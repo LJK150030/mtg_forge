@@ -3,11 +3,11 @@ requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "pyforge-game"
+name = "mtg-pyforge"
 version = "0.1.0"
 description = "Python port of the Forge MTG game engine"
 requires-python = ">=3.11"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["forge*"]
+include = ["pyforge_core*", "pyforge_game*"]
