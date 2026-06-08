@@ -63,6 +63,19 @@ strip_and_trim() {  # strip a wrapping code fence and leading/trailing blank lin
     }'
 }
 
+# Preflight: confirm headless claude works (auth + flags + model) before looping.
+pf_err="$(mktemp)"
+pf_out="$(printf 'ping' | claude --bare -p "Reply with exactly: OK" --model "$MODEL" --allowedTools "Read" --output-format json 2>"$pf_err")"
+pf_code=$?
+if [ "$pf_code" -ne 0 ]; then
+  echo "Preflight failed: 'claude -p' exited $pf_code and can't run headless yet." >&2
+  echo "Details: $(printf '%s %s' "$(cat "$pf_err")" "$pf_out" | tr '\n' ' ' | cut -c1-300)" >&2
+  echo "Fixes: run 'claude' once to sign in; try model arg 'opus'; check 'claude --help' for flag names." >&2
+  rm -f "$pf_err"; exit 1
+fi
+rm -f "$pf_err"
+echo "Preflight OK - claude headless is working. Starting..."
+
 shopt -s nullglob
 files=("$VAULT"/*.md)
 total=${#files[@]}

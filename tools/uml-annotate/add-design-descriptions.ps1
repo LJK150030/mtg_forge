@@ -56,6 +56,27 @@ no code fences.
 # Messages Claude Code emits when a usage / rate / credit limit is hit.
 $limitRe = '(?i)hit your (session|weekly|opus|usage) limit|rate.?limit|\(429\)|credit balance is too low|usage limit'
 
+# Preflight: confirm headless claude works (auth + flags + model) before looping
+# over ~1,300 files. Fails fast with the real reason instead of erroring on every note.
+$pfErr = [System.IO.Path]::GetTempFileName()
+$pfOut = ("ping" | & claude --bare -p "Reply with exactly: OK" --model $Model --allowedTools "Read" --output-format json 2> $pfErr | Out-String)
+$pfCode = $LASTEXITCODE
+$pfE = ((Get-Content -LiteralPath $pfErr -ErrorAction SilentlyContinue) -join "`n")
+Remove-Item -LiteralPath $pfErr -ErrorAction SilentlyContinue
+if ($pfCode -ne 0) {
+  $pfDiag = ((([string]$pfE) + " " + ([string]$pfOut)) -replace '\s+', ' ').Trim()
+  Write-Host ""
+  Write-Host ("Preflight failed: 'claude -p' exited {0} and can't run headless yet." -f $pfCode) -ForegroundColor Red
+  Write-Host ("Details: {0}" -f $pfDiag)
+  Write-Host ""
+  Write-Host "Common fixes:"
+  Write-Host "  - Sign in: run 'claude' once interactively, finish the browser login, then retry."
+  Write-Host "  - Model:   if it says the model is invalid/unknown, re-run with  -Model opus"
+  Write-Host "  - Flags:   run 'claude --help'; tell me which of --bare/--allowedTools/--output-format differ."
+  exit 1
+}
+Write-Host "Preflight OK - claude headless is working. Starting..." -ForegroundColor Green
+
 $files = Get-ChildItem -LiteralPath $vault -Filter *.md -File | Sort-Object Name
 $total = $files.Count
 $idx = 0; $doneN = 0; $skipN = 0; $errN = 0
@@ -72,24 +93,29 @@ foreach ($f in $files) {
   $errPath = [System.IO.Path]::GetTempFileName()
   $raw  = ($content | & claude --bare -p $prompt --model $Model --allowedTools "Read" --output-format json 2> $errPath | Out-String)
   $code = $LASTEXITCODE
-  $err  = (Get-Content -LiteralPath $errPath -Raw -ErrorAction SilentlyContinue)
+  # Coerce stderr to a single string (Get-Content can return an array of lines).
+  $err  = ((Get-Content -LiteralPath $errPath -ErrorAction SilentlyContinue) -join "`n")
   Remove-Item -LiteralPath $errPath -ErrorAction SilentlyContinue
 
+  $rawText = [string]$raw
+  $errText = [string]$err
+
   $parsed = $null
-  if ($raw.Trim()) { try { $parsed = $raw | ConvertFrom-Json } catch { } }
+  if ($rawText.Trim()) { try { $parsed = $rawText | ConvertFrom-Json } catch { } }
   $isErr = ($code -ne 0) -or ($parsed -and $parsed.is_error)
 
   if ($isErr) {
-    if (("$raw`n$err") -match $limitRe) {
+    $diag = (($errText + "`n" + $rawText) -replace '\s+', ' ').Trim()
+    if ($diag -match $limitRe) {
       Write-Host ""
       Write-Host ("Reached your usage limit at: {0}" -f $f.Name) -ForegroundColor Yellow
       Write-Host "Stopped cleanly. Re-run the exact same command later to resume from here."
       Add-Content -LiteralPath $log -Value ("{0}  STOP(limit)  {1}" -f (Get-Date -Format o), $f.Name)
       exit 2
     }
-    $oneLineErr = ($err -replace '\s+', ' ').Trim()
-    Write-Warning ("[{0}/{1}] error (exit {2}) on {3}: {4}" -f $idx, $total, $code, $f.Name, $oneLineErr)
-    Add-Content -LiteralPath $log -Value ("{0}  ERROR  {1}  {2}" -f (Get-Date -Format o), $f.Name, $oneLineErr)
+    if ($diag.Length -gt 300) { $diag = $diag.Substring(0, 300) }
+    Write-Warning ("[{0}/{1}] error (exit {2}) on {3}: {4}" -f $idx, $total, $code, $f.Name, $diag)
+    Add-Content -LiteralPath $log -Value ("{0}  ERROR  {1}  {2}" -f (Get-Date -Format o), $f.Name, $diag)
     $errN++; continue
   }
 
