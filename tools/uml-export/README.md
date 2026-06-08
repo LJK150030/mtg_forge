@@ -77,6 +77,11 @@ parses source as text. On the current tree this produces **1,283 notes** from
   here for readability even when they aren't project nodes.
 * A **Relationships** section of `[[fqn|SimpleName]]` links grouped into
   Extends / Implements / Uses — *this* is what builds the Obsidian graph.
+* A **Source** section embedding the raw Java in a ` ```java ` block, as an
+  example implementation. Top-level types embed the whole file (package +
+  imports + body); nested types (e.g. `Card.StatBreakdown`) embed only their
+  own declaration excerpt, so a note never drags in its 8,000-line parent file.
+  Disable with `-Duml.source=false`.
 
 ## Optional: external (Guava/etc.) edges
 

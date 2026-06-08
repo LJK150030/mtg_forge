@@ -17,6 +17,7 @@ import com.github.javaparser.symbolsolver.resolution.typesolvers.ReflectionTypeS
 import com.github.javaparser.utils.SourceRoot;
 
 import java.io.File;
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -66,6 +67,9 @@ public final class JavaToUml {
         final Set<String> usesSimple   = new TreeSet<>();  // referenced project types, simple (diagram)
         // FQN -> relation ("extends" / "implements" / "uses"); drives wiki-links + graph.
         final Map<String, String> relatedFqn = new TreeMap<>();
+        String sourcePath;        // repo-relative path of the .java file (display)
+        String sourceCode;        // embedded raw source (whole file or type span)
+        boolean sourceWholeFile;  // true: whole file; false: nested-type excerpt
     }
 
     public static void main(String[] args) throws Exception {
@@ -100,6 +104,9 @@ public final class JavaToUml {
         }
         Files.createDirectories(outDir);
 
+        // Embed the raw .java source in each note (-Duml.source=false to disable).
+        boolean embedSource = !"false".equalsIgnoreCase(System.getProperty("uml.source", "true"));
+
         // --- configure the symbol solver: JDK + every source root + optional jars ---
         CombinedTypeSolver typeSolver = new CombinedTypeSolver();
         typeSolver.add(new ReflectionTypeSolver());
@@ -118,6 +125,7 @@ public final class JavaToUml {
         // --- parse every root, remembering which module each unit came from ----
         // Map of CompilationUnit -> module label, so notes can record their module.
         Map<CompilationUnit, String> unitModule = new IdentityHashMap<>();
+        Map<CompilationUnit, Path> unitRoot = new IdentityHashMap<>();
         List<CompilationUnit> units = new ArrayList<>();
         int failed = 0;
         for (Path root : srcRoots) {
@@ -127,6 +135,7 @@ public final class JavaToUml {
                 if (r.isSuccessful() && r.getResult().isPresent()) {
                     CompilationUnit cu = r.getResult().get();
                     unitModule.put(cu, module);
+                    unitRoot.put(cu, root);
                     units.add(cu);
                 } else {
                     failed++;
@@ -155,10 +164,39 @@ public final class JavaToUml {
         for (CompilationUnit cu : units) {
             String module = unitModule.get(cu);
             String pkg = cu.getPackageDeclaration().map(p -> p.getNameAsString()).orElse("");
+
+            // Read the original file once per CU so every type in it can embed source.
+            String fileText = null;
+            String[] fileLines = null;
+            String repoRel = null;
+            if (embedSource && cu.getStorage().isPresent()) {
+                Path abs = cu.getStorage().get().getPath();
+                try {
+                    fileText = Files.readString(abs);
+                    fileLines = fileText.split("\r?\n", -1);
+                    repoRel = repoRelative(unitRoot.get(cu), abs);
+                } catch (IOException e) {
+                    fileText = null; // unreadable -> just skip the source section
+                }
+            }
+
             for (TypeDeclaration<?> td : cu.findAll(TypeDeclaration.class)) {
                 Optional<String> fqn = td.getFullyQualifiedName();
                 if (fqn.isEmpty()) continue; // skip local/anonymous (no stable graph node)
-                all.add(extract(td, fqn.get(), pkg, module, projectFqns));
+                TypeInfo info = extract(td, fqn.get(), pkg, module, projectFqns);
+                if (fileText != null) {
+                    info.sourcePath = repoRel;
+                    boolean topLevel = td.getParentNode()
+                            .filter(p -> p instanceof CompilationUnit).isPresent();
+                    if (topLevel) {
+                        info.sourceCode = stripTrailingNewlines(fileText);
+                        info.sourceWholeFile = true;
+                    } else {
+                        info.sourceCode = sliceType(td, fileLines);
+                        info.sourceWholeFile = false;
+                    }
+                }
+                all.add(info);
             }
         }
 
@@ -182,6 +220,54 @@ public final class JavaToUml {
             }
         }
         return p.getFileName() == null ? "unknown" : p.getFileName().toString();
+    }
+
+    /** Repo-relative display path: the source root (as passed) + path under it. */
+    static String repoRelative(Path root, Path abs) {
+        try {
+            Path rel = root.toAbsolutePath().normalize()
+                    .relativize(abs.toAbsolutePath().normalize());
+            String base = root.toString().replace('\\', '/');
+            if (base.endsWith("/")) base = base.substring(0, base.length() - 1);
+            return base + "/" + rel.toString().replace('\\', '/');
+        } catch (Exception e) {
+            return abs.toString().replace('\\', '/');
+        }
+    }
+
+    /** Raw source of a nested type's declaration (incl. its leading comment). */
+    static String sliceType(TypeDeclaration<?> td, String[] lines) {
+        if (td.getRange().isEmpty() || lines == null) return td.toString();
+        int begin = td.getRange().get().begin.line;
+        int end = td.getRange().get().end.line;
+        if (td.getComment().isPresent() && td.getComment().get().getRange().isPresent()) {
+            begin = Math.min(begin, td.getComment().get().getRange().get().begin.line);
+        }
+        begin = Math.max(1, begin);
+        end = Math.min(lines.length, end);
+        StringBuilder sb = new StringBuilder();
+        for (int i = begin; i <= end; i++) {
+            sb.append(lines[i - 1]);
+            if (i < end) sb.append("\n");
+        }
+        return sb.toString();
+    }
+
+    static String stripTrailingNewlines(String s) {
+        int e = s.length();
+        while (e > 0 && (s.charAt(e - 1) == '\n' || s.charAt(e - 1) == '\r')) e--;
+        return s.substring(0, e);
+    }
+
+    /** Fenced code block whose fence is longer than any backtick run in the body. */
+    static String codeFence(String lang, String code) {
+        int maxRun = 0, cur = 0;
+        for (int i = 0; i < code.length(); i++) {
+            if (code.charAt(i) == '`') { cur++; maxRun = Math.max(maxRun, cur); }
+            else cur = 0;
+        }
+        String fence = "`".repeat(Math.max(3, maxRun + 1));
+        return fence + lang + "\n" + code + "\n" + fence + "\n";
     }
 
     // ----------------------------------------------------------------------
@@ -392,6 +478,17 @@ public final class JavaToUml {
             appendLinks(sb, info, "implements");
             appendLinks(sb, info, "uses");
             sb.append("\n");
+        }
+
+        // --- embedded raw source (example implementation) ---
+        if (info.sourceCode != null) {
+            sb.append("## Source\n");
+            if (info.sourcePath != null) {
+                sb.append("`").append(info.sourcePath).append("`")
+                  .append(info.sourceWholeFile ? "" : " — declaration excerpt")
+                  .append("\n\n");
+            }
+            sb.append(codeFence("java", info.sourceCode));
         }
         return sb.toString();
     }
