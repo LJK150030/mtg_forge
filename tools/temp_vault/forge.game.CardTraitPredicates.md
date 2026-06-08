@@ -1,0 +1,77 @@
+---
+aliases:
+  - CardTraitPredicates
+tags:
+  - java/class
+  - module/forge-game
+  - pkg/forge/game
+fqn: forge.game.CardTraitPredicates
+package: forge.game
+module: forge-game
+kind: Class
+---
+
+# CardTraitPredicates
+
+**Package:** `forge.game` &nbsp; **Module:** `forge-game` &nbsp; **Kind:** Class
+
+```mermaid
+classDiagram
+    class CardTraitPredicates {
+        +isHostCard(Card host) Predicate~CardTraitBase~
+        +isKeyword(Keyword kw) Predicate~CardTraitBase~
+        +hasParam(String name) Predicate~CardTraitBase~
+        +hasParam(String name, String val) Predicate~CardTraitBase~
+    }
+    CardTraitPredicates ..> Card : uses
+    CardTraitPredicates ..> CardTraitBase : uses
+    CardTraitPredicates ..> Keyword : uses
+```
+
+## Relationships
+**Uses:**
+- [[forge.game.CardTraitBase|CardTraitBase]]
+- [[forge.game.card.Card|Card]]
+- [[forge.game.keyword.Keyword|Keyword]]
+
+## Design Description
+
+CardTraitPredicates is a stateless utility class that supplies factory methods producing reusable `Predicate<CardTraitBase>` instances for filtering card traits. Each method—`isHostCard`, `isKeyword`, and the overloaded `hasParam`—captures its criteria in a closure and returns a predicate that tests a given CardTraitBase against that criterion, whether matching the owning Card, checking for a Keyword, or verifying a named parameter and optional value.
+
+By collaborating with Card, Keyword, and CardTraitBase purely through these lambda predicates, the class centralizes common trait-matching logic for use with Java Stream and Collection filtering. The design intent is clear: all methods are static and final with no instantiable state, treating the class as a namespace of composable predicate builders that keep trait-selection criteria consistent and declarative across the game engine.
+
+## Source
+`forge-game/src/main/java/forge/game/CardTraitPredicates.java`
+
+```java
+package forge.game;
+
+import forge.game.card.Card;
+import forge.game.keyword.Keyword;
+
+import java.util.function.Predicate;
+
+public class CardTraitPredicates {
+
+    public static final Predicate<CardTraitBase> isHostCard(final Card host) {
+        return sa -> host.equals(sa.getHostCard());
+    }
+
+    public static final Predicate<CardTraitBase> isKeyword(final Keyword kw) {
+        return sa -> sa.isKeyword(kw);
+    }
+
+    public static final Predicate<CardTraitBase> hasParam(final String name) {
+        return sa -> sa.hasParam(name);
+    }
+
+    public static final Predicate<CardTraitBase> hasParam(final String name, final String val) {
+        return sa -> {
+            if (!sa.hasParam(name)) {
+                return false;
+            }
+            return val.equals(sa.getParam(name));
+        };
+    }
+}
+```

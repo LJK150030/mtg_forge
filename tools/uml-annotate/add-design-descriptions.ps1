@@ -29,12 +29,30 @@ param(
   [int]$Max = 0   # 0 = process all; e.g. 20 to sample
 )
 
+# Keep console output UTF-8 too (helps Write-Host); the real capture below does
+# NOT depend on this — see Invoke-ClaudeJson.
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$OutputEncoding = [System.Text.Encoding]::UTF8
+
+# Single-instance lock. Two concurrent runs race on the same notes: the read /
+# check-heading / write is not atomic, so both insert and you get DOUBLE
+# "## Design Description" sections. A named mutex makes a second run bow out.
+$mutex = New-Object System.Threading.Mutex($false, "Global\ForgeUmlAnnotate")
+$haveLock = $false
+try { $haveLock = $mutex.WaitOne(0) }
+catch [System.Threading.AbandonedMutexException] { $haveLock = $true }  # prior run died; we inherit
+if (-not $haveLock) {
+  Write-Host "Another instance of this annotator is already running. Exiting to avoid races." -ForegroundColor Yellow
+  exit 3
+}
+
 if (-not (Test-Path -LiteralPath $VaultPath -PathType Container)) {
   Write-Error "Vault folder not found: $VaultPath"; exit 1
 }
 if (-not (Get-Command claude -ErrorAction SilentlyContinue)) {
   Write-Error "The 'claude' CLI is not on your PATH. Install Claude Code first."; exit 1
 }
+$ClaudeExe = (Get-Command claude).Source
 
 $vault = (Resolve-Path -LiteralPath $VaultPath).Path
 $log   = Join-Path $vault "design-descriptions.log"
@@ -53,16 +71,50 @@ Output ONLY the description prose: no heading, no preamble such as "Here is", no
 no code fences.
 '@
 
+# Run headless claude and capture stdout/stderr as guaranteed UTF-8.
+# Using the .NET process API with StandardOutputEncoding = UTF8 is reliable even
+# in a detached/background process with no console attached -- unlike piping
+# through PowerShell, which decodes native output via [Console]::OutputEncoding
+# and silently mangles em-dashes / curly quotes when that isn't honored.
+function Invoke-ClaudeJson {
+  param([string]$PromptText, [string]$ModelId, [string]$StdinText)
+
+  # Windows arg-escaping for the (multi-line) prompt: backslashes first, then quotes.
+  $esc = ($PromptText -replace '\\', '\\') -replace '"', '\"'
+
+  $psi = New-Object System.Diagnostics.ProcessStartInfo
+  $psi.FileName               = $ClaudeExe
+  $psi.Arguments              = '-p "' + $esc + '" --model "' + $ModelId + '" --allowedTools "Read" --output-format json'
+  $psi.UseShellExecute        = $false
+  $psi.CreateNoWindow         = $true
+  $psi.RedirectStandardInput  = $true
+  $psi.RedirectStandardOutput = $true
+  $psi.RedirectStandardError  = $true
+  $psi.StandardOutputEncoding = [System.Text.Encoding]::UTF8
+  $psi.StandardErrorEncoding  = [System.Text.Encoding]::UTF8
+
+  $proc = [System.Diagnostics.Process]::Start($psi)
+  # Feed the note to stdin as real UTF-8 bytes (don't rely on console input encoding).
+  $bytes = [System.Text.Encoding]::UTF8.GetBytes($StdinText)
+  $proc.StandardInput.BaseStream.Write($bytes, 0, $bytes.Length)
+  $proc.StandardInput.BaseStream.Flush()
+  $proc.StandardInput.Close()
+  # Read both streams async to avoid a pipe-buffer deadlock on large output.
+  $outTask = $proc.StandardOutput.ReadToEndAsync()
+  $errTask = $proc.StandardError.ReadToEndAsync()
+  $proc.WaitForExit()
+  return [pscustomobject]@{ Out = $outTask.Result; Err = $errTask.Result; Code = $proc.ExitCode }
+}
+
 # Messages Claude Code emits when a usage / rate / credit limit is hit.
 $limitRe = '(?i)hit your (session|weekly|opus|usage) limit|rate.?limit|\(429\)|credit balance is too low|usage limit'
 
 # Preflight: confirm headless claude works (auth + flags + model) before looping
 # over ~1,300 files. Fails fast with the real reason instead of erroring on every note.
-$pfErr = [System.IO.Path]::GetTempFileName()
-$pfOut = ("ping" | & claude --bare -p "Reply with exactly: OK" --model $Model --allowedTools "Read" --output-format json 2> $pfErr | Out-String)
-$pfCode = $LASTEXITCODE
-$pfE = ((Get-Content -LiteralPath $pfErr -ErrorAction SilentlyContinue) -join "`n")
-Remove-Item -LiteralPath $pfErr -ErrorAction SilentlyContinue
+$pf = Invoke-ClaudeJson -PromptText "Reply with exactly: OK" -ModelId $Model -StdinText "ping"
+$pfOut = $pf.Out
+$pfCode = $pf.Code
+$pfE = $pf.Err
 if ($pfCode -ne 0) {
   $pfDiag = ((([string]$pfE) + " " + ([string]$pfOut)) -replace '\s+', ' ').Trim()
   Write-Host ""
@@ -90,12 +142,10 @@ foreach ($f in $files) {
     Write-Host ("[{0}/{1}] skip (no ## Source): {2}" -f $idx, $total, $f.Name); continue
   }
 
-  $errPath = [System.IO.Path]::GetTempFileName()
-  $raw  = ($content | & claude --bare -p $prompt --model $Model --allowedTools "Read" --output-format json 2> $errPath | Out-String)
-  $code = $LASTEXITCODE
-  # Coerce stderr to a single string (Get-Content can return an array of lines).
-  $err  = ((Get-Content -LiteralPath $errPath -ErrorAction SilentlyContinue) -join "`n")
-  Remove-Item -LiteralPath $errPath -ErrorAction SilentlyContinue
+  $call = Invoke-ClaudeJson -PromptText $prompt -ModelId $Model -StdinText $content
+  $raw  = $call.Out
+  $code = $call.Code
+  $err  = $call.Err
 
   $rawText = [string]$raw
   $errText = [string]$err
