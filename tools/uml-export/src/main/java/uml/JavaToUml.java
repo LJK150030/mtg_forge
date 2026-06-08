@@ -193,7 +193,11 @@ public final class JavaToUml {
         info.pkg = pkg;
         info.module = module;
 
-        if (td instanceof ClassOrInterfaceDeclaration cid) {
+        // Classic instanceof + cast (no pattern variables) so the tool compiles
+        // at a low release level on whatever JDK the user has. JavaParser parses
+        // Forge's Java 17 source as text regardless of this tool's own level.
+        if (td instanceof ClassOrInterfaceDeclaration) {
+            ClassOrInterfaceDeclaration cid = (ClassOrInterfaceDeclaration) td;
             info.kind = cid.isInterface() ? "Interface" : "Class";
             cid.getExtendedTypes().forEach(t -> {
                 info.extSimple.add(t.getNameAsString());
@@ -203,14 +207,16 @@ public final class JavaToUml {
                 info.implSimple.add(t.getNameAsString());
                 addRelated(info, t, projectFqns, "implements");
             });
-        } else if (td instanceof EnumDeclaration ed) {
+        } else if (td instanceof EnumDeclaration) {
+            EnumDeclaration ed = (EnumDeclaration) td;
             info.kind = "Enum";
             ed.getEntries().forEach(e -> info.enumConstants.add(e.getNameAsString()));
             ed.getImplementedTypes().forEach(t -> {
                 info.implSimple.add(t.getNameAsString());
                 addRelated(info, t, projectFqns, "implements");
             });
-        } else if (td instanceof RecordDeclaration rd) {
+        } else if (td instanceof RecordDeclaration) {
+            RecordDeclaration rd = (RecordDeclaration) td;
             info.kind = "Record";
             rd.getImplementedTypes().forEach(t -> {
                 info.implSimple.add(t.getNameAsString());

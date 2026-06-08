@@ -15,7 +15,9 @@
     <packaging>jar</packaging>
 
     <properties>
-        <maven.compiler.release>17</maven.compiler.release>
+        <!-- The tool itself targets Java 11 so it builds on any modern JDK.
+             JavaParser parses Forge's Java 17 source as text regardless. -->
+        <maven.compiler.release>11</maven.compiler.release>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <javaparser.version>3.26.4</javaparser.version>
     </properties>
@@ -31,10 +33,22 @@
 
     <build>
         <plugins>
+            <!-- Pin plugin versions explicitly. Without this, an old system Maven
+                 (e.g. 3.3.9) binds maven-compiler-plugin:3.1, which ignores
+                 <release> and falls back to Java 5. These versions also still run
+                 on Maven 3.3.9 (unlike exec-maven-plugin 3.6.3, which needs 3.6.3+). -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.8.1</version>
+                <configuration>
+                    <release>${maven.compiler.release}</release>
+                </configuration>
+            </plugin>
             <plugin>
                 <groupId>org.codehaus.mojo</groupId>
                 <artifactId>exec-maven-plugin</artifactId>
-                <version>3.6.3</version>
+                <version>3.1.0</version>
                 <configuration>
                     <mainClass>uml.JavaToUml</mainClass>
                 </configuration>

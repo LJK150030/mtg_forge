@@ -44,8 +44,11 @@ set MAVEN_OPTS=-Xmx3g
 mvn -f tools/uml-export/pom.xml compile exec:java "-Duml.out=G:\My Files\School\sprint 2026\obsidian_valuts\mtg_forge_conversion" "-Dexec.args=forge-core/src/main/java forge-game/src/main/java forge-ai/src/main/java"
 ```
 
-Requires JDK 17+ and Maven with network access to Maven Central (to fetch
-JavaParser 3.26.4). On the current tree this produces **1,283 notes** from
+Requires a modern JDK (11+) and Maven with network access to Maven Central
+(to fetch JavaParser 3.26.4). The tool targets Java 11 and pins its compiler/
+exec plugin versions, so it builds and runs even on old Maven (verified on
+Maven 3.3.9); the running JDK need not match Forge's Java 17, because JavaParser
+parses source as text. On the current tree this produces **1,283 notes** from
 1,130 source files.
 
 ## How it differs from a naive exporter
