@@ -1,12 +1,21 @@
-# Design-description annotator
+# Vault annotators (Claude Code, headless)
 
-Adds a **`## Design Description`** section (between `## Relationships` and
-`## Source`) to every note produced by [`tools/uml-export`](../uml-export), using
-**Claude Code in headless mode** (`claude -p`, Opus 4.8) — one note per call.
+Two passes that enrich every note produced by [`tools/uml-export`](../uml-export),
+each using **Claude Code in headless mode** (`claude -p`, Opus 4.8), one note per
+call. Each note is self-contained (UML + relationships + embedded Java source), so
+every call is an independent one-shot — the script pipes the note to `claude -p`
+and inserts the result.
 
-Each note is self-contained (UML diagram + relationships + embedded Java source),
-so each call is an independent one-shot. The script pipes the note to `claude -p`,
-gets back a short design description, and inserts it.
+Run them in order:
+
+| Pass | Script | Adds | Where |
+|------|--------|------|-------|
+| 1 | `add-design-descriptions.ps1` / `.sh` | `## Design Description` | between Relationships and Source |
+| 2 | `add-python-port.ps1` / `.sh` | `## Python` (a Python reengineering of the Java) | after Source |
+
+Both share the same engine: resumable, idempotent, usage-limit-aware (see below).
+Pass 2 reads the whole note — including the Design Description from pass 1 — so
+run pass 1 first.
 
 ## Prerequisites
 
@@ -27,26 +36,63 @@ pwsh tools/uml-annotate/add-design-descriptions.ps1 -VaultPath "G:\My Files\Scho
 pwsh tools/uml-annotate/add-design-descriptions.ps1 -VaultPath "G:\My Files\School\sprint 2026\obsidian_valuts\mtg_forge_conversion"
 ```
 
+Then pass 2 (same flags, run after pass 1 finishes):
+
+```powershell
+pwsh tools/uml-annotate/add-python-port.ps1 -VaultPath "G:\My Files\School\sprint 2026\obsidian_valuts\mtg_forge_conversion" -Max 20
+pwsh tools/uml-annotate/add-python-port.ps1 -VaultPath "G:\My Files\School\sprint 2026\obsidian_valuts\mtg_forge_conversion"
+```
+
 Bash (macOS/Linux/Git Bash):
 
 ```bash
 MAX_FILES=20 tools/uml-annotate/add-design-descriptions.sh "/path/to/vault"   # sample
 tools/uml-annotate/add-design-descriptions.sh "/path/to/vault"                # full run
+# then:
+MAX_FILES=20 tools/uml-annotate/add-python-port.sh "/path/to/vault"
+tools/uml-annotate/add-python-port.sh "/path/to/vault"
 ```
+
+## Pass 2: the Python port
+
+`add-python-port.*` appends a **`## Python`** section after `## Source` containing
+a Python reengineering of the Java class. The hard part is **consistency** — a
+dependency imported in one note must match the class another note defines, even
+though files are processed independently. The prompt fixes a deterministic rule so
+they line up by construction:
+
+- **Identifiers are preserved exactly** — same class, method, parameter, and field
+  names as the Java (not snake_cased), so cross-references are stable.
+- **Imports mirror fully-qualified names** — every type `forge.x.y.Name` (from the
+  Java imports and the Relationships section) becomes `from forge.x.y.Name import
+  Name`. The class extends the same supertype shown under **Extends**.
+- The section is labelled with a suggested path derived from the note's FQN, e.g.
+  `forge/ai/ability/AddPhaseAi.py`, so you can later split the `## Python` blocks
+  into a real Python package.
+
+Want PEP8 (`snake_case` methods) instead of Java-identical names? It's a one-line
+change to the NAMING rule in the prompt — but identical names maximise cross-file
+consistency, which is why it's the default.
 
 ## Resumable by design
 
 This is built for running across ~1,300 notes against a personal usage limit:
 
-- **Idempotent** — a note that already has `## Design Description` is skipped, so
-  re-running resumes exactly where you left off. No state file to manage.
+- **Idempotent** — a note that already has the section it would add (`## Design
+  Description` for pass 1, `## Python` for pass 2) is skipped, so re-running
+  resumes exactly where you left off. No state file to manage, and **no duplicate
+  sections** are ever written.
+- **Preflight** — before the loop, each script runs one tiny `claude -p` to confirm
+  headless mode works (signed in, valid model/flags). If not, it stops immediately
+  with the real reason instead of erroring on all ~1,300 notes.
 - **Clean stop on usage limit** — if Claude reports a session/weekly/Opus/credit
   limit, the loop stops immediately (exit code **2**), names the note it stopped
   on, and writes nothing for it. Re-run the same command later to continue.
 - **Transient errors don't halt the run** — a one-off failure on a single note is
   logged and skipped; the loop keeps going.
-- **Progress log** — every action is appended to `design-descriptions.log` in the
-  vault (`OK` / `ERROR` / `STOP(limit)` with timestamps).
+- **Progress log** — every action is appended to a log in the vault
+  (`design-descriptions.log` / `python-port.log`) with `OK` / `ERROR` /
+  `STOP(limit)` and timestamps.
 
 ## How it works (and how to tweak it)
 
