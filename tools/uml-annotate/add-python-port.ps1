@@ -40,6 +40,21 @@ if (-not (Get-Command claude -ErrorAction SilentlyContinue)) {
 $vault = (Resolve-Path -LiteralPath $VaultPath).Path
 $log   = Join-Path $vault "python-port.log"
 
+# --- deterministic "already done?" guards (line-ending-agnostic; see design script) ---
+function Test-HasHeading {
+  param([string]$Text, [string]$Heading)
+  foreach ($line in ($Text -split '\r?\n')) {
+    if ($line.Trim() -eq $Heading) { return $true }
+  }
+  return $false
+}
+$processed = New-Object 'System.Collections.Generic.HashSet[string]'
+if (Test-Path -LiteralPath $log) {
+  foreach ($line in (Get-Content -LiteralPath $log -ErrorAction SilentlyContinue)) {
+    if ($line -match '\bOK\s+(\S+\.md)\s*$') { [void]$processed.Add($Matches[1]) }
+  }
+}
+
 $prompt = @'
 You are reengineering ONE Java class from the Forge MTG engine into Python. The input (stdin) is
 an Obsidian note: YAML frontmatter (fqn/package/module/kind), a Mermaid UML diagram, a Relationships
@@ -105,8 +120,9 @@ foreach ($f in $files) {
   $idx++
   $content = Get-Content -LiteralPath $f.FullName -Raw
 
-  if ($content -match '(?m)^##[ \t]+Python[ \t]*$') { $skipN++; continue }
-  if ($content -notmatch '(?m)^##[ \t]+Source[ \t]*$') {
+  if ($processed.Contains($f.Name)) { $skipN++; continue }
+  if (Test-HasHeading -Text $content -Heading '## Python') { $skipN++; continue }
+  if (-not (Test-HasHeading -Text $content -Heading '## Source')) {
     Write-Host ("[{0}/{1}] skip (no ## Source): {2}" -f $idx, $total, $f.Name); continue
   }
 
@@ -166,6 +182,7 @@ foreach ($f in $files) {
   $doneN++
   Write-Host ("[{0}/{1}] done: {2}" -f $idx, $total, $f.Name) -ForegroundColor Green
   Add-Content -LiteralPath $log -Value ("{0}  OK     {1}" -f (Get-Date -Format o), $f.Name)
+  [void]$processed.Add($f.Name)   # never reprocess within this run
 
   if ($Max -gt 0 -and $doneN -ge $Max) {
     Write-Host ("Reached -Max {0} for this run. Re-run to continue." -f $Max); break

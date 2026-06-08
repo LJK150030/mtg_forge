@@ -57,6 +57,28 @@ $ClaudeExe = (Get-Command claude).Source
 $vault = (Resolve-Path -LiteralPath $VaultPath).Path
 $log   = Join-Path $vault "design-descriptions.log"
 
+# --- deterministic "already done?" guards -------------------------------------
+# Line-ending-agnostic heading test. The old (?m)^...[ \t]*$ regex did NOT match a
+# heading on a CRLF file: [ \t] excludes the trailing \r, so re-runs failed to see
+# an existing "## Design Description" and appended a DUPLICATE. Splitting on \r?\n
+# and trimming is immune to CRLF/LF and stray whitespace.
+function Test-HasHeading {
+  param([string]$Text, [string]$Heading)
+  foreach ($line in ($Text -split '\r?\n')) {
+    if ($line.Trim() -eq $Heading) { return $true }
+  }
+  return $false
+}
+
+# Second guard (belt and suspenders): every file already recorded OK in the log is
+# skipped even if its heading somehow isn't detected. The HashSet dedupes the log.
+$processed = New-Object 'System.Collections.Generic.HashSet[string]'
+if (Test-Path -LiteralPath $log) {
+  foreach ($line in (Get-Content -LiteralPath $log -ErrorAction SilentlyContinue)) {
+    if ($line -match '\bOK\s+(\S+\.md)\s*$') { [void]$processed.Add($Matches[1]) }
+  }
+}
+
 $prompt = @'
 You are writing a Software Design Description for a Java class in the Forge MTG engine.
 The input (stdin) is an Obsidian note documenting one class: a Mermaid UML class diagram,
@@ -137,8 +159,10 @@ foreach ($f in $files) {
   $idx++
   $content = Get-Content -LiteralPath $f.FullName -Raw
 
-  if ($content -match '(?m)^##[ \t]+Design Description[ \t]*$') { $skipN++; continue }
-  if ($content -notmatch '(?m)^##[ \t]+Source[ \t]*$') {
+  # Skip if the log already recorded this file, or it already has the section.
+  if ($processed.Contains($f.Name)) { $skipN++; continue }
+  if (Test-HasHeading -Text $content -Heading '## Design Description') { $skipN++; continue }
+  if (-not (Test-HasHeading -Text $content -Heading '## Source')) {
     Write-Host ("[{0}/{1}] skip (no ## Source): {2}" -f $idx, $total, $f.Name); continue
   }
 
@@ -182,13 +206,17 @@ foreach ($f in $files) {
   # Insert "## Design Description" + prose immediately before the first "## Source".
   $nl = if ($content -match "`r`n") { "`r`n" } else { "`n" }
   $section = "## Design Description$nl$nl$desc$nl$nl"
-  $m = [regex]::Match($content, '(?m)^##[ \t]+Source[ \t]*$')
+  $m = [regex]::Match($content, '(?m)^[ \t]*##[ \t]+Source[ \t]*\r?$')   # \r? handles CRLF
+  if (-not $m.Success) {
+    Write-Warning ("[{0}/{1}] no ## Source anchor: {2}" -f $idx, $total, $f.Name); $errN++; continue
+  }
   $new = $content.Substring(0, $m.Index) + $section + $content.Substring($m.Index)
 
   [System.IO.File]::WriteAllText($f.FullName, $new, (New-Object System.Text.UTF8Encoding($false)))
   $doneN++
   Write-Host ("[{0}/{1}] done: {2}" -f $idx, $total, $f.Name) -ForegroundColor Green
   Add-Content -LiteralPath $log -Value ("{0}  OK     {1}" -f (Get-Date -Format o), $f.Name)
+  [void]$processed.Add($f.Name)   # never reprocess within this run
 
   if ($Max -gt 0 -and $doneN -ge $Max) {
     Write-Host ("Reached -Max {0} for this run. Re-run to continue." -f $Max); break

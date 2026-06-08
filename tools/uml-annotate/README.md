@@ -74,6 +74,27 @@ Want PEP8 (`snake_case` methods) instead of Java-identical names? It's a one-lin
 change to the NAMING rule in the prompt — but identical names maximise cross-file
 consistency, which is why it's the default.
 
+## Determinism & fixing duplicates
+
+The "already done?" decision is deterministic and **line-ending-agnostic**: a note
+is processed only if it does **not** already contain the section *and* it is **not**
+recorded `OK` in the log. (An earlier version used a `^...$` regex that silently
+failed on CRLF files, so reruns re-appended sections — fixed.)
+
+If a previous run left duplicate sections, clean them up (keeps the first, drops the
+rest; preview with `-WhatIf` / `DRY=1`):
+
+```powershell
+pwsh tools/uml-annotate/fix-duplicate-sections.ps1 -VaultPath "G:\...\mtg_forge_conversion" -WhatIf
+pwsh tools/uml-annotate/fix-duplicate-sections.ps1 -VaultPath "G:\...\mtg_forge_conversion"
+pwsh tools/uml-annotate/fix-duplicate-sections.ps1 -VaultPath "G:\...\mtg_forge_conversion" -Heading "## Python"
+```
+
+```bash
+DRY=1 tools/uml-annotate/fix-duplicate-sections.sh "/path/to/vault"
+tools/uml-annotate/fix-duplicate-sections.sh "/path/to/vault"
+```
+
 ## Resumable by design
 
 This is built for running across ~1,300 notes against a personal usage limit:

@@ -76,6 +76,15 @@ fi
 rm -f "$pf_err"
 echo "Preflight OK - claude headless is working. Starting..."
 
+# Second guard: files already recorded OK in the log are skipped even if their
+# heading isn't detected. Membership via grep -Fxq (works on bash 3.2+).
+oklist="$(mktemp)"
+if [ -f "$LOG" ]; then
+  awk '/[[:space:]]OK[[:space:]]/ && $NF ~ /\.md$/ { print $NF }' "$LOG" | sort -u > "$oklist"
+else
+  : > "$oklist"
+fi
+
 shopt -s nullglob
 files=("$VAULT"/*.md)
 total=${#files[@]}
@@ -85,6 +94,7 @@ for f in "${files[@]}"; do
   idx=$((idx+1))
   base="$(basename "$f")"
 
+  if grep -Fxq "$base" "$oklist"; then skip_n=$((skip_n+1)); continue; fi
   if grep -qE '^##[[:space:]]+Design Description[[:space:]]*$' "$f"; then
     skip_n=$((skip_n+1)); continue
   fi
@@ -126,19 +136,22 @@ for f in "${files[@]}"; do
   awk -v df="$descf" '
     function slurp(file,   s,l){ while ((getline l < file) > 0) s = s l "\n"; close(file); return s }
     BEGIN { d = slurp(df) }
-    (!ins && /^##[ \t]+Source[ \t]*$/) { printf "## Design Description\n\n%s\n", d; ins=1 }
-    { print }
+    { t=$0; sub(/\r$/,"",t)
+      if (!ins && t ~ /^##[ \t]+Source[ \t]*$/) { printf "## Design Description\n\n%s\n", d; ins=1 }
+      print $0 }
   ' "$f" > "$outf"
   mv "$outf" "$f"; rm -f "$descf"
 
   done_n=$((done_n+1))
   echo "[$idx/$total] done: $base"
   printf '%s  OK     %s\n' "$(date -Iseconds)" "$base" >> "$LOG"
+  echo "$base" >> "$oklist"
 
   if [ "$MAX_FILES" != "0" ] && [ "$done_n" -ge "$MAX_FILES" ]; then
     echo "Reached MAX_FILES=$MAX_FILES for this run. Re-run to continue."; break
   fi
 done
 
+rm -f "$oklist"
 echo ""
 echo "Summary: $done_n written, $skip_n already-done, $err_n errors, of $total notes."
