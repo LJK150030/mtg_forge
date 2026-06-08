@@ -69,20 +69,34 @@ public final class JavaToUml {
     }
 
     public static void main(String[] args) throws Exception {
-        if (args.length < 2) {
-            System.err.println("Usage: JavaToUml <outDir> <srcRoot1> [srcRoot2 ...] [--jar path.jar ...]");
+        // The output dir may be supplied as a system property (-Duml.out=...).
+        // Prefer this for paths with spaces (e.g. Windows Obsidian vaults): a
+        // -D value is a single shell-quoted token, whereas -Dexec.args is
+        // re-split on whitespace by the exec plugin and would fragment the path.
+        String outProp = System.getProperty("uml.out");
+        boolean outFromProp = outProp != null && !outProp.isBlank();
+
+        int firstArg = outFromProp ? 0 : 1; // when out is positional it's args[0]
+        if (!outFromProp && args.length < 2 || outFromProp && args.length < 1) {
+            System.err.println("Usage:");
+            System.err.println("  JavaToUml <outDir> <srcRoot1> [srcRoot2 ...] [--jar path.jar ...]");
+            System.err.println("  -Duml.out=<outDir> ... <srcRoot1> [srcRoot2 ...]   (spaces-safe)");
             System.exit(1);
         }
 
-        Path outDir = Paths.get(args[0]);
+        Path outDir = outFromProp ? Paths.get(outProp) : Paths.get(args[0]);
         List<Path> srcRoots = new ArrayList<>();
         List<Path> jars = new ArrayList<>();
-        for (int i = 1; i < args.length; i++) {
+        for (int i = firstArg; i < args.length; i++) {
             if ("--jar".equals(args[i]) && i + 1 < args.length) {
                 jars.add(Paths.get(args[++i]));
             } else {
                 srcRoots.add(Paths.get(args[i]));
             }
+        }
+        if (srcRoots.isEmpty()) {
+            System.err.println("Error: at least one source root is required.");
+            System.exit(1);
         }
         Files.createDirectories(outDir);
 

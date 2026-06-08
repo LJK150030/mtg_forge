@@ -23,7 +23,8 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 # Output dir: arg 1, or default. Make it absolute (relative resolves vs repo root).
 OUT="${1:-$REPO_ROOT/uml-vault}"
 case "$OUT" in
-  /*) : ;;                       # already absolute
+  /*) : ;;                       # already absolute (POSIX / Git-Bash /g/...)
+  [A-Za-z]:*) : ;;               # already absolute (Windows drive, e.g. G:\ or G:/)
   *)  OUT="$REPO_ROOT/$OUT" ;;
 esac
 
@@ -43,9 +44,12 @@ echo "Modules   : ${ROOTS[*]}"
 echo
 
 # -Xmx: full-project symbol resolution over ~1100 files is memory-hungry.
+# Output dir goes through -Duml.out (a single token) so paths with spaces are
+# safe; only the (space-free) source roots ride in -Dexec.args.
 MAVEN_OPTS="${MAVEN_OPTS:--Xmx3g}" \
   mvn -B -q -f tools/uml-export/pom.xml compile exec:java \
-  -Dexec.args="$OUT ${ROOTS[*]}"
+  -Duml.out="$OUT" \
+  -Dexec.args="${ROOTS[*]}"
 
 echo
 echo "Done. Open '$OUT' as an Obsidian vault (or a folder inside one)."

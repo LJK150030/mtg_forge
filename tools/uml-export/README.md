@@ -15,14 +15,33 @@ tools/uml-export/export-uml.sh ~/Vaults/Forge   # write into an Obsidian vault
 ```
 
 Or directly via Maven (run from the repo root so the repo's `.mvn` settings
-resolve):
+resolve). Pass the output dir as `-Duml.out` — it is a single token, so paths
+with spaces are safe; only the source roots ride in `-Dexec.args`:
 
 ```bash
 MAVEN_OPTS=-Xmx3g mvn -f tools/uml-export/pom.xml compile exec:java \
-  -Dexec.args="uml-vault \
-    forge-core/src/main/java \
-    forge-game/src/main/java \
-    forge-ai/src/main/java"
+  -Duml.out="uml-vault" \
+  -Dexec.args="forge-core/src/main/java forge-game/src/main/java forge-ai/src/main/java"
+```
+
+### Windows (IntelliJ terminal)
+
+Writing straight into an Obsidian vault whose path has spaces.
+
+PowerShell:
+
+```powershell
+$env:MAVEN_OPTS="-Xmx3g"
+mvn -f tools/uml-export/pom.xml compile exec:java `
+  "-Duml.out=G:\My Files\School\sprint 2026\obsidian_valuts\mtg_forge_conversion" `
+  "-Dexec.args=forge-core/src/main/java forge-game/src/main/java forge-ai/src/main/java"
+```
+
+cmd.exe:
+
+```bat
+set MAVEN_OPTS=-Xmx3g
+mvn -f tools/uml-export/pom.xml compile exec:java "-Duml.out=G:\My Files\School\sprint 2026\obsidian_valuts\mtg_forge_conversion" "-Dexec.args=forge-core/src/main/java forge-game/src/main/java forge-ai/src/main/java"
 ```
 
 Requires JDK 17+ and Maven with network access to Maven Central (to fetch
