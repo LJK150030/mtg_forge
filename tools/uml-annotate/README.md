@@ -117,9 +117,10 @@ This is built for running across ~1,300 notes against a personal usage limit:
 
 ## How it works (and how to tweak it)
 
-- Runs `claude --bare -p "<prompt>" --model claude-opus-4-8 --allowedTools "Read" --output-format json`,
-  feeding the note on **stdin**. `--bare` skips CLAUDE.md/hooks/skills/MCP for a
-  clean, identical run per file.
+- Runs `claude -p "<prompt>" --model claude-opus-4-8 --allowedTools "Read" --output-format json`,
+  feeding the note on **stdin**. (`--bare` was removed: in some setups it bypasses
+  the cached-credential/refresh path and reports "Not logged in" even when
+  `claude -p` works normally.)
 - The **prompt** (edit it inside the script) asks for a 1–2 paragraph description
   of the class's purpose, its role vs. its supertype/collaborators, and design
   intent visible in the source.

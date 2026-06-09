@@ -88,7 +88,7 @@ strip_and_trim() {  # strip a wrapping code fence and leading/trailing blank lin
 
 # Preflight: confirm headless claude works before looping.
 pf_err="$(mktemp)"
-pf_out="$(printf 'ping' | claude --bare -p "Reply with exactly: OK" --model "$MODEL" --allowedTools "Read" --output-format json 2>"$pf_err")"
+pf_out="$(printf 'ping' | claude -p "Reply with exactly: OK" --model "$MODEL" --allowedTools "Read" --output-format json 2>"$pf_err")"
 pf_code=$?
 if [ "$pf_code" -ne 0 ]; then
   echo "Preflight failed: 'claude -p' exited $pf_code and can't run headless yet." >&2
@@ -125,7 +125,7 @@ for f in "${files[@]}"; do
   fi
 
   errf="$(mktemp)"
-  raw="$(claude --bare -p "$PROMPT" --model "$MODEL" --allowedTools "Read" --output-format json < "$f" 2>"$errf")"
+  raw="$(claude -p "$PROMPT" --model "$MODEL" --allowedTools "Read" --output-format json < "$f" 2>"$errf")"
   code=$?
   errtxt="$(cat "$errf")"; rm -f "$errf"
 

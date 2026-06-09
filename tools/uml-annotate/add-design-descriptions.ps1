@@ -149,7 +149,7 @@ if ($pfCode -ne 0) {
   Write-Host "  - Sign in (quick):   run 'claude' once interactively, finish the browser login, then retry."
   Write-Host "  - Sign in (durable): run 'claude setup-token', then set CLAUDE_CODE_OAUTH_TOKEN so it survives expiry."
   Write-Host "  - Model:   if it says the model is invalid/unknown, re-run with  -Model opus"
-  Write-Host "  - Flags:   run 'claude --help'; tell me which of --bare/--allowedTools/--output-format differ."
+  Write-Host "  - Flags:   run 'claude --help'; tell me which of --model/--allowedTools/--output-format differ."
   exit 1
 }
 Write-Host "Preflight OK - claude headless is working. Starting..." -ForegroundColor Green

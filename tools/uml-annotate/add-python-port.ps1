@@ -96,7 +96,7 @@ $authRe  = '(?i)not logged in|please run /login|/login\b|unauthorized|authentica
 
 # Preflight: confirm headless claude works before looping over ~1,300 files.
 $pfErr = [System.IO.Path]::GetTempFileName()
-$pfOut = ("ping" | & claude --bare -p "Reply with exactly: OK" --model $Model --allowedTools "Read" --output-format json 2> $pfErr | Out-String)
+$pfOut = ("ping" | & claude -p "Reply with exactly: OK" --model $Model --allowedTools "Read" --output-format json 2> $pfErr | Out-String)
 $pfCode = $LASTEXITCODE
 $pfE = ((Get-Content -LiteralPath $pfErr -ErrorAction SilentlyContinue) -join "`n")
 Remove-Item -LiteralPath $pfErr -ErrorAction SilentlyContinue
@@ -110,7 +110,7 @@ if ($pfCode -ne 0) {
   Write-Host "  - Sign in (quick):   run 'claude' once interactively, finish the browser login, then retry."
   Write-Host "  - Sign in (durable): run 'claude setup-token', then set CLAUDE_CODE_OAUTH_TOKEN so it survives expiry."
   Write-Host "  - Model:   if it says the model is invalid/unknown, re-run with  -Model opus"
-  Write-Host "  - Flags:   run 'claude --help'; tell me which of --bare/--allowedTools/--output-format differ."
+  Write-Host "  - Flags:   run 'claude --help'; tell me which of --model/--allowedTools/--output-format differ."
   exit 1
 }
 Write-Host "Preflight OK - claude headless is working. Starting..." -ForegroundColor Green
@@ -130,7 +130,7 @@ foreach ($f in $files) {
   }
 
   $errPath = [System.IO.Path]::GetTempFileName()
-  $raw  = ($content | & claude --bare -p $prompt --model $Model --allowedTools "Read" --output-format json 2> $errPath | Out-String)
+  $raw  = ($content | & claude -p $prompt --model $Model --allowedTools "Read" --output-format json 2> $errPath | Out-String)
   $code = $LASTEXITCODE
   $err  = ((Get-Content -LiteralPath $errPath -ErrorAction SilentlyContinue) -join "`n")
   Remove-Item -LiteralPath $errPath -ErrorAction SilentlyContinue
