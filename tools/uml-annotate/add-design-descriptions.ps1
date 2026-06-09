@@ -130,6 +130,8 @@ function Invoke-ClaudeJson {
 
 # Messages Claude Code emits when a usage / rate / credit limit is hit.
 $limitRe = '(?i)hit your (session|weekly|opus|usage) limit|rate.?limit|\(429\)|credit balance is too low|usage limit'
+# Messages that mean the session expired / not authenticated (stop, re-login, resume).
+$authRe  = '(?i)not logged in|please run /login|/login\b|unauthorized|authentication_error|invalid (x-)?api key|(oauth |session |token )(has )?expired|please (re-?)?log ?in'
 
 # Preflight: confirm headless claude works (auth + flags + model) before looping
 # over ~1,300 files. Fails fast with the real reason instead of erroring on every note.
@@ -144,7 +146,8 @@ if ($pfCode -ne 0) {
   Write-Host ("Details: {0}" -f $pfDiag)
   Write-Host ""
   Write-Host "Common fixes:"
-  Write-Host "  - Sign in: run 'claude' once interactively, finish the browser login, then retry."
+  Write-Host "  - Sign in (quick):   run 'claude' once interactively, finish the browser login, then retry."
+  Write-Host "  - Sign in (durable): run 'claude setup-token', then set CLAUDE_CODE_OAUTH_TOKEN so it survives expiry."
   Write-Host "  - Model:   if it says the model is invalid/unknown, re-run with  -Model opus"
   Write-Host "  - Flags:   run 'claude --help'; tell me which of --bare/--allowedTools/--output-format differ."
   exit 1
@@ -186,6 +189,15 @@ foreach ($f in $files) {
       Write-Host "Stopped cleanly. Re-run the exact same command later to resume from here."
       Add-Content -LiteralPath $log -Value ("{0}  STOP(limit)  {1}" -f (Get-Date -Format o), $f.Name)
       exit 2
+    }
+    if ($diag -match $authRe) {
+      Write-Host ""
+      Write-Host ("Lost authentication at: {0}" -f $f.Name) -ForegroundColor Yellow
+      Write-Host "Your Claude session expired. Re-authenticate, then re-run to resume:"
+      Write-Host "  durable:  claude setup-token   then set CLAUDE_CODE_OAUTH_TOKEN"
+      Write-Host "  quick:    run 'claude' interactively and /login"
+      Add-Content -LiteralPath $log -Value ("{0}  STOP(auth)  {1}" -f (Get-Date -Format o), $f.Name)
+      exit 4
     }
     if ($diag.Length -gt 300) { $diag = $diag.Substring(0, 300) }
     Write-Warning ("[{0}/{1}] error (exit {2}) on {3}: {4}" -f $idx, $total, $code, $f.Name, $diag)

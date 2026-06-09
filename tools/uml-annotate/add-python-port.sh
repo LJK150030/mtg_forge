@@ -71,6 +71,7 @@ EOF
 )"
 
 LIMIT_RE='hit your (session|weekly|opus|usage) limit|rate.?limit|\(429\)|credit balance is too low|usage limit'
+AUTH_RE='not logged in|please run /login|/login|unauthorized|authentication_error|invalid (x-)?api key|(oauth|session|token) (has )?expired|please re-?log ?in'
 
 strip_and_trim() {  # strip a wrapping code fence and leading/trailing blank lines
   awk '
@@ -139,6 +140,13 @@ for f in "${files[@]}"; do
       echo "Stopped cleanly. Re-run the same command later to resume from here."
       printf '%s  STOP(limit)  %s\n' "$(date -Iseconds)" "$base" >> "$LOG"
       exit 2
+    fi
+    if printf '%s\n%s' "$raw" "$errtxt" | grep -qiE "$AUTH_RE"; then
+      echo ""
+      echo "Lost authentication at: $base"
+      echo "Session expired. Re-authenticate ('claude setup-token' + CLAUDE_CODE_OAUTH_TOKEN, or run 'claude' and /login), then re-run to resume."
+      printf '%s  STOP(auth)  %s\n' "$(date -Iseconds)" "$base" >> "$LOG"
+      exit 4
     fi
     echo "[$idx/$total] ERROR (exit $code): $base  $(printf '%s' "$errtxt" | tr '\n' ' ' | cut -c1-200)"
     printf '%s  ERROR  %s  %s\n' "$(date -Iseconds)" "$base" "$(printf '%s' "$errtxt" | tr '\n' ' ')" >> "$LOG"
