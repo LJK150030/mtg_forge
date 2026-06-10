@@ -39,6 +39,10 @@ classDiagram
 - [[forge.game.player.GameLossReason|GameLossReason]]
 - [[forge.util.Localizer|Localizer]]
 
+## Design Description
+
+PlayerOutcome is an immutable value object that records the terminal result of a game for a single playerâ€”win, draw, alternate-source win, loss, or concessionâ€”capturing the reason and any associated source or spell name in three final fields. Its private constructor is reached only through static factory methods (`win`, `draw`, `altWin`, `loss`, `concede`), each encoding a specific outcome scenario and giving callers an intention-revealing API rather than raw field assignment. It collaborates with the `GameLossReason` enum to classify defeats and queries `hasWon()` by treating a null loss state as victory. The `toString()` method delegates to `Localizer` to translate each outcome into a human-readable, internationalized message, switching over the loss reason and interpolating the source or spell name. The design favors immutability, factory-based construction, and separation of state from presentation.
+
 ## Source
 `forge-game/src/main/java/forge/game/player/PlayerOutcome.java`
 
@@ -126,4 +130,81 @@ public class PlayerOutcome {
     }
 
 }
+```
+
+## Python
+`forge/game/player/PlayerOutcome.py`
+
+```python
+from forge.game.player.GameLossReason import GameLossReason
+from forge.util.Localizer import Localizer
+
+
+# TODO: Write javadoc for this type.
+class PlayerOutcome:
+    def __init__(self, altWinSourceName: str, lossState: GameLossReason, loseConditionSpell: str):
+        self.altWinSourceName = altWinSourceName
+        self.loseConditionSpell = loseConditionSpell
+        self.lossState = lossState
+
+    # TODO: Write javadoc for this method.
+    # @return
+    @staticmethod
+    def win() -> "PlayerOutcome":
+        return PlayerOutcome(None, None, None)
+
+    @staticmethod
+    def draw() -> "PlayerOutcome":
+        return PlayerOutcome(None, GameLossReason.IntentionalDraw, None)
+
+    @staticmethod
+    def altWin(sourceName: str) -> "PlayerOutcome":
+        return PlayerOutcome(sourceName, None, None)
+
+    # TODO: Write javadoc for this method.
+    # @param state
+    # @param spellName
+    # @return
+    @staticmethod
+    def loss(state: GameLossReason, spellName: str) -> "PlayerOutcome":
+        return PlayerOutcome(None, state, spellName)
+
+    # TODO: Write javadoc for this method.
+    # @return
+    @staticmethod
+    def concede() -> "PlayerOutcome":
+        return PlayerOutcome(None, GameLossReason.Conceded, None)
+
+    def hasWon(self) -> bool:
+        return self.lossState is None
+
+    # (non-Javadoc)
+    # @see java.lang.Object#toString()
+    def toString(self) -> str:
+        localizer = Localizer.getInstance()
+        if self.lossState is None:
+            if self.altWinSourceName is None:
+                return localizer.getMessage("lblWonBecauseAllOpponentsHaveLost")
+            else:
+                return localizer.getMessage("lblWonDueToEffectOf").replace("%s", self.altWinSourceName)
+        if self.lossState == GameLossReason.Conceded:
+            return localizer.getMessage("lblConceded")
+        elif self.lossState == GameLossReason.Milled:
+            return localizer.getMessage("lblLostTryingToDrawCardsFromEmptyLibrary")
+        elif self.lossState == GameLossReason.LifeReachedZero:
+            return localizer.getMessage("lblLostBecauseLifeTotalReachedZero")
+        elif self.lossState == GameLossReason.Poisoned:
+            return localizer.getMessage("lblLostBecauseOfObtainingTenPoisonCounters")
+        elif self.lossState == GameLossReason.OpponentWon:
+            return localizer.getMessage("lblLostBecauseAnOpponentHasWonBySpell").replace("%s", self.loseConditionSpell)
+        elif self.lossState == GameLossReason.SpellEffect:
+            return localizer.getMessage("lblLostDueToEffectOfSpell").replace("%s", self.loseConditionSpell)
+        elif self.lossState == GameLossReason.CommanderDamage:
+            return localizer.getMessage("lblLostDueToAccumulationOf21DamageFromGenerals")
+        elif self.lossState == GameLossReason.IntentionalDraw:
+            return localizer.getMessage("lblAcceptedThatTheGameIsADraw")
+        return localizer.getMessage("lblLostForUnknownReasonBug")
+
+    def __str__(self) -> str:
+        return self.toString()
 ```

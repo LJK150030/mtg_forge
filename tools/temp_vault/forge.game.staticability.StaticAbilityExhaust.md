@@ -34,6 +34,10 @@ classDiagram
 - [[forge.game.player.Player|Player]]
 - [[forge.game.staticability.StaticAbility|StaticAbility]]
 
+## Design Description
+
+StaticAbilityExhaust is a stateless utility class in the static-ability subsystem that determines whether a player is permitted to use the Exhaust mechanic. It exposes only static methods: `anyWithExhaust` scans every active static-ability source across the relevant zones, inspecting each `Card`'s `StaticAbility` instances for those whose conditions match the `CanExhaust` mode, while `applyWithExhaust` evaluates an individual ability against the player via its `ValidPlayer` parameter. Reaching the game state through `Player.getGame()`, it collaborates with `Game`, `Card`, `Player`, and `StaticAbility` purely as a query helper rather than holding state. Unlike many static abilities it implements no interface and is not instantiated, reflecting an intentionally lightweight, side-effect-free design that centralizes the Exhaust eligibility check for callers elsewhere in the rules engine.
+
 ## Source
 `forge-game/src/main/java/forge/game/staticability/StaticAbilityExhaust.java`
 
@@ -70,4 +74,37 @@ public class StaticAbilityExhaust {
         return true;
     }
 }
+```
+
+## Python
+`forge/game/staticability/StaticAbilityExhaust.py`
+
+```python
+from forge.game.Game import Game
+from forge.game.card.Card import Card
+from forge.game.player.Player import Player
+from forge.game.zone.ZoneType import ZoneType
+from forge.game.staticability.StaticAbility import StaticAbility
+from forge.game.staticability.StaticAbilityMode import StaticAbilityMode
+
+
+class StaticAbilityExhaust:
+
+    @staticmethod
+    def anyWithExhaust(player: Player) -> bool:
+        game = player.getGame()
+        for ca in game.getCardsIn(ZoneType.STATIC_ABILITIES_SOURCE_ZONES):
+            for stAb in ca.getStaticAbilities():
+                if not stAb.checkConditions(StaticAbilityMode.CanExhaust):
+                    continue
+                if StaticAbilityExhaust.applyWithExhaust(stAb, player):
+                    return True
+        return False
+
+    @staticmethod
+    def applyWithExhaust(stAb: StaticAbility, player: Player) -> bool:
+        if not stAb.matchesValidParam("ValidPlayer", player):
+            return False
+
+        return True
 ```

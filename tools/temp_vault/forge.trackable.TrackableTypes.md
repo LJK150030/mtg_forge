@@ -90,6 +90,12 @@ classDiagram
 - [[forge.trackable.TrackableTypes.TrackableType|TrackableType]]
 - [[forge.trackable.Tracker|Tracker]]
 
+## Design Description
+
+TrackableTypes is a namespace utility that defines the complete catalog of value-type descriptors used by Forge's client-server state-synchronization (tracking) layer. It exposes singleton `TrackableType<T>` constantsâ€”primitives, enums, collections, and view objects (CardView, PlayerView, StackItemView, CombatView, etc.)â€”each parameterized to a property's value type, supplying that type's default value and the logic for copying changed properties between `TrackableObject` snapshots.
+
+Through its nested abstract hierarchyâ€”`TrackableType`, the identity-resolving `TrackableObjectType`, and `TrackableCollectionType`â€”it collaborates with `Tracker`, `TrackableProperty`, and `TrackableCollection` to deduplicate and reconcile tracked objects by ID during synchronization. Notable design intent includes the lazily-cached `EnumType` factory that avoids declaring a class per enum, and specialized `copyChangedProps` overrides that handle edge cases: shared-ID CardStateViews, ConcurrentModification-safe collection rebuilds, and stale cross-zone CardView references.
+
 ## Source
 `forge-game/src/main/java/forge/trackable/TrackableTypes.java`
 
@@ -200,7 +206,7 @@ public class TrackableTypes {
                     if (newObj != null) {
                         T existingObj = from.getTracker().getObj(itemType, newObj.getId());
                         if (existingObj != null) {
-                            // Skip CardView collections — cross-zone refs like Commander hold stale copies
+                            // Skip CardView collections Ã¢â‚¬â€ cross-zone refs like Commander hold stale copies
                             if (prop.getType() != TrackableTypes.CardViewCollectionType &&
                                     prop.getType() != TrackableTypes.StackItemViewListType) {
                                 existingObj.copyChangedProps(newObj);
@@ -411,4 +417,262 @@ public class TrackableTypes {
         }
     };
 }
+```
+
+## Python
+`forge/trackable/TrackableTypes.py`
+
+```python
+from forge.card.CardType import CardType
+from forge.card.CardTypeView import CardTypeView
+from forge.card.ColorSet import ColorSet
+from forge.card.mana.ManaCost import ManaCost
+from forge.game.GameEntityView import GameEntityView
+from forge.game.card.CardView import CardView
+from forge.game.card.CardView.CardStateView import CardStateView
+from forge.game.card.CounterType import CounterType
+from forge.game.combat.CombatView import CombatView
+from forge.game.keyword.KeywordCollectionView import KeywordCollectionView
+from forge.game.player.PlayerView import PlayerView
+from forge.game.spellability.StackItemView import StackItemView
+from forge.item.IPaperCard import IPaperCard
+from forge.trackable.TrackableCollection import TrackableCollection
+from forge.trackable.TrackableObject import TrackableObject
+from forge.trackable.TrackableProperty import TrackableProperty
+from forge.trackable.Tracker import Tracker
+
+
+class TrackableTypes:
+    class TrackableType:
+        def __init__(self):
+            pass
+
+        def updateObjLookup(self, tracker, newObj):
+            pass
+
+        def copyChangedProps(self, from_, to, prop):
+            to.set(prop, from_.get(prop))
+
+        def getDefaultValue(self):
+            raise NotImplementedError
+
+    class TrackableObjectType(TrackableType):
+        def __init__(self):
+            pass
+
+        def lookup(self, from_):
+            if from_ is None:
+                return None
+            to = from_.getTracker().getObj(self, from_.getId())
+            if to is None:
+                from_.getTracker().putObj(self, from_.getId(), from_)
+                return from_
+            return to
+
+        def updateObjLookup(self, tracker, newObj):
+            if tracker is None:
+                return
+            if newObj is not None and not tracker.hasObj(self, newObj.getId()):
+                tracker.putObj(self, newObj.getId(), newObj)
+                newObj.updateObjLookup()
+
+        def copyChangedProps(self, from_, to, prop):
+            newObj = from_.get(prop)
+            if newObj is not None:
+                existingObj = newObj.getTracker().getObj(self, newObj.getId())
+                if existingObj is not None:  # if object exists already, update its changed properties
+                    existingObj.copyChangedProps(newObj)
+                    newObj = existingObj
+                else:  # if object is new, cache in object lookup
+                    newObj.getTracker().putObj(self, newObj.getId(), newObj)
+            to.set(prop, newObj)
+
+    class TrackableCollectionType(TrackableType):
+        def __init__(self, itemType0):
+            self.itemType = itemType0
+
+        def updateObjLookup(self, tracker, newCollection):
+            if newCollection is not None:
+                for newObj in newCollection:
+                    if newObj is not None:
+                        self.itemType.updateObjLookup(tracker, newObj)
+
+        def copyChangedProps(self, from_, to, prop):
+            newCollection = from_.get(prop)
+            if newCollection is not None:
+                # Snapshot via toArray: the loop below clears and rebuilds the collection,
+                # so direct iteration would throw ConcurrentModificationException
+                items = list(newCollection)
+                newCollection.clear()
+                for newObj in items:
+                    if newObj is not None:
+                        existingObj = from_.getTracker().getObj(self.itemType, newObj.getId())
+                        if existingObj is not None:
+                            # Skip CardView collections ΓÇö cross-zone refs like Commander hold stale copies
+                            if prop.getType() is not TrackableTypes.CardViewCollectionType and \
+                                    prop.getType() is not TrackableTypes.StackItemViewListType:
+                                existingObj.copyChangedProps(newObj)
+                            newCollection.add(existingObj)
+                        else:
+                            from_.getTracker().putObj(self.itemType, newObj.getId(), newObj)
+                            newCollection.add(newObj)
+            to.set(prop, newCollection)
+
+    class _BooleanType(TrackableType):
+        def getDefaultValue(self):
+            return False
+    BooleanType = _BooleanType()
+
+    class _IntegerType(TrackableType):
+        def getDefaultValue(self):
+            return 0
+    IntegerType = _IntegerType()
+
+    class _FloatType(TrackableType):
+        def getDefaultValue(self):
+            return 0.0
+    FloatType = _FloatType()
+
+    class _StringType(TrackableType):
+        def getDefaultValue(self):
+            return ""
+    StringType = _StringType()
+
+    # make this quicker than having to define a new class for every single enum
+    enumTypes = {}
+
+    class _EnumType(TrackableType):
+        def getDefaultValue(self):
+            return None
+
+    @staticmethod
+    def EnumType(enumType):
+        type = TrackableTypes.enumTypes.get(enumType)
+        if type is None:
+            type = TrackableTypes._EnumType()
+            TrackableTypes.enumTypes[enumType] = type
+        return type
+
+    class _CardViewType(TrackableObjectType):
+        def getDefaultValue(self):
+            return None
+    CardViewType = _CardViewType()
+
+    class _IPaperCardType(TrackableType):
+        def getDefaultValue(self):
+            return None
+    IPaperCardType = _IPaperCardType()
+
+    class _CardViewCollectionType(TrackableCollectionType):
+        def getDefaultValue(self):
+            return None
+    CardViewCollectionType = _CardViewCollectionType(CardViewType)
+
+    class _CardStateViewType(TrackableObjectType):
+        def getDefaultValue(self):
+            return None
+
+        def copyChangedProps(self, from_, to, prop):
+            # CardStateViews share their parent CardView's ID, so multiple states
+            # (CurrentState, AlternateState) have the same (type, id) key. The base
+            # implementation uses tracker.getObj(type, id) which returns the wrong
+            # state. Instead, look up the existing state directly via the property.
+            newCsv = from_.get(prop)
+            existingCsv = to.get(prop)
+            if newCsv is not None and existingCsv is not None:
+                existingCsv.copyChangedProps(newCsv)
+                to.set(prop, existingCsv)
+            else:
+                to.set(prop, newCsv)
+    CardStateViewType = _CardStateViewType()
+
+    class _CardTypeViewType(TrackableType):
+        def getDefaultValue(self):
+            return CardType.EMPTY
+    CardTypeViewType = _CardTypeViewType()
+
+    class _PlayerViewType(TrackableObjectType):
+        def getDefaultValue(self):
+            return None
+    PlayerViewType = _PlayerViewType()
+
+    class _PlayerViewCollectionType(TrackableCollectionType):
+        def getDefaultValue(self):
+            return None
+    PlayerViewCollectionType = _PlayerViewCollectionType(PlayerViewType)
+
+    class _GameEntityViewType(TrackableObjectType):
+        def getDefaultValue(self):
+            return None
+    GameEntityViewType = _GameEntityViewType()
+
+    class _StackItemViewType(TrackableObjectType):
+        def getDefaultValue(self):
+            return None
+    StackItemViewType = _StackItemViewType()
+
+    class _StackItemViewListType(TrackableCollectionType):
+        def getDefaultValue(self):
+            return TrackableCollection()
+    StackItemViewListType = _StackItemViewListType(StackItemViewType)
+
+    class _CombatViewType(TrackableObjectType):
+        def getDefaultValue(self):
+            return None
+    CombatViewType = _CombatViewType()
+
+    class _ManaCostType(TrackableType):
+        def getDefaultValue(self):
+            return ManaCost.NO_COST
+    ManaCostType = _ManaCostType()
+
+    class _ColorSetType(TrackableType):
+        def getDefaultValue(self):
+            return ColorSet.C
+    ColorSetType = _ColorSetType()
+
+    class _StringListType(TrackableType):
+        def getDefaultValue(self):
+            return None
+    StringListType = _StringListType()
+
+    class _StringSetType(TrackableType):
+        def getDefaultValue(self):
+            return None
+    StringSetType = _StringSetType()
+
+    class _StringMapType(TrackableType):
+        def getDefaultValue(self):
+            return None
+    StringMapType = _StringMapType()
+
+    class _IntegerSetType(TrackableType):
+        def getDefaultValue(self):
+            return None
+    IntegerSetType = _IntegerSetType()
+
+    class _IntegerMapType(TrackableType):
+        def getDefaultValue(self):
+            return None
+    IntegerMapType = _IntegerMapType()
+
+    class _ManaMapType(TrackableType):
+        def getDefaultValue(self):
+            return None
+    ManaMapType = _ManaMapType()
+
+    class _CounterMapType(TrackableType):
+        def getDefaultValue(self):
+            return None
+    CounterMapType = _CounterMapType()
+
+    class _GenericMapType(TrackableType):
+        def getDefaultValue(self):
+            return None
+    GenericMapType = _GenericMapType()
+
+    class _KeywordCollectionViewType(TrackableType):
+        def getDefaultValue(self):
+            return KeywordCollectionView.EMPTY
+    KeywordCollectionViewType = _KeywordCollectionViewType()
 ```

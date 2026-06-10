@@ -41,12 +41,12 @@ classDiagram
 
 ## Design Description
 
-The `Editor` is a nested helper class within `CardDb` that provides controlled, mutating write access to the card database, functioning much like a `Map.put` for card definitions. Its core method, `putCard`, registers a `CardRules` entry by primary name—either updating an existing entry in place via `reinitializeFromRules` or inserting a new one—then materializes the corresponding `PaperCard` printings from each `CardEdition`'s `EditionEntry` data (rarity, collector number, artist, variant), falling back to an unknown edition when no printing data exists.
+The `Editor` is a nested helper class within `CardDb` that provides controlled, mutating write access to the card database, functioning much like a `Map.put` for card definitions. Its core method, `putCard`, registers a `CardRules` entry by primary nameâ€”either updating an existing entry in place via `reinitializeFromRules` or inserting a new oneâ€”then materializes the corresponding `PaperCard` printings from each `CardEdition`'s `EditionEntry` data (rarity, collector number, artist, variant), falling back to an unknown edition when no printing data exists.
 
 As a focused mutator collaborating with `CardRules`, `CardEdition`, `EditionEntry`, `CardRarity`, and `PaperCard`, it deliberately separates write concerns from the enclosing database's read API. Its notable design intent is the `immediateReindex` flag, which lets callers defer reindexing so an entire batch of cards can be added before a single, more efficient `reIndex` pass.
 
 ## Source
-`forge-core/src/main/java/forge/card/CardDb.java` â€” declaration excerpt
+`forge-core/src/main/java/forge/card/CardDb.java` Ã¢â‚¬â€ declaration excerpt
 
 ```java
     public class Editor {
@@ -122,4 +122,77 @@ As a focused mutator collaborating with `CardRules`, `CardEdition`, `EditionEntr
             this.immediateReindex = immediateReindex;
         }
     }
+```
+
+## Python
+`forge/card/CardDb/Editor.py`
+
+```python
+from forge.card.CardEdition import CardEdition
+from forge.card.CardEdition.EditionEntry import EditionEntry
+from forge.card.CardRarity import CardRarity
+from forge.card.CardRules import CardRules
+from forge.item.PaperCard import PaperCard
+from forge.item.IPaperCard import IPaperCard
+
+
+class Editor:
+    def __init__(self):
+        self.immediateReindex = True
+
+    def putCard(self, rules, whenItWasPrinted=None):
+        # works similarly to Map<K,V>, returning prev. value
+        cardName = rules.getName()
+
+        result = rulesByPrimaryName.get(cardName)
+        if result is not None and result.getName() == cardName:  # change properties only
+            result.reinitializeFromRules(rules)
+            return result
+
+        result = rulesByPrimaryName.put(cardName, rules)
+
+        # 1. generate all paper cards from edition data we have (either explicit, or found in res/editions, or add to unknown edition)
+        paperCards = []
+        if whenItWasPrinted is None or len(whenItWasPrinted) == 0:
+            # @friarsol: Not performant Each time we "putCard" we loop through ALL CARDS IN ALL editions
+            # @leriomaggio: DONE! re-using here the same strategy implemented for lazy-loading!
+            for e in editions.getOrderedEditions():
+                artIdx = IPaperCard.DEFAULT_ART_INDEX
+                for cis in e.getCardInSet(cardName):
+                    paperCards.append(PaperCard(rules, e.getCode(), cis.rarity(), artIdx, False,
+                                                cis.collectorNumber(), cis.artistName(), cis.getFunctionalVariantName()))
+                    artIdx += 1
+        else:
+            lastEdition = None
+            artIdx = 0
+            for tuple in whenItWasPrinted:
+                if tuple.getKey() != lastEdition:
+                    artIdx = IPaperCard.DEFAULT_ART_INDEX  # reset artIndex
+                    lastEdition = tuple.getKey()
+                ed = editions.get(lastEdition)
+                if ed is None:
+                    continue
+                cardsInSet = ed.getCardInSet(cardName)
+                if len(cardsInSet) == 0:
+                    continue
+                cardInSetIndex = max(artIdx - 1, 0)  # make sure doesn't go below zero
+                cds = cardsInSet[cardInSetIndex]  # use ArtIndex to get the right Coll. Number
+                paperCards.append(PaperCard(rules, lastEdition, tuple.getValue(), artIdx, False,
+                                            cds.collectorNumber(), cds.artistName(), cds.getFunctionalVariantName()))
+                artIdx += 1
+        if len(paperCards) == 0:
+            paperCards.append(PaperCard(rules, CardEdition.UNKNOWN_CODE, CardRarity.Special))
+        # 2. add them to db
+        for paperCard in paperCards:
+            addCard(paperCard)
+        # 3. reindex can be temporary disabled and run after the whole batch of rules is added to db.
+        if self.immediateReindex:
+            reIndex()
+        return result
+
+    def isImmediateReindex(self):
+        return self.immediateReindex
+
+    def setImmediateReindex(self, immediateReindex):
+        self.immediateReindex = immediateReindex
 ```

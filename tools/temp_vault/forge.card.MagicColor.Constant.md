@@ -37,12 +37,12 @@ classDiagram
 
 ## Design Description
 
-A static utility class nesting color-related string constants and predefined collections within the `MagicColor` class. It centralizes the canonical string identifiers for Magic: The Gathering's five colors (white, blue, black, red, green), colorless, and snow, alongside immutable lists grouping them—`ONLY_COLORS`, `COLORS_AND_COLORLESS`—plus the basic and snow-covered land names and special mana-conversion tokens.
+A static utility class nesting color-related string constants and predefined collections within the `MagicColor` class. It centralizes the canonical string identifiers for Magic: The Gathering's five colors (white, blue, black, red, green), colorless, and snow, alongside immutable lists grouping themâ€”`ONLY_COLORS`, `COLORS_AND_COLORLESS`â€”plus the basic and snow-covered land names and special mana-conversion tokens.
 
 Declared `final` with a private constructor, it is designed purely as a non-instantiable namespace for shared constants rather than a behavioral type, exposing no methods or state beyond its `public static final` fields. Its use of Guava's `ImmutableList` enforces that the grouped collections cannot be mutated by callers, guaranteeing these foundational values remain stable references shared across the engine's card and color-handling code.
 
 ## Source
-`forge-core/src/main/java/forge/card/MagicColor.java` â€” declaration excerpt
+`forge-core/src/main/java/forge/card/MagicColor.java` Ã¢â‚¬â€ declaration excerpt
 
 ```java
     /**
@@ -86,4 +86,43 @@ Declared `final` with a private constructor, it is designed purely as a non-inst
         private Constant() {
         }
     }
+```
+
+## Python
+`forge/card/MagicColor/Constant.py`
+
+```python
+from forge.card.MagicColor import MagicColor
+
+
+class Constant:
+    """A static utility class nesting color-related string constants and
+    predefined collections. Non-instantiable namespace for shared constants."""
+
+    WHITE = "white"
+
+    BLUE = "blue"
+
+    BLACK = "black"
+
+    RED = "red"
+
+    GREEN = "green"
+
+    COLORLESS = "colorless"
+
+    ONLY_COLORS = (WHITE, BLUE, BLACK, RED, GREEN)
+    COLORS_AND_COLORLESS = (WHITE, BLUE, BLACK, RED, GREEN, COLORLESS)
+
+    SNOW = "snow"
+
+    BASIC_LANDS = ("Plains", "Island", "Swamp", "Mountain", "Forest")
+    SNOW_LANDS = ("Snow-Covered Plains", "Snow-Covered Island", "Snow-Covered Swamp", "Snow-Covered Mountain", "Snow-Covered Forest")
+
+    ANY_COLOR_CONVERSION = "AnyType->AnyColor"
+    ANY_TYPE_CONVERSION = "AnyType->AnyType"
+
+    def __init__(self):
+        """Private constructor to prevent instantiation."""
+        raise RuntimeError("Constant is non-instantiable")
 ```

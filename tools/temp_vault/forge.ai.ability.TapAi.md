@@ -197,3 +197,128 @@ public class TapAi extends TapAiBase {
     }
 }
 ```
+
+## Python
+`forge/ai/ability/TapAi.py`
+
+```python
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.ai.AiProfileUtil import AiProfileUtil
+from forge.ai.AiProps import AiProps
+from forge.ai.ComputerUtil import ComputerUtil
+from forge.ai.ComputerUtilCard import ComputerUtilCard
+from forge.ai.ComputerUtilCombat import ComputerUtilCombat
+from forge.ai.ComputerUtilCost import ComputerUtilCost
+from forge.ai.SpecialCardAi import SpecialCardAi
+from forge.ai.ability.TapAiBase import TapAiBase
+from forge.card.ColorSet import ColorSet
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardLists import CardLists
+from forge.game.combat.CombatUtil import CombatUtil
+from forge.game.cost.Cost import Cost
+from forge.game.cost.CostPart import CostPart
+from forge.game.cost.CostPayLife import CostPayLife
+from forge.game.phase.PhaseHandler import PhaseHandler
+from forge.game.phase.PhaseType import PhaseType
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.collect.FCollectionView import FCollectionView
+
+
+class TapAi(TapAiBase):
+
+    def checkApiLogic(self, ai: Player, sa: SpellAbility) -> AiAbilityDecision:
+        phase = ai.getGame().getPhaseHandler()
+        turn = phase.getPlayerTurn()
+
+        if turn.isOpponentOf(ai) and phase.getPhase().isBefore(PhaseType.COMBAT_DECLARE_ATTACKERS):
+            # Tap things down if it's Human's turn
+            pass
+        elif turn == ai:
+            if self.isSorcerySpeed(sa, ai) and phase.getPhase().isBefore(PhaseType.COMBAT_BEGIN):
+                # Cast it if it's a sorcery.
+                pass
+            elif phase.getPhase().isBefore(PhaseType.COMBAT_DECLARE_BLOCKERS):
+                # Aggro Brains are willing to use TapEffects aggressively instead of defensively
+                if not AiProfileUtil.getBoolProperty(ai, AiProps.PLAY_AGGRO):
+                    return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+            else:
+                # Don't tap down after blockers
+                return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+        elif not self.playReusable(ai, sa):
+            # Generally don't want to tap things with an Instant during Players turn outside of combat
+            return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+        source = sa.getHostCard()
+
+        aiLogic = sa.getParamOrDefault("AILogic", "")
+        if "GoblinPolkaBand" == aiLogic:
+            return SpecialCardAi.GoblinPolkaBand.consider(ai, sa)
+        elif "Arena" == aiLogic:
+            return SpecialCardAi.Arena.consider(ai, sa)
+
+        if sa.usesTargeting():
+            # X controls the minimum targets
+            if "X" == sa.getTargetRestrictions().getMinTargets() and sa.getSVar("X") == "Count$xPaid":
+                ComputerUtilCost.setMaxXValue(sa, ai, sa.isTrigger())
+
+            sa.resetTargets()
+            if self.tapPrefTargeting(ai, source, sa, False):
+                return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+            return AiAbilityDecision(0, AiPlayDecision.TargetingFailed)
+        else:
+            if sa.hasParam("CardChoices"):
+                untap = CardLists.getValidCards(source.getGame().getCardsIn(ZoneType.Battlefield), sa.getParam("CardChoices"), ai, source, sa)
+            else:
+                untap = AbilityUtils.getDefinedCards(source, sa.getParam("Defined"), sa)
+
+            value = 0
+            for c in untap:
+                if c.isUntapped():
+                    value += ComputerUtilCard.evaluateCreature(c)
+
+            if value > 0:
+                return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+            return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+    def willPayUnlessCost(self, payer: Player, sa: SpellAbility, cost: Cost, alreadyPaid: bool, payers: FCollectionView[Player]) -> bool:
+        # Check for shocklands and similar ETB replacement effects
+        if sa.hasParam("ETB"):
+            source = sa.getHostCard()
+            for part in cost.getCostParts():
+                if isinstance(part, CostPayLife):
+                    lifeCost = part
+                    amount = lifeCost.convertAmount()
+                    if payer.getLife() > (amount + 1) and payer.canPayLife(amount, True, sa):
+                        landsize = payer.getLandsInPlay().size() + 1
+                        for c in payer.getCardsIn(ZoneType.Hand):
+                            # Check if the AI has enough lands to play the card
+                            if landsize != c.getCMC():
+                                continue
+                            # Check if the AI intends to play the card and if it can pay for it with the mana it has
+                            willPlay = ComputerUtil.hasReasonToPlayCardThisTurn(payer, c)
+                            canPay = c.getManaCost().canBePaidWithAvailable(ColorSet.fromNames(ComputerUtilCost.getAvailableManaColors(payer, source)).getColor())
+                            if canPay and willPlay:
+                                return True
+                    return False
+        elif sa.hasParam("UnlessSwitched"):
+            # effect is each opponent may sacrifice to tap creature
+            source = sa.getHostCard()
+            if alreadyPaid:
+                return False
+            # if it can't attack the payer, do nothing?
+            # TODO check if it can attack team mates?
+            if not CombatUtil.canAttack(source, payer):
+                return False
+
+            # predict combat damage
+            dmg = ComputerUtilCombat.damageIfUnblocked(source, payer, None, False)
+            if payer.getLife() < dmg * 1.5:
+                return True
+
+        return super().willPayUnlessCost(payer, sa, cost, alreadyPaid, payers)
+```

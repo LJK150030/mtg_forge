@@ -72,3 +72,40 @@ public record GameEventCardTapped(CardView card, boolean tapped) implements Game
     }
 }
 ```
+
+## Python
+`forge/game/event/GameEventCardTapped.py`
+
+```python
+from typing import TypeVar
+
+from forge.game.card.Card import Card
+from forge.game.card.CardView import CardView
+from forge.game.event.GameEvent import GameEvent
+from forge.game.event.IGameEventVisitor import IGameEventVisitor
+
+T = TypeVar("T")
+
+
+class GameEventCardTapped(GameEvent):
+
+    def __init__(self, card, tapped: bool):
+        # Convenience constructor accepts a domain Card but stores only its CardView,
+        # decoupling event consumers from the mutable model.
+        if isinstance(card, Card):
+            self.card: CardView = CardView.get(card)
+        else:
+            self.card: CardView = card
+        self.tapped: bool = tapped
+
+    def visit(self, visitor: IGameEventVisitor[T]) -> T:
+        return visitor.visit(self)
+
+    # (non-Javadoc)
+    # @see java.lang.Object#toString()
+    def toString(self) -> str:
+        return "" + str(self.card.getController()) + (" tapped " if self.tapped else " untapped ") + str(self.card)
+
+    def __str__(self) -> str:
+        return self.toString()
+```

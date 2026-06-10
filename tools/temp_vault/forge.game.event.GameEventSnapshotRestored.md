@@ -63,3 +63,28 @@ public record GameEventSnapshotRestored(boolean start) implements GameEvent {
     }
 }
 ```
+
+## Python
+`forge/game/event/GameEventSnapshotRestored.py`
+
+```python
+package forge.game.event;
+
+from forge.util.TextUtil import TextUtil
+from forge.game.event.GameEvent import GameEvent
+from forge.game.event.IGameEventVisitor import IGameEventVisitor
+
+
+class GameEventSnapshotRestored(GameEvent):
+    def __init__(self, start: bool):
+        self.start = start
+
+    def visit(self, visitor: IGameEventVisitor):
+        return visitor.visit(self)
+
+    def __str__(self) -> str:
+        if self.start:
+            return TextUtil.concatWithSpace("Undo Snapshot Restoration Started")
+
+        return TextUtil.concatWithSpace("Undo Snapshot Restored")
+```

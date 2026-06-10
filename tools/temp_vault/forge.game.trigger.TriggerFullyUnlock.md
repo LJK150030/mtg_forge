@@ -37,6 +37,10 @@ classDiagram
 - [[forge.game.card.Card|Card]]
 - [[forge.game.spellability.SpellAbility|SpellAbility]]
 
+## Design Description
+
+TriggerFullyUnlock is a concrete trigger type that fires when a card becomes fully unlocked, modeling that game event within Forge's data-driven triggered-ability system. Extending the abstract Trigger base class, it supplies the three behaviors the framework expects: performTest gates firing by matching the optional ValidCard and ValidPlayer restrictions against the run parameters, setTriggeringObjects binds the relevant Card and Player onto the resolving SpellAbility, and getImportantStackObjects produces a localized summary for stack display. It collaborates with AbilityKey to look up event participants in the runParams map, Card as its host, and SpellAbility as the ability being configured. Its design intent is minimalismâ€”parameters drive matching declaratively and Localizer keeps user-facing text translatableâ€”so the class adds only the event-specific keys (Card, Player) while delegating all shared trigger machinery to its supertype.
+
 ## Source
 `forge-game/src/main/java/forge/game/trigger/TriggerFullyUnlock.java`
 
@@ -82,4 +86,43 @@ public class TriggerFullyUnlock extends Trigger {
     }
 
 }
+```
+
+## Python
+`forge/game/trigger/TriggerFullyUnlock.py`
+
+```python
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Localizer import Localizer
+from forge.game.trigger.Trigger import Trigger
+
+
+class TriggerFullyUnlock(Trigger):
+
+    def __init__(self, params: dict[str, str], host: Card, intrinsic: bool):
+        super().__init__(params, host, intrinsic)
+
+    def performTest(self, runParams: dict[AbilityKey, object]) -> bool:
+        if not self.matchesValidParam("ValidCard", runParams.get(AbilityKey.Card)):
+            return False
+
+        if not self.matchesValidParam("ValidPlayer", runParams.get(AbilityKey.Player)):
+            return False
+        return True
+
+    def setTriggeringObjects(self, sa: SpellAbility, runParams: dict[AbilityKey, object]) -> None:
+        sa.setTriggeringObjectsFrom(runParams, AbilityKey.Card, AbilityKey.Player)
+
+    def getImportantStackObjects(self, sa: SpellAbility) -> str:
+        sb = []
+        sb.append(Localizer.getInstance().getMessage("lblPlayer"))
+        sb.append(": ")
+        sb.append(str(sa.getTriggeringObject(AbilityKey.Player)))
+        sb.append(", ")
+        sb.append(Localizer.getInstance().getMessage("lblCard"))
+        sb.append(": ")
+        sb.append(str(sa.getTriggeringObject(AbilityKey.Card)))
+        return "".join(sb)
 ```

@@ -105,3 +105,53 @@ public class CostBehold extends CostReveal {
     }
 }
 ```
+
+## Python
+`forge/game/cost/CostBehold.py`
+
+```python
+from forge.game.card.Card import Card
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CardPredicates import CardPredicates
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.cost.CostReveal import CostReveal
+from forge.game.cost.Cost import Cost
+from forge.game.cost.ICostVisitor import ICostVisitor
+
+
+class CostBehold(CostReveal):
+
+    serialVersionUID = 1
+
+    def __init__(self, amount: str, type: str, description: str):
+        super().__init__(amount, type, description, "Hand,Battlefield")
+
+    def canPay(self, ability: SpellAbility, payer: Player, effect: bool) -> bool:
+        handList = payer.getCardsIn(self.revealFrom)
+        amount = self.getAbilityAmount(ability)
+        # currently only creatures (Celestial Reunion)
+        if self.getType().endswith("ChosenType"):
+            for card in handList:
+                if CardLists.count(handList, CardPredicates.sharesCreatureTypeWith(card)) >= amount:
+                    return True
+            return False
+        return super().canPay(ability, payer, effect)
+
+    def toString(self) -> str:
+        sb = []
+        sb.append("Behold ")
+
+        i = self.convertAmount()
+
+        desc = self.getType() if self.getTypeDescription() is None else self.getTypeDescription()
+
+        sb.append(Cost.convertAmountTypeToWords(i, self.getAmount(), desc))
+
+        return "".join(sb)
+
+    # Inputs
+    def accept(self, visitor: ICostVisitor):
+        return visitor.visit(self)
+```

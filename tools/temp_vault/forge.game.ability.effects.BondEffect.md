@@ -42,7 +42,7 @@ classDiagram
 
 ## Design Description
 
-BondEffect implements the resolution logic for Magic's "Soulbond" pairing mechanic. As a concrete subclass of SpellAbilityEffect, it plugs into Forge's data-driven ability framework—where each effect type is a discrete handler—overriding `resolve` to pair targeted creatures and `getStackDescription` to render a human-readable stack message. For each valid target controlled by the activating Player, it gathers eligible unpaired creatures via the `ValidCards` parameter, prompts the controller to choose a partner, and mutually links the two cards with `setPairedWith`.
+BondEffect implements the resolution logic for Magic's "Soulbond" pairing mechanic. As a concrete subclass of SpellAbilityEffect, it plugs into Forge's data-driven ability frameworkâ€”where each effect type is a discrete handlerâ€”overriding `resolve` to pair targeted creatures and `getStackDescription` to render a human-readable stack message. For each valid target controlled by the activating Player, it gathers eligible unpaired creatures via the `ValidCards` parameter, prompts the controller to choose a partner, and mutually links the two cards with `setPairedWith`.
 
 Notably, it resolves each target through `Game.getCardState` and skips last-known-information or stale-timestamp cards, re-validating that each remains an in-play, unpaired creature under the correct controller before pairing. It also threads a `Partner` hint through the choice parameters to guide AI decisions, collaborating with Card, CardCollectionView, Game, Player, and SpellAbility.
 
@@ -114,4 +114,60 @@ public class BondEffect extends SpellAbilityEffect {
     }
 
 }
+```
+
+## Python
+`forge/game/ability/effects/BondEffect.py`
+
+```python
+from typing import Any
+
+from forge.game.Game import Game
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.card.CardLists import CardLists
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Lang import Lang
+from forge.util.Localizer import Localizer
+
+
+class BondEffect(SpellAbilityEffect):
+    def resolve(self, sa: SpellAbility) -> None:
+        source = sa.getHostCard()
+        p = sa.getActivatingPlayer()
+        game = source.getGame()
+        for tgtC in self.getTargetCards(sa):
+            gameCard = game.getCardState(tgtC, None)
+            # gameCard is LKI in that case, the card is not in game anymore
+            # or the timestamp did change
+            # this should check Self too
+            if gameCard is None or not tgtC.equalsWithGameTimestamp(gameCard):
+                continue
+            if gameCard.isPaired() or not gameCard.isCreature() or not gameCard.isInPlay() or gameCard.getController() != p:
+                continue
+
+            # find list of valid cards to pair with
+            cards = CardLists.getValidCards(p.getCreaturesInPlay(), sa.getParam("ValidCards"), p, source, sa)
+            if cards.isEmpty():
+                continue
+
+            params: dict[str, Any] = {}
+            params["Partner"] = gameCard  # info for AI to bond them
+
+            partner = p.getController().chooseSingleEntityForEffect(cards, sa, Localizer.getInstance().getMessage("lblSelectACardPair"), True, params)
+
+            if partner is not None:
+                # pair choices together
+                gameCard.setPairedWith(partner)
+                partner.setPairedWith(gameCard)
+
+    def getStackDescription(self, sa: SpellAbility) -> str:
+        sb = []
+
+        sb.append(Lang.joinHomogenous(self.getTargetCards(sa)))
+
+        sb.append(" pairs with another unpaired creature you control.")
+        return "".join(sb)
 ```

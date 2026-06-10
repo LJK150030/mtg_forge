@@ -179,3 +179,111 @@ public class BlockEffect extends SpellAbilityEffect {
 
 }
 ```
+
+## Python
+`forge/game/ability/effects/BlockEffect.py`
+
+```python
+from forge.game.Game import Game
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardCopyService import CardCopyService
+from forge.game.combat.Combat import Combat
+from forge.game.event.GameEventCombatChanged import GameEventCombatChanged
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.trigger.TriggerType import TriggerType
+from forge.util.Lang import Lang
+
+
+class BlockEffect(SpellAbilityEffect):
+
+    def resolve(self, sa: SpellAbility) -> None:
+        host = sa.getHostCard()
+        game = host.getGame()
+        combat = game.getPhaseHandler().getCombat()
+
+        attackers: list[Card] = []
+        if sa.hasParam("DefinedAttacker"):
+            for attacker in AbilityUtils.getDefinedCards(host, sa.getParam("DefinedAttacker"), sa):
+                if combat.isAttacking(attacker):
+                    attackers.append(attacker)
+
+        blockers: list[Card] = []
+        if sa.hasParam("DefinedBlocker"):
+            for blocker in AbilityUtils.getDefinedCards(host, sa.getParam("DefinedBlocker"), sa):
+                if blocker.isCreature() and blocker.isInPlay():
+                    blockers.append(blocker)
+
+        if len(attackers) == 0 or len(blockers) == 0:
+            return
+
+        blocked: list[Card] = []
+
+        for attacker in attackers:
+            wasBlocked = combat.isBlocked(attacker)
+
+            for blocker in blockers:
+                if combat.isBlocking(blocker, attacker):
+                    continue
+
+                # If the attacker was blocked, this covers adding the blocker to the damage assignment
+                combat.addBlocker(attacker, blocker)
+                combat.orderAttackersForDamageAssignment(blocker)
+
+                blocker.addBlockedThisTurn(CardCopyService.getLKICopy(attacker))
+                attacker.addBlockedByThisTurn(CardCopyService.getLKICopy(blocker))
+
+                runParams = AbilityKey.newMap()
+                runParams[AbilityKey.Attacker] = attacker
+                runParams[AbilityKey.Blocker] = blocker
+                game.getTriggerHandler().runTrigger(TriggerType.AttackerBlockedByCreature, runParams, False)
+
+                runParams = AbilityKey.newMap()
+                runParams[AbilityKey.Blocker] = blocker
+                runParams[AbilityKey.Attackers] = attacker
+                game.getTriggerHandler().runTrigger(TriggerType.Blocks, runParams, False)
+
+            attacker.getDamageHistory().setCreatureGotBlockedThisCombat(True)
+            if not wasBlocked:
+                blocked.append(attacker)
+                runParams = AbilityKey.newMap()
+                runParams[AbilityKey.Attacker] = attacker
+                runParams[AbilityKey.Blockers] = blockers
+                runParams[AbilityKey.Defender] = combat.getDefenderByAttacker(attacker)
+                runParams[AbilityKey.DefendingPlayer] = combat.getDefenderPlayerByAttacker(attacker)
+                game.getTriggerHandler().runTrigger(TriggerType.AttackerBlocked, runParams, False)
+
+                combat.orderBlockersForDamageAssignment(attacker, CardCollection(blockers))
+
+        if len(blocked) != 0:
+            runParams = AbilityKey.newMap()
+            runParams[AbilityKey.Attackers] = blocked
+            game.getTriggerHandler().runTrigger(TriggerType.AttackerBlockedOnce, runParams, False)
+
+        game.updateCombatForView()
+        game.fireEvent(GameEventCombatChanged())
+
+    def getStackDescription(self, sa: SpellAbility) -> str:
+        sb = []
+
+        # end standard pre-
+
+        attackers: list[str] = []
+        if sa.hasParam("DefinedAttacker"):
+            for attacker in AbilityUtils.getDefinedCards(sa.getHostCard(), sa.getParam("DefinedAttacker"), sa):
+                attackers.append(str(attacker))
+
+        blockers: list[str] = []
+        if sa.hasParam("DefinedBlocker"):
+            for blocker in AbilityUtils.getDefinedCards(sa.getHostCard(), sa.getParam("DefinedBlocker"), sa):
+                blockers.append(str(blocker))
+
+        sb.append(Lang.joinHomogenous(blockers))
+        sb.append(" block ")
+        sb.append(Lang.joinHomogenous(attackers))
+
+        return "".join(sb)
+```

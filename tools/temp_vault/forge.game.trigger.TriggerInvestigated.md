@@ -37,6 +37,12 @@ classDiagram
 - [[forge.game.card.Card|Card]]
 - [[forge.game.spellability.SpellAbility|SpellAbility]]
 
+## Design Description
+
+Investigates trigger that fires when a permanent's Investigate ability creates a Clue, firing in response to investigation events during gameplay. As a concrete subclass of `Trigger`, it specializes the engine's event-driven trigger framework for this specific game event.
+
+`performTest` gates firing through optional `ValidPlayer` matching and a `FirstTime` constraint, reading event context from the `runParams` map keyed by `AbilityKey` enum values. `setTriggeringObjects` exposes the investigating `Player` to the resolving `SpellAbility`, while `getImportantStackObjects` builds a localized stack description via `Localizer`. The design follows the established Trigger patternâ€”lightweight per-trigger subclasses overriding test and binding hooksâ€”keeping per-event logic uniform and decoupled from the central trigger-dispatch machinery, with `Card host` and `intrinsic` flag passed straight to the superclass constructor.
+
 ## Source
 `forge-game/src/main/java/forge/game/trigger/TriggerInvestigated.java`
 
@@ -124,4 +130,47 @@ public class TriggerInvestigated extends Trigger {
     }
 
 }
+```
+
+## Python
+`forge/game/trigger/TriggerInvestigated.py`
+
+```python
+from forge.game.trigger.Trigger import Trigger
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Localizer import Localizer
+
+
+class TriggerInvestigated(Trigger):
+    """
+    Trigger_LandPlayed class.
+
+    @author Forge
+    @version $Id: TriggerInvestigated.java 30294 2015-10-16 01:53:32Z friarsol $
+    """
+
+    def __init__(self, params: dict[str, str], host: Card, intrinsic: bool):
+        super().__init__(params, host, intrinsic)
+
+    def getImportantStackObjects(self, sa: SpellAbility) -> str:
+        sb = []
+        sb.append(Localizer.getInstance().getMessage("lblPlayer"))
+        sb.append(": ")
+        sb.append(str(sa.getTriggeringObject(AbilityKey.Player)))
+        return "".join(sb)
+
+    def setTriggeringObjects(self, sa: SpellAbility, runParams: dict[AbilityKey, object]) -> None:
+        sa.setTriggeringObjectsFrom(runParams, AbilityKey.Player)
+
+    def performTest(self, runParams: dict[AbilityKey, object]) -> bool:
+        if not self.matchesValidParam("ValidPlayer", runParams.get(AbilityKey.Player)):
+            return False
+
+        if self.hasParam("FirstTime"):
+            if not bool(runParams.get(AbilityKey.FirstTime)):
+                return False
+
+        return True
 ```

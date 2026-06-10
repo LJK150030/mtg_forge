@@ -31,7 +31,7 @@ classDiagram
 
 ## Design Description
 
-`IParserManaCost` defines the contract for incrementally parsing a mana-cost string into its individual `ManaCostShard` symbols. By extending `Iterator<ManaCostShard>`, it models parsing as a lazy, forward traversal—each `next()` produces the next shard—so callers can consume a cost symbol-by-symbol without knowing how the underlying string is tokenized or buffering the full result. Its one extra method, `getTotalGenericCost()`, exposes the aggregate generic (colorless numeric) portion of the cost, a value that has no natural representation as a single shard.
+`IParserManaCost` defines the contract for incrementally parsing a mana-cost string into its individual `ManaCostShard` symbols. By extending `Iterator<ManaCostShard>`, it models parsing as a lazy, forward traversalâ€”each `next()` produces the next shardâ€”so callers can consume a cost symbol-by-symbol without knowing how the underlying string is tokenized or buffering the full result. Its one extra method, `getTotalGenericCost()`, exposes the aggregate generic (colorless numeric) portion of the cost, a value that has no natural representation as a single shard.
 
 The interface is deliberately minimal, separating the consumption of parsed shards from any concrete parser. This lets `ManaCost` and related types work with any parsing strategy through the familiar iterator idiom, keeping the parser implementation pluggable and shard-consuming code independent of how the cost was decoded.
 
@@ -50,4 +50,22 @@ import java.util.Iterator;
 public interface IParserManaCost extends Iterator<ManaCostShard> {
     int getTotalGenericCost();
 }
+```
+
+## Python
+`forge/card/mana/IParserManaCost.py`
+
+```python
+from abc import abstractmethod
+from typing import Iterator
+
+from forge.card.mana.ManaCostShard import ManaCostShard
+
+
+class IParserManaCost(Iterator[ManaCostShard]):
+    """The Interface ManaParser."""
+
+    @abstractmethod
+    def getTotalGenericCost(self) -> int:
+        ...
 ```

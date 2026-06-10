@@ -45,6 +45,10 @@ classDiagram
 - [[forge.game.replacement.ReplacementEffect|ReplacementEffect]]
 - [[forge.trackable.Tracker|Tracker]]
 
+## Design Description
+
+Replacement effects in Forge's MTG engine are server-side game rules that intercept and modify game events; this class is their lightweight, client-facing projection. ReplacementEffectView extends TrackableObject to participate in the engine's change-tracking and serialization framework, caching only the data a UI needsâ€”the host card and a human-readable descriptionâ€”as TrackableProperty values keyed by the underlying ReplacementEffect's id. By implementing IHasCardView (with getCardView delegating to the host card), it presents uniformly with other view types wherever the UI resolves an owning card. The package-private constructors and update methods signal that instances are created and refreshed only by the game layer, deriving their Tracker from the host card's game; toString returns the description for convenient display.
+
 ## Source
 `forge-game/src/main/java/forge/game/replacement/ReplacementEffectView.java`
 
@@ -96,4 +100,45 @@ public class ReplacementEffectView extends TrackableObject implements IHasCardVi
         set(TrackableProperty.RE_Description, re.getDescription());
     }
 }
+```
+
+## Python
+`forge/game/replacement/ReplacementEffectView.py`
+
+```python
+from forge.game.card.CardView import CardView
+from forge.game.card.IHasCardView import IHasCardView
+from forge.trackable.TrackableObject import TrackableObject
+from forge.trackable.TrackableProperty import TrackableProperty
+from forge.trackable.Tracker import Tracker
+from forge.game.replacement.ReplacementEffect import ReplacementEffect
+
+
+class ReplacementEffectView(TrackableObject, IHasCardView):
+    serialVersionUID = 1
+
+    def __init__(self, re, tracker=None):
+        if tracker is None:
+            tracker = None if re.getHostCard() is None or re.getHostCard().getGame() is None else re.getHostCard().getGame().getTracker()
+        super().__init__(re.getId(), tracker)
+        self.updateHostCard(re)
+        self.updateDescription(re)
+
+    def getCardView(self):
+        return self.getHostCard()
+
+    def getHostCard(self):
+        return self.get(TrackableProperty.RE_HostCard)
+
+    def updateHostCard(self, re):
+        self.set(TrackableProperty.RE_HostCard, CardView.get(re.getHostCard()))
+
+    def __str__(self):
+        return self.getDescription()
+
+    def getDescription(self):
+        return self.get(TrackableProperty.RE_Description)
+
+    def updateDescription(self, re):
+        self.set(TrackableProperty.RE_Description, re.getDescription())
 ```

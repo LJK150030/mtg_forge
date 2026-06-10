@@ -106,3 +106,58 @@ public class SurveilEffect extends SpellAbilityEffect {
 
 }
 ```
+
+## Python
+`forge/game/ability/effects/SurveilEffect.py`
+
+```python
+package forge.game.ability.effects
+
+from typing import Any
+
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.CardZoneTable import CardZoneTable
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Lang import Lang
+from forge.util.Localizer import Localizer
+
+
+class SurveilEffect(SpellAbilityEffect):
+    def getStackDescription(self, sa: SpellAbility) -> str:
+        sb = []
+
+        sb.append(Lang.joinHomogenous(self.getTargetPlayers(sa)))
+
+        num = 1
+        if sa.hasParam("Amount"):
+            num = AbilityUtils.calculateAmount(sa.getHostCard(), sa.getParam("Amount"), sa)
+
+        sb.append(" surveils (")
+        sb.append(str(num))
+        sb.append(").")
+        return "".join(sb)
+
+    def resolve(self, sa: SpellAbility) -> None:
+        num = 1
+        if sa.hasParam("Amount"):
+            num = AbilityUtils.calculateAmount(sa.getHostCard(), sa.getParam("Amount"), sa)
+        if num == 0:
+            return
+
+        optional = sa.hasParam("Optional")
+
+        moveParams: dict[AbilityKey, Any] = AbilityKey.newMap()
+        table: CardZoneTable = AbilityKey.addCardZoneTableParams(moveParams, sa)
+
+        for p in self.getTargetPlayers(sa):
+            if not p.isInGame():
+                continue
+            if optional and not p.getController().confirmAction(sa, None, Localizer.getInstance().getMessage("lblDoYouWantSurveil"), None):
+                continue
+
+            p.surveil(num, sa, moveParams)
+        table.triggerChangesZoneAll(sa.getHostCard().getGame(), sa)
+```

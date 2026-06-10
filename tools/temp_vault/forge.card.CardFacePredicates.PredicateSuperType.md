@@ -42,7 +42,7 @@ PredicateSuperType is a private, immutable helper class within CardFacePredicate
 As a Predicate implementation, it slots into Forge's functional filtering pipelines over `ICardFace` collections, collaborating with `CardType` to inspect a face's supertypes via `getType().hasSupertype()`. Both fields are `final`, reflecting a deliberately stateless, side-effect-free design whose `test` method reduces the supertype check to a single boolean comparison; the polarity flag is a compact idiom that avoids needing a separate negating predicate.
 
 ## Source
-`forge-core/src/main/java/forge/card/CardFacePredicates.java` â€” declaration excerpt
+`forge-core/src/main/java/forge/card/CardFacePredicates.java` Ã¢â‚¬â€ declaration excerpt
 
 ```java
     private static class PredicateSuperType implements Predicate<ICardFace> {
@@ -59,4 +59,22 @@ As a Predicate implementation, it slots into Forge's functional filtering pipeli
             this.shouldBeEqual = wantEqual;
         }
     }
+```
+
+## Python
+`forge/card/CardFacePredicates/PredicateSuperType.py`
+
+```python
+from forge.card.CardType import CardType
+from forge.card.ICardFace import ICardFace
+from forge.util.Predicate import Predicate
+
+
+class PredicateSuperType(Predicate[ICardFace]):
+    def __init__(self, type: CardType.Supertype, wantEqual: bool):
+        self.operand: CardType.Supertype = type
+        self.shouldBeEqual: bool = wantEqual
+
+    def test(self, face: ICardFace) -> bool:
+        return self.shouldBeEqual == face.getType().hasSupertype(self.operand)
 ```

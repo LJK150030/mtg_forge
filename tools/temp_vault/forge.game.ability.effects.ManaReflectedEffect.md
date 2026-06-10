@@ -187,3 +187,107 @@ public class ManaReflectedEffect extends SpellAbilityEffect {
     }
 }
 ```
+
+## Python
+`forge/game/ability/effects/ManaReflectedEffect.py`
+
+```python
+from forge.card.ColorSet import ColorSet
+from forge.card.MagicColor import MagicColor
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.CardUtil import CardUtil
+from forge.game.player.Player import Player
+from forge.game.spellability.AbilityManaPart import AbilityManaPart
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Localizer import Localizer
+
+
+class ManaReflectedEffect(SpellAbilityEffect):
+
+    def buildSpellAbility(self, sa: SpellAbility) -> None:
+        super().buildSpellAbility(sa)
+        sa.setManaPart(AbilityManaPart(sa, sa.getMapParams()))
+        if sa.getParent() is None:
+            sa.setUndoable(True)  # will try at least
+
+    # (non-Javadoc)
+    # @see forge.card.abilityfactory.SpellEffect#resolve(java.util.Map, forge.card.spellability.SpellAbility)
+    def resolve(self, sa: SpellAbility) -> None:
+        colors = CardUtil.getReflectableManaColors(sa)
+        ma = sa.getManaPart()
+
+        # Spells are not undoable
+        sa.setUndoable(sa.isAbility() and sa.isUndoable() and sa.getSubAbility() is None)
+
+        producedMana = []
+        for player in self.getTargetPlayers(sa):
+            generated = ManaReflectedEffect.generatedReflectedMana(sa, colors, player)
+            producedMana.append(ma.produceMana(generated, player, sa))
+
+        ma.tapsForMana(sa.getRootAbility(), "".join(producedMana))
+
+    # *************** Utility Functions **********************
+
+    @staticmethod
+    def generatedReflectedMana(sa: SpellAbility, colors: list[str], player: Player) -> str:
+        # Calculate generated mana here for stack description and resolving
+        amount = AbilityUtils.calculateAmount(sa.getHostCard(), sa.getParam("Amount"), sa) if sa.hasParam("Amount") else 1
+        sb = []
+
+        if sa.getManaPart().isComboMana():
+            choices = player.getController().specifyManaCombo(sa, ColorSet.fromNames(colors), amount, False)
+            for chosenColor, count in choices.items():
+                choice = MagicColor.toShortString(chosenColor)
+                while count > 0:
+                    if len(sb) > 0:
+                        sb.append(" ")
+                    sb.append(choice)
+                    count -= 1
+            return "".join(sb)
+
+        baseMana = None
+
+        # TODO: This effect explicitly obeys express color choice as set by auto payment and AI routines in order
+        # to avoid misplays and auto mana payment selection errors. Perhaps a better solution is possible?
+        expressChoiceColors = sa.getManaPart().getExpressChoice()
+        colorMenu = None
+        mask = 0
+        # loop through colors to make menu
+        for nChar in range(len(expressChoiceColors)):
+            mask |= MagicColor.fromName(expressChoiceColors[nChar])
+
+        if mask == 0 and len(expressChoiceColors) > 0 and "colorless" in colors:
+            baseMana = MagicColor.toShortString(player.getController().chooseColorAllowColorless(Localizer.getInstance().getMessage("lblSelectManaProduce"), sa.getHostCard(), ColorSet.fromMask(mask)))
+        else:
+            # Nothing set previously so ask player if needed
+            if mask == 0:
+                if len(colors) == 0:
+                    return "0"
+                elif len(colors) == 1:
+                    baseMana = MagicColor.toShortString(next(iter(colors)))
+                elif "colorless" in colors:
+                    baseMana = MagicColor.toShortString(player.getController().chooseColorAllowColorless(Localizer.getInstance().getMessage("lblSelectManaProduce"), sa.getHostCard(), ColorSet.fromNames(colors)))
+                else:
+                    baseMana = MagicColor.toShortString(player.getController().chooseColor(Localizer.getInstance().getMessage("lblSelectManaProduce"), sa, ColorSet.fromNames(colors)))
+            else:
+                colorMenu = ColorSet.fromMask(mask)
+                color = sa.getActivatingPlayer().getController().chooseColor(Localizer.getInstance().getMessage("lblSelectManaProduce"), sa, colorMenu)
+                if color == 0:
+                    import sys
+                    print("Unexpected behavior in ManaReflectedEffect: " + str(sa.getActivatingPlayer()) + " - color mana choice is empty for " + sa.getHostCard().getName(), file=sys.stderr)
+                baseMana = MagicColor.toShortString(color)
+
+        if amount == 0:
+            sb.append("0")
+        elif baseMana is not None and baseMana.isdigit():
+            # if baseMana is an integer(colorless), just multiply amount and baseMana
+            base = int(baseMana)
+            sb.append(str(base * amount))
+        else:
+            for i in range(amount):
+                if i != 0:
+                    sb.append(" ")
+                sb.append(baseMana)
+        return "".join(sb)
+```

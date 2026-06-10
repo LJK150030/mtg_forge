@@ -63,3 +63,29 @@ public record GameEventCardModeChosen(PlayerView player, String cardName, String
     }
 }
 ```
+
+## Python
+`forge/game/event/GameEventCardModeChosen.py`
+
+```python
+from forge.game.event.GameEvent import GameEvent
+from forge.game.event.IGameEventVisitor import IGameEventVisitor
+from forge.game.player.Player import Player
+from forge.game.player.PlayerView import PlayerView
+
+
+class GameEventCardModeChosen(GameEvent):
+
+    def __init__(self, player, cardName: str, mode: str, log: bool, random: bool):
+        if isinstance(player, Player):
+            self.player = PlayerView.get(player)
+        else:
+            self.player = player
+        self.cardName = cardName
+        self.mode = mode
+        self.log = log
+        self.random = random
+
+    def visit(self, visitor: IGameEventVisitor):
+        return visitor.visit(self)
+```

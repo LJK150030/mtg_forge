@@ -37,6 +37,12 @@ classDiagram
     FCollectionView --|> Collection : extends
 ```
 
+## Design Description
+
+Read-only interface exposing safe, query-only access to an `FCollection`, parameterized over its element type `T`. It extends `java.util.Collection<T>` but deliberately omits any mutating operations, surfacing only positional reads (`get`, `getFirst`, `getLast`), search operations (`indexOf`, `lastIndexOf`, `contains`), range views (`subList`), and functional queries (`stream`, `anyMatch`, `allMatch`).
+
+The design intent is to publish a collection's contents to clients without exposing its mutability, letting `FCollection` serve itself wherever read-only views are needed. Notable touches include `getFirst`/`getLast` that throw `NoSuchElementException` on empty collections, an identity-style `get(T obj)` for retrieving the stored equivalent of a candidate, and `threadSafeIterable`, which returns a snapshot Iterable decoupled from the live collection so concurrent iteration is safe and read-only.
+
 ## Source
 `forge-core/src/main/java/forge/util/collect/FCollectionView.java`
 
@@ -133,4 +139,91 @@ public interface FCollectionView<T> extends Collection<T> {
      */
     boolean allMatch(Predicate<? super T> test);
 }
+```
+
+## Python
+`forge/util/collect/FCollectionView.py`
+
+```python
+from __future__ import annotations
+
+from typing import Iterable, Iterator, List, TypeVar
+from collections.abc import Collection
+from forge.util.collect.FCollection import FCollection
+
+T = TypeVar("T")
+
+
+class FCollectionView(Collection[T]):
+    """Read-only interface to an FCollection."""
+
+    def isEmpty(self) -> bool:
+        """@see Collection#isEmpty()"""
+        raise NotImplementedError
+
+    def size(self) -> int:
+        """@see Collection#size()"""
+        raise NotImplementedError
+
+    def get(self, index_or_obj):
+        """
+        Either get the object at a positional index (see List#get(int)),
+        or get the stored equivalent of a candidate object (T get(final T obj)).
+        """
+        raise NotImplementedError
+
+    def getFirst(self) -> T:
+        """
+        Get the first object in this FCollectionView.
+
+        Raises NoSuchElementException if the collection is empty.
+        """
+        raise NotImplementedError
+
+    def getLast(self) -> T:
+        """
+        Get the last object in this FCollectionView.
+
+        Raises NoSuchElementException if the collection is empty.
+        """
+        raise NotImplementedError
+
+    def indexOf(self, o) -> int:
+        """@see List#indexOf(Object)"""
+        raise NotImplementedError
+
+    def lastIndexOf(self, o) -> int:
+        """@see List#lastIndexOf(Object)"""
+        raise NotImplementedError
+
+    def contains(self, o) -> bool:
+        """@see Collection#contains(Object)"""
+        raise NotImplementedError
+
+    def subList(self, fromIndex: int, toIndex: int) -> List[T]:
+        """
+        Return an unmodifiable list with shallow copies of the elements in a
+        particular range of this collection.
+        """
+        raise NotImplementedError
+
+    def threadSafeIterable(self) -> Iterable[T]:
+        """
+        Get a thread-safe Iterable, ie. one that is not backed by this
+        collection, but rather represents the state at the time this method is
+        called. The iterator is read-only (does not support remove()), as such
+        an operation would have no meaning.
+        """
+        raise NotImplementedError
+
+    def stream(self) -> Iterator[T]:
+        raise NotImplementedError
+
+    def anyMatch(self, test) -> bool:
+        """Returns true if any member of this collection matches the given predicate."""
+        raise NotImplementedError
+
+    def allMatch(self, test) -> bool:
+        """Returns true if each member of this collection matches the given predicate."""
+        raise NotImplementedError
 ```

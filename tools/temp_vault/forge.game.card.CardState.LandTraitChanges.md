@@ -64,7 +64,7 @@ classDiagram
 The remaining `apply*` methods are deliberately minimal, only honoring `hasRemoveIntrinsic()` by clearing the supplied collections, since lands contribute no triggers, replacement effects, static abilities, or keywords. Being an immutable record, its `copy` simply returns `this`, reflecting that all state derives from the referenced `CardState` rather than from mutable per-instance data.
 
 ## Source
-`forge-game/src/main/java/forge/game/card/CardState.java` â€” declaration excerpt
+`forge-game/src/main/java/forge/game/card/CardState.java` Ã¢â‚¬â€ declaration excerpt
 
 ```java
     record LandTraitChanges(CardState state, Map<MagicColor.Color, SpellAbility> map) implements ICardTraitChanges, IKeywordsChange
@@ -122,4 +122,72 @@ The remaining `apply*` methods are deliberately minimal, only honoring `hasRemov
         }
         public LandTraitChanges copy(Card host, boolean lki) { return this; }
     }
+```
+
+## Python
+`forge/game/card/CardState/LandTraitChanges.py`
+
+```python
+from forge.game.card.ICardTraitChanges import ICardTraitChanges
+from forge.game.keyword.IKeywordsChange import IKeywordsChange
+from forge.card.CardTypeView import CardTypeView
+from forge.card.MagicColor import MagicColor
+from forge.card.MagicColor.Color import Color
+from forge.game.card.Card import Card
+from forge.game.card.CardState import CardState
+from forge.game.keyword.KeywordCollection import KeywordCollection
+from forge.game.replacement.ReplacementEffect import ReplacementEffect
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.staticability.StaticAbility import StaticAbility
+from forge.game.trigger.Trigger import Trigger
+from forge.game.ability.AbilityFactory import AbilityFactory
+
+
+class LandTraitChanges(ICardTraitChanges, IKeywordsChange):
+    def __init__(self, state: CardState, map: dict = None):
+        self.state = state
+        if map is None:
+            map = {}
+        self.map = map
+
+    def applySpellAbility(self, list: list[SpellAbility]) -> list[SpellAbility]:
+        if self.state.getCard().hasRemoveIntrinsic():
+            list.clear()
+        type = self.state.getTypeWithChanges()
+        if not type.isLand():
+            return list
+        for c in Color.values():
+            if c.getBasicLandType() is None:
+                continue
+            if type.hasSubtype(c.getBasicLandType()):
+                if c not in self.map:
+                    abString = ("AB$ Mana | Cost$ T | Produced$ " + c.getShortName() +
+                                " | Secondary$ True | SpellDescription$ Add " + c.getSymbol() + ".")
+                    sa = AbilityFactory.getAbility(abString, self.state)
+                    sa.setIntrinsic(True)  # always intrinsic
+                    self.map[c] = sa
+                list.append(self.map[c])
+        return list
+
+    def applyTrigger(self, list: list[Trigger]) -> list[Trigger]:
+        if self.state.getCard().hasRemoveIntrinsic():
+            list.clear()
+        return list
+
+    def applyReplacementEffect(self, list: list[ReplacementEffect]) -> list[ReplacementEffect]:
+        if self.state.getCard().hasRemoveIntrinsic():
+            list.clear()
+        return list
+
+    def applyStaticAbility(self, list: list[StaticAbility]) -> list[StaticAbility]:
+        if self.state.getCard().hasRemoveIntrinsic():
+            list.clear()
+        return list
+
+    def applyKeywords(self, list: KeywordCollection) -> None:
+        if self.state.getCard().hasRemoveIntrinsic():
+            list.clear()
+
+    def copy(self, host: Card, lki: bool) -> "LandTraitChanges":
+        return self
 ```

@@ -294,7 +294,7 @@ classDiagram
 
 ## Design Description
 
-The CardView class is a read-only, serializable view of a game Card, used to present card information to the UI and to remote (networked) clients without exposing or directly coupling to the mutable game-state Card object. Extending GameEntityView, it stores all displayable attributes — name, owner, controller, zone, counters, damage, combat status, chosen values, attachments, and related card collections — as TrackableProperty entries, so that changes are tracked and synchronized through the Tracker framework rather than read live from the Card.
+The CardView class is a read-only, serializable view of a game Card, used to present card information to the UI and to remote (networked) clients without exposing or directly coupling to the mutable game-state Card object. Extending GameEntityView, it stores all displayable attributes â€” name, owner, controller, zone, counters, damage, combat status, chosen values, attachments, and related card collections â€” as TrackableProperty entries, so that changes are tracked and synchronized through the Tracker framework rather than read live from the Card.
 
 Its many `update*` methods (package-private) snapshot state from a source Card, while public getters serve the UI; static factories like `get`, `getCollection`, and `getCardForUi` build views from cards. A key design responsibility is information hiding: `canBeShownTo`/`mayViewAny` enforce per-zone, per-viewer visibility rules (hidden hands, face-down cards, mind-slave control) so players only see what the rules permit. The inner CardStateView models each card face/state (power, toughness, colors, types, keywords, mana), supporting split, double-faced, flip, and merged cards.
 
@@ -2179,4 +2179,636 @@ public class CardView extends GameEntityView {
             flagAsChanged(TrackableProperty.MergedCardsCollection);
     }
 }
+```
+
+## Python
+`forge/game/card/CardView.py`
+
+```python
+if alternateState is None:
+            self.set(TrackableProperty.AlternateState, None)
+        else:
+            alternateStateView = alternateState.getView()
+            if self.getAlternateState() is not alternateStateView:
+                self.set(TrackableProperty.AlternateState, alternateStateView)
+                alternateStateView.updateName(alternateState)
+                alternateStateView.updatePower(c)  # ensure power, toughness, and loyalty updated when current state changes
+                alternateStateView.updateToughness(c)
+                alternateStateView.updateLoyalty(c)
+                alternateStateView.updateDefense(c)
+
+                # update the color only while in Game
+                if c.getGame() is not None:
+                    alternateStateView.updateColors(alternateState)
+            else:
+                alternateStateView.updateLoyalty(alternateState)
+                alternateStateView.updateDefense(alternateState)
+            alternateState.getView().updateKeywords(c, alternateState)
+
+    def getHiddenId(self):
+        hiddenId = super().get(TrackableProperty.HiddenId)
+        if hiddenId is None:
+            return self.getId()
+        return hiddenId
+
+    def updateHiddenId(self, hiddenId):
+        self.set(TrackableProperty.HiddenId, hiddenId)
+
+    def getBlockAdditional(self):
+        return super().get(TrackableProperty.BlockAdditional)
+
+    def getCanBlockAny(self):
+        return super().get(TrackableProperty.BlockAny)
+
+    def updateBlockAdditional(self, c):
+        self.set(TrackableProperty.BlockAdditional, c.canBlockAdditional())
+        self.set(TrackableProperty.BlockAny, c.canBlockAny())
+
+    def isRingBearer(self):
+        return super().get(TrackableProperty.IsRingBearer)
+
+    def updateRingBearer(self, c):
+        self.set(TrackableProperty.IsRingBearer, c.isRingBearer())
+
+    def getCantHaveKeyword(self):
+        return super().get(TrackableProperty.CantHaveKeyword)
+
+    def updateCantHaveKeyword(self, c):
+        keywords = set()
+        for k in c.getCantHaveKeyword():
+            keywords.add(str(k))
+        self.set(TrackableProperty.CantHaveKeyword, keywords)
+
+    def getZoneText(self):
+        return self.zoneText
+
+    def updateZoneText(self, c):
+        if c.getZone() is not None and c.getZone().is_(ZoneType.Sideboard) and c.getGame().getMaingame() is not None:
+            parentCard = c.getOwner().getMappingMaingameCard(c)
+            sb = ""
+            parentLevel = 0
+            while parentCard is not None:
+                parentLevel += 1
+                if not parentCard.getZone().is_(ZoneType.Sideboard):
+                    sb += '['
+                    if parentCard.getGame().getMaingame() is None:
+                        sb += Localizer.getInstance().getMessage("lblMainGame")
+                    else:
+                        sb += Localizer.getInstance().getMessage("lblSubgame", parentLevel)
+                    sb += ": "
+                    sb += TextUtil.capitalize(parentCard.getZone().getZoneType().getTranslatedName())
+                    sb += ']'
+                    break
+                parentCard = parentCard.getOwner().getMappingMaingameCard(parentCard)
+            self.zoneText = sb
+
+    def toString(self):
+        name = self.getName()
+        zone = self.getZoneText()
+        if self.getId() <= 0:  # if fake card, just return name
+            return name
+
+        if name == "":
+            alternate = self.getAlternateState()
+            if alternate is not None:
+                if self.isFaceDown():
+                    return "Face-down card (H" + str(self.getHiddenId()) + ")"
+                else:
+                    return self.getAlternateState().getName() + " (" + str(self.getId()) + ")"
+        return (zone + ' ' + CardTranslation.getTranslatedName(name) + " (" + str(self.getId()) + ")").strip()
+
+    def __str__(self):
+        return self.toString()
+
+    class CardStateView(TrackableObject, ITranslatable):
+        serialVersionUID = 6673944200513430607
+
+        def __init__(self, id0, state0, tracker):
+            super().__init__(id0, tracker)
+            self.state = state0
+            self.foilIndexOverride = -1
+            self._outer = None
+
+        def getDisplayId(self):
+            if self.getState() == CardStateName.FaceDown:
+                return "H" + str(self._outer.getHiddenId())
+            id = self.getId()
+            if id > 0:
+                return str(self.getId())
+            return ""
+
+        def __hash__(self):
+            return hash((self.getId(), self.state))
+
+        def toString(self):
+            return (self.getName() + " (" + self.getDisplayId() + ")").strip()
+
+        def __str__(self):
+            return self.toString()
+
+        def getCard(self):
+            return self._outer
+
+        def getState(self):
+            return self.state
+
+        def getName(self):
+            return self.get(TrackableProperty.Name)
+
+        def updateName(self, c):
+            card = c.getCard()
+            self.setName(card.getDisplayName(c))
+            self.setOracleName(card.getName(c))
+
+            if self._outer.getCurrentState() is self:
+                self._outer.updateName(card)
+
+        def setName(self, name):
+            self.set(TrackableProperty.Name, name)
+
+        def getOracleName(self):
+            return self.get(TrackableProperty.OracleName)
+
+        def setOracleName(self, name):
+            self.set(TrackableProperty.OracleName, name)
+
+        def getColors(self):
+            return self.get(TrackableProperty.Colors)
+
+        def getOriginalColors(self):
+            return self.get(TrackableProperty.OriginalColors)
+
+        def updateColors(self, c):
+            self.set(TrackableProperty.Colors, c.getColor())
+
+        def setOriginalColors(self, c):
+            self.set(TrackableProperty.OriginalColors, c.getColor())
+
+        def updateHasChangeColors(self, hasChangeColor):
+            self.set(TrackableProperty.HasChangedColors, hasChangeColor)
+
+        def hasChangeColors(self):
+            return self.get(TrackableProperty.HasChangedColors)
+
+        def getImageKey(self, viewers=None):
+            if self.getState() == CardStateName.FaceDown:
+                return self.getCard().getFacedownImageKey()
+            if self._outer.canBeShownToAny(viewers):
+                if self._outer.isCloned() and StaticData.instance().useSourceImageForClone():
+                    return self._outer.getBackup().getCurrentState().getImageKey(viewers)
+                return self.get(TrackableProperty.ImageKey)
+            return ImageKeys.getTokenKey(ImageKeys.HIDDEN_CARD)
+
+        # Use this for revealing purposes only
+        def getTrackableImageKey(self):
+            return self.get(TrackableProperty.ImageKey)
+
+        def updateImageKey(self, c):
+            self.set(TrackableProperty.ImageKey, c.getImageKey())
+
+        def getType(self):
+            if self.getState() != CardStateName.Original and self._outer.isFaceDown() and not self._outer.isInZone({ZoneType.Battlefield, ZoneType.Stack}):
+                return CardType.EMPTY
+            return self.get(TrackableProperty.Type)
+
+        def updateType(self, c):
+            self.set(TrackableProperty.Type, c.getTypeWithChanges())
+
+        def getManaCost(self):
+            return self.get(TrackableProperty.ManaCost)
+
+        def getOriginalManaCost(self):
+            return self.get(TrackableProperty.OriginalManaCost)
+
+        def updateManaCost(self, c):
+            if isinstance(c, Card):
+                self.set(TrackableProperty.ManaCost, c.getCurrentState().getPerpetualAdjustedManaCost())
+                self.set(TrackableProperty.OriginalManaCost, c.getManaCost())
+            else:
+                self.set(TrackableProperty.ManaCost, c.getPerpetualAdjustedManaCost())
+                self.set(TrackableProperty.OriginalManaCost, c.getManaCost())
+
+        def getOracleText(self):
+            return self.get(TrackableProperty.OracleText)
+
+        def setOracleText(self, oracleText):
+            self.set(TrackableProperty.OracleText, oracleText.replace("\\n", "\r\n\r\n").strip())
+
+        def getFunctionalVariantName(self):
+            return self.get(TrackableProperty.FunctionalVariant)
+
+        def setFunctionalVariantName(self, functionalVariant):
+            self.set(TrackableProperty.FunctionalVariant, functionalVariant)
+
+        def getRulesText(self):
+            return self.get(TrackableProperty.RulesText)
+
+        def updateRulesText(self, rules):
+            rulesText = None
+
+            if rules is not None and rules.getType().isVanguard():
+                decHand = rules.getHand() < 0
+                decLife = rules.getLife() < 0
+                handSize = Localizer.getInstance().getMessageorUseDefault("lblHandSize", "Hand Size") \
+                    + ((": " if decHand else ": +")) + str(rules.getHand())
+                startingLife = Localizer.getInstance().getMessageorUseDefault("lblStartingLife", "Starting Life") \
+                    + ((": " if decLife else ": +")) + str(rules.getLife())
+                rulesText = handSize + "\r\n" + startingLife
+            self.set(TrackableProperty.RulesText, rulesText)
+
+        def getPower(self):
+            return self.get(TrackableProperty.Power)
+
+        def updatePower(self, c):
+            if isinstance(c, Card):
+                if self.hasPrintedPT() and not self.isCreature():
+                    # use printed value so user can still see it
+                    num = c.getCurrentPower()
+                else:
+                    num = c.getNetPower()
+                if c.getCurrentState().getView() is not self and c.getAlternateState() is not None:
+                    num = num - c.getBasePower() + c.getAlternateState().getBasePower()
+                self.set(TrackableProperty.Power, num)
+            else:
+                card = c.getCard()
+                if card is not None:
+                    self.updatePower(card)  # TODO: find a better way to do this
+                    return
+                self.set(TrackableProperty.Power, c.getBasePower())
+
+        def getToughness(self):
+            return self.get(TrackableProperty.Toughness)
+
+        def updateToughness(self, c):
+            if isinstance(c, Card):
+                if self.hasPrintedPT() and not self.isCreature():
+                    # use printed value so user can still see it
+                    num = c.getCurrentToughness()
+                else:
+                    num = c.getNetToughness()
+                if c.getCurrentState().getView() is not self and c.getAlternateState() is not None:
+                    num = num - c.getBaseToughness() + c.getAlternateState().getBaseToughness()
+                self.set(TrackableProperty.Toughness, num)
+            else:
+                card = c.getCard()
+                if card is not None:
+                    self.updateToughness(card)  # TODO: find a better way to do this
+                    return
+                self.set(TrackableProperty.Toughness, c.getBaseToughness())
+
+        def getLoyalty(self):
+            return self.get(TrackableProperty.Loyalty)
+
+        def updateLoyalty(self, c):
+            if isinstance(c, str):
+                self.set(TrackableProperty.Loyalty, c)
+                return
+            if isinstance(c, Card):
+                if c.isInZone(ZoneType.Battlefield):
+                    self.updateLoyalty(str(c.getCurrentLoyalty()))
+                else:
+                    self.updateLoyalty(c.getCurrentState().getBaseLoyalty())
+                return
+            if self._outer.getCurrentState() is self:
+                card = c.getCard()
+                if card is not None:
+                    if card.isInZone(ZoneType.Battlefield):
+                        self.updateLoyalty(card)
+                    else:
+                        self.updateLoyalty(c.getBaseLoyalty())
+
+                    return
+            self.set(TrackableProperty.Loyalty, "0")  # alternates don't need loyalty
+
+        def getDefense(self):
+            return self.get(TrackableProperty.Defense)
+
+        def updateDefense(self, c):
+            if isinstance(c, str):
+                self.set(TrackableProperty.Defense, c)
+                return
+            if isinstance(c, Card):
+                if c.isInZone(ZoneType.Battlefield):
+                    self.updateDefense(str(c.getCurrentDefense()))
+                else:
+                    self.updateDefense(c.getCurrentState().getBaseDefense())
+                return
+            if self._outer.getCurrentState() is self:
+                card = c.getCard()
+                if card is not None:
+                    if card.isInZone(ZoneType.Battlefield):
+                        self.updateDefense(card)
+                    else:
+                        self.updateDefense(c.getBaseDefense())
+
+                    return
+            self.updateDefense("0")
+
+        def getAttractionLights(self):
+            return self.get(TrackableProperty.AttractionLights)
+
+        def updateAttractionLights(self, c):
+            self.set(TrackableProperty.AttractionLights, c.getAttractionLights())
+
+        def hasPrintedPT(self):
+            return self.get(TrackableProperty.HasPrintedPT)
+
+        def updateHasPrintedPT(self, v):
+            self.set(TrackableProperty.HasPrintedPT, v)
+
+        def getSetCode(self):
+            return self.get(TrackableProperty.SetCode)
+
+        def updateSetCode(self, c):
+            self.set(TrackableProperty.SetCode, c.getSetCode())
+
+        def getRarity(self):
+            return self.get(TrackableProperty.Rarity)
+
+        def updateRarity(self, c):
+            self.set(TrackableProperty.Rarity, c.getRarity())
+
+        def getFoilIndex(self):
+            if self.foilIndexOverride >= 0:
+                return self.foilIndexOverride
+            return self.get(TrackableProperty.FoilIndex)
+
+        def updateFoilIndex(self, c):
+            if isinstance(c, Card):
+                self.updateFoilIndex(c.getCurrentState())
+                return
+            self.set(TrackableProperty.FoilIndex, c.getFoil())
+
+        def setFoilIndexOverride(self, index0):
+            if index0 < 0:
+                index0 = CardEdition.getRandomFoil(self.getSetCode())
+            self.foilIndexOverride = index0
+
+        def getKeywords(self):
+            return self.get(TrackableProperty.Keywords)
+
+        def hasKeyword(self, keyword):
+            return self.getKeywords().contains(keyword)
+
+        def hasAnnihilator(self):
+            return self.get(TrackableProperty.HasAnnihilator)
+
+        def hasWard(self):
+            return self.get(TrackableProperty.HasWard)
+
+        def hasDeathtouch(self):
+            return self.hasKeyword(Keyword.DEATHTOUCH)
+
+        def hasDevoid(self):
+            return self.hasKeyword(Keyword.DEVOID)
+
+        def hasTrample(self):
+            return self.hasKeyword(Keyword.TRAMPLE)
+
+        def hasHaste(self):
+            return self.hasKeyword(Keyword.HASTE)
+
+        def hasInfect(self):
+            return self.hasKeyword(Keyword.INFECT)
+
+        def hasStorm(self):
+            return self.hasKeyword(Keyword.STORM)
+
+        def hasAftermath(self):
+            return self.hasKeyword(Keyword.AFTERMATH)
+
+        def hasDivideDamage(self):
+            return self.get(TrackableProperty.HasDivideDamage)
+
+        def origProduceAnyMana(self):
+            return self.get(TrackableProperty.OrigProduceAnyMana)
+
+        def origProduceMana(self):
+            return self.get(TrackableProperty.OrigProduceMana)
+
+        def getAbilityText(self):
+            return self.get(TrackableProperty.AbilityText)
+
+        def updateAbilityText(self, c, state):
+            self.set(TrackableProperty.AbilityText, c.getAbilityText(state))
+
+        def updateKeywords(self, c, state):
+            c.updateKeywordsCache(state)
+            self.set(TrackableProperty.Keywords, state.getCachedKeywords().getView())
+            # deeper check for Idris
+            self.set(TrackableProperty.HasAnnihilator, c.hasKeyword(Keyword.ANNIHILATOR, state) or state.getTriggers().anyMatch(lambda t: t.isKeyword(Keyword.ANNIHILATOR)))
+            self.set(TrackableProperty.HasWard, c.hasKeyword(Keyword.WARD, state) or state.getTriggers().anyMatch(lambda t: t.isKeyword(Keyword.WARD)))
+            self.updateAbilityText(c, state)
+            # update Trackable Mana Color for BG Colors
+            self.updateManaColorBG(state)
+
+            self.set(TrackableProperty.HasDivideDamage, c.hasKeyword("You may assign CARDNAME's combat damage divided as "
+                    "you choose among defending player and/or any number of creatures they control."))
+
+        def updateManaColorBG(self, state):
+            anyMana = False
+            cMana = False
+            colors = 0
+            for sa in state.getManaAbilities():
+                if sa is None:
+                    continue
+                for mp in sa.getAllManaParts():
+                    if mp.isAnyMana():
+                        anyMana = True
+                        continue
+
+                    colorsProduced = mp.mana(sa).split(" ")
+
+                    # todo improve this
+                    for s in colorsProduced:
+                        u = s.upper()
+                        if u == "R":
+                            colors |= MagicColor.RED
+                        elif u == "G":
+                            colors |= MagicColor.GREEN
+                        elif u == "B":
+                            colors |= MagicColor.BLACK
+                        elif u == "U":
+                            colors |= MagicColor.BLUE
+                        elif u == "W":
+                            colors |= MagicColor.WHITE
+                        elif u == "C":
+                            cMana = True
+            self.set(TrackableProperty.OrigProduceMana, ColorSet.fromMask(colors) if colors > 0 else (ColorSet.C if cMana else None))
+            self.set(TrackableProperty.OrigProduceAnyMana, anyMana)
+
+        def isBasicLand(self):
+            return self.getType().isBasicLand()
+
+        def isCreature(self):
+            return self.getType().isCreature()
+
+        def isLand(self):
+            return self.getType().isLand()
+
+        def isPlane(self):
+            return self.getType().isPlane()
+
+        def isPhenomenon(self):
+            return self.getType().isPhenomenon()
+
+        def isPlaneswalker(self):
+            return self.getType().isPlaneswalker()
+
+        def isBattle(self):
+            return self.getType().isBattle()
+
+        def isVehicle(self):
+            return self.getType().hasSubtype("Vehicle")
+
+        def isArtifact(self):
+            return self.getType().isArtifact()
+
+        def isEnchantment(self):
+            return self.getType().isEnchantment()
+
+        def isSpaceCraft(self):
+            return self.getType().hasSubtype("Spacecraft")
+
+        def isAttraction(self):
+            return self.getType().isAttraction()
+
+        def isContraption(self):
+            return self.getType().isContraption()
+
+        def isInstant(self):
+            return self.getType().isInstant()
+
+        def isSorcery(self):
+            return self.getType().isSorcery()
+
+        def getTranslationKey(self):
+            key = self.getName()
+            variant = self.getFunctionalVariantName()
+            if variant:
+                key = key + " $" + variant
+            return key
+
+        def getUntranslatedType(self):
+            return self.getType().toString()
+
+        def getTranslatedName(self):
+            return CardTranslation.getTranslatedName(self)
+
+    # special methods for updating card and player properties as needed and returning the new collection
+    def setCard(self, oldCard, newCard, key):
+        if newCard is not oldCard:
+            self.set(key, CardView.get(newCard))
+        return newCard
+
+    def setCards(self, oldCards, newCards, key):
+        if newCards is not None and not isinstance(newCards, CardCollection):
+            if newCards is None:
+                self.set(key, None)
+                return None
+            return self.setCards(oldCards, CardCollection(newCards), key)
+        if newCards is None or newCards.isEmpty():  # avoid storing empty collections
+            self.set(key, None)
+            return None
+        self.set(key, CardView.getCollection(newCards))  # TODO prevent overwriting list if not necessary
+        return newCards
+
+    def addCard(self, oldCards, cardToAdd, key):
+        if cardToAdd is None:
+            return oldCards
+
+        if oldCards is None:
+            oldCards = CardCollection()
+        if oldCards.add(cardToAdd):
+            views = super().get(key)
+            if views is None:
+                views = TrackableCollection()
+                views.add(cardToAdd.getView())
+                self.set(key, views)
+            elif views.add(cardToAdd.getView()):
+                self.flagAsChanged(key)
+        return oldCards
+
+    def addCards(self, oldCards, cardsToAdd, key):
+        if cardsToAdd is None:
+            return oldCards
+
+        views = super().get(key)
+        if oldCards is None:
+            oldCards = CardCollection()
+        needFlagAsChanged = False
+        for c in cardsToAdd:
+            if c is not None and oldCards.add(c):
+                if views is None:
+                    views = TrackableCollection()
+                    views.add(c.getView())
+                    self.set(key, views)
+                elif views.add(c.getView()):
+                    needFlagAsChanged = True
+        if needFlagAsChanged:
+            self.flagAsChanged(key)
+        return oldCards
+
+    def removeCard(self, oldCards, cardToRemove, key):
+        if cardToRemove is None or oldCards is None:
+            return oldCards
+
+        if oldCards.remove(cardToRemove):
+            views = super().get(key)
+            if views is None:
+                self.set(key, None)
+            elif views.remove(cardToRemove.getView()):
+                if views.isEmpty():
+                    self.set(key, None)  # avoid keeping around an empty collection
+                else:
+                    self.flagAsChanged(key)
+            if oldCards.isEmpty():
+                oldCards = None  # avoid keeping around an empty collection
+        return oldCards
+
+    def removeCards(self, oldCards, cardsToRemove, key):
+        if cardsToRemove is None or oldCards is None:
+            return oldCards
+
+        views = super().get(key)
+        needFlagAsChanged = False
+        for c in cardsToRemove:
+            if oldCards.remove(c):
+                if views is None:
+                    self.set(key, None)
+                elif views.remove(c.getView()):
+                    if views.isEmpty():
+                        views = None
+                        self.set(key, None)  # avoid keeping around an empty collection
+                        needFlagAsChanged = False  # doesn't need to be flagged a second time
+                    else:
+                        needFlagAsChanged = True
+                if oldCards.isEmpty():
+                    oldCards = None  # avoid keeping around an empty collection
+                    break
+        if needFlagAsChanged:
+            self.flagAsChanged(key)
+        return oldCards
+
+    def clearCards(self, oldCards, key):
+        if oldCards is not None:
+            self.set(key, None)
+        return None
+
+    def updateMergeCollections(self, cards):
+        views = super().get(TrackableProperty.MergedCardsCollection)
+        needFlagAsChanged = False
+        if views is None:
+            views = TrackableCollection()
+            self.set(TrackableProperty.MergedCardsCollection, views)
+        else:
+            if not views.isEmpty():
+                needFlagAsChanged = True
+            views.clear()
+        if cards is not None:
+            for c in cards:
+                if views.add(c.getView()):
+                    needFlagAsChanged = True
+        if needFlagAsChanged:
+            self.flagAsChanged(TrackableProperty.MergedCardsCollection)
 ```

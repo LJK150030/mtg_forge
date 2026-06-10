@@ -35,12 +35,12 @@ classDiagram
 
 ## Design Description
 
-TimmerianFiends is a stateless AI helper—one of the nested static decision classes within `SpecialCardAi`—that encapsulates the computer player's heuristic for whether to activate Timmerian Fiends' card-theft ability. Its sole `consider` method inspects the spell's targeted `Card` and returns a boolean go/no-go verdict, delegating valuation to `ComputerUtilCard` and life-safety checks to `ComputerUtil`.
+TimmerianFiends is a stateless AI helperâ€”one of the nested static decision classes within `SpecialCardAi`â€”that encapsulates the computer player's heuristic for whether to activate Timmerian Fiends' card-theft ability. Its sole `consider` method inspects the spell's targeted `Card` and returns a boolean go/no-go verdict, delegating valuation to `ComputerUtilCard` and life-safety checks to `ComputerUtil`.
 
 The class collaborates with `Player` and `SpellAbility` to read game context and resolve the target, and wraps non-creature permanents in a `CardCollection` for list-based evaluation. Its design intent is a simple threshold policy: steal a creature when the AI is in mortal danger or the creature scores highly, and otherwise steal permanents only above a CMC-based worth cutoff. Inline TODOs flag the value thresholds and the crude CMC comparison as deliberately provisional, isolating this card-specific quirk from the engine's general AI logic.
 
 ## Source
-`forge-ai/src/main/java/forge/ai/SpecialCardAi.java` â€” declaration excerpt
+`forge-ai/src/main/java/forge/ai/SpecialCardAi.java` Ã¢â‚¬â€ declaration excerpt
 
 ```java
     // Timmerian Fiends
@@ -62,4 +62,32 @@ The class collaborates with `Player` and `SpellAbility` to read game context and
             }
         }
     }
+```
+
+## Python
+`forge/ai/SpecialCardAi/TimmerianFiends.py`
+
+```python
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.ai.ComputerUtil import ComputerUtil
+from forge.ai.ComputerUtilCard import ComputerUtilCard
+
+
+class TimmerianFiends:
+    @staticmethod
+    def consider(ai: Player, sa: SpellAbility) -> bool:
+        targeted = sa.getParentTargetingCard().getTargetCard()
+        if targeted is None:
+            return False
+
+        if targeted.isCreature():
+            if ComputerUtil.aiLifeInDanger(ai, True, 0):
+                return True  # do it, hoping to save a valuable potential blocker etc.
+            return ComputerUtilCard.evaluateCreature(targeted) >= 200  # might need tweaking
+        else:
+            # TODO: this currently compares purely by CMC. To be somehow improved, especially for stuff like the Power Nine etc.
+            return ComputerUtilCard.evaluatePermanentList(CardCollection(targeted)) >= 3
 ```

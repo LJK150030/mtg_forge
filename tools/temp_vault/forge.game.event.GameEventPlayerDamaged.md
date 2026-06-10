@@ -70,3 +70,30 @@ public record GameEventPlayerDamaged(PlayerView target, CardView source, int amo
     }
 }
 ```
+
+## Python
+`forge/game/event/GameEventPlayerDamaged.py`
+
+```python
+package forge.game.event;
+from forge.game.card.CardView import CardView
+from forge.game.event.GameEvent import GameEvent
+from forge.game.event.IGameEventVisitor import IGameEventVisitor
+from forge.game.player.PlayerView import PlayerView
+
+
+class GameEventPlayerDamaged(GameEvent):
+
+    def __init__(self, target: PlayerView, source: CardView, amount: int, combat: bool, infect: bool):
+        self.target = target
+        self.source = source
+        self.amount = amount
+        self.combat = combat
+        self.infect = infect
+
+    def visit(self, visitor: IGameEventVisitor):
+        return visitor.visit(self)
+
+    def __str__(self) -> str:
+        return "" + str(self.target) + " took " + str(self.amount) + (" infect" if self.infect else " combat" if self.combat else "") + " damage from " + str(self.source)
+```

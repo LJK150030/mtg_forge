@@ -45,6 +45,10 @@ classDiagram
 - [[forge.game.staticability.StaticAbility|StaticAbility]]
 - [[forge.trackable.Tracker|Tracker]]
 
+## Design Description
+
+StaticAbilityView is a lightweight, serializable presentation/view object that exposes a StaticAbility's display state to the rest of the engine and UI. Extending TrackableObject, it stores its host card and description as tracked properties (ST_HostCard, ST_Description) so changes propagate through the game's change-tracking system; package-private constructors derive the appropriate Tracker from the originating ability's host card and game. By implementing IHasCardView, it advertises an associated CardViewâ€”here the host card itselfâ€”allowing UI code to resolve the owning card uniformly. The update methods translate model objects (the StaticAbility and its host Card) into view-friendly forms (a CardView and the ability's string description), keeping the mutable game model decoupled from the view layer, while toString simply surfaces the cached description.
+
 ## Source
 `forge-game/src/main/java/forge/game/staticability/StaticAbilityView.java`
 
@@ -96,4 +100,50 @@ public class StaticAbilityView extends TrackableObject implements IHasCardView {
         set(TrackableProperty.ST_Description, st.toString());
     }
 }
+```
+
+## Python
+`forge/game/staticability/StaticAbilityView.py`
+
+```python
+package forge.game.staticability;
+
+from forge.game.card.CardView import CardView
+from forge.game.card.IHasCardView import IHasCardView
+from forge.trackable.TrackableObject import TrackableObject
+from forge.trackable.TrackableProperty import TrackableProperty
+from forge.trackable.Tracker import Tracker
+from forge.game.staticability.StaticAbility import StaticAbility
+
+
+class StaticAbilityView(TrackableObject, IHasCardView):
+    serialVersionUID = 1
+
+    def __init__(self, st, tracker=None):
+        if tracker is None:
+            tracker = None if st.getHostCard() is None or st.getHostCard().getGame() is None else st.getHostCard().getGame().getTracker()
+        super().__init__(st.getId(), tracker)
+        self.updateHostCard(st)
+        self.updateDescription(st)
+
+    def getCardView(self):
+        return self.getHostCard()
+
+    def getHostCard(self):
+        return self.get(TrackableProperty.ST_HostCard)
+
+    def updateHostCard(self, st):
+        self.set(TrackableProperty.ST_HostCard, CardView.get(st.getHostCard()))
+
+    def __str__(self):
+        return self.getDescription()
+
+    def toString(self):
+        return self.getDescription()
+
+    def getDescription(self):
+        return self.get(TrackableProperty.ST_Description)
+
+    def updateDescription(self, st):
+        self.set(TrackableProperty.ST_Description, st.toString())
 ```

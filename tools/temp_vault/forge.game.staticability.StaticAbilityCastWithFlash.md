@@ -41,6 +41,12 @@ classDiagram
 - [[forge.game.spellability.SpellAbility|SpellAbility]]
 - [[forge.game.staticability.StaticAbility|StaticAbility]]
 
+## Design Description
+
+StaticAbilityCastWithFlash is a stateless utility class in the static-ability subsystem that determines whether a spell or ability may be cast with flash (at instant speed) by virtue of some active continuous static effect. Its static query methods, anyWithFlash and anyWithFlashNeedsInfo, scan every relevant Card across the game's static-ability source zones (plus the card in question), filter their StaticAbilities to those in CastWithFlash mode, and test each against the proposed SpellAbility, Card, and activating Player.
+
+Unlike most members of the package, it does not extend StaticAbility but instead operates on those objects, collaborating with Game, CardCollection, Card, Player, and SpellAbility. The private commonParts helper centralizes the ValidCard/ValidSA/Caster predicate matching, while the parallel "NeedsInfo" path signals when targeting or X-cost details must be resolved before the permission can be decidedâ€”deferring evaluation that depends on not-yet-chosen information.
+
 ## Source
 `forge-game/src/main/java/forge/game/staticability/StaticAbilityCastWithFlash.java`
 
@@ -128,4 +134,78 @@ public class StaticAbilityCastWithFlash {
         return true;
     }
 }
+```
+
+## Python
+`forge/game/staticability/StaticAbilityCastWithFlash.py`
+
+```python
+from forge.game.Game import Game
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.staticability.StaticAbility import StaticAbility
+from forge.game.staticability.StaticAbilityMode import StaticAbilityMode
+from forge.game.zone.ZoneType import ZoneType
+
+
+class StaticAbilityCastWithFlash:
+
+    @staticmethod
+    def anyWithFlashNeedsInfo(sa: SpellAbility, card: Card, activator: Player) -> bool:
+        game = activator.getGame()
+        allp = CardCollection(game.getCardsIn(ZoneType.STATIC_ABILITIES_SOURCE_ZONES))
+        allp.add(card)
+        for ca in allp:
+            for stAb in ca.getStaticAbilities():
+                if not stAb.checkConditions(StaticAbilityMode.CastWithFlash):
+                    continue
+                if StaticAbilityCastWithFlash.applyWithFlashNeedsInfo(stAb, sa, card, activator):
+                    return True
+        return False
+
+    @staticmethod
+    def anyWithFlash(sa: SpellAbility, card: Card, activator: Player) -> bool:
+        game = activator.getGame()
+        allp = CardCollection(game.getCardsIn(ZoneType.STATIC_ABILITIES_SOURCE_ZONES))
+        allp.add(card)
+        for ca in allp:
+            for stAb in ca.getStaticAbilities():
+                if not stAb.checkConditions(StaticAbilityMode.CastWithFlash):
+                    continue
+                if StaticAbilityCastWithFlash.applyWithFlashAbility(stAb, sa, card, activator):
+                    return True
+        return False
+
+    @staticmethod
+    def commonParts(stAb: StaticAbility, sa: SpellAbility, card: Card, activator: Player, skipValidSA: bool) -> bool:
+        if not stAb.matchesValidParam("ValidCard", card):
+            return False
+
+        if not skipValidSA:
+            if not stAb.matchesValidParam("ValidSA", sa):
+                return False
+
+        if not stAb.matchesValidParam("Caster", activator):
+            return False
+        return True
+
+    @staticmethod
+    def applyWithFlashNeedsInfo(stAb: StaticAbility, sa: SpellAbility, card: Card, activator: Player) -> bool:
+        info = False
+        validSA = stAb.getParamOrDefault("ValidSA", "")
+        if "IsTargeting" in validSA or "XCost" in validSA:
+            info = True
+        if not StaticAbilityCastWithFlash.commonParts(stAb, sa, card, activator, info):
+            return False
+
+        return info
+
+    @staticmethod
+    def applyWithFlashAbility(stAb: StaticAbility, sa: SpellAbility, card: Card, activator: Player) -> bool:
+        if not StaticAbilityCastWithFlash.commonParts(stAb, sa, card, activator, False):
+            return False
+
+        return True
 ```

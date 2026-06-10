@@ -40,6 +40,12 @@ classDiagram
 - [[forge.item.PaperCard|PaperCard]]
 - [[forge.item.SealedTemplate|SealedTemplate]]
 
+## Design Description
+
+BoxedProduct is an abstract base for multi-pack sealed products (such as booster boxes), extending SealedProduct to model an item that bundles a fixed number of generated booster packs built from a shared SealedTemplate. It lazily generates all packs on first access, caching them in an internal list, and lets callers draw packs sequentially via getNextBoosterPack() while tracking how many remain. getCards() aggregates every pack plus any extra contents into the inherited card list, and getTotalCards() reports the expected count as cards-per-pack times the number of packs.
+
+The design centralizes pack generation and counting here while deferring product-specific behavior to subclasses: getExtraCards() is an empty hook for added contents, and getNextBoosterPack() is final to protect the lazy-generation and cursor logic. It collaborates with PaperCard as the card type it dispenses and relies on SealedProduct's generate() and contents for the underlying booster construction.
+
 ## Source
 `forge-core/src/main/java/forge/item/BoxedProduct.java`
 
@@ -99,4 +105,50 @@ public abstract class BoxedProduct extends SealedProduct {
     }
 	
 }
+```
+
+## Python
+`forge/item/BoxedProduct.py`
+
+```python
+from forge.item.SealedProduct import SealedProduct
+from forge.item.PaperCard import PaperCard
+from forge.item.SealedTemplate import SealedTemplate
+
+
+class BoxedProduct(SealedProduct):
+
+    def __init__(self, name0: str, boosterData: SealedTemplate, numberOfPacks: int):
+        super().__init__(name0, boosterData)
+        self.boosterPacks: list[list[PaperCard]] = []
+        self.currentPack: int = 0
+        self.numberOfPacks: int = numberOfPacks
+
+    def boosterPacksRemaining(self) -> int:
+        return self.numberOfPacks - self.currentPack
+
+    def getNextBoosterPack(self) -> list[PaperCard]:
+        if len(self.boosterPacks) == 0:
+            self.cards = []
+            for i in range(self.numberOfPacks):
+                self.boosterPacks.append(self.generate())
+                self.cards.extend(self.boosterPacks[i])
+        pack = self.boosterPacks[self.currentPack]
+        self.currentPack += 1
+        return pack
+
+    def getCards(self) -> list[PaperCard]:
+        if len(self.boosterPacks) == 0:
+            self.cards = []
+            for i in range(self.numberOfPacks):
+                self.boosterPacks.append(self.generate())
+                self.cards.extend(self.boosterPacks[i])
+        self.cards.extend(self.getExtraCards())
+        return self.cards
+
+    def getExtraCards(self) -> list[PaperCard]:
+        return []
+
+    def getTotalCards(self) -> int:
+        return self.contents.getNumberOfCardsExpected() * self.numberOfPacks
 ```

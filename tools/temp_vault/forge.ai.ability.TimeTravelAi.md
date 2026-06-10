@@ -110,3 +110,52 @@ public class TimeTravelAi extends SpellAbilityAi {
     }
 }
 ```
+
+## Python
+`forge/ai/ability/TimeTravelAi.py`
+
+```python
+from typing import Iterable
+
+from com.google.common.collect.Iterables import Iterables
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.ai.ComputerUtil import ComputerUtil
+from forge.ai.SpellAbilityAi import SpellAbilityAi
+from forge.game.card.Card import Card
+from forge.game.card.CardPredicates import CardPredicates
+from forge.game.card.CounterEnumType import CounterEnumType
+from forge.game.player.Player import Player
+from forge.game.player.PlayerActionConfirmMode import PlayerActionConfirmMode
+from forge.game.player.PlayerController import PlayerController
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+
+
+class TimeTravelAi(SpellAbilityAi):
+    def canPlay(self, aiPlayer: Player, sa: SpellAbility) -> AiAbilityDecision:
+        hasSuspendedCards = aiPlayer.getCardsIn(ZoneType.Exile).anyMatch(Card.hasSuspend)
+        hasRelevantCardsOTB = aiPlayer.getCardsIn(ZoneType.Battlefield).anyMatch(CardPredicates.hasCounter(CounterEnumType.TIME))
+
+        if hasSuspendedCards or hasRelevantCardsOTB:
+            # If there are cards with Time counters, we can play this ability
+            return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+        else:
+            # No cards to add/remove Time counters from, so don't play this ability
+            return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+    def chooseBinary(self, kindOfChoice: "PlayerController.BinaryChoiceType", sa: SpellAbility, params: dict[str, object]) -> bool:
+        # Returning true means "add counter", false means "remove counter"
+
+        # TODO: extend this (usually, stuff in exile such as Suspended cards with Time counters is played once no Time counters are left,
+        # so removing them is good; stuff on the battlefield is usually stuff like Vanishing or As Foretold, which favors adding Time
+        # counters for better effect, but exceptions should be added here).
+        target = params.get("Target")
+        return not ComputerUtil.isNegativeCounter(CounterEnumType.TIME, target)
+
+    def chooseSingleCard(self, ai: Player, sa: SpellAbility, options: Iterable[Card], isOptional: bool, targetedPlayer: Player, params: dict[str, object]) -> Card:
+        return Iterables.getFirst(options, None)
+
+    def confirmAction(self, player: Player, sa: SpellAbility, mode: PlayerActionConfirmMode, message: str, params: dict[str, object]) -> bool:
+        return True
+```

@@ -46,6 +46,10 @@ classDiagram
     }
 ```
 
+## Design Description
+
+RuntimeVersion is a final, immutable value class in `forge.util` that parses a Java-style runtime version string into its constituent componentsâ€”major, minor, security level, update, optional pre-release identifier, build number, and build information. Construction is restricted to the private constructor and exposed through the static `of` factory method, which validates the input against a layered set of precompiled regular expressions and rejects malformed strings with an `IllegalArgumentException`. The patterns are composed hierarchically, with smaller fragments (version number, pre-release, build number, build information) assembled into four alternative full-string forms tried in order of specificity. Collaborating only with `java.util.regex` and the standard library, it depends on no other Forge types and serves purely as a self-contained parser and read-only accessor, exposing each parsed field through dedicated getters while `toString` reconstructs a normalized version representation.
+
 ## Source
 `forge-core/src/main/java/forge/util/RuntimeVersion.java`
 
@@ -187,4 +191,120 @@ public final class RuntimeVersion {
 	}
 
 }
+```
+
+## Python
+`forge/util/RuntimeVersion.py`
+
+```python
+package forge.util corresponds to module forge/util/RuntimeVersion.py.
+
+import re
+
+
+class RuntimeVersion:
+
+    versionNumberPattern = re.compile(r"([1-9][0-9]*((\.0)*\.[0-9]*)*(_[0-9]+)?)")
+    preReleasePattern = re.compile(r"([a-zA-Z0-9]+)")
+    buildNumberPattern = re.compile(r"(0|[1-9][0-9]*)")
+    buildInformationPattern = re.compile(r"([-a-zA-Z0-9.]+)")
+
+    versionStringPattern1 = re.compile(versionNumberPattern.pattern + "(-" + preReleasePattern.pattern + r")?\+" + buildNumberPattern.pattern + "(-" + buildInformationPattern.pattern + ")?")
+    versionStringPattern2 = re.compile(versionNumberPattern.pattern + "-" + preReleasePattern.pattern + "(-" + buildInformationPattern.pattern + ")?")
+    versionStringPattern3 = re.compile(versionNumberPattern.pattern + r"(\+?-" + buildInformationPattern.pattern + ")?")
+    versionStringPattern4 = re.compile(versionNumberPattern.pattern + "(-" + preReleasePattern.pattern + ")?")
+
+    def __init__(self, versionString: str):
+
+        self.major = 0
+        self.minor = 0
+        self.securityLevel = 0
+        self.update = 0
+        self.preReleaseIdentifier = None
+        self.buildNumber = 0
+        self.buildInformation = None
+
+        matcher = RuntimeVersion.versionNumberPattern.search(versionString)
+
+        if not matcher:
+            raise ValueError("Improperly formatted version string provided: " + versionString)
+
+        versionNumbers = re.split(r"[._]", matcher.group())
+
+        if len(versionNumbers) >= 1:
+            self.major = int(versionNumbers[0])
+
+        if len(versionNumbers) >= 2:
+            self.minor = int(versionNumbers[1])
+
+        if len(versionNumbers) >= 3:
+            self.securityLevel = int(versionNumbers[2])
+
+        if len(versionNumbers) >= 4:
+            self.update = int(versionNumbers[3])
+
+        if RuntimeVersion.versionStringPattern1.search(versionString):
+
+            infoMatcher = RuntimeVersion.preReleasePattern.search(versionString)
+            if infoMatcher:
+                self.preReleaseIdentifier = infoMatcher.group()
+
+            infoMatcher = RuntimeVersion.buildNumberPattern.search(versionString)
+            self.buildNumber = int(infoMatcher.group())
+
+            infoMatcher = RuntimeVersion.buildInformationPattern.search(versionString)
+            if infoMatcher:
+                self.buildInformation = infoMatcher.group()
+
+        elif RuntimeVersion.versionStringPattern2.search(versionString):
+
+            infoMatcher = RuntimeVersion.preReleasePattern.search(versionString)
+            self.preReleaseIdentifier = infoMatcher.group()
+
+            infoMatcher = RuntimeVersion.buildInformationPattern.search(versionString)
+            if infoMatcher:
+                self.buildInformation = infoMatcher.group()
+
+        elif RuntimeVersion.versionStringPattern3.search(versionString):
+
+            infoMatcher = RuntimeVersion.buildInformationPattern.search(versionString)
+            if infoMatcher:
+                self.buildInformation = infoMatcher.group()
+
+        elif RuntimeVersion.versionStringPattern4.search(versionString):
+
+            infoMatcher = RuntimeVersion.preReleasePattern.search(versionString)
+            if infoMatcher:
+                self.preReleaseIdentifier = infoMatcher.group()
+
+        else:
+            raise ValueError("Improperly formatted version string provided: " + versionString)
+
+    @staticmethod
+    def of(versionString: str) -> "RuntimeVersion":
+        return RuntimeVersion(versionString)
+
+    def __str__(self) -> str:
+        return "1." + str(self.minor) + "." + str(self.securityLevel) + "_" + str(self.update)
+
+    def getMajor(self) -> int:
+        return self.major
+
+    def getMinor(self) -> int:
+        return self.minor
+
+    def getSecurityLevel(self) -> int:
+        return self.securityLevel
+
+    def getUpdate(self) -> int:
+        return self.update
+
+    def getPreReleaseIdentifier(self) -> str:
+        return self.preReleaseIdentifier
+
+    def getBuildNumber(self) -> int:
+        return self.buildNumber
+
+    def getBuildInformation(self) -> str:
+        return self.buildInformation
 ```

@@ -47,6 +47,12 @@ classDiagram
 - [[forge.item.SealedTemplate|SealedTemplate]]
 - [[forge.util.ItemPool|ItemPool]]
 
+## Design Description
+
+UnOpenedProduct represents a sealed Magic product (booster pack) that can be opened to yield a list of cards. Implementing IUnOpenedProduct, it is constructed from a SealedTemplate describing the pack's slot structure, and optionally from a constrained card pool supplied as an ItemPool, a raw Iterable of PaperCards, or a Predicate filter applied to the global card database.
+
+The design distinguishes two generation modes: when given a specific pool it eagerly prebuilds a PrintSheet per template slot (cached in a TreeMap and delegated to BoosterGenerator.makeSheet), whereas with no pool it defers entirely to BoosterGenerator using the default database, avoiding pointless caching. The optional pool-limited flag makes generation consume cardsâ€”removing drawn cards from their sheets and throwing IllegalStateException when a slot's sheet is depletedâ€”supporting limited formats where the pool must not be reused.
+
 ## Source
 `forge-core/src/main/java/forge/item/generation/UnOpenedProduct.java`
 
@@ -136,4 +142,76 @@ public class UnOpenedProduct implements IUnOpenedProduct {
     }
 
 }
+```
+
+## Python
+`forge/item/generation/UnOpenedProduct.py`
+
+```python
+from forge.StaticData import StaticData
+from forge.card.PrintSheet import PrintSheet
+from forge.item.PaperCard import PaperCard
+from forge.item.SealedTemplate import SealedTemplate
+from forge.util.ItemPool import ItemPool
+from forge.util.IterableUtil import IterableUtil
+from forge.item.generation.IUnOpenedProduct import IUnOpenedProduct
+from forge.item.generation.BoosterGenerator import BoosterGenerator
+
+
+_UNSET = object()
+
+
+class UnOpenedProduct(IUnOpenedProduct):
+
+    def __init__(self, template, second=_UNSET):
+        self.tpl = None
+        self.sheets = None
+        self.poolLimited = False  # if true after successful generation cards are removed from printsheets.
+
+        if second is _UNSET:
+            # Means to select from all unique cards (from base game, ie. no schemes or avatars)
+            self.tpl = template
+            self.sheets = None
+        elif isinstance(second, ItemPool):
+            # Invoke this constructor only if you are sure that the pool is not equal to default carddb
+            self._initFromCards(template, second.toFlatList())
+        elif callable(second):
+            self._initFromCards(template, IterableUtil.filter(StaticData.instance().getCommonCards().getAllCards(), second))
+        else:
+            self._initFromCards(template, second)
+
+    def _initFromCards(self, template, cards):
+        self.tpl = template
+        self.sheets = {}
+        self.prebuildSheets(cards)
+
+    def isPoolLimited(self) -> bool:
+        return self.poolLimited
+
+    def setLimitedPool(self, considerNumbersInPool: bool) -> None:
+        self.poolLimited = considerNumbersInPool  # TODO: Add 0 to parameter's name.
+
+    def prebuildSheets(self, sourceList) -> None:
+        for cc in self.tpl.getSlots():
+            self.sheets[cc.getKey()] = BoosterGenerator.makeSheet(cc.getKey(), sourceList)
+
+    def get(self) -> list[PaperCard]:
+        if self.sheets is not None:
+            return self.getBoosterPack()
+
+        return BoosterGenerator.getBoosterPack(self.tpl)
+
+    # If they request cards from an arbitrary pool, there's no use to cache printsheets.
+    def getBoosterPack(self) -> list[PaperCard]:
+        result = []
+        for slot in self.tpl.getSlots():
+            ps = self.sheets.get(slot.getLeft())
+            if ps.isEmpty() and self.poolLimited:
+                raise RuntimeError("The cardpool has been depleted and has no more cards for slot " + slot.getKey())
+
+            foundCards = ps.random(slot.getRight(), True)
+            if self.poolLimited:
+                ps.removeAll(foundCards)
+            result.extend(foundCards)
+        return result
 ```

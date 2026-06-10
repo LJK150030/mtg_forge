@@ -46,6 +46,12 @@ classDiagram
 - [[forge.game.player.Player|Player]]
 - [[forge.game.zone.ZoneType|ZoneType]]
 
+## Design Description
+
+PlayerCollection is a specialized, serializable container of `Player` objects that extends the generic `FCollection<Player>` framework, inheriting its ordered, set-like storage and exposing convenience constructors for building a collection from nothing, an existing iterable, or a single player. Its responsibility is to add player-domain operations on top of that base: aggregating cards across all contained players (`getCardsIn`, `getCreaturesInPlay`) into a unified `CardCollection`, and providing functional-style query helpers for filtering by `Predicate`, selecting extremes via `Comparator`, and computing min/max/sum over integer-valued `Function`s.
+
+The design intent is to keep player-group logic cohesive and fluent: `filter` returns a new `PlayerCollection` to support chaining, comparator-based selectors guard against emptiness by returning null, and value aggregations delegate to the shared `Aggregates` utility. An author's TODO notes these aggregate methods could be hoisted into `FCollectionView`, signaling awareness that the same patterns recur across collaborating collection types.
+
 ## Source
 `forge-game/src/main/java/forge/game/player/PlayerCollection.java`
 
@@ -130,4 +136,75 @@ public class PlayerCollection extends FCollection<Player> {
         return Aggregates.sum(this, func);
     }
 }
+```
+
+## Python
+`forge/game/player/PlayerCollection.py`
+
+```python
+from forge.game.card.CardCollection import CardCollection
+from forge.game.player.Player import Player
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.Aggregates import Aggregates
+from forge.util.IterableUtil import IterableUtil
+from forge.util.collect.FCollection import FCollection
+
+
+class PlayerCollection(FCollection):
+
+    serialVersionUID = -4374566955977201748
+
+    def __init__(self, arg=None):
+        super().__init__()
+        if arg is None:
+            pass
+        elif isinstance(arg, Player):
+            self.add(arg)
+        else:
+            self.addAll(arg)
+
+    # card collection functions
+    def getCardsIn(self, zone):
+        result = CardCollection()
+        for p in self:
+            result.addAll(p.getCardsIn(zone))
+        return result
+
+    def getCardsIn(self, zones):
+        result = CardCollection()
+        for p in self:
+            result.addAll(p.getCardsIn(zones))
+        return result
+
+    def getCreaturesInPlay(self):
+        result = CardCollection()
+        for p in self:
+            result.addAll(p.getCreaturesInPlay())
+        return result
+
+    # filter functions with predicate
+    def filter(self, pred):
+        return PlayerCollection(IterableUtil.filter(self, pred))
+
+    # sort functions with Comparator
+    def min(self, comp):
+        if self.isEmpty():
+            return None
+        return min(self, key=cmp_to_key(comp))
+
+    def max(self, comp):
+        if self.isEmpty():
+            return None
+        return max(self, key=cmp_to_key(comp))
+
+    # value functions with Function
+    # TODO: Could probably move these up to FCollectionView, apply them, and trim off a bunch of "Aggregates" clauses.
+    def min(self, func):
+        return Aggregates.min(self, func)
+
+    def max(self, func):
+        return Aggregates.max(self, func)
+
+    def sum(self, func):
+        return Aggregates.sum(self, func)
 ```

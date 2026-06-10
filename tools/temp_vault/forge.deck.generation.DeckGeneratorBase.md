@@ -556,3 +556,375 @@ public abstract class DeckGeneratorBase {
     }
 }
 ```
+
+## Python
+`forge/deck/generation/DeckGeneratorBase.py`
+
+```python
+from forge.StaticData import StaticData
+from forge.card.CardRules import CardRules
+from forge.card.CardRulesPredicates import CardRulesPredicates
+from forge.card.CardType import CardType
+from forge.card.ColorSet import ColorSet
+from forge.card.MagicColor import MagicColor
+from forge.card.mana.ManaCost import ManaCost
+from forge.deck.CardPool import CardPool
+from forge.deck.DeckFormat import DeckFormat
+from forge.deck.generation.DeckGenPool import DeckGenPool
+from forge.deck.generation.IDeckGenPool import IDeckGenPool
+from forge.item.PaperCard import PaperCard
+from forge.item.PaperCardPredicates import PaperCardPredicates
+from forge.util.Aggregates import Aggregates
+from forge.util.DebugTrace import DebugTrace
+from forge.util.IterableUtil import IterableUtil
+from forge.util.ItemPool import ItemPool
+from forge.util.MyRandom import MyRandom
+
+import math
+import re
+from abc import ABC, abstractmethod
+
+
+class DeckGeneratorBase(ABC):
+    def __init__(self, pool0, format0, formatFilter0=None):
+        self.trace = DebugTrace()
+        self.cardCounts = {}
+        self.maxDuplicates = 4
+        self.useArtifacts = True
+        self.basicLandEdition = None
+        self.inverseDLands = []
+        self.dLands = []
+
+        self.colors = None
+        self.tDeck = CardPool()
+        self.landPool = None
+
+        if formatFilter0 is not None:
+            self.pool = DeckGenPool(format0.getCardPool(pool0).getAllCards(formatFilter0))
+        else:
+            self.pool = DeckGenPool(format0.getCardPool(pool0).getAllCards())
+        self.format = format0
+        self.fullCardDB = pool0
+
+    @abstractmethod
+    def getLandPercentage(self):
+        ...
+
+    @abstractmethod
+    def getCreaturePercentage(self):
+        ...
+
+    @abstractmethod
+    def getSpellPercentage(self):
+        ...
+
+    def setSingleton(self, singleton):
+        self.maxDuplicates = 1 if singleton else 4
+
+    def setUseArtifacts(self, value):
+        self.useArtifacts = value
+
+    def addCreaturesAndSpells(self, size, cmcLevels, forAi):
+        self.trace.append("Building deck of ").append(size).append("cards\n")
+
+        cards = self.selectCardsOfMatchingColorForPlayer(forAi)
+        # build subsets based on type
+
+        creatures = IterableUtil.filter(cards, PaperCardPredicates.IS_CREATURE)
+        creatCnt = int(math.ceil(self.getCreaturePercentage() * size))
+        self.trace.append("Creatures to add:").append(creatCnt).append("\n")
+        self.addCmcAdjusted(creatures, creatCnt, cmcLevels)
+
+        preSpells = PaperCardPredicates.fromRules(CardRulesPredicates.IS_NON_CREATURE_SPELL)
+        spells = IterableUtil.filter(cards, preSpells)
+        spellCnt = int(math.ceil(self.getSpellPercentage() * size))
+        self.trace.append("Spells to add:").append(spellCnt).append("\n")
+        self.addCmcAdjusted(spells, spellCnt, cmcLevels)
+
+        self.trace.append("Current deck size: %d... should be %f\n" % (self.tDeck.countAll(), size * (self.getCreaturePercentage() + self.getSpellPercentage())))
+
+    def getDeck(self, size, forAi):
+        return None  # all but theme deck do override this method
+
+    def setBasicLandPool(self, edition):
+        if edition is not None:
+            printed = PaperCardPredicates.printedInSet(edition)
+            isSetBasicLand = lambda c: printed(c) and PaperCardPredicates.IS_BASIC_LAND(c)
+        else:
+            isSetBasicLand = PaperCardPredicates.IS_BASIC_LAND
+
+        self.landPool = DeckGenPool(StaticData.instance().getCommonCards().getAllCards(isSetBasicLand))
+        return self.landPool.contains("Plains")
+
+    def addSome(self, cnt, source):
+        srcLen = len(source)
+        if srcLen == 0:
+            return 0
+
+        res = 0
+        while res < cnt:
+            cp = source[MyRandom.getRandom().nextInt(srcLen)]
+            # TODO AltName conversion needed?
+            newCount = self.cardCounts.get(cp.getName()) + 1
+
+            # add card to deck if not already maxed out on card
+            if newCount <= self.maxDuplicates:
+                self.tDeck.add(self.pool.getCard(cp.getName(), cp.getEdition()))
+                # see if current card is from an edition with basic lands to use for this deck
+                if self.basicLandEdition is None:
+                    if self.setBasicLandPool(cp.getEdition()):
+                        self.basicLandEdition = cp.getEdition()
+                self.cardCounts[cp.getName()] = newCount
+                self.trace.append("(%d) %s [%s]\n" % (cp.getRules().getManaCost().getCMC(), cp.getName(), cp.getRules().getManaCost()))
+                res += 1
+
+            # remove card from source if now maxed out on card
+            if newCount >= self.maxDuplicates:
+                source.remove(cp)
+                srcLen -= 1
+                if srcLen == 0:
+                    break
+        return res
+
+    def addSomeStr(self, cnt, source):
+        srcLen = len(source)
+        if srcLen == 0:
+            return 0
+
+        res = 0
+        while res < cnt:
+            s = source[MyRandom.getRandom().nextInt(srcLen)]
+            newCount = self.cardCounts.get(s) + 1
+
+            # add card to deck if not already maxed out on card
+            if newCount <= self.maxDuplicates:
+                self.tDeck.add(self.pool.getCard(s))
+                self.cardCounts[s] = newCount
+                self.trace.append(s + "\n")
+                res += 1
+
+            # remove card from source if now maxed out on card
+            if newCount >= self.maxDuplicates:
+                source.remove(s)
+                srcLen -= 1
+                if srcLen == 0:
+                    break
+        return res
+
+    def addBasicLand(self, cnt, edition=None):
+        self.trace.append(cnt).append(" basic lands remain").append("\n")
+
+        # attempt to optimize basic land counts according to colors of picked cards
+        clrCnts = self.countLands(self.tDeck)
+
+        if cnt > 0 and not clrCnts:
+            # The deck is completely colorless. Add some Plains then to fill the deck.
+            clrCnts[MagicColor.Constant.BASIC_LANDS.get(0)] = cnt
+
+        # total of all ClrCnts
+        totalColor = 0.0
+        for key, value in clrCnts.items():
+            totalColor += value
+            self.trace.append(key).append(":").append(value).append("\n")
+
+        self.trace.append("totalColor:").append(totalColor).append("\n")
+
+        landsLeft = cnt
+        for key, value in clrCnts.items():
+            basicLandName = key
+
+            # calculate number of lands for each color
+            nLand = min(landsLeft, round(cnt * value / totalColor))
+            self.trace.append("nLand-").append(basicLandName).append(":").append(nLand).append("\n")
+
+            # just to prevent a null exception by the deck size fixing code
+            self.cardCounts[basicLandName] = nLand
+
+            if not self.landPool.contains("Plains"):  # in case none of the cards came from a set with all basic lands
+                self.setBasicLandPool("BFZ")
+                self.basicLandEdition = "BFZ"
+
+            for i in range(nLand):
+                self.tDeck.add(self.landPool.getCard(basicLandName, edition if edition is not None else self.basicLandEdition), 1)
+
+            landsLeft -= nLand
+
+    def adjustDeckSize(self, targetSize):
+        # fix under-sized or over-sized decks, due to integer arithmetic
+        actualSize = self.tDeck.countAll()
+        if actualSize < targetSize:
+            self.addSome(targetSize - actualSize, self.tDeck.toFlatList())
+        elif actualSize > targetSize:
+
+            for i in range(3):
+                if not (actualSize > targetSize):
+                    break
+                toRemove = Aggregates.random(
+                    [c for c in self.tDeck.toFlatList() if PaperCardPredicates.NOT_BASIC_LAND(c)],
+                    actualSize - targetSize)
+                self.tDeck.removeAllFlat(toRemove)
+
+                for c in toRemove:
+                    self.trace.append("Removed:").append(c.getName()).append("\n")
+                actualSize = self.tDeck.countAll()
+
+    def addCmcAdjusted(self, source, cnt, cmcLevels):
+        totalWeight = 0
+        for pair in cmcLevels:
+            totalWeight += pair.getRight()
+
+        variability = 0.6  # if set to 1, you'll get minimum cards to choose from
+        desiredWeight = cnt / (self.maxDuplicates * variability)
+        desiredOverTotal = desiredWeight / totalWeight
+        requestedOverTotal = cnt / totalWeight
+
+        for pair in cmcLevels:
+            matchingCards = IterableUtil.filter(source, PaperCardPredicates.fromRules(pair.getLeft()))
+            cmcCountForPool = int(math.ceil(pair.getRight() * desiredOverTotal))
+
+            addOfThisCmc = round(pair.getRight() * requestedOverTotal)
+            self.trace.append("Adding %d cards for cmc range from a pool with %d cards:\n" % (addOfThisCmc, cmcCountForPool))
+
+            curved = Aggregates.random(matchingCards, cmcCountForPool)
+            curvedRandomized = []
+            for c in curved:
+                self.cardCounts[c.getName()] = 0
+                curvedRandomized.append(self.pool.getCard(c.getName()))
+
+            self.addSome(addOfThisCmc, curvedRandomized)
+
+    def selectCardsOfMatchingColorForPlayer(self, forAi):
+        # start with all cards
+        # remove cards that generated decks don't like
+        canPlay = self.AI_CAN_PLAY if forAi else CardRulesPredicates.IS_KEPT_IN_RANDOM_DECKS
+        hasColor = self.MatchColorIdentity(self.colors)
+        canUseInFormat = lambda c: (not c.getAiHints().getRemNonCommanderDecks()) or self.format.hasCommander()
+
+        if self.useArtifacts:
+            baseHasColor = hasColor
+            hasColor = lambda c: baseHasColor(c) or self.COLORLESS_CARDS(c)
+        return IterableUtil.filter(self.pool.getAllCards(), PaperCardPredicates.fromRules(lambda c: canPlay(c) and hasColor(c) and canUseInFormat(c)))
+
+    @staticmethod
+    def countLands(outList):
+        # attempt to optimize basic land counts according
+        # to color representation
+        res = {}
+        # count each card color using mana costs
+        # TODO: count hybrid mana differently?
+        for cpe in outList:
+            profile = cpe.getKey().getRules().getManaCost().getColorProfile()
+
+            if (profile & MagicColor.WHITE) != 0:
+                DeckGeneratorBase.increment(res, MagicColor.Constant.BASIC_LANDS.get(0), cpe.getValue())
+            elif (profile & MagicColor.BLUE) != 0:
+                DeckGeneratorBase.increment(res, MagicColor.Constant.BASIC_LANDS.get(1), cpe.getValue())
+            elif (profile & MagicColor.BLACK) != 0:
+                DeckGeneratorBase.increment(res, MagicColor.Constant.BASIC_LANDS.get(2), cpe.getValue())
+            elif (profile & MagicColor.RED) != 0:
+                DeckGeneratorBase.increment(res, MagicColor.Constant.BASIC_LANDS.get(3), cpe.getValue())
+            elif (profile & MagicColor.GREEN) != 0:
+                DeckGeneratorBase.increment(res, MagicColor.Constant.BASIC_LANDS.get(4), cpe.getValue())
+        return res
+
+    @staticmethod
+    def increment(map, key, delta):
+        map[key] = map.get(key, 0) + delta
+
+    AI_CAN_PLAY = staticmethod(lambda c: CardRulesPredicates.IS_KEPT_IN_AI_DECKS(c) and CardRulesPredicates.IS_KEPT_IN_RANDOM_DECKS(c))
+
+    COLORLESS_CARDS = staticmethod(lambda c: c.getColorIdentity().isColorless() and not c.getManaCost().isNoCost())
+
+    class MatchColorIdentity:
+        def __init__(self, color):
+            self.allowedColor = color
+
+        def test(self, subject):
+            mc = subject.getManaCost()
+            return (not mc.isPureGeneric()) and self.allowedColor.containsAllColorsFrom(subject.getColorIdentity().getColor())
+            # return mc.canBePaidWithAvaliable(allowedColor);
+            # return allowedColor.containsAllColorsFrom(mc.getColorProfile());
+
+        def __call__(self, subject):
+            return self.test(subject)
+
+    class FilterCMC:
+        def __init__(self, from_, to):
+            self.min = from_
+            self.max = to
+
+        def test(self, c):
+            mc = c.getManaCost()
+            cmc = mc.getCMC()
+            return cmc >= self.min and cmc <= self.max and not mc.isNoCost()
+
+        def __call__(self, c):
+            return self.test(c)
+
+    def getDualLandList(self, arg):
+        if isinstance(arg, bool):
+            return self.getDualLandList(self.AI_CAN_PLAY if arg else CardRulesPredicates.IS_KEPT_IN_RANDOM_DECKS)
+
+        canPlay = arg
+        if self.colors.countColors() > 3:
+            self.addCardNameToList("Rupture Spire", self.dLands)
+            self.addCardNameToList("Undiscovered Paradise", self.dLands)
+
+        if self.colors.countColors() > 2:
+            self.addCardNameToList("Evolving Wilds", self.dLands)
+            self.addCardNameToList("Terramorphic Expanse", self.dLands)
+
+        # filter to provide all dual lands from pool matching 2 or 3 colors from current deck
+        dualLandFilter = CardRulesPredicates.coreType(CardType.CoreType.Land)
+        exceptBasicLand = CardRulesPredicates.NOT_BASIC_LAND
+
+        landCards = list(self.pool.getAllCards(PaperCardPredicates.fromRules(lambda c: dualLandFilter(c) and exceptBasicLand(c) and canPlay(c))))
+        dualLandPatterns = ["Add \\{([WUBRG])\\} or \\{([WUBRG])\\}",
+                            "Add \\{([WUBRG])\\}, \\{([WUBRG])\\}, or \\{([WUBRG])\\}",
+                            "Add \\{([WUBRG])\\}\\{([WUBRG])\\}",
+                            "Add \\{[WUBRG]\\}\\{[WUBRG]\\}, \\{([WUBRG])\\}\\{([WUBRG])\\}, or \\{[WUBRG]\\}\\{[WUBRG]\\}"]
+        for pattern in dualLandPatterns:
+            self.regexLandSearch(pattern, landCards)
+        self.regexFetchLandSearch(landCards)
+
+        return self.dLands
+
+    def regexLandSearch(self, pattern, landCards):
+        p = re.compile(pattern)
+        for card in landCards:
+            for matcher in p.finditer(card.getRules().getOracleText()):
+                manaColorNames = []
+                for i in range(1, p.groups + 1):
+                    manaColorNames.append(matcher.group(i))
+                manaColorSet = ColorSet.fromNames(manaColorNames)
+                if self.colors.hasAllColors(manaColorSet.getColor()):
+                    self.addCardNameToList(card.getName(), self.dLands)
+                else:
+                    self.addCardNameToList(card.getName(), self.inverseDLands)
+        return self.dLands
+
+    def regexFetchLandSearch(self, landCards):
+        fetchPattern = "Search your library for an* ([^\\s]*) or ([^\\s]*) card"
+        colorLookup = {}
+        colorLookup["Plains"] = "W"
+        colorLookup["Forest"] = "G"
+        colorLookup["Mountain"] = "R"
+        colorLookup["Island"] = "U"
+        colorLookup["Swamp"] = "B"
+        p = re.compile(fetchPattern)
+        for card in landCards:
+            for matcher in p.finditer(card.getRules().getOracleText()):
+                manaColorNames = []
+                for i in range(1, p.groups + 1):
+                    manaColorNames.append(colorLookup.get(matcher.group(i)))
+                manaColorSet = ColorSet.fromNames(manaColorNames)
+                if self.colors.hasAllColors(manaColorSet.getColor()):
+                    self.addCardNameToList(card.getName(), self.dLands)
+                else:
+                    self.addCardNameToList(card.getName(), self.inverseDLands)
+        return self.dLands
+
+    def addCardNameToList(self, cardName, cardNameList):
+        if self.pool.contains(cardName):  # avoid adding card if it's not in pool
+            cardNameList.append(cardName)
+```

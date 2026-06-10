@@ -47,7 +47,7 @@ classDiagram
 
 ## Design Description
 
-DeckGenerator5Color is a concrete deck builder that specializes the abstract `DeckGeneratorBase` template to produce five-color Magic decks. It pins the deck's composition by overriding the protected percentage hooks—44% lands, 33% creatures, 23% spells—and declares a fixed mana curve as a list of `FilterCMC` predicates weighted 3:2:1 across low (0–2), mid (3–5), and high (6–20) CMC bands, which the supplied `DeckFormat` may further adjust via `adjustCMCLevels`.
+DeckGenerator5Color is a concrete deck builder that specializes the abstract `DeckGeneratorBase` template to produce five-color Magic decks. It pins the deck's composition by overriding the protected percentage hooksâ€”44% lands, 33% creatures, 23% spellsâ€”and declares a fixed mana curve as a list of `FilterCMC` predicates weighted 3:2:1 across low (0â€“2), mid (3â€“5), and high (6â€“20) CMC bands, which the supplied `DeckFormat` may further adjust via `adjustCMCLevels`.
 
 Both constructors delegate pool, format, and filter wiring to the superclass and seed the inherited `colors` field to all five colors (`ColorSet.fromMask(0).inverse()`). The overridden `getDeck` orchestrates assembly: it calls the base `addCreaturesAndSpells` along the curve, then computes the land count, layers in dual lands and basic lands, and returns the accumulated `CardPool`. The design keeps all reusable generation mechanics in the base class, leaving this subclass to supply only five-color tuning constants and the land-filling sequence.
 
@@ -158,4 +158,67 @@ public class DeckGenerator5Color extends DeckGeneratorBase {
         return tDeck;
     }
 }
+```
+
+## Python
+`forge/deck/generation/DeckGenerator5Color.py`
+
+```python
+from forge.deck.generation.DeckGeneratorBase import DeckGeneratorBase
+from forge.deck.generation.DeckGeneratorBase import FilterCMC
+from forge.deck.generation.IDeckGenPool import IDeckGenPool
+from forge.deck.CardPool import CardPool
+from forge.deck.DeckFormat import DeckFormat
+from forge.item.PaperCard import PaperCard
+from forge.card.ColorSet import ColorSet
+
+
+class DeckGenerator5Color(DeckGeneratorBase):
+    def getLandPercentage(self) -> float:
+        return 0.44
+
+    def getCreaturePercentage(self) -> float:
+        return 0.33
+
+    def getSpellPercentage(self) -> float:
+        return 0.23
+
+    # resulting mana curve of the card pool
+    # 30x 0 - 2
+    # 20x 3 - 5
+    # 10x 6 - 20
+    # =60x - card pool
+
+    def __init__(self, pool0: IDeckGenPool, format0: DeckFormat, formatFilter0=None):
+        if formatFilter0 is not None:
+            super().__init__(pool0, format0, formatFilter0)
+        else:
+            super().__init__(pool0, format0)
+        self.cmcLevels = [
+            (FilterCMC(0, 2), 3),
+            (FilterCMC(3, 5), 2),
+            (FilterCMC(6, 20), 1),
+        ]
+        format0.adjustCMCLevels(self.cmcLevels)
+        self.colors = ColorSet.fromMask(0).inverse()
+
+    def getDeck(self, size: int, forAi: bool) -> CardPool:
+        self.addCreaturesAndSpells(size, self.cmcLevels, forAi)
+
+        # Add lands
+        numLands = round(size * self.getLandPercentage())
+        self.adjustDeckSize(size - numLands)
+        self.trace.append("numLands:").append(numLands).append("\n")
+
+        # Add dual lands
+        duals = self.getDualLandList(forAi)
+        for s in duals:
+            self.cardCounts.put(s, 0)
+
+        dblsAdded = self.addSomeStr((numLands // 4), duals)
+        numLands -= dblsAdded
+
+        self.addBasicLand(numLands)
+        self.adjustDeckSize(size)
+        return self.tDeck
 ```

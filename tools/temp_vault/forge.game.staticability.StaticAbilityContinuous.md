@@ -84,6 +84,12 @@ classDiagram
 - [[forge.game.trigger.Trigger|Trigger]]
 - [[forge.game.zone.ZoneType|ZoneType]]
 
+## Design Description
+
+StaticAbilityContinuous is a final, non-instantiable utility class that implements the resolution engine for continuous static abilities in Forge's layered effect system. Its core method, `applyContinuousAbility`, interprets a `StaticAbility`'s parameter map one `StaticAbilityLayer` at a time, translating declarative card-script directivesâ€”power/toughness changes, added or removed keywords, types, colors, abilities, triggers, replacements, and rules modifications such as MayPlay or control changesâ€”into mutations applied to the affected `Card`s and `Player`s with the ability's timestamp.
+
+Rather than subclassing anything, it acts as a stateless coordinator over the game model, delegating amount calculations to `AbilityUtils` and resolving the affected set via `getAffectedCards`/`getAffectedPlayers` against zones, defined cards, and validity restrictions. Helpers like `getColorsFromParam`, `cardsGainedFrom`, and `buildIgnoreEffectAbility` factor out parameter parsing and the optional cost-to-ignore mechanism. The design intent is a single, exhaustive, layer-ordered dispatcher that keeps Magic's complex continuous-effect rules centralized and data-driven.
+
 ## Source
 `forge-game/src/main/java/forge/game/staticability/StaticAbilityContinuous.java`
 
@@ -672,7 +678,7 @@ public final class StaticAbilityContinuous {
                     if (!allValid.isEmpty()) {
                         Card first = allValid.getFirst();
 
-                        // for Volrath’s Shapeshifter, respect flipped state if able?
+                        // for VolrathÃ¢â‚¬â„¢s Shapeshifter, respect flipped state if able?
                         CardState state = first.getState(affectedCard.isFlipped() && first.isFlipCard() ? CardStateName.Flipped : first.getCurrentStateName());
 
                         List<SpellAbility> spellAbilities = Lists.newArrayList();
@@ -704,7 +710,7 @@ public final class StaticAbilityContinuous {
                             kwIdx++;
                         }
 
-                        // Volrath’s Shapeshifter has that card’s name, mana cost, color, types, abilities, power, and toughness.
+                        // VolrathÃ¢â‚¬â„¢s Shapeshifter has that cardÃ¢â‚¬â„¢s name, mana cost, color, types, abilities, power, and toughness.
 
                         // name
                         affectedCard.addChangedName(state.getName(), false, se.getTimestamp(), stAb.getId());
@@ -1184,4 +1190,875 @@ public final class StaticAbilityContinuous {
         return affectedCards;
     }
 }
+```
+
+## Python
+`forge/game/staticability/StaticAbilityContinuous.py`
+
+```python
+from __future__ import annotations
+
+from forge.GameCommand import GameCommand
+from forge.card.CardType import CardType
+from forge.card.ColorSet import ColorSet
+from forge.card.MagicColor import MagicColor
+from forge.card.MagicColor.Color import Color
+from forge.card.RemoveType import RemoveType
+from forge.card.CardStateName import CardStateName
+from forge.card.mana.ManaCost import ManaCost
+from forge.game.CardTraitBase import CardTraitBase
+from forge.game.Game import Game
+from forge.game.StaticEffect import StaticEffect
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.ability.ApiType import ApiType
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.card.CardState import CardState
+from forge.game.card.CardUtil import CardUtil
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CardPredicates import CardPredicates
+from forge.game.card.CardFactoryUtil import CardFactoryUtil
+from forge.game.cost.Cost import Cost
+from forge.game.keyword.Keyword import Keyword
+from forge.game.keyword.KeywordInterface import KeywordInterface
+from forge.game.player.Player import Player
+from forge.game.player.PlayerCollection import PlayerCollection
+from forge.game.replacement.ReplacementEffect import ReplacementEffect
+from forge.game.spellability.AbilityStatic import AbilityStatic
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.staticability.StaticAbility import StaticAbility
+from forge.game.staticability.StaticAbilityLayer import StaticAbilityLayer
+from forge.game.trigger.Trigger import Trigger
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.TextUtil import TextUtil
+from org.apache.commons.lang3.StringUtils import StringUtils
+
+
+class StaticAbilityContinuous:
+    """The Class StaticAbility_Continuous."""
+
+    # Private constructor to prevent instantiation
+    def __init__(self):
+        pass
+
+    @staticmethod
+    def applyContinuousAbility(stAb: StaticAbility, arg2, arg3) -> CardCollectionView:
+        # Java has two overloads of applyContinuousAbility:
+        #   (StaticAbility, StaticAbilityLayer, CardCollectionView)
+        #   (StaticAbility, CardCollectionView, StaticAbilityLayer)
+        if isinstance(arg2, StaticAbilityLayer):
+            layer = arg2
+            preList = arg3
+            affectedCards = StaticAbilityContinuous.getAffectedCards(stAb, preList)
+            return StaticAbilityContinuous.applyContinuousAbility(stAb, affectedCards, layer)
+
+        affectedCards = arg2
+        layer = arg3
+
+        params = stAb.getMapParams()
+        hostCard = stAb.getHostCard()
+        controller = hostCard.getController()
+        affectedPlayers = StaticAbilityContinuous.getAffectedPlayers(stAb)
+
+        # nothing more to do
+        if stAb.hasParam("Affected") and not affectedPlayers and affectedCards.isEmpty():
+            return affectedCards
+
+        game = hostCard.getGame()
+        se = game.getStaticEffects().getStaticEffect(stAb)
+        se.setAffectedCards(affectedCards)
+        se.setAffectedPlayers(affectedPlayers)
+        se.setParams(params)
+        se.setTimestamp(stAb.getTimestamp())
+
+        addP = ""
+        powerBonus = 0
+        addT = ""
+        toughnessBonus = 0
+        setP = ""
+        setPower = None
+        setT = ""
+        setToughness = None
+
+        addKeywords = None
+        addHiddenKeywords = []
+        removeKeywords = None
+        addAbilities = None
+        addReplacements = None
+        addSVars = None
+        addTypes = None
+        removeTypes = None
+        addColors = None
+        addTriggers = None
+        addStatics = None
+        removeAbilities = None
+        addAllCreatureTypes = False
+        remove = set()
+
+        overwriteColors = False
+
+        cantHaveKeyword = None
+
+        mayLookAt = None
+
+        controllerMayPlay = False
+        mayPlayWithoutManaCost = False
+        mayPlayWithFlash = False
+        mayPlayAltManaCost = None
+        mayPlayGrantZonePermissions = True
+        mayPlayLimit = None
+
+        if layer == StaticAbilityLayer.SETPT or layer == StaticAbilityLayer.CHARACTERISTIC:
+            if "SetPower" in params:
+                setP = params.get("SetPower")
+                setPower = AbilityUtils.calculateAmount(hostCard, setP, stAb)
+
+            if "SetToughness" in params:
+                setT = params.get("SetToughness")
+                setToughness = AbilityUtils.calculateAmount(hostCard, setT, stAb)
+
+        if layer == StaticAbilityLayer.MODIFYPT:
+            if "AddPower" in params:
+                addP = params.get("AddPower")
+                powerBonus = AbilityUtils.calculateAmount(hostCard, addP, stAb, True)
+
+            if "AddToughness" in params:
+                addT = params.get("AddToughness")
+                toughnessBonus = AbilityUtils.calculateAmount(hostCard, addT, stAb, True)
+
+        if layer == StaticAbilityLayer.ABILITIES:
+            if "AddKeyword" in params:
+                addKeywords = list(params.get("AddKeyword").split(" & "))
+                newKeywords = []
+
+                # Protection with "doesn't remove" effect
+                hostCardUID = str(hostCard.getId())
+                hostCardControllerUID = str(hostCard.getController().getId())
+
+                # update keywords with Chosen parts
+                def _filterAddKeyword(input):
+                    if not hostCard.hasChosenColor() and "ChosenColor" in input:
+                        return True
+                    if not hostCard.hasChosenType() and "ChosenType" in input:
+                        return True
+                    if not hostCard.hasChosenNumber() and "ChosenNumber" in input:
+                        return True
+                    if not hostCard.hasChosenPlayer() and "ChosenPlayer" in input:
+                        return True
+                    if not hostCard.hasNamedCard() and "ChosenName" in input:
+                        return True
+                    if not hostCard.hasChosenEvenOdd() and ("ChosenEvenOdd" in input or "chosenEvenOdd" in input):
+                        return True
+
+                    if "AllColors" in input or "allColors" in input:
+                        for color in MagicColor.WUBRG:
+                            colorWord = MagicColor.toLongString(color)
+                            y = input.replace("AllColors", StringUtils.capitalize(colorWord))
+                            y = y.replace("allColors", colorWord)
+                            newKeywords.append(y)
+                        return True
+                    if "CommanderColorID" in input:
+                        if not hostCard.getController().getCommanders().isEmpty():
+                            if "NotCommanderColorID" in input:
+                                for color in hostCard.getController().getNotCommanderColorID():
+                                    newKeywords.append(input.replace("NotCommanderColorID", color.getName()))
+                                return True
+                            else:
+                                for color in hostCard.getController().getCommanderColorID():
+                                    newKeywords.append(input.replace("CommanderColorID", color.getName()))
+                                return True
+                        return True
+                    # two variants for Red vs. red in keyword
+                    if "ColorsYouCtrl" in input or "colorsYouCtrl" in input:
+                        for color in CardUtil.getColorsFromCards(controller.getCardsIn(ZoneType.Battlefield)):
+                            y = input.replace("ColorsYouCtrl", StringUtils.capitalize(color.getName()))
+                            y = y.replace("colorsYouCtrl", color.getName())
+                            newKeywords.append(y)
+                        return True
+                    if "YourBasic" in input:
+                        lands = hostCard.getController().getLandsInPlay()
+                        basic = MagicColor.Constant.BASIC_LANDS
+                        for type in basic:
+                            if lands.anyMatch(CardPredicates.isType(type)):
+                                y = input.replace("YourBasic", type)
+                                newKeywords.append(y)
+                        return True
+                    if "EachCMCAmongDefined" in input:
+                        keywordDefined = params.get("KeywordDefined")
+                        definedCards = game.getCardsIn(ZoneType.Battlefield)
+                        definedCards = CardLists.getValidCards(definedCards, keywordDefined, hostCard.getController(),
+                                hostCard, stAb)
+                        for c in definedCards:
+                            cmc = c.getCMC()
+                            y = input.replace(" from EachCMCAmongDefined", ":Card.cmcEQ"
+                                    + str(cmc) + ":Protection from mana value " + str(cmc))
+                            if y not in newKeywords:
+                                newKeywords.append(y)
+                        return True
+
+                    return False
+
+                addKeywords = [x for x in addKeywords if not _filterAddKeyword(x)]
+
+                addKeywords.extend(newKeywords)
+
+                def _mapAddKeyword(input):
+                    if hostCard.hasChosenColor():
+                        input = input.replace("ChosenColor", StringUtils.capitalize(hostCard.getChosenColor()))
+                        input = input.replace("chosenColor", hostCard.getChosenColor().lower())
+                    if hostCard.hasChosenType():
+                        input = input.replace("ChosenType", hostCard.getChosenType())
+                    if hostCard.hasChosenNumber():
+                        input = input.replace("ChosenNumber", str(hostCard.getChosenNumber()))
+                    if hostCard.hasChosenPlayer():
+                        cp = hostCard.getChosenPlayer()
+                        input = input.replace("ChosenPlayerUID", str(cp.getId()))
+                        input = input.replace("ChosenPlayerName", cp.getName())
+                    if hostCard.hasNamedCard():
+                        chosenName = hostCard.getNamedCard().replace(",", ";")
+                        input = input.replace("ChosenName", "Card.named" + chosenName)
+                    if hostCard.hasChosenEvenOdd():
+                        input = input.replace("ChosenEvenOdd", str(hostCard.getChosenEvenOdd()))
+                        input = input.replace("chosenEvenOdd", str(hostCard.getChosenEvenOdd()).lower())
+                    input = input.replace("HostCardUID", hostCardUID)
+                    input = input.replace("HostCardControllerUID", hostCardControllerUID)
+                    if "CalcKeywordN" in params:
+                        input = input.replace("N", str(AbilityUtils.calculateAmount(hostCard, params.get("CalcKeywordN"), stAb)))
+                    return input
+
+                addKeywords = [_mapAddKeyword(x) for x in addKeywords]
+
+                if "SharedKeywordsZone" in params:
+                    zones = ZoneType.listValueOf(params.get("SharedKeywordsZone"))
+                    restrictions = params.get("SharedRestrictions").split(",") if "SharedRestrictions" in params else ["Card"]
+                    addKeywords = CardFactoryUtil.sharedKeywords(addKeywords, restrictions, zones, hostCard, stAb)
+
+                if "FromDraftNotes" in params:
+                    addKeywords = list(hostCard.getController().getDraftNotes().getOrDefault(params.get("FromDraftNotes"), "").split(","))
+            elif "ShareRememberedKeywords" in params:
+                kwToShare = []
+                for o in hostCard.getRemembered():
+                    k = o
+                    kwToShare.append(k)
+                if kwToShare:
+                    addKeywords = kwToShare
+
+            if "CantHaveKeyword" in params:
+                cantHaveKeyword = Keyword.setValueOf(params.get("CantHaveKeyword"))
+
+            if "RemoveKeyword" in params:
+                removeKeywords = params.get("RemoveKeyword").split(" & ")
+
+        if layer == StaticAbilityLayer.RULES and "AddHiddenKeyword" in params:
+            addHiddenKeywords.extend(params.get("AddHiddenKeyword").split(" & "))
+
+        if layer == StaticAbilityLayer.ABILITIES:
+            if "RemoveAllAbilities" in params:
+                removeAbilities = lambda e: True
+            elif "RemoveNonManaAbilities" in params:
+                removeAbilities = lambda e: not e.isManaAbility()
+
+            if "AddAbility" in params:
+                sVars = params.get("AddAbility").split(" & ")
+                for i in range(len(sVars)):
+                    sVars[i] = AbilityUtils.getSVar(stAb, sVars[i])
+                addAbilities = sVars
+
+            if "AddReplacementEffect" in params:
+                sVars = params.get("AddReplacementEffect").split(" & ")
+                for i in range(len(sVars)):
+                    sVars[i] = AbilityUtils.getSVar(stAb, sVars[i])
+                addReplacements = sVars
+
+            if "AddTrigger" in params:
+                sVars = params.get("AddTrigger").split(" & ")
+                for i in range(len(sVars)):
+                    sVars[i] = AbilityUtils.getSVar(stAb, sVars[i])
+                addTriggers = sVars
+
+            if "AddStaticAbility" in params:
+                sVars = params.get("AddStaticAbility").split(" & ")
+                for i in range(len(sVars)):
+                    sVars[i] = AbilityUtils.getSVar(stAb, sVars[i])
+                addStatics = sVars
+
+            if "AddSVar" in params:
+                addSVars = params.get("AddSVar").split(" & ")
+
+        if layer == StaticAbilityLayer.TYPE:
+            if "AddType" in params:
+                addTypes = list(params.get("AddType").split(" & "))
+                newTypes = []
+
+                def _filterAddType(input):
+                    if input == "ChosenType" and not hostCard.hasChosenType():
+                        return True
+                    if input == "ChosenType2" and not hostCard.hasChosenType2():
+                        return True
+                    if input == "ImprintedCreatureType":
+                        if hostCard.hasImprintedCard():
+                            newTypes.extend(hostCard.getImprintedCards().getLast().getType().getCreatureTypes())
+                        return True
+                    if input == "AllBasicLandType":
+                        newTypes.extend(CardType.getBasicTypes())
+                        return True
+                    if input == "AllNonBasicLandType":
+                        newTypes.extend(CardType.getNonBasicTypes())
+                        return True
+                    return False
+
+                addTypes = [x for x in addTypes if not _filterAddType(x)]
+                addTypes.extend(newTypes)
+
+                def _mapAddType(input):
+                    if hostCard.hasChosenType2():
+                        input = input.replace("ChosenType2", hostCard.getChosenType2())
+                    if hostCard.hasChosenType():
+                        input = input.replace("ChosenType", hostCard.getChosenType())
+                    return input
+
+                addTypes = [_mapAddType(x) for x in addTypes]
+
+            if "RemoveType" in params:
+                removeTypes = list(params.get("RemoveType").split(" & "))
+
+                def _filterRemoveType(input):
+                    if input == "ChosenType" and not hostCard.hasChosenType():
+                        return True
+                    return False
+
+                removeTypes = [x for x in removeTypes if not _filterRemoveType(x)]
+            if "AddAllCreatureTypes" in params:
+                addAllCreatureTypes = True
+
+            # overwrite doesn't work without new value (e.g. Conspiracy missing choice)
+            if addTypes is None or addTypes:
+                if "RemoveSuperTypes" in params:
+                    remove.add(RemoveType.SuperTypes)
+                if "RemoveCardTypes" in params:
+                    remove.add(RemoveType.CardTypes)
+                if "RemoveSubTypes" in params:
+                    remove.add(RemoveType.SubTypes)
+                if "RemoveLandTypes" in params:
+                    remove.add(RemoveType.LandTypes)
+                if "RemoveCreatureTypes" in params:
+                    remove.add(RemoveType.CreatureTypes)
+                if "RemoveArtifactTypes" in params:
+                    remove.add(RemoveType.ArtifactTypes)
+                if "RemoveEnchantmentTypes" in params:
+                    remove.add(RemoveType.EnchantmentTypes)
+
+        if layer == StaticAbilityLayer.COLOR:
+            if "AddColor" in params:
+                addColors = StaticAbilityContinuous.getColorsFromParam(stAb, params.get("AddColor"))
+
+            if "SetColor" in params:
+                addColors = StaticAbilityContinuous.getColorsFromParam(stAb, params.get("SetColor"))
+                overwriteColors = True
+
+        if layer == StaticAbilityLayer.RULES:
+            # These fall under Rule changes, as they don't fit any other category
+            if "MayLookAt" in params:
+                look = params.get("MayLookAt")
+                if "True" == look:
+                    # shortcut when combined with MayPlay
+                    mayLookAt = PlayerCollection()
+                else:
+                    mayLookAt = AbilityUtils.getDefinedPlayers(hostCard, look, stAb)
+            if "MayPlay" in params:
+                controllerMayPlay = True
+                if "MayPlayWithoutManaCost" in params:
+                    mayPlayWithoutManaCost = True
+                elif "MayPlayAltManaCost" in params:
+                    mayPlayAltManaCost = params.get("MayPlayAltManaCost")
+                if "MayPlayWithFlash" in params:
+                    mayPlayWithFlash = True
+                if "MayPlayLimit" in params:
+                    mayPlayLimit = int(params.get("MayPlayLimit"))
+                if "MayPlayDontGrantZonePermissions" in params:
+                    mayPlayGrantZonePermissions = False
+
+            if "IgnoreEffectCost" in params:
+                cost = params.get("IgnoreEffectCost")
+                StaticAbilityContinuous.buildIgnoreEffectAbility(stAb, cost, affectedPlayers, affectedCards)
+
+        # modify players
+        for p in affectedPlayers:
+            # add keywords
+            if addKeywords is not None and addKeywords:
+                p.addChangedKeywords(addKeywords, removeKeywords, se.getTimestamp(), stAb.getId())
+
+            if layer == StaticAbilityLayer.RULES:
+                if "SetMaxHandSize" in params:
+                    mhs = params.get("SetMaxHandSize")
+                    if mhs == "Unlimited":
+                        p.setUnlimitedHandSize(True)
+                    else:
+                        p.setUnlimitedHandSize(False)
+                        max = AbilityUtils.calculateAmount(hostCard, mhs, stAb)
+                        p.setMaxHandSize(max)
+                if "RaiseMaxHandSize" in params:
+                    rmhs = params.get("RaiseMaxHandSize")
+                    rmax = AbilityUtils.calculateAmount(hostCard, rmhs, stAb)
+                    p.setMaxHandSize(p.getMaxHandSize() + rmax)
+
+                if "AdjustLandPlays" in params:
+                    mhs = params.get("AdjustLandPlays")
+                    if mhs == "Unlimited":
+                        p.addMaxLandPlaysInfinite(se.getTimestamp())
+                    else:
+                        add = AbilityUtils.calculateAmount(hostCard, mhs, stAb)
+                        p.addMaxLandPlays(se.getTimestamp(), add)
+
+                if "ControlOpponentsSearchingLibrary" in params:
+                    cntl = next(iter(AbilityUtils.getDefinedPlayers(hostCard, params.get("ControlOpponentsSearchingLibrary"), stAb)), None)
+                    p.addControlledWhileSearching(se.getTimestamp(), cntl)
+
+                if "ControlVote" in params:
+                    p.addControlVote(se.getTimestamp())
+                if "AdditionalVote" in params:
+                    mhs = params.get("AdditionalVote")
+                    add = AbilityUtils.calculateAmount(hostCard, mhs, stAb)
+                    p.addAdditionalVote(se.getTimestamp(), add)
+                if "AdditionalOptionalVote" in params:
+                    mhs = params.get("AdditionalOptionalVote")
+                    add = AbilityUtils.calculateAmount(hostCard, mhs, stAb)
+                    p.addAdditionalOptionalVote(se.getTimestamp(), add)
+                if "AdditionalVillainousChoice" in params:
+                    mhs = params.get("AdditionalVillainousChoice")
+                    add = AbilityUtils.calculateAmount(hostCard, mhs, stAb)
+                    p.addAdditionalVillainousChoices(se.getTimestamp(), add)
+
+                if "DeclaresAttackers" in params:
+                    players = AbilityUtils.getDefinedPlayers(hostCard, params.get("DeclaresAttackers"), stAb)
+                    if not players.isEmpty():
+                        p.addDeclaresAttackers(se.getTimestamp(), players.getFirst())
+                if "DeclaresBlockers" in params:
+                    players = AbilityUtils.getDefinedPlayers(hostCard, params.get("DeclaresBlockers"), stAb)
+                    if not players.isEmpty():
+                        p.addDeclaresBlockers(se.getTimestamp(), players.getFirst())
+
+        # start modifying the cards
+        for affectedCard in affectedCards:
+            # Gain control
+            if layer == StaticAbilityLayer.CONTROL and "GainControl" in params:
+                gain = AbilityUtils.getDefinedPlayers(hostCard, params.get("GainControl"), stAb)
+                if not gain.isEmpty():
+                    affectedCard.addTempController(gain.get(0), se.getTimestamp())
+
+            # Gain text from another card
+            if layer == StaticAbilityLayer.TEXT:
+                if "GainTextOf" in params:
+                    allValid = AbilityUtils.getDefinedCards(hostCard, params.get("GainTextOf"), stAb)
+                    if not allValid.isEmpty():
+                        first = allValid.getFirst()
+
+                        # for Volrath's Shapeshifter, respect flipped state if able?
+                        state = first.getState(CardStateName.Flipped if affectedCard.isFlipped() and first.isFlipCard() else first.getCurrentStateName())
+
+                        spellAbilities = []
+                        trigger = []
+                        replacementEffects = []
+                        staticAbilities = []
+                        keywords = []
+
+                        for sa in state.getSpellAbilities():
+                            spellAbilities.append(affectedCard.getSpellAbilityForStaticAbilityByText(sa, stAb))
+                        if "GainTextAbilities" in params:
+                            for ability in params.get("GainTextAbilities").split(" & "):
+                                spellAbilities.append(affectedCard.getSpellAbilityForStaticAbilityGainedByText(AbilityUtils.getSVar(stAb, ability), stAb))
+                        for tr in state.getTriggers():
+                            trigger.append(affectedCard.getTriggerForStaticAbilityByText(tr, stAb))
+                        for re in state.getReplacementEffects():
+                            replacementEffects.append(affectedCard.getReplacementEffectForStaticAbilityByText(re, stAb))
+                        for st in state.getStaticAbilities():
+                            staticAbilities.append(affectedCard.getStaticAbilityForStaticAbilityByText(st, stAb))
+                        kwIdx = 1
+                        for ki in state.getIntrinsicKeywords():
+                            keywords.append(affectedCard.getKeywordForStaticAbilityByText(ki, stAb, kwIdx))
+                            kwIdx += 1
+
+                        # Volrath's Shapeshifter has that card's name, mana cost, color, types, abilities, power, and toughness.
+
+                        # name
+                        affectedCard.addChangedName(state.getName(), False, se.getTimestamp(), stAb.getId())
+                        # Mana cost
+                        affectedCard.addChangedManaCost(state.getManaCost(), False, se.getTimestamp(), stAb.getId())
+                        # color
+                        affectedCard.addColorByText(state.getColor(), False, se.getTimestamp(), stAb)
+                        # type
+                        affectedCard.addChangedCardTypesByText(state.getType(), se.getTimestamp(), stAb.getId())
+                        # abilities
+                        affectedCard.addChangedCardTraitsByText(spellAbilities, trigger, replacementEffects, staticAbilities, se.getTimestamp(), stAb.getId())
+                        affectedCard.addChangedCardKeywordsByText(keywords, se.getTimestamp(), stAb.getId(), False)
+                        # power and toughness
+                        affectedCard.addNewPTByText(state.getBasePower(), state.getBaseToughness(), se.getTimestamp(), stAb.getId())
+                if stAb.hasParam("Incorporate"):
+                    manaCost = ManaCost(stAb.getParam("Incorporate"))
+                    affectedCard.addChangedManaCost(manaCost, True, se.getTimestamp(), stAb.getId())
+                    affectedCard.addColorByText(ColorSet.fromMask(manaCost.getColorProfile()), True, se.getTimestamp(), stAb)
+                if stAb.hasParam("ManaCost"):
+                    manaCost = ManaCost(stAb.getParam("ManaCost"))
+                    affectedCard.addChangedManaCost(manaCost, False, se.getTimestamp(), stAb.getId())
+
+                if stAb.hasParam("AddNames"):  # currently only for AllNonLegendaryCreatureNames
+                    affectedCard.addChangedName(None, True, se.getTimestamp(), stAb.getId())
+                if stAb.hasParam("SetName"):
+                    newName = stAb.getParam("SetName")
+                    if newName == "ChosenName":
+                        newName = hostCard.getNamedCard()
+                    if newName != "":
+                        affectedCard.addChangedName(newName, False, se.getTimestamp(), stAb.getId())
+
+                # Change color words
+                if "ChangeColorWordsTo" in params:
+                    changeColorWordsTo = params.get("ChangeColorWordsTo")
+                    if changeColorWordsTo == "ChosenColor":
+                        if hostCard.hasChosenColor():
+                            color = MagicColor.fromName(next(iter(hostCard.getChosenColors()), None))
+                        else:
+                            color = 0
+                    else:
+                        color = MagicColor.fromName(changeColorWordsTo)
+
+                    if color != 0:
+                        colorName = MagicColor.toLongString(color)
+                        affectedCard.addChangedTextColorWord(stAb.getParamOrDefault("ChangeColorWordsFrom", "Any"), colorName, se.getTimestamp(), stAb.getId())
+
+            # set P/T
+            if layer == StaticAbilityLayer.SETPT or layer == StaticAbilityLayer.CHARACTERISTIC:
+                if setPower is not None or setToughness is not None:
+                    # non CharacteristicDefining
+                    if "Affected" in setP:
+                        setPower = AbilityUtils.calculateAmount(affectedCard, setP, stAb, True)
+                    if "Affected" in setT:
+                        setToughness = AbilityUtils.calculateAmount(affectedCard, setT, stAb, True)
+                    affectedCard.addNewPT(setPower, setToughness,
+                        se.getTimestamp(), stAb.getId(), layer == StaticAbilityLayer.CHARACTERISTIC, False)
+
+            # add P/T bonus
+            if layer == StaticAbilityLayer.MODIFYPT:
+                if "Affected" in addP:
+                    # TODO don't calculate these above if this gets used instead
+                    powerBonus = AbilityUtils.calculateAmount(affectedCard, addP, stAb, True)
+                if "Affected" in addT:
+                    toughnessBonus = AbilityUtils.calculateAmount(affectedCard, addT, stAb, True)
+                affectedCard.addPTBoost(powerBonus, toughnessBonus, se.getTimestamp(), stAb.getId())
+
+            # add keywords
+            if (addKeywords is not None and addKeywords) or removeKeywords is not None or removeAbilities is not None:
+                newKeywords = None
+                if addKeywords is not None:
+                    newKeywords = list(addKeywords)
+                    extraKeywords = []
+
+                    def _filterCardKeyword(input):
+                        # replace one Keyword with list of keywords
+                        if "CardColors" in input or "cardColors" in input:
+                            if not affectedCard.getColor().isColorless():
+                                for color in affectedCard.getColor():
+                                    extraKeywords.append(
+                                            input.replace("CardColors", StringUtils.capitalize(color.getName()))
+                                                    .replace("cardColors", color.getName())
+                                    )
+                            return True
+
+                        return False
+
+                    newKeywords = [x for x in newKeywords if not _filterCardKeyword(x)]
+                    newKeywords.extend(extraKeywords)
+
+                    def _mapCardKeyword(input):
+                        if "CardManaCost" in input:
+                            input = input.replace("CardManaCost", affectedCard.getManaCost().getShortString())
+                        elif "ConvertedManaCost" in input:
+                            costcmc = str(affectedCard.getCMC())
+                            input = input.replace("ConvertedManaCost", costcmc)
+                        return input
+
+                    newKeywords = [_mapCardKeyword(x) for x in newKeywords]
+
+                if newKeywords is not None and newKeywords and "KeywordMultiplier" in params:
+                    mult = int(params.get("KeywordMultiplier"))
+                    newKeywords = [s for s in newKeywords for _ in range(mult)]
+
+                affectedCard.addChangedCardKeywords(newKeywords, removeKeywords,
+                        removeAbilities is not None, se.getTimestamp(), stAb, False)
+                affectedCard.updateKeywordsCache()
+
+            # add HIDDEN keywords
+            if addHiddenKeywords:
+                affectedCard.addHiddenExtrinsicKeywords(se.getTimestamp(), stAb.getId(), addHiddenKeywords)
+
+            # add SVars
+            if addSVars is not None:
+                map = {}
+                for sVar in addSVars:
+                    actualSVar = AbilityUtils.getSVar(stAb, sVar)
+                    name = sVar
+                    if actualSVar.startswith("SVar:"):
+                        actualSVar = actualSVar.split("SVar:")[1]
+                        name = actualSVar.split(":")[0]
+                        actualSVar = actualSVar.split(":")[1]
+                    map[name] = actualSVar
+                affectedCard.addChangedSVars(map, se.getTimestamp(), stAb.getId())
+
+            if layer == StaticAbilityLayer.ABILITIES:
+                addedAbilities = []
+                addedReplacementEffects = []
+                addedTrigger = []
+                addedStaticAbility = []
+                # add abilities
+                if addAbilities is not None:
+                    for ability in addAbilities:
+                        if "CardManaCost" in ability:
+                            ability = TextUtil.fastReplace(ability, "CardManaCost", affectedCard.getManaCost().getShortString())
+                        elif "ConvertedManaCost" in ability:
+                            costcmc = str(affectedCard.getCMC())
+                            ability = TextUtil.fastReplace(ability, "ConvertedManaCost", costcmc)
+                        addedAbilities.append(affectedCard.getSpellAbilityForStaticAbility(ability, stAb))
+
+                if "GainsAbilitiesOf" in params or "GainsAbilitiesOfDefined" in params:
+                    cards = StaticAbilityContinuous.cardsGainedFrom("GainsAbilitiesOfDefined" if "GainsAbilitiesOfDefined" in params else "GainsAbilitiesOf", params, hostCard, stAb, game)
+
+                    for c in cards:
+                        for sa in c.getSpellAbilities():
+                            if sa.isActivatedAbility():
+                                if not stAb.matchesValidParam("GainsValidAbilities", sa):
+                                    continue
+                                newSA = sa.copy(affectedCard, sa.getActivatingPlayer(), False, True)
+                                if "GainsAbilitiesLimitPerTurn" in params:
+                                    newSA.setRestrictions(sa.getRestrictions())
+                                    newSA.getRestrictions().setLimitToCheck(params.get("GainsAbilitiesLimitPerTurn"))
+                                newSA.setOriginalAbility(sa)  # need to be set to get the Once Per turn Clause correct
+                                newSA.setGrantorStatic(stAb)
+                                newSA.setIntrinsic(False)
+                                addedAbilities.append(newSA)
+
+                # add Replacement effects
+                if addReplacements is not None:
+                    for rep in addReplacements:
+                        addedReplacementEffects.append(affectedCard.getReplacementEffectForStaticAbility(rep, stAb))
+
+                # add triggers
+                if addTriggers is not None:
+                    for trigger in addTriggers:
+                        addedTrigger.append(affectedCard.getTriggerForStaticAbility(trigger, stAb))
+
+                if "GainsTriggerAbsOf" in params:
+                    cards = StaticAbilityContinuous.cardsGainedFrom("GainsTriggerAbsOf", params, hostCard, stAb, game)
+
+                    for c in cards:
+                        for trig in c.getTriggers():
+                            newTrigger = affectedCard.addTriggerForStaticAbility(trig, stAb)
+                            if newTrigger.getKeyword() is not None:
+                                newTrigger.removeParam("Secondary")
+                            addedTrigger.append(newTrigger)
+
+                # add static abilities
+                if addStatics is not None:
+                    for s in addStatics:
+                        if "ConvertedManaCost" in s:
+                            costcmc = str(affectedCard.getCMC())
+                            s = TextUtil.fastReplace(s, "ConvertedManaCost", costcmc)
+
+                        addedStaticAbility.append(affectedCard.getStaticAbilityForStaticAbility(s, stAb))
+
+                if addedAbilities or addedTrigger or addReplacements is not None or addStatics is not None \
+                    or removeAbilities is not None:
+                    affectedCard.addChangedCardTraits(
+                        addedAbilities, addedTrigger, addedReplacementEffects, addedStaticAbility, removeAbilities, se.getTimestamp(), stAb.getId(), False
+                    )
+
+                if cantHaveKeyword is not None:
+                    affectedCard.addCantHaveKeyword(se.getTimestamp(), cantHaveKeyword)
+
+            # add Types
+            if (addTypes is not None and addTypes) or (removeTypes is not None and removeTypes) or addAllCreatureTypes or remove:
+                affectedCard.addChangedCardTypes(CardType(addTypes, True) if addTypes is not None else None, CardType(removeTypes, True) if removeTypes is not None else None, addAllCreatureTypes, remove,
+                        se.getTimestamp(), stAb.getId(), False, stAb.isCharacteristicDefining())
+
+            # add colors
+            if addColors is not None:
+                affectedCard.addColor(addColors, not overwriteColors, se.getTimestamp(), stAb)
+
+            if layer == StaticAbilityLayer.RULES:
+                if "Goad" in params:
+                    affectedCard.addGoad(se.getTimestamp(), hostCard.getController())
+                if "CanBlockAny" in params:
+                    affectedCard.addCanBlockAny(se.getTimestamp())
+                if "CanBlockAmount" in params:
+                    v = AbilityUtils.calculateAmount(hostCard, params.get("CanBlockAmount"), stAb, True)
+                    affectedCard.addCanBlockAdditional(v, se.getTimestamp())
+
+            if controllerMayPlay and (mayPlayLimit is None or stAb.getMayPlayTurn() < mayPlayLimit):
+                mayPlayAltCost = mayPlayAltManaCost
+
+                if mayPlayAltCost is not None:
+                    if "ConvertedManaCost" in mayPlayAltCost:
+                        costcmc = str(affectedCard.getCMC())
+                        mayPlayAltCost = mayPlayAltCost.replace("ConvertedManaCost", costcmc)
+
+                mayPlayController = AbilityUtils.getDefinedPlayers(affectedCard, params.get("MayPlayPlayer"), stAb).get(0) if "MayPlayPlayer" in params else controller
+                affectedCard.setMayPlay(mayPlayController, mayPlayWithoutManaCost,
+                        Cost(mayPlayAltCost, False, affectedCard.equals(hostCard)) if mayPlayAltCost is not None else None, mayPlayWithFlash,
+                        mayPlayGrantZonePermissions, stAb)
+
+                if mayLookAt is not None and mayLookAt.isEmpty():
+                    mayLookAt.add(mayPlayController)
+
+                # If the MayPlay effect only affected itself, check if it is in graveyard and give other player who cast Shaman's Trance MayPlay
+                if stAb.hasParam("Affected") and stAb.getParam("Affected") == "Card.Self" and affectedCard.isInZone(ZoneType.Graveyard):
+                    for p in game.getPlayers():
+                        if p.hasKeyword("Shaman's Trance") and mayPlayController != p:
+                            affectedCard.setMayPlay(p, mayPlayWithoutManaCost,
+                                    Cost(mayPlayAltCost, False) if mayPlayAltCost is not None else None,
+                                    mayPlayWithFlash, mayPlayGrantZonePermissions, stAb)
+
+            if mayLookAt is not None and (not affectedCard.getOwner().getTopXCardsFromLibrary(1).contains(affectedCard) or game.getTopLibForPlayer(affectedCard.getOwner()) is None or game.getTopLibForPlayer(affectedCard.getOwner()) == affectedCard):
+                affectedCard.addMayLookAt(se.getTimestamp(), mayLookAt)
+
+        return affectedCards
+
+    @staticmethod
+    def getColorsFromParam(stAb: StaticAbility, colors: str) -> ColorSet:
+        hostCard = stAb.getHostCard()
+        addColors = None
+        if colors == "ChosenColor":
+            if hostCard.hasChosenColor():
+                addColors = ColorSet.fromNames(hostCard.getChosenColors())
+        elif colors == "All":
+            addColors = ColorSet.WUBRG
+        else:
+            addColors = ColorSet.fromNames(colors.split(" & "))
+        return addColors
+
+    @staticmethod
+    def buildIgnoreEffectAbility(stAb: StaticAbility, costString: str, players: list[Player], cards: CardCollectionView) -> None:
+        validActivator = list(players)
+        for c in cards:
+            validActivator.append(c.getController())
+        sourceCard = stAb.getHostCard()
+        cost = Cost(costString, True)
+
+        class _AddIgnore(AbilityStatic):
+            def resolve(self):
+                stAb.addIgnoreEffectPlayers(self.getActivatingPlayer())
+                stAb.setIgnoreEffectCards(cards)
+
+            def canPlay(self):
+                return self.getActivatingPlayer() in validActivator \
+                        and sourceCard.isInPlay()
+
+        addIgnore = _AddIgnore(sourceCard, cost, None)
+
+        addIgnore.setIntrinsic(False)
+        addIgnore.setApi(ApiType.InternalIgnoreEffect)
+        addIgnore.setDescription(str(cost) + " Ignore the effect until end of turn.")
+        sourceCard.addChangedCardTraits([addIgnore], None, None, None, None, sourceCard.getLayerTimestamp(), stAb.getId())
+
+        class _RemoveIgnore(GameCommand):
+            serialVersionUID = -5415775215053216360
+
+            def run(self):
+                stAb.clearIgnoreEffects()
+
+        removeIgnore = _RemoveIgnore()
+        sourceCard.getGame().getEndOfTurn().addUntil(removeIgnore)
+        sourceCard.addLeavesPlayCommand(removeIgnore)
+
+    @staticmethod
+    def cardsGainedFrom(param: str, params: dict[str, str], hostCard: Card, stAb: StaticAbility, game: Game) -> CardCollection:
+        cards = CardCollection()
+        if "Defined" in param:
+            cards.addAll(AbilityUtils.getDefinedCards(hostCard, params.get(param), stAb))
+        else:
+            valids = params.get(param).split(",")
+            if "GainsAbilitiesOfZones" in params:
+                validZones = ZoneType.listValueOf(params.get("GainsAbilitiesOfZones"))
+            else:
+                validZones = [ZoneType.Battlefield]
+            cards.addAll(CardLists.getValidCards(game.getCardsIn(validZones), valids, hostCard.getController(), hostCard, stAb))
+        return cards
+
+    @staticmethod
+    def getAffectedPlayers(stAb: StaticAbility) -> list[Player]:
+        params = stAb.getMapParams()
+        hostCard = stAb.getHostCard()
+        controller = hostCard.getController()
+
+        players = []
+
+        if "Affected" not in params:
+            return players
+
+        strngs = params.get("Affected").split(",")
+
+        for p in controller.getGame().getPlayersInTurnOrder():
+            if p.isValid(strngs, controller, hostCard, stAb):
+                players.append(p)
+        ignore = stAb.getIgnoreEffectPlayers()
+        players = [p for p in players if p not in ignore]
+
+        return players
+
+    @staticmethod
+    def getAffectedCards(stAb: StaticAbility, preList: CardCollectionView) -> CardCollectionView:
+        hostCard = stAb.getHostCard()
+        game = hostCard.getGame()
+        controller = hostCard.getController()
+
+        if stAb.isCharacteristicDefining():
+            if stAb.hasParam("ExcludeZone"):
+                for zt in ZoneType.listValueOf(stAb.getParam("ExcludeZone")):
+                    if hostCard.isInZone(zt):
+                        return CardCollection.EMPTY
+            return CardCollection(hostCard)  # will always be the card itself
+
+        # non - CharacteristicDefining
+        affectedCards = CardCollection()
+
+        definedCards = None
+        if stAb.hasParam("AffectedDefined"):
+            definedCards = AbilityUtils.getDefinedCards(hostCard, stAb.getParam("AffectedDefined"), stAb).filter(CardPredicates.phasedIn())
+
+        # add preList in addition to the normal affected cards
+        # need to add before game cards to have preference over them
+        if not preList.isEmpty():
+            if stAb.hasParam("AffectedDefined"):
+                affectedCards.addAll(preList)
+                affectedCards.retainAll(definedCards)
+            elif stAb.hasParam("AffectedZone"):
+                affectedCards.addAll(CardLists.filter(preList, CardPredicates.inZone(
+                        ZoneType.listValueOf(stAb.getParam("AffectedZone")))))
+            else:
+                affectedCards.addAll(CardLists.filter(preList, CardPredicates.inZone(ZoneType.Battlefield)))
+
+        if stAb.hasParam("AffectedDefined"):
+            affectedCards.addAll(definedCards)
+        elif stAb.hasParam("AffectedZone"):
+            affectedCards.addAll(game.getCardsIn(ZoneType.listValueOf(stAb.getParam("AffectedZone"))))
+        else:
+            affectedCards.addAll(game.getCardsIn(ZoneType.Battlefield))
+        if stAb.hasParam("Affected"):
+            # Handle Shaman's Trance
+            affectedCardsOriginal = None
+            if controller.hasKeyword("Shaman's Trance") and stAb.hasParam("MayPlay"):
+                affectedCardsOriginal = CardCollection(affectedCards)
+
+            affectedCards = CardLists.getValidCards(affectedCards, stAb.getParam("Affected"), controller, hostCard, stAb)
+
+            # Add back all cards that are in other player's graveyard, and meet the restrictions without YouOwn/YouCtrl (treat it as in your graveyard)
+            if affectedCardsOriginal is not None:
+                affectedParam = stAb.getParam("Affected")
+                affectedParam = re.sub(r"[.\+]YouOwn", "", affectedParam)
+                affectedParam = re.sub(r"[.\+]YouCtrl", "", affectedParam)
+                restrictions = affectedParam.split(",")
+                for card in affectedCardsOriginal:
+                    if card.isInZone(ZoneType.Graveyard) and card.getController() != controller and card.isValid(restrictions, controller, hostCard, stAb):
+                        affectedCards.add(card)
+
+        affectedCards.removeAll(stAb.getIgnoreEffectCards())
+        return affectedCards
 ```

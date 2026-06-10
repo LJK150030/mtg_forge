@@ -48,7 +48,7 @@ classDiagram
 
 ## Design Description
 
-MeldEffect implements the resolution logic for Magic's "meld" mechanic, in which two specific cards combine into a single double-faced permanent. As a concrete subclass of `SpellAbilityEffect`, it overrides `resolve(SpellAbility)` to carry out the merge when the host card's ability resolves, integrating with Forge's standard ability-effect dispatch rather than exposing its own API. The effect locates the secondary card—a permanent the activating player owns and controls matching the named `Secondary` (defaulting to a creature)—via `CardLists`/`CardPredicates` filtering, prompting the controller to choose one. It exiles both cards through the game action layer, using `AbilityKey` move-parameter maps and a `CardZoneTable` to batch and fire zone-change triggers. Notably, it validates state defensively after exile—rejecting tokens, clones, renamed, or displaced cards—before melding: switching the primary to its `Meld` face, linking the secondary via `setMeldedWith`, registering it in the battlefield's melded set, moving the result into play, and optionally adding it to combat with a `GameEventCombatChanged` notification.
+MeldEffect implements the resolution logic for Magic's "meld" mechanic, in which two specific cards combine into a single double-faced permanent. As a concrete subclass of `SpellAbilityEffect`, it overrides `resolve(SpellAbility)` to carry out the merge when the host card's ability resolves, integrating with Forge's standard ability-effect dispatch rather than exposing its own API. The effect locates the secondary cardâ€”a permanent the activating player owns and controls matching the named `Secondary` (defaulting to a creature)â€”via `CardLists`/`CardPredicates` filtering, prompting the controller to choose one. It exiles both cards through the game action layer, using `AbilityKey` move-parameter maps and a `CardZoneTable` to batch and fire zone-change triggers. Notably, it validates state defensively after exileâ€”rejecting tokens, clones, renamed, or displaced cardsâ€”before melding: switching the primary to its `Meld` face, linking the secondary via `setMeldedWith`, registering it in the battlefield's melded set, moving the result into play, and optionally adding it to combat with a `GameEventCombatChanged` notification.
 
 ## Source
 `forge-game/src/main/java/forge/game/ability/effects/MeldEffect.java`
@@ -147,4 +147,92 @@ public class MeldEffect extends SpellAbilityEffect {
         zoneMovements.triggerChangesZoneAll(game, sa);
     }
 }
+```
+
+## Python
+`forge/game/ability/effects/MeldEffect.py`
+
+```python
+package = "forge.game.ability.effects"
+
+from forge.card.CardStateName import CardStateName
+from forge.game.Game import Game
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CardPredicates import CardPredicates
+from forge.game.card.CardZoneTable import CardZoneTable
+from forge.game.event.GameEventCombatChanged import GameEventCombatChanged
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.PlayerZoneBattlefield import PlayerZoneBattlefield
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.Localizer import Localizer
+
+
+class MeldEffect(SpellAbilityEffect):
+    def resolve(self, sa: SpellAbility) -> None:
+        hostCard = sa.getHostCard()
+        primName = sa.getParam("Primary")
+        secName = sa.getParam("Secondary")
+        game = hostCard.getGame()
+        controller = sa.getActivatingPlayer()
+
+        # a permanent you control and own named secondary
+        field = CardLists.filter(
+            controller.getCardsIn(ZoneType.Battlefield),
+            CardPredicates.isOwner(controller),
+            CardPredicates.nameEquals(secName))
+        field = CardLists.getType(field, sa.getParamOrDefault("SecondaryType", "Creature"))
+        if field.isEmpty():
+            return
+
+        secondary = controller.getController().chooseSingleEntityForEffect(field, sa, Localizer.getInstance().getMessage("lblChooseCardToMeld"), None)
+
+        exiled = CardLists.filter([hostCard, secondary], CardPredicates.canExiledBy(sa, True))
+
+        moveParams = AbilityKey.newMap()
+        zoneMovements = AbilityKey.addCardZoneTableParams(moveParams, sa)
+
+        exiled = game.getAction().exile(exiled, sa, moveParams)
+
+        zoneMovements.triggerChangesZoneAll(game, sa)
+
+        if exiled.size() < 2:
+            return
+
+        primary = exiled.get(hostCard)
+        secondary = exiled.get(secondary)
+
+        # cards has wrong name in exile
+        if not primary.sharesNameWith(primName) or not secondary.sharesNameWith(secName):
+            return
+
+        for c in exiled:
+            if c.isToken() or c.getCloneOrigin() is not None:
+                # Neither of these things
+                return
+            elif not c.isInZone(ZoneType.Exile):
+                return
+
+        if sa.hasParam("Tapped"):
+            primary.setTapped(True)
+
+        primary.changeToState(CardStateName.Meld)
+        primary.setBackSide(True)
+        primary.setMeldedWith(secondary)
+        bf = controller.getZone(ZoneType.Battlefield)
+        bf.addToMelded(secondary)
+
+        moveParams = AbilityKey.newMap()
+        zoneMovements = AbilityKey.addCardZoneTableParams(moveParams, sa)
+
+        movedCard = game.getAction().moveToPlay(primary, controller, sa, moveParams)
+        if self.addToCombat(movedCard, sa, "Attacking", "Blocking"):
+            game.updateCombatForView()
+            game.fireEvent(GameEventCombatChanged())
+
+        zoneMovements.triggerChangesZoneAll(game, sa)
 ```

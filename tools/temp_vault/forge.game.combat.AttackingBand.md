@@ -48,7 +48,7 @@ classDiagram
 
 ## Design Description
 
-`AttackingBand` models a single band of attacking creatures within the combat subsystem, wrapping a `CardCollection` of attackers together with a tri-state `blocked` flag (null, true, or false) that deliberately persists once set so a band stays blocked even after its blockers are removed before damage. It exposes basic membership operations—adding, removing, and querying attackers—and renders its state symbolically via `toString()`.
+`AttackingBand` models a single band of attacking creatures within the combat subsystem, wrapping a `CardCollection` of attackers together with a tri-state `blocked` flag (null, true, or false) that deliberately persists once set so a band stays blocked even after its blockers are removed before damage. It exposes basic membership operationsâ€”adding, removing, and querying attackersâ€”and renders its state symbolically via `toString()`.
 
 Its central responsibility is enforcing the rules of the Banding keyword: the static `isValidBand` validates that a proposed group is legal, checking for sufficient `Keyword.BANDING` creatures (one suffices to share damage, all-but-one to form a band) and honoring "bands with other" restrictions by matching each card's `KeywordInterface` original text against the rest of the band. The instance helper `canJoinBand` reuses this logic to test prospective additions. The class collaborates closely with `Card`, `CardCollectionView`, and `CardLists`, keeping band-legality rules centralized rather than scattered across the combat flow.
 
@@ -147,4 +147,84 @@ public class AttackingBand {
     }
 
 }
+```
+
+## Python
+`forge/game/combat/AttackingBand.py`
+
+```python
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.card.CardLists import CardLists
+from forge.game.keyword.Keyword import Keyword
+from forge.game.keyword.KeywordInterface import KeywordInterface
+
+from typing import List
+
+
+class AttackingBand:
+    def __init__(self, band):
+        self.attackers = CardCollection()
+        self.blocked = None  # even if all blockers were killed before FS or CD, band remains blocked
+        if isinstance(band, Card):
+            self.attackers.add(band)
+        else:
+            self.attackers.addAll(band)
+
+    def getAttackers(self) -> CardCollectionView:
+        return self.attackers
+
+    def addAttacker(self, card: Card) -> None:
+        self.attackers.add(card)
+
+    def removeAttacker(self, card: Card) -> None:
+        self.attackers.remove(card)
+
+    @staticmethod
+    def isValidBand(band: CardCollectionView, shareDamage: bool) -> bool:
+        if band.isEmpty():
+            # An empty band is not a valid band
+            return False
+
+        bandingCreatures = CardLists.getKeyword(band, Keyword.BANDING).size()
+        neededBandingCreatures = 1 if shareDamage else band.size() - 1
+        if neededBandingCreatures <= bandingCreatures:
+            # For starting a band, only one can be non-Banding
+            # For sharing damage, only one needs to be Banding
+            return True
+
+        for c in CardLists.getKeyword(band, Keyword.BANDSWITH):
+            for kw in c.getKeywords(Keyword.BANDSWITH):
+                o = kw.getOriginal()
+                m = o.split(":")
+
+                if CardLists.getValidCards(band, m[1], c.getController(), c, None).size() == band.size():
+                    return True
+
+        return False
+
+    def canJoinBand(self, card: Card) -> bool:
+        # Trying to join an existing band, attackers should be non-empty and card should exist
+        newBand = CardCollection(self.attackers)
+        if card is not None:
+            newBand.add(card)
+
+        return AttackingBand.isValidBand(newBand, False)
+
+    def contains(self, c: Card) -> bool:
+        return self.attackers.contains(c)
+
+    def isBlocked(self):
+        return self.blocked
+
+    def setBlocked(self, value: bool) -> None:
+        self.blocked = value
+
+    def isEmpty(self) -> bool:
+        # TODO Auto-generated method stub
+        return self.attackers.isEmpty()
+
+    def toString(self) -> str:
+        return "%s %s" % (self.attackers.toString(), " ? " if self.blocked is None else (">||" if self.blocked else ">>>"))
 ```

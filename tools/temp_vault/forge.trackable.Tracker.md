@@ -45,6 +45,10 @@ classDiagram
 - [[forge.trackable.TrackableTypes.TrackableType|TrackableType]]
 - [[forge.trackable.Tracker.DelayedPropChange|DelayedPropChange]]
 
+## Design Description
+
+The Tracker is a per-game ledger that serves two roles for the trackable view layer: an object registry and a change-coalescing buffer. As a registry it maps `(TrackableType, id)` pairs to canonical instances, letting deserialization resolve `IdRef` stand-ins back to real objects; lookups live here rather than on the globally-shared `TrackableType` precisely because a Tracker is scoped to a single game. As a buffer it implements a reentrant freeze model via a counter: while frozen, `TrackableObject.set` enqueues `DelayedPropChange` records instead of applying them, and `unfreeze` replays the queue only when the count returns to zero, bundling a multi-step engine effect into one coherent post-effect snapshot. It collaborates with `TrackableObject`, `TrackableProperty`, and `TrackableType`, using a private inner `DelayedPropChange` to hold deferred writes. The design is deliberately single-threadedâ€”replay drives consumer dirty-bit notifications, so off-thread use would corrupt that state.
+
 ## Source
 `forge-game/src/main/java/forge/trackable/Tracker.java`
 
@@ -67,7 +71,7 @@ import forge.trackable.TrackableTypes.TrackableType;
  * game thread; every TrackableObject in an active game's view holds a reference to one
  * instance.
  *
- * <p><b>Object lookup.</b> Stores ({@link TrackableTypes.TrackableType}, id) → instance.
+ * <p><b>Object lookup.</b> Stores ({@link TrackableTypes.TrackableType}, id) Ã¢â€ â€™ instance.
  * Used by deserialization to resolve {@code IdRef} stand-ins back to canonical objects.
  *
  * <p><b>Freeze model.</b> {@link #freeze()}/{@link #unfreeze()} bracket a region during
@@ -77,7 +81,7 @@ import forge.trackable.TrackableTypes.TrackableType;
  * engine effect into a single coherent post-effect snapshot. {@link #flush()} drains the
  * queue without leaving the frozen state.
  *
- * <p><b>Thread safety.</b> Not thread-safe — game thread only. The {@code unfreeze}
+ * <p><b>Thread safety.</b> Not thread-safe Ã¢â‚¬â€ game thread only. The {@code unfreeze}
  * replay walks TrackableObjects and triggers consumer notifications; running it from
  * another thread corrupts consumer dirty-bit state.
  */
@@ -168,4 +172,84 @@ public class Tracker {
         }
     }
 }
+```
+
+## Python
+`forge/trackable/Tracker.py`
+
+```python
+from typing import TypeVar
+
+from forge.trackable.TrackableObject import TrackableObject
+from forge.trackable.TrackableProperty import TrackableProperty
+from forge.trackable.TrackableTypes.TrackableType import TrackableType
+
+T = TypeVar("T")
+
+
+class Tracker:
+    def __init__(self):
+        self.freezeCounter = 0
+        self.delayedPropChanges: list["Tracker.DelayedPropChange"] = []
+        self.objLookups: dict[tuple[TrackableType, int], object] = {}
+
+    def isFrozen(self) -> bool:
+        return self.freezeCounter > 0
+
+    def freeze(self) -> None:
+        self.freezeCounter += 1
+
+    # Note: objLookups exist on the tracker and not on the TrackableType because
+    # TrackableType is global and Tracker is per game.
+    def getObj(self, type: TrackableType, id: int) -> T:
+        return self.objLookups.get((type, id))
+
+    def hasObj(self, type: TrackableType, id: int) -> bool:
+        return (type, id) in self.objLookups
+
+    def putObj(self, type: TrackableType, id: int, val: T) -> None:
+        self.objLookups[(type, id)] = val
+
+    def unfreeze(self) -> None:
+        if not self.isFrozen():
+            return
+        self.freezeCounter -= 1
+        if self.freezeCounter > 0 or not self.delayedPropChanges:
+            return
+        # after being unfrozen, ensure all changes delayed during freeze are now applied
+        for change in self.delayedPropChanges:
+            change.object.set(change.prop, change.value)
+        self.delayedPropChanges.clear()
+
+    def flush(self) -> None:
+        # unfreeze and refreeze the tracker in order to flush current pending properties
+        if not self.isFrozen():
+            return
+        self.unfreeze()
+        self.freeze()
+
+    def addDelayedPropChange(self, object: TrackableObject, prop: TrackableProperty, value: object) -> None:
+        self.delayedPropChanges.append(Tracker.DelayedPropChange(object, prop, value))
+
+    def clearDelayed(self) -> None:
+        self.delayedPropChanges.clear()
+
+    def getDelayedPropsFor(self, obj: TrackableObject) -> dict[TrackableProperty, object]:
+        """Read-only peek at delayed property changes queued for a specific object."""
+        if not self.delayedPropChanges:
+            return {}
+        result: dict[TrackableProperty, object] = {}
+        for change in self.delayedPropChanges:
+            if change.object is obj:
+                result[change.prop] = change.value
+        return result
+
+    class DelayedPropChange:
+        def __init__(self, object0: TrackableObject, prop0: TrackableProperty, value0: object):
+            self.object = object0
+            self.prop = prop0
+            self.value = value0
+
+        def __str__(self) -> str:
+            return "Set " + str(self.prop) + " of " + str(self.object) + " to " + str(self.value)
 ```

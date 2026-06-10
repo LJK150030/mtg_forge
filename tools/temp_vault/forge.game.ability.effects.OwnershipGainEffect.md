@@ -68,3 +68,27 @@ public class OwnershipGainEffect extends SpellAbilityEffect {
     }
 }
 ```
+
+## Python
+`forge/game/ability/effects/OwnershipGainEffect.py`
+
+```python
+from typing import List
+
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+
+
+class OwnershipGainEffect(SpellAbilityEffect):
+
+    def resolve(self, sa: SpellAbility) -> None:
+        cards: List[Card] = self.getTargetCards(sa)
+        controllers: List[Player] = self.getDefinedPlayersOrTargeted(sa, "DefinedPlayer")
+
+        newOwner: Player = sa.getActivatingPlayer() if not controllers else controllers[0]
+
+        for card in cards:
+            newOwner.changeOwnership(card)
+```

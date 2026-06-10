@@ -77,6 +77,12 @@ classDiagram
 - [[forge.card.ColorSet|ColorSet]]
 - [[forge.card.ICardFace|ICardFace]]
 
+## Design Description
+
+PaperToken represents a physical Magic token card within Forge's inventory model, implementing both `IPaperCard` and `InventoryItemFromSet` so tokens are treated uniformly alongside ordinary paper cards. It wraps the token's gameplay definition (`CardRules`) and printing metadata (`CardEdition`, collector number, artist), exposing identity, face, color, and image-key accessors while hardcoding token-appropriate defaultsâ€”`CardRarity.Token`, never foil, no functional variant or marked colors.
+
+Its central responsibility is resolving token art into stable image keys: static `makeTokenFileName` helpers normalize descriptive strings ("colors power toughness name") into lowercase filenames, while the constructor builds edition- and collector-number-qualified image keys, tracking multiple art indices per token. Image-key lookup randomizes among available art and, for transform/modal tokens (`hasBackFace`), derives a back-face key from the other `ICardFace`. The `transient` rules and edition fields signal that runtime data is reconstructed rather than serialized.
+
 ## Source
 `forge-core/src/main/java/forge/item/PaperToken.java`
 
@@ -303,4 +309,178 @@ public class PaperToken implements InventoryItemFromSet, IPaperCard {
         return false;
     }
 }
+```
+
+## Python
+`forge/item/PaperToken.py`
+
+```python
+from forge.ImageKeys import ImageKeys
+from forge.card.CardEdition import CardEdition
+from forge.card.CardRarity import CardRarity
+from forge.card.CardRules import CardRules
+from forge.card.CardSplitType import CardSplitType
+from forge.card.ColorSet import ColorSet
+from forge.card.ICardFace import ICardFace
+from forge.item.IPaperCard import IPaperCard
+from forge.item.InventoryItemFromSet import InventoryItemFromSet
+from forge.util.MyRandom import MyRandom
+
+
+class PaperToken(InventoryItemFromSet, IPaperCard):
+    serialVersionUID = 1
+
+    # takes a string of the form "<colors> <power> <toughness> <name>" such as: "B 0 0 Germ"
+    @staticmethod
+    def makeTokenFileName(*args):
+        if len(args) == 1:
+            in_ = args[0]
+            out = []
+            for i in range(len(in_)):
+                c = in_[i]
+                if c == ' ' or c == '-' or c == '_':
+                    out.append('_')
+                elif c.isalnum():
+                    out.append(c)
+            return ''.join(out).lower()
+        elif len(args) == 4:
+            colors, power, toughness, types = args
+            return PaperToken.makeTokenFileName(None, colors, power, toughness, types)
+        else:
+            name, colors, power, toughness, types = args
+            build = []
+            if name is not None:
+                build.append(name)
+
+            build.append(colors)
+
+            if power is not None and toughness is not None:
+                build.append(power)
+                build.append(toughness)
+            build.append(types)
+
+            fileName = "_".join(build)
+            return PaperToken.makeTokenFileName(fileName)
+
+    def __init__(self, c: CardRules, edition0: CardEdition, imageFileName: str, collectorNumber: str, artist: str):
+        self.name = None
+        self.collectorNumber = None
+        self.artist = None
+        self.edition = None
+        self.imageFileName = []
+        self.cardRules = None
+        self.artIndex = 1
+
+        self.cardRules = c
+        self.name = c.getName()
+        self.edition = edition0
+        self.collectorNumber = collectorNumber
+        self.artist = artist
+
+        if collectorNumber is not None and collectorNumber != "" and self.edition is not None and imageFileName in self.edition.getTokens():
+            idx = 0
+            # count the one with the same collectorNumber
+            for t in self.edition.getTokens()[imageFileName]:
+                idx += 1
+                if t.collectorNumber() != collectorNumber:
+                    continue
+                # TODO make better image file names when collector number is known
+                # for the right index, we need to count the ones with wrong collector number too
+                self.imageFileName.append("%s|%s|%s|%d" % (imageFileName, self.edition.getCode(), collectorNumber, idx))
+            self.artIndex = len(self.imageFileName)
+        elif self.edition is None or CardEdition.UNKNOWN == self.edition:
+            self.imageFileName.append(imageFileName)
+        else:
+            # Fallback if CollectorNumber is not used
+            self.imageFileName.append("%s|%s" % (imageFileName, self.edition.getCode()))
+
+    def getName(self) -> str:
+        return self.name
+
+    def getDisplayName(self) -> str:
+        return self.name
+
+    def __str__(self) -> str:
+        return self.name
+
+    def getEdition(self) -> str:
+        return self.edition.getCode() if self.edition is not None else CardEdition.UNKNOWN_CODE
+
+    def getCollectorNumber(self) -> str:
+        if self.collectorNumber == "":
+            return IPaperCard.NO_COLLECTOR_NUMBER
+        return self.collectorNumber
+
+    def getFunctionalVariant(self) -> str:
+        # Tokens aren't differentiated by name, so they don't really need support for this.
+        return IPaperCard.NO_FUNCTIONAL_VARIANT
+
+    def getMarkedColors(self) -> ColorSet:
+        return None
+
+    def getArtIndex(self) -> int:
+        return self.artIndex
+
+    def isFoil(self) -> bool:
+        return False
+
+    def getRules(self) -> CardRules:
+        return self.cardRules
+
+    def getRarity(self) -> CardRarity:
+        return CardRarity.Token
+
+    def getArtist(self) -> str:
+        return self.artist
+
+    def getImageFilename(self, idx: int) -> str:
+        return self.imageFileName[idx - 1]
+
+    def getItemType(self) -> str:
+        return "Token"
+
+    def hasBackFace(self) -> bool:
+        if self.cardRules is None:
+            return False
+        cst = self.cardRules.getSplitType()
+        # expand this on future for other tokens that has other backsides besides transform..
+        return cst == CardSplitType.Transform or cst == CardSplitType.Modal
+
+    def getMainFace(self) -> ICardFace:
+        return self.getRules().getMainPart()
+
+    def getOtherFace(self) -> ICardFace:
+        return self.getRules().getOtherPart()
+
+    def getAllFaces(self) -> list[ICardFace]:
+        return self.cardRules.getAllFaces()
+
+    def isToken(self) -> bool:
+        return True
+
+    # IPaperCard
+    def getCardImageKey(self) -> str:
+        return self.getImageKey(False)
+
+    def getCardAltImageKey(self) -> str:
+        return self.getImageKey(True)
+
+    # InventoryItem
+    def getImageKey(self, altState) -> str:
+        if isinstance(altState, bool):
+            suffix = ""
+            if self.hasBackFace() and altState:
+                if self.collectorNumber is not None and self.collectorNumber != "" and self.edition is not None:
+                    name = self.cardRules.getOtherPart().getName().lower().replace(" token", "").replace(" ", "_")
+                    return ImageKeys.getTokenKey("%s|%s|%s%s" % (name, self.edition.getCode(), self.collectorNumber, ImageKeys.BACKFACE_POSTFIX))
+                else:
+                    suffix = ImageKeys.BACKFACE_POSTFIX
+            idx = MyRandom.getRandom().nextInt(self.artIndex)
+            return self.getImageKey(idx) + suffix
+        else:
+            artIndex = altState
+            return ImageKeys.getTokenKey(self.imageFileName[artIndex].replace(" ", "_"))
+
+    def isRebalanced(self) -> bool:
+        return False
 ```

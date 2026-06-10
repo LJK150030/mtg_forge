@@ -37,6 +37,12 @@ classDiagram
 - [[forge.game.card.Card|Card]]
 - [[forge.game.spellability.SpellAbility|SpellAbility]]
 
+## Design Description
+
+TriggerExcessDamage is a concrete trigger that fires when a card or player receives "excess" damage, extending the abstract `Trigger` base class within Forge's event-driven triggered-ability framework. It overrides `performTest` to gate activation on the damage event's parametersâ€”validating the damaged target against a `ValidTarget` restriction and optionally matching the configured `CombatDamage` flag against the actual combat-damage status.
+
+When the trigger fires, `setTriggeringObjects` exposes the damaged target and damage amount to the resolving `SpellAbility` via standardized `AbilityKey` entries, while `getImportantStackObjects` produces a localized, human-readable summary for the stack display. The design follows the established trigger pattern: configuration arrives as a string-keyed parameter map and runtime data through an `AbilityKey`-keyed map, decoupling the trigger's matching logic from how damage events are produced and consumed elsewhere in the engine.
+
 ## Source
 `forge-game/src/main/java/forge/game/trigger/TriggerExcessDamage.java`
 
@@ -119,4 +125,46 @@ public class TriggerExcessDamage extends Trigger {
         return sb.toString();
     }
 }
+```
+
+## Python
+`forge/game/trigger/TriggerExcessDamage.py`
+
+```python
+from forge.game.trigger.Trigger import Trigger
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Localizer import Localizer
+
+
+class TriggerExcessDamage(Trigger):
+
+    def __init__(self, params: dict[str, str], host: Card, intrinsic: bool):
+        super().__init__(params, host, intrinsic)
+
+    def performTest(self, runParams: dict[AbilityKey, object]) -> bool:
+        if not self.matchesValidParam("ValidTarget", runParams.get(AbilityKey.DamageTarget)):
+            return False
+
+        if self.hasParam("CombatDamage"):
+            if (self.getParam("CombatDamage").lower() == "true") != runParams.get(AbilityKey.IsCombatDamage):
+                return False
+
+        return True
+
+    def setTriggeringObjects(self, sa: SpellAbility, runParams: dict[AbilityKey, object]) -> None:
+        sa.setTriggeringObject(AbilityKey.Target, runParams.get(AbilityKey.DamageTarget))
+        sa.setTriggeringObjectsFrom(runParams, AbilityKey.DamageAmount)
+
+    def getImportantStackObjects(self, sa: SpellAbility) -> str:
+        sb = []
+        sb.append(Localizer.getInstance().getMessage("lblDamaged"))
+        sb.append(": ")
+        sb.append(str(sa.getTriggeringObject(AbilityKey.Target)))
+        sb.append(", ")
+        sb.append(Localizer.getInstance().getMessage("lblAmount"))
+        sb.append(": ")
+        sb.append(str(sa.getTriggeringObject(AbilityKey.DamageAmount)))
+        return "".join(sb)
 ```

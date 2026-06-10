@@ -39,7 +39,7 @@ classDiagram
 
 ## Design Description
 
-ActivationTable is a specialized tally that records which players have activated a given ability, keyed by the ability and the optional static ability that granted it. By extending Guava's `ForwardingTable` and delegating to an internal `HashBasedTable<SpellAbility, Optional<StaticAbility>, List<Player>>`, it inherits the full `Table` API while exposing a small, intent-revealing surface—`add`, `get`, and `getActivators`—tailored to activation counting.
+ActivationTable is a specialized tally that records which players have activated a given ability, keyed by the ability and the optional static ability that granted it. By extending Guava's `ForwardingTable` and delegating to an internal `HashBasedTable<SpellAbility, Optional<StaticAbility>, List<Player>>`, it inherits the full `Table` API while exposing a small, intent-revealing surfaceâ€”`add`, `get`, and `getActivators`â€”tailored to activation counting.
 
 Its central design concern is identity normalization: because trigger and copied spell abilities are duplicated at runtime, `getOriginal` resolves each `SpellAbility` back to its canonical root (via the trigger's overriding ability or the original ability) so that every activation maps to a stable key. Pairing that root with the grantor `StaticAbility` lets the table distinguish activations granted by different static effects, and storing per-key `List<Player>` collaborators preserves who activated so callers can both count and enumerate activators.
 
@@ -113,4 +113,65 @@ public class ActivationTable extends ForwardingTable<SpellAbility, Optional<Stat
         return Lists.newArrayList();
     }
 }
+```
+
+## Python
+`forge/game/card/ActivationTable.py`
+
+```python
+package forge.game.card
+
+from typing import Optional
+
+from com.google.common.collect.ForwardingTable import ForwardingTable
+from com.google.common.collect.HashBasedTable import HashBasedTable
+from com.google.common.collect.Table import Table
+
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.staticability.StaticAbility import StaticAbility
+
+
+class ActivationTable(ForwardingTable):
+    def __init__(self):
+        self.dataTable: Table = HashBasedTable.create()
+
+    def delegate(self) -> Table:
+        return self.dataTable
+
+    def getOriginal(self, sa: SpellAbility) -> SpellAbility:
+        original = None
+        root = sa.getRootAbility()
+
+        # because trigger spell abilities are copied, try to get original one
+        if root.isTrigger():
+            original = root.getTrigger().getOverridingAbility()
+        else:
+            original = root.getOriginalAbility() if root.getOriginalAbility() is not None else root
+        return original
+
+    def add(self, sa: SpellAbility) -> None:
+        root = sa.getRootAbility()
+        original = self.getOriginal(sa)
+
+        if original is not None:
+            st: Optional[StaticAbility] = Optional.ofNullable(root.getGrantorStatic())
+
+            activators = self.get(original, st)
+            if activators is None:
+                activators = []
+            activators.append(sa.getActivatingPlayer())
+            self.delegate().put(original, st, activators)
+
+    def get(self, sa: SpellAbility) -> int:
+        return len(self.getActivators(sa))
+
+    def getActivators(self, sa: SpellAbility) -> list[Player]:
+        root = sa.getRootAbility()
+        original = self.getOriginal(sa)
+        st: Optional[StaticAbility] = Optional.ofNullable(root.getGrantorStatic())
+
+        if self.contains(original, st):
+            return self.get(original, st)
+        return []
 ```

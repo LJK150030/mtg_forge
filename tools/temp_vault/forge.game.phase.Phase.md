@@ -51,6 +51,10 @@ classDiagram
 - [[forge.game.phase.PhaseType|PhaseType]]
 - [[forge.game.player.Player|Player]]
 
+## Design Description
+
+The Phase class models a single step in Magic: the Gathering's turn structure and serves as a registry for deferred game effects tied to that phase. Implementing `Serializable` so it can be persisted with game state, it maintains several command collections â€” a list of hardcoded "at this phase" triggers, an "until this phase" termination list, and three per-player `Multimap`s that schedule effects ending at a player's next phase or end of phase. It collaborates with `GameCommand` (the executable effect interface), `Player` (the keying entity for player-scoped effects), and `PhaseType` (identifying which phase, though the field is currently decorative and unused). Notably, the shared `excute` helper snapshots each collection before running and clearing its commands, ensuring one-shot execution and safe removal even if a command schedules further work. The `registerMap`/`untilEndMap` split lets effects be staged via `registerUntilEndCommand` and promoted before execution.
+
 ## Source
 `forge-game/src/main/java/forge/game/phase/Phase.java`
 
@@ -202,4 +206,76 @@ public class Phase implements java.io.Serializable {
         list.removeAll(events);
     }
 }
+```
+
+## Python
+`forge/game/phase/Phase.py`
+
+```python
+package = "forge.game.phase"
+
+import typing
+from collections import defaultdict
+
+from forge.GameCommand import GameCommand
+from forge.game.phase.PhaseType import PhaseType
+from forge.game.player.Player import Player
+
+
+class Phase:
+    serialVersionUID = 4665309652476851977
+
+    def __init__(self, type: PhaseType):
+        self.type = type  # mostly decorative field - it's never used
+        self.at: list[GameCommand] = []
+        self.until: list[GameCommand] = []
+        self.untilMap: dict[Player, list[GameCommand]] = defaultdict(list)
+        self.untilEndMap: dict[Player, list[GameCommand]] = defaultdict(list)
+        self.registerMap: dict[Player, list[GameCommand]] = defaultdict(list)
+
+    def clearCommands(self) -> None:
+        self.at.clear()
+        self.until.clear()
+        self.untilMap.clear()
+        self.untilEndMap.clear()
+        self.registerMap.clear()
+
+    def addAt(self, c: GameCommand) -> None:
+        self.at.append(c)
+
+    def executeAt(self) -> None:
+        self.excute(self.at)
+
+    def addUntil(self, c: GameCommand) -> None:
+        self.until.append(c)
+
+    def executeUntil(self) -> None:
+        self.excute(self.until)
+
+    def addUntil(self, p: Player, c: GameCommand) -> None:
+        self.untilMap[p].append(c)
+
+    def executeUntil(self, p: Player) -> None:
+        self.excute(self.untilMap[p])
+
+    def registerUntilEnd(self, p: Player, c: GameCommand) -> None:
+        self.registerMap[p].append(c)
+
+    def addUntilEnd(self, p: Player, c: GameCommand) -> None:
+        self.untilEndMap[p].append(c)
+
+    def registerUntilEndCommand(self, p: Player) -> None:
+        self.untilEndMap[p].extend(self.registerMap.get(p, []))
+        if p in self.registerMap:
+            del self.registerMap[p]
+
+    def executeUntilEndOfPhase(self, p: Player) -> None:
+        self.excute(self.untilEndMap[p])
+
+    def excute(self, list: typing.Collection[GameCommand]) -> None:
+        events = [c for c in list]
+        for c in events:
+            c.run()
+        for c in events:
+            list.remove(c)
 ```

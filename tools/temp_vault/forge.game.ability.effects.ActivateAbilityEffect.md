@@ -111,3 +111,31 @@ public class ActivateAbilityEffect extends SpellAbilityEffect {
 
 }
 ```
+
+## Python
+`forge/game/ability/effects/ActivateAbilityEffect.py`
+
+```python
+package forge.game.ability.effects -> module path. Let me produce the Python port.
+
+The dependencies and their FQNs:
+- SpellAbilityEffect: forge.game.ability.SpellAbilityEffect
+- Card: forge.game.card.Card
+- CardLists: forge.game.card.CardLists
+- Player: forge.game.player.Player
+- SpellAbility: forge.game.spellability.SpellAbility
+- ZoneType: forge.game.zone.ZoneType
+- Lang: forge.util.Lang
+- Localizer: forge.util.Localizer
+- FCollection: forge.util.collect.FCollection
+- StringUtils (commons lang) -> not a forge type; use Python join
+- ImmutableMap -> use {} dict
+
+Let me write it.
+
+For StringUtils.join(tgtPlayers, ", ") -> ", ".join(str(p) for p in tgtPlayers)
+
+Lang.nounWithAmount(1, ...) -> Lang.nounWithAmount(1, ...)
+
+Let me output.
+```

@@ -32,8 +32,12 @@ classDiagram
 - [[forge.card.CardRarity|CardRarity]]
 - [[forge.item.PaperCard|PaperCard]]
 
+## Design Description
+
+Forge's `PredicateRarities` is an immutable predicate that matches a `PaperCard` whose rarity belongs to a fixed set of `CardRarity` values. As a `static final` class implementing `Predicate<PaperCard>`, it serves as a self-contained filterâ€”one of several nested predicate types within `PaperCardPredicates`â€”usable wherever card collections are screened by rarity. Its varargs constructor eagerly collects the supplied rarities into a `HashSet`, trading a small allocation for constant-time membership checks in `test`, which simply delegates to `card.getRarity()`. The `final` field and absence of mutators reflect a deliberate stateless, thread-safe design: once constructed, the predicate is a reusable, side-effect-free criterion that composes cleanly with Java's functional `Predicate` combinators.
+
 ## Source
-`forge-core/src/main/java/forge/item/PaperCardPredicates.java` — declaration excerpt
+`forge-core/src/main/java/forge/item/PaperCardPredicates.java` Ã¢â‚¬â€ declaration excerpt
 
 ```java
     public static final class PredicateRarities implements Predicate<PaperCard> {
@@ -48,4 +52,20 @@ classDiagram
             this.operand = new HashSet<>(Arrays.asList(rarities));
         }
     }
+```
+
+## Python
+`forge/item/PaperCardPredicates/PredicateRarities.py`
+
+```python
+from forge.card.CardRarity import CardRarity
+from forge.item.PaperCard import PaperCard
+
+
+class PredicateRarities(Predicate[PaperCard]):
+    def __init__(self, *rarities: CardRarity):
+        self.operand: set[CardRarity] = set(rarities)
+
+    def test(self, card: PaperCard) -> bool:
+        return card.getRarity() in self.operand
 ```

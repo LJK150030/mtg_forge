@@ -123,9 +123,9 @@ classDiagram
 
 ## Design Description
 
-GameEntity is the abstract root for any addressable, persistent object in a game of Magic — principally players and cards in play — supplying the identity and shared state that distinguish such objects from transient game data. As a `GameObject` and `IIdentifiable`, it carries an immutable integer `id` (the basis of `equals`/`hashCode`), a name, and three cross-cutting concerns common to all targetable entities: cards attached to it (auras, equipment, fortifications), counters keyed by `CounterType`, and damage received this turn.
+GameEntity is the abstract root for any addressable, persistent object in a game of Magic â€” principally players and cards in play â€” supplying the identity and shared state that distinguish such objects from transient game data. As a `GameObject` and `IIdentifiable`, it carries an immutable integer `id` (the basis of `equals`/`hashCode`), a name, and three cross-cutting concerns common to all targetable entities: cards attached to it (auras, equipment, fortifications), counters keyed by `CounterType`, and damage received this turn.
 
-It concentrates the rules logic for these concerns — attachment legality (`cantBeAttachedMsg` delegating to `StaticAbilityCantAttach`), counter caps and rule-107.1b guards, and static damage prevention scanning replacement effects — while deferring state-mutating and subtype-specific behavior (damage application, counter mutation, keyword checks, `getGame`, `getView`) to abstract methods that `Player` and `Card` implement. Deliberate touches include forecast-safe prevention methods usable by the AI without altering game state, phased-out filtering, and view synchronization on every state change.
+It concentrates the rules logic for these concerns â€” attachment legality (`cantBeAttachedMsg` delegating to `StaticAbilityCantAttach`), counter caps and rule-107.1b guards, and static damage prevention scanning replacement effects â€” while deferring state-mutating and subtype-specific behavior (damage application, counter mutation, keyword checks, `getGame`, `getView`) to abstract methods that `Player` and `Card` implement. Deliberate touches include forecast-safe prevention methods usable by the AI without altering game state, phased-out filtering, and view synchronization on every state change.
 
 ## Source
 `forge-game/src/main/java/forge/game/GameEntity.java`
@@ -548,4 +548,328 @@ public abstract class GameEntity implements GameObject, IIdentifiable {
     public abstract Game getGame();
     public abstract GameEntityView getView();
 }
+```
+
+## Python
+`forge/game/GameEntity.py`
+
+```python
+from typing import List, Map  # noqa
+from typing import Dict, List as TList, Optional
+
+from forge.game.GameObject import GameObject
+from forge.game.IIdentifiable import IIdentifiable
+from forge.game.Game import Game
+from forge.game.GameEntityCounterTable import GameEntityCounterTable
+from forge.game.GameEntityView import GameEntityView
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.ability.ApiType import ApiType
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CardPredicates import CardPredicates
+from forge.game.card.CounterType import CounterType
+from forge.game.keyword.Keyword import Keyword
+from forge.game.keyword.KeywordInterface import KeywordInterface
+from forge.game.keyword.KeywordWithType import KeywordWithType
+from forge.game.player.Player import Player
+from forge.game.replacement.ReplacementEffect import ReplacementEffect
+from forge.game.replacement.ReplacementType import ReplacementType
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.staticability.StaticAbility import StaticAbility
+from forge.game.staticability.StaticAbilityCantAttach import StaticAbilityCantAttach
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.Lang import Lang
+
+
+class GameEntity(GameObject, IIdentifiable):
+    def __init__(self, id0: int):
+        self.id: int = id0
+        self.name: str = ""
+        self.attachedCards: CardCollection = CardCollection()
+        self.counters: Dict[CounterType, int] = {}
+        self.damageReceivedThisTurn: list = []
+
+    def getId(self) -> int:
+        return self.id
+
+    def dangerouslySetId(self, i: int) -> None:
+        self.id = i
+
+    def getName(self) -> str:
+        return self.name
+
+    def setName(self, s: str) -> None:
+        self.name = s
+        self.getView().updateName(self)
+
+    # This function handles damage after replacement and prevention effects are applied
+    def addDamageAfterPrevention(self, damage: int, source: Card, cause: SpellAbility, isCombat: bool, counterTable: GameEntityCounterTable) -> int:
+        raise NotImplementedError
+
+    # This should be also usable by the AI to forecast an effect (so it must
+    # not change the game state)
+    def staticDamagePrevention(self, damage: int, possiblePrevention: int, source: Card, isCombat: bool) -> int:
+        if damage <= 0:
+            return 0
+        if not source.canDamagePrevented(isCombat):
+            return damage
+
+        if isCombat and self.getGame().getReplacementHandler().isPreventCombatDamageThisTurn():
+            return 0
+
+        for ca in self.getGame().getCardsIn(ZoneType.STATIC_ABILITIES_SOURCE_ZONES):
+            for re in ca.getReplacementEffects():
+                if not re.getMode() == ReplacementType.DamageDone or \
+                        (not re.hasParam("PreventionEffect") and not re.hasParam("Prevent")):
+                    continue
+                if not re.zonesCheck(self.getGame().getZoneOf(ca)):
+                    continue
+                if not re.requirementsCheck(self.getGame()):
+                    continue
+                # Immortal Coil prevents the damage but has a similar negative effect
+                if "Immortal Coil" == ca.getName():
+                    continue
+                if not re.matchesValidParam("ValidSource", source):
+                    continue
+                if not re.matchesValidParam("ValidTarget", self):
+                    continue
+                if re.hasParam("IsCombat"):
+                    if (re.getParam("IsCombat") == "True") != isCombat:
+                        continue
+                if re.hasParam("Prevent"):
+                    return 0
+                elif re.getOverridingAbility() is not None:
+                    repSA = re.getOverridingAbility()
+                    if repSA.getApi() == ApiType.ReplaceDamage:
+                        damage = max(0, damage - AbilityUtils.calculateAmount(ca, repSA.getParam("Amount"), repSA))
+                else:
+                    return 0
+
+        return max(0, damage - possiblePrevention)
+
+    # This should be also usable by the AI to forecast an effect (so it must
+    # not change the game state)
+    def staticReplaceDamage(self, damage: int, source: Card, isCombat: bool) -> int:
+        raise NotImplementedError
+
+    def getPreventNextDamageTotalShields(self) -> int:
+        return self.getGame().getReplacementHandler().getTotalPreventionShieldAmount(self)
+
+    def hasKeyword(self, keyword) -> bool:
+        raise NotImplementedError
+
+    def getEnchantedBy(self) -> CardCollectionView:
+        # enchanted means attached by Aura
+        return CardLists.filter(self.getAttachedCards(), Card.isAura)
+
+    # doesn't include phased out cards
+    def getAttachedCards(self) -> CardCollectionView:
+        return CardLists.filter(self.attachedCards, CardPredicates.phasedIn())
+
+    # for view does include phased out cards
+    def getAllAttachedCards(self) -> CardCollectionView:
+        return self.attachedCards
+
+    def setAttachedCards(self, cards) -> None:
+        self.attachedCards = CardCollection(cards)
+        self.updateAttachedCards()
+
+    def clearAttachedCards(self) -> None:
+        if self.attachedCards.isEmpty():
+            return
+        self.attachedCards.clear()
+        self.updateAttachedCards()
+
+    def hasCardAttachments(self) -> bool:
+        return not self.getAttachedCards().isEmpty()
+
+    def isEnchanted(self) -> bool:
+        # enchanted means attached by Aura
+        return self.getAttachedCards().anyMatch(Card.isAura)
+
+    def hasCardAttachment(self, c) -> bool:
+        if isinstance(c, str):
+            cardName = c
+            return self.getAttachedCards().anyMatch(CardPredicates.nameEquals(cardName))
+        return self.getAttachedCards().contains(c)
+
+    def isEnchantedBy(self, c) -> bool:
+        # Rule 303.4k  Even if c is no Aura it still counts
+        return self.hasCardAttachment(c)
+
+    def addAttachedCard(self, c: Card) -> None:
+        if self.attachedCards.add(c):
+            self.updateAttachedCards()
+
+    def removeAttachedCard(self, c: Card) -> None:
+        if self.attachedCards.remove(c):
+            self.updateAttachedCards()
+
+    def updateAttachedCards(self) -> None:
+        self.getView().updateAttachedCards(self)
+
+    def unAttachAllCards(self, old: Card) -> None:
+        for c in self.getAttachedCards():
+            c.unattachFromEntity(self, old)
+
+    def canBeAttached(self, attach: Card, sa: SpellAbility, checkSBA: bool = False) -> bool:
+        return self.cantBeAttachedMsg(attach, sa, checkSBA) is None
+
+    def cantBeAttachedMsg(self, attach: Card, sa: SpellAbility, checkSBA: bool = False) -> str:
+        if not attach.isAttachment():
+            return attach.getDisplayName() + " is not an attachment"
+        if self == attach:
+            return attach.getDisplayName() + " can't attach to itself"
+
+        if attach.isCreature() and not attach.hasKeyword(Keyword.RECONFIGURE):
+            return attach.getDisplayName() + " is a creature without reconfigure"
+
+        if attach.isPhasedOut():
+            return attach.getDisplayName() + " is phased out"
+
+        if attach.isAura():
+            msg = self.cantBeEnchantedByMsg(attach)
+            if msg is not None:
+                return msg
+        if attach.isEquipment():
+            msg = self.cantBeEquippedByMsg(attach, sa)
+            if msg is not None:
+                return msg
+        if attach.isFortification():
+            msg = self.cantBeFortifiedByMsg(attach)
+            if msg is not None:
+                return msg
+
+        stAb = StaticAbilityCantAttach.cantAttach(self, attach, checkSBA)
+        if stAb is not None:
+            return stAb.toString()
+
+        return None
+
+    def cantBeEquippedByMsg(self, aura: Card, sa: SpellAbility) -> str:
+        """
+        Equip only to Lands which are cards
+        """
+        return self.getName() + " is not a Creature"
+
+    def cantBeFortifiedByMsg(self, fort: Card) -> str:
+        """
+        Equip only to Lands which are cards
+        """
+        return self.getName() + " is not a Land"
+
+    def cantBeEnchantedByMsg(self, aura: Card) -> str:
+        if not aura.hasKeyword(Keyword.ENCHANT):
+            return "No Enchant Keyword"
+        for ki in aura.getKeywords(Keyword.ENCHANT):
+            if isinstance(ki, KeywordWithType):
+                kwt = ki
+                v = kwt.getValidType()
+                desc = kwt.getTypeDescription()
+                if not self.isValid(v.split(","), aura.getController(), aura, None):
+                    return self.getName() + " is not " + Lang.nounWithAmount(1, desc)
+        return None
+
+    def hasCounters(self) -> bool:
+        return len(self.counters) != 0
+
+    # get all counters from a card
+    def getCounters(self, counterName: CounterType = None):
+        if counterName is None:
+            return self.counters
+        value = self.counters.get(counterName)
+        return 0 if value is None else value
+
+    # get total number of all counters on an entity
+    def getNumAllCounters(self) -> int:
+        count = 0
+        for i in self.getCounters().values():
+            if i is not None and i > 0:
+                count += i
+        return count
+
+    def setCounters(self, *args) -> None:
+        if len(args) == 1:
+            allCounters = args[0]
+            raise NotImplementedError
+        counterType, num = args
+        if num <= 0:
+            self.counters.pop(counterType, None)
+        else:
+            self.counters[counterType] = num
+
+    def canRemoveCounters(self, type: CounterType) -> bool:
+        raise NotImplementedError
+
+    def canReceiveCounters(self, type: CounterType) -> bool:
+        raise NotImplementedError
+
+    def subtractCounter(self, counterName: CounterType, n: int, remover: Player) -> int:
+        raise NotImplementedError
+
+    def clearCounters(self) -> None:
+        raise NotImplementedError
+
+    def addCounter(self, counterType: CounterType, n: int, source: Player, table: GameEntityCounterTable) -> None:
+        if n <= 0 or not self.canReceiveCounters(counterType):
+            # As per rule 107.1b
+            return
+
+        max_ = self.getCounterMax(counterType)
+        if max_ is not None:
+            n = min(n, max_ - self.getCounters(counterType))
+            if n <= 0:
+                return
+
+        # doesn't really add counters, but is just a helper to add them to the Table
+        # so the Table can handle the Replacement Effect
+        table.put(source, self, counterType, n)
+
+    def addCounterInternal(self, counterType: CounterType, n: int, source: Player, fireEvents: bool, table: GameEntityCounterTable, params: Dict[AbilityKey, object]) -> None:
+        raise NotImplementedError
+
+    def getCounterMax(self, counterType: CounterType) -> Optional[int]:
+        return None
+
+    def getDamageReceivedThisTurn(self) -> list:
+        return self.damageReceivedThisTurn
+
+    def setDamageReceivedThisTurn(self, dmg: list) -> None:
+        self.damageReceivedThisTurn.extend(dmg)
+
+    def receiveDamage(self, dmg) -> None:
+        self.damageReceivedThisTurn.append(dmg)
+
+    def getAssignedDamage(self, isCombat=None, source: Card = None) -> int:
+        num = 0
+        for dmg in self.damageReceivedThisTurn:
+            if isCombat is not None and dmg.getRight() != isCombat:
+                continue
+            if source is not None and not self.getGame().getDamageLKI(dmg).getLeft().equalsWithGameTimestamp(source):
+                continue
+            num += dmg.getLeft()
+        return num
+
+    def getAssignedCombatDamage(self) -> int:
+        return self.getAssignedDamage(True, None)
+
+    def __eq__(self, o) -> bool:
+        if o is None:
+            return False
+        return hash(o) == self.id and o.__class__ == self.__class__
+
+    def __hash__(self) -> int:
+        return self.id
+
+    def __str__(self) -> str:
+        return self.name
+
+    def getGame(self) -> Game:
+        raise NotImplementedError
+
+    def getView(self) -> GameEntityView:
+        raise NotImplementedError
 ```

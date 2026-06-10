@@ -34,8 +34,14 @@ classDiagram
 - [[forge.card.MagicColor.Color|Color]]
 - [[forge.item.PaperCard|PaperCard]]
 
+## Design Description
+
+The PredicateColor class is a private, immutable nested helper within PaperCardPredicates that implements `Predicate<PaperCard>` to filter cards by a single color. It holds one `MagicColor.Color` operand, set through its private constructor, restricting instantiation to the enclosing factory class.
+
+Its `test` method evaluates a card's membership in the target color: it returns true when the card's rules declare the operand directly, orâ€”for lands specificallyâ€”when the operand appears in the card's color identity. This dual check reflects the design intent that lands are matched by color identity rather than printed color, accommodating Magic's distinction between a card's mana cost colors and the colors of mana it can produce. The class collaborates with PaperCard (and its CardRules), MagicColor, and CardType to resolve these color semantics.
+
 ## Source
-`forge-core/src/main/java/forge/item/PaperCardPredicates.java` — declaration excerpt
+`forge-core/src/main/java/forge/item/PaperCardPredicates.java` Ã¢â‚¬â€ declaration excerpt
 
 ```java
     private static final class PredicateColor implements Predicate<PaperCard> {
@@ -56,4 +62,26 @@ classDiagram
             return false;
         }
     }
+```
+
+## Python
+`forge/item/PaperCardPredicates/PredicateColor.py`
+
+```python
+from forge.card.MagicColor import MagicColor
+from forge.card.MagicColor.Color import Color
+from forge.card.CardType import CardType
+from forge.item.PaperCard import PaperCard
+
+
+class PredicateColor:
+    def __init__(self, color: Color):
+        self.operand = color
+
+    def test(self, card: PaperCard) -> bool:
+        if card.getRules().getColor().hasAnyColor(self.operand):
+            return True
+        if card.getRules().getType().hasType(CardType.CoreType.Land) and card.getRules().getColorIdentity().hasAnyColor(self.operand):
+            return True
+        return False
 ```

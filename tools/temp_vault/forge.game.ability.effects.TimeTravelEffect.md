@@ -124,3 +124,63 @@ public class TimeTravelEffect extends SpellAbilityEffect {
 
 }
 ```
+
+## Python
+`forge/game/ability/effects/TimeTravelEffect.py`
+
+```python
+from forge.game.Game import Game
+from forge.game.GameEntityCounterTable import GameEntityCounterTable
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CardPredicates import CardPredicates
+from forge.game.card.CounterType import CounterType
+from forge.game.card.CounterEnumType import CounterEnumType
+from forge.game.player.Player import Player
+from forge.game.player.PlayerController import PlayerController
+from forge.game.player.PlayerController import BinaryChoiceType
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.Localizer import Localizer
+
+
+class TimeTravelEffect(SpellAbilityEffect):
+
+    def getStackDescription(self, sa: SpellAbility) -> str:
+        return "Time travel. (For each suspended card you own and each permanent you control with a time counter on it, you may add or remove a time counter.)"
+
+    def resolve(self, sa: SpellAbility) -> None:
+        activator = sa.getActivatingPlayer()
+        host = sa.getHostCard()
+        game = host.getGame()
+        num = AbilityUtils.calculateAmount(host, sa.getParam("Amount"), sa) if sa.hasParam("Amount") else 1
+
+        pc = activator.getController()
+
+        counterType = CounterEnumType.TIME
+
+        for i in range(num):
+            # card you own that is suspended
+            list = CardLists.filter(activator.getCardsIn(ZoneType.Exile), Card.hasSuspend)
+            # permanent you control with time counter
+            list.addAll(CardLists.filter(activator.getCardsIn(ZoneType.Battlefield), CardPredicates.hasCounter(counterType)))
+
+            table = GameEntityCounterTable()
+
+            prompt = Localizer.getInstance().getMessage("lblChooseaCard")
+            for c in pc.chooseEntitiesForEffect(list, 0, list.size(), None, sa, prompt, activator, None):
+                params = {}
+                params["Target"] = c
+                params["CounterType"] = counterType
+                prompt = Localizer.getInstance().getMessage("lblWhatToDoWithTargetCounter", counterType.getName(), c.getTranslatedName()) + " "
+                putCounter = pc.chooseBinary(sa, prompt, BinaryChoiceType.AddOrRemove, params)
+
+                if putCounter:
+                    c.addCounter(counterType, 1, activator, table)
+                else:
+                    c.subtractCounter(counterType, 1, activator)
+            table.replaceCounterEffect(game, sa)
+```

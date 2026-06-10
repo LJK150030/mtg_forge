@@ -53,6 +53,12 @@ classDiagram
 - [[forge.game.spellability.SpellAbility|SpellAbility]]
 - [[forge.game.spellability.SpellAbility.EmptySa|EmptySa]]
 
+## Design Description
+
+Untap is a concrete game-phase handler that extends Phase to model Magic's untap step. Constructed with the owning Game and bound to PhaseType.UNTAP, it overrides executeAt() to orchestrate the step's ordered work: phasing permanents in and out, resolving day/night transitions, refreshing static abilities, and then untapping the active player's permanents. The private doUntap() centralizes the rules-heavy logic â€” honoring bounce-on-untap effects, UntapAdjust/OnlyUntapChosen restrictions, optional "you may choose not to untap" prompts, and untapping other players' permanents via static abilities.
+
+The class collaborates broadly with the game model: it queries Player and Card collections (CardCollection), routes zone moves through CardZoneTable, consults KeywordInterface and static-ability helpers, and uses throwaway EmptySa SpellAbility instances to drive controller choices. Notably it fires AbilityKey-parameterized triggers (UntapAll, PhaseOutAll) so other systems react, and its static doPhasing/doDayTime helpers keep that comprehensive-rules logic reusable and self-contained.
+
 ## Source
 `forge-game/src/main/java/forge/game/phase/Untap.java`
 
@@ -321,4 +327,225 @@ public class Untap extends Phase {
         }
     }
 }
+```
+
+## Python
+`forge/game/phase/Untap.py`
+
+```python
+/*
+ * Forge: Play Magic: the Gathering.
+ * Copyright (C) 2011  Forge Team
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
+from forge.game.Game import Game
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.ability.ApiType import ApiType
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CardPredicates import CardPredicates
+from forge.game.card.CardZoneTable import CardZoneTable
+from forge.game.keyword.Keyword import Keyword
+from forge.game.keyword.KeywordInterface import KeywordInterface
+from forge.game.player.Player import Player
+from forge.game.player.PlayerController import BinaryChoiceType
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.staticability.StaticAbilityCantPhase import StaticAbilityCantPhase
+from forge.game.staticability.StaticAbilityUntapOtherPlayer import StaticAbilityUntapOtherPlayer
+from forge.game.trigger.TriggerType import TriggerType
+from forge.game.zone.ZoneType import ZoneType
+
+from forge.game.phase.Phase import Phase
+from forge.game.phase.PhaseType import PhaseType
+
+
+class Untap(Phase):
+    """
+    Untap class.
+    Handles "until next untap", "until your next untap" and "at beginning of untap"
+    commands from cards.
+
+    @author Forge
+    @version $Id: Untap 12482 2011-12-06 11:14:11Z Sloth $
+    """
+    serialVersionUID = 4515266331266259123
+
+    def __init__(self, game0: Game):
+        super().__init__(PhaseType.UNTAP)
+        self.game = game0
+
+    def executeAt(self) -> None:
+        """
+        Executes any hardcoded triggers that happen "at end of combat".
+        """
+        super().executeAt()
+
+        Untap.doPhasing(self.game.getPhaseHandler().getPlayerTurn())
+        Untap.doDayTime(self.game.getPhaseHandler().getPreviousPlayerTurn())
+
+        self.game.getAction().checkStaticAbilities()
+
+        self.doUntap()
+
+    def doUntap(self) -> None:
+        """
+        doUntap.
+        """
+        active = self.game.getPhaseHandler().getPlayerTurn()
+        untapMap: dict[Player, CardCollection] = {}
+
+        untapList = CardCollection(active.getCardsIn(ZoneType.Battlefield))
+
+        triggerList = CardZoneTable(self.game.getLastStateBattlefield(), self.game.getLastStateGraveyard())
+        bounceList = CardLists.getKeyword(untapList, "During your next untap step, as you untap your permanents, return CARDNAME to its owner's hand.")
+        for c in bounceList:
+            moved = self.game.getAction().moveToHand(c, None)
+            triggerList.put(ZoneType.Battlefield, moved.getZone().getZoneType(), moved)
+        triggerList.triggerChangesZoneAll(self.game, None)
+        untapList.removeAll(bounceList)
+
+        restrictUntap: dict[str, int] = {}
+        for ki in active.getKeywords():
+            kw = ki.getOriginal()
+            if kw.startswith("UntapAdjust"):
+                parse = kw.split(":")
+                if (parse[1] not in restrictUntap
+                        or int(parse[2]) < restrictUntap[parse[1]]):
+                    restrictUntap[parse[1]] = int(parse[2])
+            if kw.startswith("OnlyUntapChosen"):
+                validTypes = kw.split(":")[1].split(",")
+                chosen = active.getController().chooseSomeType("Card", SpellAbility.EmptySa(ApiType.ChooseType, None, active), validTypes)
+                untapList = CardLists.getType(untapList, chosen)
+
+        untapList = CardLists.filter(untapList, lambda c: c.canUntap(active, False))
+
+        restrict = list(restrictUntap.keys())
+        restrictList = CardLists.getValidCards(untapList, restrict, active, None, None)
+        untapList.removeAll(restrictList)
+        restrictUntapped = CardCollection()
+        while not restrictList.isEmpty():
+            remaining = dict(restrictUntap)
+            for key, value in list(remaining.items()):
+                if value == 0:
+                    restrictList.removeAll(CardLists.getValidCards(restrictList, key, active, None, None))
+                    del restrictUntap[key]
+            chosen = active.getController().chooseSingleEntityForEffect(restrictList, SpellAbility.EmptySa(ApiType.Untap, None, active),
+                    "Select a card to untap\r\n(Selected:" + str(restrictUntapped) + ")\r\n" + "Remaining cards that can untap: " + str(remaining), None)
+            if chosen is not None:
+                for restKey, restValue in list(restrictUntap.items()):
+                    if chosen.isValid(restKey, active, None, None):
+                        restrictUntap[restKey] = restValue - 1
+                untapList.add(chosen)
+                restrictList.remove(chosen)
+
+        for c in untapList:
+            if Untap.optionalUntap(c, active):
+                untapMap.setdefault(active, CardCollection()).add(c)
+
+        for c in active.getAllOtherPlayers().getCardsIn(ZoneType.Battlefield):
+            if c.isTapped() and StaticAbilityUntapOtherPlayer.untap(c, active) and c.untap(active):
+                untapMap.setdefault(c.getController(), CardCollection()).add(c)
+
+        # Remove temporary keywords
+        # TODO Replace with Static Abilities
+        for c in active.getCardsIn(ZoneType.Battlefield):
+            c.removeHiddenExtrinsicKeyword("This card doesn't untap during your next untap step.")
+
+        # remove exerted flags from all things in play
+        # even if they are not creatures
+        for c in self.game.getCardsIn(ZoneType.Battlefield):
+            c.removeExertedBy(active)
+
+        runParams = AbilityKey.newMap()
+        runParams[AbilityKey.Map] = untapMap
+        self.game.getTriggerHandler().runTrigger(TriggerType.UntapAll, runParams, False)
+
+    @staticmethod
+    def optionalUntap(c: Card, phase: Player) -> bool:
+        untap = True
+
+        if c.hasKeyword("You may choose not to untap CARDNAME during your untap step."):
+            prompt = "Untap " + c.toString() + "?"
+            defaultChoice = True
+            if c.hasGainControlTarget():
+                targets = c.getGainControlTargets()
+                prompt += "\r\n" + str(c) + " is controlling: "
+                for target in targets:
+                    prompt += str(target)
+                    if target.isInPlay():
+                        defaultChoice = False
+            untap = c.getController().getController().chooseBinary(SpellAbility.EmptySa(c, c.getController()), prompt, BinaryChoiceType.UntapOrLeaveTapped, defaultChoice)
+        if untap and not c.untap(phase):
+            untap = False
+        return untap
+
+    @staticmethod
+    def doPhasing(turn: Player) -> None:
+        game = turn.getGame()
+
+        # Needs to include phased out cards
+        list_ = CardLists.filter(game.getCardsIncludePhasingIn(ZoneType.Battlefield),
+                lambda c: (c.isPhasedOut(turn) and c.isDirectlyPhasedOut())
+                        or (c.hasKeyword(Keyword.PHASING) and c.getController() == turn)
+        )
+
+        toPhase = CardCollection()
+        for tgtC in list_:
+            if tgtC.isPhasedOut() and StaticAbilityCantPhase.cantPhaseIn(tgtC):
+                continue
+            if not tgtC.isPhasedOut() and StaticAbilityCantPhase.cantPhaseOut(tgtC):
+                continue
+            toPhase.add(tgtC)
+        # If c has things attached to it, they phase out simultaneously, and
+        # will phase back in with it
+        # If c is attached to something, it will phase out on its own, and try
+        # to attach back to that thing when it comes back
+        phasedOut = CardCollection()
+        for c in toPhase:
+            if c.isPhasedOut() and c.isDirectlyPhasedOut():
+                c.phase(True)
+            elif c.hasKeyword(Keyword.PHASING):
+                # CR 702.26h If an object would simultaneously phase out directly
+                # and indirectly, it just phases out indirectly.
+                if c.isAttachment():
+                    ent = c.getAttachedTo()
+                    if ent is not None and ent in list_ and not StaticAbilityCantPhase.cantPhaseOut(ent):
+                        continue
+                c.phase(True)
+                phasedOut.add(c)
+        if not phasedOut.isEmpty():
+            runParams = AbilityKey.newMap()
+            runParams[AbilityKey.Cards] = phasedOut
+            game.getTriggerHandler().runTrigger(TriggerType.PhaseOutAll, runParams, False)
+        if not toPhase.isEmpty():
+            # refresh statics for phased in permanents (e.g. so King of the Oathbreakers sees Changeling)
+            game.getAction().checkStaticAbilities()
+            # collect now before some zone change during Untap resets triggers
+            game.getTriggerHandler().collectTriggerForWaiting()
+
+    @staticmethod
+    def doDayTime(previous: Player) -> None:
+        if previous is None:
+            return
+        game = previous.getGame()
+        casted = game.getStack().getSpellsCastLastTurn()
+
+        if game.isDay() and not any(CardPredicates.isController(previous)(s) for s in casted):
+            game.setDayTime(True)
+        elif game.isNight() and CardLists.count(casted, CardPredicates.isController(previous)) > 1:
+            game.setDayTime(False)
 ```

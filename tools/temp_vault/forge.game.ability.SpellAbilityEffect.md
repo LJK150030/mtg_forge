@@ -190,18 +190,18 @@ public abstract class SpellAbilityEffect {
             sa.putParam("ActivationLimit", "1");
             sa.putParam("ActivationPhases", "Upkeep");
             sa.putParam("PlayerTurn", "True");
-            sa.putParam("PrecostDesc", "Forecast â€” ");
+            sa.putParam("PrecostDesc", "Forecast Ã¢â‚¬â€ ");
         }
         if (sa.isBoast()) {
             sa.putParam("PresentDefined", "Self");
             sa.putParam("IsPresent", "Card.attackedThisTurn");
-            sa.putParam("PrecostDesc", "Boast â€” ");
+            sa.putParam("PrecostDesc", "Boast Ã¢â‚¬â€ ");
         }
         if (sa.isExhaust()) {
-            sa.putParam("PrecostDesc", "Exhaust â€” ");
+            sa.putParam("PrecostDesc", "Exhaust Ã¢â‚¬â€ ");
         }
         if (sa.isPowerUp()) {
-            sa.putParam("PrecostDesc", "Power-Up â€” ");
+            sa.putParam("PrecostDesc", "Power-Up Ã¢â‚¬â€ ");
         }
 
         if (sa.hasParam("Named")) {
@@ -1224,4 +1224,1000 @@ public abstract class SpellAbilityEffect {
         movedCard.setExiledSA(cause);
     }
 }
+```
+
+## Python
+`forge/game/ability/SpellAbilityEffect.py`
+
+```python
+import re
+from abc import ABC, abstractmethod
+
+from forge.GameCommand import GameCommand
+from forge.card.CardRarity import CardRarity
+from forge.card.ColorSet import ColorSet
+from forge.card.GamePieceType import GamePieceType
+from forge.game.Game import Game
+from forge.game.GameEntity import GameEntity
+from forge.game.GameObject import GameObject
+from forge.game.ability.AbilityFactory import AbilityFactory
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.ability.ApiType import ApiType
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.card.CardCopyService import CardCopyService
+from forge.game.card.CardTranslation import CardTranslation
+from forge.game.card.CardZoneTable import CardZoneTable
+from forge.game.combat.Combat import Combat
+from forge.game.phase.PhaseType import PhaseType
+from forge.game.player.Player import Player
+from forge.game.player.PlayerCollection import PlayerCollection
+from forge.game.replacement.ReplacementEffect import ReplacementEffect
+from forge.game.replacement.ReplacementHandler import ReplacementHandler
+from forge.game.replacement.ReplacementLayer import ReplacementLayer
+from forge.game.spellability.AbilitySub import AbilitySub
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.trigger.Trigger import Trigger
+from forge.game.trigger.TriggerHandler import TriggerHandler
+from forge.game.trigger.TriggerType import TriggerType
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.Lang import Lang
+from forge.util.Localizer import Localizer
+from forge.util.TextUtil import TextUtil
+from forge.util.collect.FCollection import FCollection
+from org.apache.commons.lang3.StringUtils import StringUtils
+
+_UNSET = object()
+
+
+class SpellAbilityEffect(ABC):
+
+    @abstractmethod
+    def resolve(self, sa):
+        pass
+
+    def getStackDescription(self, sa):
+        # Unless overridden, let the spell description also be the stack description
+        return sa.getDescription()
+
+    def buildSpellAbility(self, sa):
+        if sa.hasParam("Forecast"):
+            sa.putParam("ActivationZone", "Hand")
+            sa.putParam("ActivationLimit", "1")
+            sa.putParam("ActivationPhases", "Upkeep")
+            sa.putParam("PlayerTurn", "True")
+            sa.putParam("PrecostDesc", "Forecast ???????? ")
+        if sa.isBoast():
+            sa.putParam("PresentDefined", "Self")
+            sa.putParam("IsPresent", "Card.attackedThisTurn")
+            sa.putParam("PrecostDesc", "Boast ???????? ")
+        if sa.isExhaust():
+            sa.putParam("PrecostDesc", "Exhaust ???????? ")
+        if sa.isPowerUp():
+            sa.putParam("PrecostDesc", "Power-Up ???????? ")
+
+        if sa.hasParam("Named"):
+            sa.setName(sa.getParam("Named"))
+
+    def getStackDescriptionWithSubs(self, params, sa):
+        sb = []
+
+        if sa.getApi() != ApiType.PermanentCreature and sa.getApi() != ApiType.PermanentNoncreature:
+            # prelude for when this is root ability
+            if not isinstance(sa, AbilitySub):
+                sb.append(sa.getHostCard())
+                sb.append(" -")
+                if sa.getHostCard().hasPromisedGift() and sa.hasAdditionalAbility("GiftAbility"):
+                    sb.append(" Gift ")
+                    sb.append(sa.getAdditionalAbility("GiftAbility").getParam("GiftDescription"))
+                    sb.append(" to ")
+                    sb.append(sa.getHostCard().getPromisedGift())
+                    sb.append(". ")
+            sb.append(" ")
+
+        # Own description
+        stackDesc = params.get("StackDescription")
+        if stackDesc is not None:
+            reps = None
+            if stackDesc.startswith("REP"):
+                reps = stackDesc[4:].split(" & ")
+                stackDesc = "SpellDescription"
+            # by typing "SpellDescription" they want to bypass the Effect's string builder
+            if stackDesc.lower() == "spelldescription":
+                if "SpellDescription" in params:
+                    rawSDesc = params.get("SpellDescription")
+                    if ",,,,,," in rawSDesc:
+                        rawSDesc = rawSDesc.replace(",,,,,,", " ")
+                    if ",,," in rawSDesc:
+                        rawSDesc = rawSDesc.replace(",,,", " ")
+                    spellDesc = CardTranslation.translateSingleDescriptionText(rawSDesc, sa.getHostCard())
+
+                    # trim reminder text from StackDesc
+                    idxL = spellDesc.find(" (")
+                    idxR = spellDesc.find(")")
+                    if idxL > 0 and idxR > idxL:
+                        spellDesc = spellDesc.replace(spellDesc[idxL:idxR + 1], "")
+
+                    if reps is not None:
+                        for s in reps:
+                            rep = s.split("_", 1)
+                            if rep[0] in spellDesc:
+                                spellDesc = re.sub(rep[0], rep[1], spellDesc, count=1)
+                        SpellAbilityEffect.tokenizeString(sa, sb, spellDesc)
+                    else:
+                        sb.append(spellDesc)
+                if sa.getTargets() is not None and not sa.getTargets().isEmpty() and reps is None:
+                    sb.append(" (Targeting: ")
+                    sb.append(Lang.joinHomogenous(sa.getTargets()))
+                    sb.append(")")
+            elif stackDesc.lower() != "none":  # by typing "none" they want to suppress output
+                SpellAbilityEffect.tokenizeString(sa, sb, stackDesc)
+        else:
+            condDesc = sa.getParam("ConditionDescription")
+            afterDesc = sa.getParam("AfterDescription")
+            baseDesc = CardTranslation.translateSingleDescriptionText(self.getStackDescription(sa), sa.getHostCard())
+            if condDesc is not None:
+                sb.append(condDesc)
+                sb.append(" ")
+            if condDesc is not None and condDesc.endswith(","):
+                sb.append(StringUtils.uncapitalize(baseDesc))
+            else:
+                sb.append(baseDesc)
+            if afterDesc is not None:
+                sb.append(" ")
+                sb.append(afterDesc)
+
+        # only add to StackDescription if its not a Permanent Spell
+        if sa.getApi() != ApiType.PermanentCreature and sa.getApi() != ApiType.PermanentNoncreature:
+            # This includes all subAbilities
+            abSub = sa.getSubAbility()
+            if abSub is not None:
+                sb.append(abSub.getStackDescription())
+
+        if sa.hasParam("Announce"):
+            svar = sa.getParam("Announce")
+            amount = AbilityUtils.calculateAmount(sa.getHostCard(), svar, sa)
+            sb.append(" ")
+            sb.append(TextUtil.enclosedParen(TextUtil.concatNoSpace(svar, "=", str(amount))))
+        elif sa.costHasManaX():
+            amount = 0 if sa.getXManaCostPaid() is None else sa.getXManaCostPaid()
+            sb.append(" ")
+            sb.append(TextUtil.enclosedParen(TextUtil.concatNoSpace("X", "=", str(amount))))
+
+        currentName = sa.getHostCard().getTranslatedName()
+        substitutedDesc = TextUtil.fastReplace("".join(str(x) for x in sb), "CARDNAME", currentName)
+        substitutedDesc = TextUtil.fastReplace(substitutedDesc, "NICKNAME", Lang.getInstance().getNickName(currentName))
+        return substitutedDesc
+
+    # Common functions that all SAEffects will probably use
+    def extractAmount(self, sa):
+        return AbilityUtils.calculateAmount(sa.getHostCard(), sa.getParamOrDefault("Amount", "1"), sa)
+
+    @staticmethod
+    def tokenizeString(sa, sb, stackDesc):
+        tokens = [t for t in re.split(r'([{}])', stackDesc) if t != ""]
+        isPlainText = True
+
+        for t in tokens:
+            if t == "{":
+                isPlainText = False
+                continue
+            if t == "}":
+                isPlainText = True
+                continue
+
+            if not isPlainText:
+                if len(t) <= 2:
+                    sb.append("{")
+                    sb.append(t)
+                    sb.append("}")  # string includes mana cost (e.g. {2}{R})
+                elif t.startswith("n:"):  # {n:<SVar> <noun(opt.)>}
+                    parts = t[2:].split(" ", 1)
+                    n = AbilityUtils.calculateAmount(sa.getHostCard(), parts[0], sa)
+                    sb.append(Lang.getNumeral(n) if len(parts) == 1 else Lang.nounWithNumeral(n, parts[1]))
+                else:
+                    if t.startswith("p:"):
+                        objs = AbilityUtils.getDefinedPlayers(sa.getHostCard(), t[2:], sa)
+                    elif t.startswith("s:"):
+                        objs = AbilityUtils.getDefinedSpellAbilities(sa.getHostCard(), t[2:], sa)
+                    elif t.startswith("c:"):
+                        objs = AbilityUtils.getDefinedCards(sa.getHostCard(), t[2:], sa)
+                    else:
+                        objs = AbilityUtils.getDefinedObjects(sa.getHostCard(), t, sa)
+                    sb.append(Lang.joinHomogenous(objs))
+            else:
+                sb.append(t)
+
+    # Target/defined methods
+    # Cards
+    @staticmethod
+    def getTargetCards(sa, definedParam="Defined"):
+        return SpellAbilityEffect.getCards(False, definedParam, sa)
+
+    @staticmethod
+    def getDefinedCardsOrTargeted(sa, definedParam="Defined"):
+        return SpellAbilityEffect.getCards(True, definedParam, sa)
+
+    @staticmethod
+    def getTargetCardsWithDuplicates(definedFirst, definedParam, sa):
+        result = []
+        SpellAbilityEffect.getCards(definedFirst, definedParam, sa, result)
+        return result
+
+    # overloaded variant that returns the unique objects instead of filling a result list
+    @staticmethod
+    def getCards(definedFirst, definedParam, sa, resultDuplicate=None):
+        if sa.hasParam("ThisDefinedAndTgts"):
+            cards = AbilityUtils.getDefinedCards(sa.getHostCard(), sa.getParam("ThisDefinedAndTgts"), sa)
+            cards.addAll(sa.getTargets().getTargetCards())
+            return cards
+
+        resultUnique = None
+        useTargets = sa.usesTargeting() and (not definedFirst or not sa.hasParam(definedParam))
+        if useTargets:
+            if resultDuplicate is None:
+                resultUnique = CardCollection()
+                resultDuplicate = resultUnique
+            for c in sa.getTargets().getTargetCards():
+                resultDuplicate.add(c)
+        else:
+            defs = sa.getParamOrDefault(definedParam, "Self").split(" & ")
+            for d in defs:
+                defResult = AbilityUtils.getDefinedCards(sa.getHostCard(), d, sa)
+                if resultDuplicate is None:
+                    resultUnique = defResult
+                    resultDuplicate = resultUnique
+                else:
+                    resultDuplicate.addAll(defResult)
+        if resultUnique is None:
+            return None
+        if sa.hasParam("IncludeAllComponentCards"):
+            components = CardCollection()
+            for c in resultUnique:
+                components.addAll(c.getAllComponentCards(False))
+            resultUnique.addAll(components)
+        return resultUnique
+
+    # Players
+    @staticmethod
+    def getTargetPlayers(sa, definedParam="Defined"):
+        return SpellAbilityEffect.getPlayers(False, definedParam, sa)
+
+    @staticmethod
+    def getDefinedPlayersOrTargeted(sa, definedParam="Defined"):
+        return SpellAbilityEffect.getPlayers(True, definedParam, sa)
+
+    @staticmethod
+    def getTargetPlayersWithDuplicates(definedFirst, definedParam, sa):
+        result = []
+        SpellAbilityEffect.getPlayers(definedFirst, definedParam, sa, result)
+        return result
+
+    # overloaded variant that returns the unique objects instead of filling a result list
+    @staticmethod
+    def getPlayers(definedFirst, definedParam, sa, resultDuplicate=None):
+        game = sa.getHostCard().getGame()
+        resultUnique = None
+        useTargets = sa.usesTargeting() and (not definedFirst or not sa.hasParam(definedParam))
+        if useTargets:
+            if resultDuplicate is None:
+                resultUnique = PlayerCollection()
+                resultDuplicate = resultUnique
+            for p in sa.getTargets().getTargetPlayers():
+                resultDuplicate.add(p)
+        else:
+            defs = sa.getParamOrDefault(definedParam, "You").split(" & ")
+            for d in defs:
+                defResult = AbilityUtils.getDefinedPlayers(sa.getHostCard(), d, sa)
+                if resultDuplicate is None:
+                    resultUnique = defResult
+                    resultDuplicate = resultUnique
+                else:
+                    resultDuplicate.addAll(defResult)
+
+        # try sort in APNAP order
+        starter = game.getPhaseHandler().getPlayerTurn()
+        if sa.hasParam("StartingWith"):
+            starter = AbilityUtils.getDefinedPlayers(sa.getHostCard(), sa.getParam("StartingWith"), sa).getFirst()
+        ordered = game.getPlayersInTurnOrder(starter)
+        resultDuplicate.sort(key=lambda p: ordered.indexOf(p))
+        return resultUnique
+
+    # Spells
+    @staticmethod
+    def getTargetSpells(sa, definedParam="Defined"):
+        return SpellAbilityEffect.getSpells(False, definedParam, sa)
+
+    @staticmethod
+    def getDefinedSpellsOrTargeted(sa, definedParam):
+        return SpellAbilityEffect.getSpells(True, definedParam, sa)
+
+    @staticmethod
+    def getSpells(definedFirst, definedParam, sa):
+        useTargets = sa.usesTargeting() and (not definedFirst or not sa.hasParam(definedParam))
+        return list(sa.getTargets().getTargetSpells()) if useTargets \
+            else AbilityUtils.getDefinedSpellAbilities(sa.getHostCard(), sa.getParam(definedParam), sa)
+
+    # Targets of card or player type
+    @staticmethod
+    def getTargetEntities(sa, definedParam="Defined"):
+        return SpellAbilityEffect.getEntities(False, definedParam, sa)
+
+    @staticmethod
+    def getDefinedEntitiesOrTargeted(sa, definedParam):
+        return SpellAbilityEffect.getEntities(True, definedParam, sa)
+
+    @staticmethod
+    def getEntities(definedFirst, definedParam, sa):
+        useTargets = sa.usesTargeting() and (not definedFirst or not sa.hasParam(definedParam))
+        defs = sa.getParamOrDefault(definedParam, "Self").split(" & ")
+        return list(sa.getTargets().getTargetEntities()) if useTargets \
+            else AbilityUtils.getDefinedEntities(sa.getHostCard(), defs, sa)
+
+    # Targets of unspecified type
+    @staticmethod
+    def getTargets(sa, definedParam="Defined"):
+        return SpellAbilityEffect.getTargetables(False, definedParam, sa)
+
+    @staticmethod
+    def getDefinedOrTargeted(sa, definedParam):
+        return SpellAbilityEffect.getTargetables(True, definedParam, sa)
+
+    @staticmethod
+    def getTargetables(definedFirst, definedParam, sa):
+        useTargets = sa.usesTargeting() and (not definedFirst or not sa.hasParam(definedParam))
+        return list(sa.getTargets()) if useTargets \
+            else AbilityUtils.getDefinedObjects(sa.getHostCard(), sa.getParam(definedParam), sa)
+
+    @staticmethod
+    def getCardsfromTargets(sa):
+        cards = SpellAbilityEffect.getTargetCards(sa)
+        # some card effects can also target a spell
+        for s in sa.getTargets().getTargetSpells():
+            cards.add(s.getHostCard())
+        return cards
+
+    @staticmethod
+    def registerDelayedTrigger(sa, location, crds):
+        intrinsic = sa.isIntrinsic()
+        your = location.startswith("Your")
+        combat = location.endswith("Combat")
+        upkeep = location.endswith("Upkeep")
+
+        desc = sa.getParamOrDefault("AtEOTDesc", "")
+
+        if your:
+            location = location[len("Your"):]
+        if combat:
+            location = location[:len(location) - len("Combat")]
+        if upkeep:
+            location = location[:len(location) - len("Upkeep")]
+
+        if desc == "":
+            sb = []
+            if location == "Hand":
+                sb.append("Return ")
+            elif location == "Library":
+                sb.append("Shuffle ")
+            elif location == "SacrificeCtrl":
+                sb.append("Its controller sacrifices ")
+            else:
+                sb.append(location)
+                sb.append(" ")
+            sb.append(Lang.joinHomogenous(crds))
+            if location == "Hand":
+                sb.append(" to your hand")
+            elif location == "Library":
+                sb.append(" into your library")
+            sb.append(" at the ")
+            if combat:
+                sb.append("end of combat.")
+            else:
+                sb.append("beginning of ")
+                sb.append("your" if your else "the")
+                if upkeep:
+                    sb.append(" next upkeep.")
+                else:
+                    sb.append(" next end step.")
+            desc = "".join(str(x) for x in sb)
+
+        delTrig = []
+        delTrig.append("Mode$ Phase | Phase$ ")
+        delTrig.append("EndCombat " if combat else ("Upkeep" if upkeep else "End Of Turn "))
+
+        if your:
+            delTrig.append("| ValidPlayer$ You ")
+        delTrig.append("| TriggerDescription$ ")
+        delTrig.append(desc)
+
+        trig = TriggerHandler.parseTrigger("".join(delTrig), CardCopyService.getLKICopy(sa.getHostCard()), intrinsic)
+        ts = sa.getHostCard().getGame().getNextTimestamp()
+        for c in crds:
+            trig.addRemembered(c)
+
+            # Svar for AI
+            c.addChangedSVars({"EndOfTurnLeavePlay": "AtEOT"}, ts, 0)
+        trigSA = ""
+        if location == "Hand":
+            trigSA = "DB$ ChangeZone | Defined$ DelayTriggerRememberedLKI | Origin$ Battlefield | Destination$ Hand"
+        elif location == "Library":
+            trigSA = "DB$ ChangeZone | Defined$ DelayTriggerRememberedLKI | Origin$ Battlefield | Destination$ Library | Shuffle$ True"
+        elif location == "SacrificeCtrl":
+            trigSA = "DB$ SacrificeAll | Defined$ DelayTriggerRememberedLKI"
+        elif location == "Sacrifice":
+            trigSA = "DB$ SacrificeAll | Defined$ DelayTriggerRememberedLKI | Controller$ You"
+        elif location == "Exile":
+            trigSA = "DB$ ChangeZone | Defined$ DelayTriggerRememberedLKI | Origin$ Battlefield | Destination$ Exile"
+        elif location == "Destroy":
+            trigSA = "DB$ Destroy | Defined$ DelayTriggerRememberedLKI"
+        if sa.hasParam("AtEOTCondition"):
+            var = sa.getParam("AtEOTCondition")
+            trigSA += "| ConditionCheckSVar$ " + var
+        newSa = AbilityFactory.getAbility(trigSA, sa.getHostCard())
+        newSa.setIntrinsic(intrinsic)
+        trig.setOverridingAbility(newSa)
+        trig.setSpawningAbility(sa.copy(sa.getHostCard(), True))
+        trig.setKeyword(trig.getSpawningAbility().getKeyword())
+        sa.getActivatingPlayer().getGame().getTriggerHandler().registerDelayedTrigger(trig)
+
+    @staticmethod
+    def addSelfTrigger(sa, location, card):
+        player = ""
+        whose = " the "
+        if "_" in location:
+            locSplit = location.split("_")
+            player = locSplit[0]
+            location = locSplit[1]
+            if player == "You":
+                whose = " your next "
+
+        trigStr = "Mode$ Phase | Phase$ End of Turn | TriggerZones$ Battlefield " + \
+            "| TriggerDescription$ At the beginning of" + whose + "end step, " + location.lower() \
+            + " CARDNAME."
+        if player != "":
+            trigStr += " | Player$ " + player
+
+        trig = TriggerHandler.parseTrigger(trigStr, card, True)
+
+        trigSA = ""
+        if location == "Sacrifice":
+            trigSA = "DB$ Sacrifice | SacValid$ Self"
+        elif location == "Exile":
+            trigSA = "DB$ ChangeZone | Origin$ Battlefield | Destination$ Exile | Defined$ Self"
+        trig.setOverridingAbility(AbilityFactory.getAbility(trigSA, card))
+        card.addTrigger(trig)
+
+        # Svar for AI
+        card.addChangedSVars({"EndOfTurnLeavePlay": "AtEOT"}, card.getGame().getNextTimestamp(), 0)
+
+    @staticmethod
+    def getExileSpellAbility(card):
+        effect = "DB$ ChangeZone | Defined$ Self | Origin$ Command | Destination$ Exile"
+        return AbilityFactory.getAbility(effect, card)
+
+    @staticmethod
+    def getForgetSpellAbility(card):
+        forgetEffect = "DB$ Pump | ForgetObjects$ TriggeredCard"
+        exileEffect = "DB$ ChangeZone | Defined$ Self | Origin$ Command | Destination$ Exile" \
+            + " | ConditionDefined$ Remembered | ConditionPresent$ Card | ConditionCompare$ EQ0"
+
+        saForget = AbilityFactory.getAbility(forgetEffect, card)
+        saExile = AbilityFactory.getAbility(exileEffect, card)
+        saForget.setSubAbility(saExile)
+        return saForget
+
+    @staticmethod
+    def addForgetOnMovedTrigger(card, zone):
+        trig = "Mode$ ChangesZone | ValidCard$ Card.IsRemembered | Origin$ " + zone + " | ExcludedDestinations$ Stack,Exile | Destination$ Any | TriggerZones$ Command | Static$ True"
+        # CR 400.8 Exiled card becomes new object when it's exiled
+        trig2 = "Mode$ Exiled | ValidCard$ Card.IsRemembered | ValidCause$ SpellAbility.!EffectSource | TriggerZones$ Command | Static$ True"
+
+        parsedTrigger = TriggerHandler.parseTrigger(trig, card, True)
+        parsedTrigger2 = TriggerHandler.parseTrigger(trig2, card, True)
+        forget = SpellAbilityEffect.getForgetSpellAbility(card)
+        parsedTrigger.setOverridingAbility(forget)
+        parsedTrigger2.setOverridingAbility(forget)
+        card.addTrigger(parsedTrigger)
+        card.addTrigger(parsedTrigger2)
+
+    @staticmethod
+    def addForgetOnCastTrigger(card, valid):
+        trig = "Mode$ SpellCast | TriggerZones$ Command | Static$ True | ValidCard$ " + valid
+
+        parsedTrigger = TriggerHandler.parseTrigger(trig, card, True)
+        parsedTrigger.setOverridingAbility(SpellAbilityEffect.getForgetSpellAbility(card))
+        card.addTrigger(parsedTrigger)
+
+    @staticmethod
+    def addExileOnMovedTrigger(card, zone):
+        trig = "Mode$ ChangesZone | ValidCard$ Card.IsRemembered | Origin$ " + zone + " | Destination$ Any | TriggerZones$ Command | Static$ True"
+        parsedTrigger = TriggerHandler.parseTrigger(trig, card, True)
+        parsedTrigger.setOverridingAbility(SpellAbilityEffect.getExileSpellAbility(card))
+        card.addTrigger(parsedTrigger)
+
+    @staticmethod
+    def addExileOnCounteredTrigger(card):
+        trig = "Mode$ Countered | ValidCard$ Card.IsRemembered | TriggerZones$ Command | Static$ True"
+        parsedTrigger = TriggerHandler.parseTrigger(trig, card, True)
+        parsedTrigger.setOverridingAbility(SpellAbilityEffect.getExileSpellAbility(card))
+        card.addTrigger(parsedTrigger)
+
+    @staticmethod
+    def addForgetOnPhasedInTrigger(card):
+        trig = "Mode$ PhaseIn | ValidCard$ Card.IsRemembered | TriggerZones$ Command | Static$ True"
+
+        parsedTrigger = TriggerHandler.parseTrigger(trig, card, True)
+        parsedTrigger.setOverridingAbility(SpellAbilityEffect.getForgetSpellAbility(card))
+        card.addTrigger(parsedTrigger)
+
+    @staticmethod
+    def addExileCounterTrigger(card, counterType):
+        trig = "Mode$ CounterRemoved | TriggerZones$ Command | ValidCard$ Card.EffectSource | CounterType$ " + counterType + " | NewCounterAmount$ 0 | Static$ True"
+        parsedTrigger = TriggerHandler.parseTrigger(trig, card, True)
+        parsedTrigger.setOverridingAbility(SpellAbilityEffect.getExileSpellAbility(card))
+        card.addTrigger(parsedTrigger)
+
+    @staticmethod
+    def addForgetCounterTrigger(card, counterType):
+        trig = "Mode$ CounterRemoved | TriggerZones$ Command | ValidCard$ Card.IsRemembered | CounterType$ " + counterType + " | NewCounterAmount$ 0 | Static$ True"
+        trig2 = "Mode$ PhaseOut | TriggerZones$ Command | ValidCard$ Card.phasedOutIsRemembered | Static$ True"
+
+        forgetSA = SpellAbilityEffect.getForgetSpellAbility(card)
+
+        parsedTrigger = TriggerHandler.parseTrigger(trig, card, True)
+        parsedTrigger2 = TriggerHandler.parseTrigger(trig2, card, True)
+        parsedTrigger.setOverridingAbility(forgetSA)
+        parsedTrigger2.setOverridingAbility(forgetSA)
+        card.addTrigger(parsedTrigger)
+        card.addTrigger(parsedTrigger2)
+
+    @staticmethod
+    def addExileOnLostTrigger(card):
+        trig = "Mode$ LosesGame | ValidPlayer$ You | TriggerController$ Player | TriggerZones$ Command | Static$ True"
+        parsedTrigger = TriggerHandler.parseTrigger(trig, card, True)
+        parsedTrigger.setOverridingAbility(SpellAbilityEffect.getExileSpellAbility(card))
+        card.addTrigger(parsedTrigger)
+
+    @staticmethod
+    def addLeaveBattlefieldReplacement(card, sa=None, zone=None):
+        # overloaded: (card, sa, zone) and (eff, zone)
+        if zone is None:
+            eff = card
+            zone = sa
+            repeffstr = "Event$ Moved | ValidCard$ Card.IsRemembered " \
+                + "| Origin$ Battlefield | ExcludeDestination$ " + zone \
+                + "| Description$ If Creature would leave the battlefield, " \
+                + " exile it instead of putting it anywhere else."
+            effect = "DB$ ChangeZone | Defined$ ReplacedCard | Origin$ Battlefield | Destination$ " + zone
+
+            re_ = ReplacementHandler.parseReplacement(repeffstr, eff, True)
+            re_.setLayer(ReplacementLayer.Other)
+
+            re_.setOverridingAbility(AbilityFactory.getAbility(effect, eff))
+            eff.addReplacementEffect(re_)
+            return
+
+        host = sa.getHostCard()
+        game = card.getGame()
+        eff = SpellAbilityEffect.createEffect(sa, sa.getActivatingPlayer(), str(host) + "'s Effect", host.getImageKey())
+
+        SpellAbilityEffect.addLeaveBattlefieldReplacement(eff, zone)
+
+        eff.addRemembered(card)
+
+        # Add forgot trigger
+        SpellAbilityEffect.addExileOnMovedTrigger(eff, "Battlefield")
+
+        # Copy text changes
+        if sa.isIntrinsic():
+            eff.copyChangedTextFrom(card)
+
+        game.getAction().moveToCommand(eff, sa)
+
+    # create a basic template for Effect to be used somewhere els
+    @staticmethod
+    def createEffect(sa, *args):
+        if len(args) == 3:
+            controller, name, image = args
+            return SpellAbilityEffect.createEffect(sa, sa.getHostCard(), controller, name, image, controller.getGame().getNextTimestamp())
+        hostCard, controller, name, image, timestamp = args
+        game = controller.getGame()
+        eff = Card(game.nextCardId(), game)
+
+        eff.setGameTimestamp(timestamp)
+        eff.setName(name)
+        # if name includes emblem then it should be one
+        if name.startswith("Emblem"):
+            eff.setEmblem(True)
+            # Emblem needs to be colorless
+            eff.setColor(ColorSet.C)
+            eff.setRarity(CardRarity.Common)
+        else:
+            eff.setColor(hostCard.getColor())
+            eff.setRarity(hostCard.getRarity())
+
+        eff.setOwner(controller)
+
+        eff.setSetCode(hostCard.getSetCode())
+        if image is not None:
+            eff.setImageKey(image)
+
+        eff.setGamePieceType(GamePieceType.EFFECT)
+        if sa is not None:
+            eff.setEffectSource(sa)
+            eff.setSVars(sa.getSVars())
+        else:
+            eff.setEffectSource(hostCard)
+
+        return eff
+
+    @staticmethod
+    def replaceDying(sa):
+        if sa.hasParam("ReplaceDyingDefined") or sa.hasParam("ReplaceDyingValid"):
+            if sa.hasParam("ReplaceDyingCondition"):
+                # currently there is only one with Kicker
+                condition = sa.getParam("ReplaceDyingCondition")
+                if "Kicked" == condition:
+                    if not sa.isKicked():
+                        return
+
+            host = sa.getHostCard()
+            controller = sa.getActivatingPlayer()
+            game = host.getGame()
+            zone = sa.getParamOrDefault("ReplaceDyingZone", "Exile")
+
+            cards = None
+
+            if sa.hasParam("ReplaceDyingDefined"):
+                cards = AbilityUtils.getDefinedCards(host, sa.getParam("ReplaceDyingDefined"), sa)
+                # no cards, no need for Effect
+                if cards.isEmpty():
+                    return
+
+            # build an Effect with that information
+            name = host.getDisplayName() + "'s Effect"
+
+            eff = SpellAbilityEffect.createEffect(sa, controller, name, host.getImageKey())
+            if cards is not None:
+                eff.addRemembered(cards)
+
+            valid = sa.getParamOrDefault("ReplaceDyingValid", "Card.IsRemembered")
+
+            repeffstr = "Event$ Moved | ValidLKI$ " + valid + \
+                "| Origin$ Battlefield | Destination$ Graveyard " + \
+                "| Description$ If that permanent would die this turn, exile it instead."
+            effect = "DB$ ChangeZone | Defined$ ReplacedCard | Origin$ Battlefield | Destination$ " + zone
+            if sa.hasParam("ReplaceDyingExiledWith"):
+                effect += " | ExiledWithEffectSource$ True"
+
+            re_ = ReplacementHandler.parseReplacement(repeffstr, eff, True)
+            re_.setLayer(ReplacementLayer.Other)
+
+            re_.setOverridingAbility(AbilityFactory.getAbility(effect, eff))
+            eff.addReplacementEffect(re_)
+
+            if cards is not None:
+                # Add forgot trigger
+                SpellAbilityEffect.addForgetOnMovedTrigger(eff, "Battlefield")
+
+            # Copy text changes
+            if sa.isIntrinsic():
+                eff.copyChangedTextFrom(host)
+
+            game.getEndOfTurn().addUntil(lambda: game.getAction().exileEffect(eff))
+
+            game.getAction().moveToCommand(eff, sa)
+
+    @staticmethod
+    def addToCombat(c, sa, attackingParam, blockingParam):
+        host = sa.getHostCard()
+        game = host.getGame()
+        if not c.isCreature() or not game.getPhaseHandler().inCombat():
+            return False
+        combatChanged = False
+        combat = game.getCombat()
+
+        # CR 506.3b
+        if sa.hasParam(attackingParam) and combat.getAttackingPlayer().equals(c.getController()):
+            attacking = sa.getParam(attackingParam)
+
+            defender = None
+            defs = FCollection()
+            # important to update defenders here, maybe some PW got removed
+            combat.initConstraints()
+            if "true" == attacking.lower():
+                defs.addAll(combat.getDefenders())
+            else:
+                defs.addAll(AbilityUtils.getDefinedEntities(c if sa.hasParam("ForEach") else host, attacking.split(" & "), sa))
+
+            params = {}
+            params["Attacker"] = c
+            defender = sa.getActivatingPlayer().getController().chooseSingleEntityForEffect(defs, sa,
+                Localizer.getInstance().getMessage("lblChooseDefenderToAttackWithCard", c.getTranslatedName()), False, params)
+
+            if defender is not None and not combat.getAttackersOf(defender).contains(c):
+                # we might be reselecting
+                combat.removeFromCombat(c)
+
+                combat.addAttacker(c, defender)
+                combat.getBandOfAttacker(c).setBlocked(False)
+                combatChanged = True
+        if sa.hasParam(blockingParam):
+            attacker = next(iter(AbilityUtils.getDefinedCards(host, sa.getParam(blockingParam), sa)), None)
+            if attacker is not None and combat.getDefenderPlayerByAttacker(attacker).equals(c.getController()):
+                wasBlocked = combat.isBlocked(attacker)
+                combat.addBlocker(attacker, c)
+                combat.orderAttackersForDamageAssignment(c)
+
+                runParams = AbilityKey.newMap()
+                runParams.put(AbilityKey.Attacker, attacker)
+                runParams.put(AbilityKey.Blocker, c)
+                game.getTriggerHandler().runTrigger(TriggerType.AttackerBlockedByCreature, runParams, False)
+
+                runParams = AbilityKey.newMap()
+                runParams.put(AbilityKey.Attackers, attacker)
+                game.getTriggerHandler().runTrigger(TriggerType.AttackerBlockedOnce, runParams, False)
+
+                # Run triggers for new blocker and add it to damage assignment order
+                if not wasBlocked:
+                    blockers = combat.getBlockers(attacker)
+                    runParams = AbilityKey.newMap()
+                    runParams.put(AbilityKey.Attacker, attacker)
+                    runParams.put(AbilityKey.Blockers, blockers)
+                    runParams.put(AbilityKey.Defender, combat.getDefenderByAttacker(attacker))
+                    runParams.put(AbilityKey.DefendingPlayer, combat.getDefenderPlayerByAttacker(attacker))
+                    game.getTriggerHandler().runTrigger(TriggerType.AttackerBlocked, runParams, False)
+
+                    combat.setBlocked(attacker, True)
+                    combat.addBlockerToDamageAssignmentOrder(attacker, c)
+                combatChanged = True
+        return combatChanged
+
+    @staticmethod
+    def changeZoneUntilCommand(triggerList, sa):
+        if not sa.hasParam("Duration"):
+            return
+
+        hostCard = sa.getHostCard()
+        game = hostCard.getGame()
+        hostCard.addUntilLeavesBattlefield(triggerList.allCards())
+        trigHandler = game.getTriggerHandler()
+
+        if sa.hasParam("ReturnAbility"):
+            lki = CardCopyService.getLKICopy(hostCard)
+            lki.clearControllers()
+            lki.setOwner(sa.getActivatingPlayer())
+        else:
+            lki = None
+
+        class _GC(GameCommand):
+            def run(_self):
+                untilCards = hostCard.getUntilLeavesBattlefield()
+                # if the list is empty, then the table doesn't need to be checked anymore
+                if untilCards.isEmpty():
+                    return
+                moveParams = AbilityKey.newMap()
+                moveParams.put(AbilityKey.LastStateBattlefield, game.copyLastStateBattlefield())
+                moveParams.put(AbilityKey.LastStateGraveyard, game.copyLastStateGraveyard())
+                for cell in triggerList.cellSet():
+                    for c in cell.getValue():
+                        # check if card is still in the until host leaves play list
+                        if not untilCards.contains(c):
+                            continue
+                        # better check if card didn't changed zones again?
+                        newCard = game.getCardState(c, None)
+                        if newCard is None or not newCard.equalsWithGameTimestamp(c):
+                            continue
+                        if sa.hasAdditionalAbility("ReturnAbility"):
+                            valid = sa.getParamOrDefault("ReturnValid", "Card.IsTriggerRemembered")
+
+                            trigSA = "Mode$ ChangesZone | Origin$ " + str(cell.getColumnKey()) + " | Destination$ " + str(cell.getRowKey()) + " | ValidCard$ " + valid + \
+                                " | TriggerDescription$ " + sa.getAdditionalAbility("ReturnAbility").getParam("SpellDescription")
+
+                            trig = TriggerHandler.parseTrigger(trigSA, hostCard, sa.isIntrinsic(), None)
+                            trig.setSpawningAbility(sa.copy(lki, True))
+                            trig.setActiveZone(None)
+                            trig.addRemembered(newCard)
+
+                            overridingSA = sa.getAdditionalAbility("ReturnAbility").copy(hostCard, sa.getActivatingPlayer(), False)
+                            # need to reset the parent, additionalAbility does set it to this
+                            if isinstance(overridingSA, AbilitySub):
+                                overridingSA.setParent(None)
+
+                            trig.setOverridingAbility(overridingSA)
+
+                            # Delayed Trigger should only happen once, no need for cleanup?
+                            trigHandler.registerThisTurnDelayedTrigger(trig)
+                        # no cause there?
+                        movedCard = game.getAction().moveTo(cell.getRowKey(), newCard, 0, None, moveParams)
+                        game.getUntilHostLeavesPlayTriggerList().put(cell.getColumnKey(), cell.getRowKey(), movedCard)
+
+        gc = _GC()
+
+        # corner case can lead to host exiling itself during the effect
+        if "UntilHostLeavesPlay" in sa.getParam("Duration") and not hostCard.isInPlay():
+            gc.run()
+        else:
+            SpellAbilityEffect.addUntilCommand(sa, gc)
+
+    @staticmethod
+    def discard(sa, effect, discardedMap, params):
+        discarders = discardedMap.keySet()
+        discardedBefore = {}
+        for p in discarders:
+            discardedBefore[p] = list(p.getDiscardedThisTurn())
+            discardedByPlayer = CardCollection()
+            for card in list(discardedMap.get(p)):  # without copying will get concurrent modification exception
+                if card is None:
+                    continue
+                moved = p.discard(card, sa, effect, params)
+                if moved is not None:
+                    discardedByPlayer.add(moved)
+            discardedMap.put(p, discardedByPlayer)
+
+        for p in discarders:
+            discardedByPlayer = discardedMap.get(p)
+            if not discardedByPlayer.isEmpty():
+                runParams = AbilityKey.mapFromPlayer(p)
+                runParams.put(AbilityKey.Cards, discardedByPlayer)
+                runParams.put(AbilityKey.Cause, sa)
+                runParams.put(AbilityKey.DiscardedBefore, discardedBefore.get(p))
+                p.getGame().getTriggerHandler().runTrigger(TriggerType.DiscardedAll, runParams, False)
+
+    @staticmethod
+    def addUntilCommand(sa, until, duration=_UNSET, controller=_UNSET):
+        if duration is _UNSET and controller is _UNSET:
+            SpellAbilityEffect.addUntilCommand(sa, until, sa.getParam("Duration"), sa.getActivatingPlayer())
+            return
+        if controller is _UNSET:
+            # called as (sa, until, controller)
+            SpellAbilityEffect.addUntilCommand(sa, until, sa.getParam("Duration"), duration)
+            return
+
+        host = sa.getHostCard()
+        game = host.getGame()
+        # in case host was LKI or still resolving
+        if host.isLKI() or host.getZone() is None or host.getZone().is_(ZoneType.Stack):
+            host = game.getCardState(host)
+
+        if "UntilEndOfCombat" == duration:
+            game.getEndOfCombat().addUntil(until)
+        elif "UntilEndOfCombatYourNextTurn" == duration:
+            game.getEndOfCombat().registerUntilEnd(controller, until)
+        elif "UntilYourNextUpkeep" == duration:
+            game.getUpkeep().addUntil(controller, until)
+        elif "UntilTheEndOfYourNextUpkeep" == duration:
+            if game.getPhaseHandler().is_(PhaseType.UPKEEP):
+                game.getUpkeep().registerUntilEnd(controller, until)
+            else:
+                game.getUpkeep().addUntilEnd(controller, until)
+        elif "UntilTheEndOfYourNextUntap" == duration:
+            game.getUntap().addUntilEnd(controller, until)
+        elif "UntilNextEndStep" == duration:
+            game.getEndOfTurn().addAt(until)
+        elif "UntilYourNextEndStep" == duration:
+            game.getEndOfTurn().addUntil(controller, until)
+        elif "UntilYourNextTurn" == duration:
+            game.getCleanup().addUntil(controller, until)
+        elif "UntilTheEndOfYourNextTurn" == duration:
+            if game.getPhaseHandler().isPlayerTurn(controller):
+                game.getEndOfTurn().registerUntilEnd(controller, until)
+            else:
+                game.getEndOfTurn().addUntilEnd(controller, until)
+        elif "UntilTheEndOfTargetedNextTurn" == duration:
+            targeted = sa.getTargets().getFirstTargetedPlayer()
+            if game.getPhaseHandler().isPlayerTurn(targeted):
+                game.getEndOfTurn().registerUntilEnd(targeted, until)
+            else:
+                game.getEndOfTurn().addUntilEnd(targeted, until)
+        elif "ThisTurnAndNextTurn" == duration:
+            game.getEndOfTurn().addUntil(lambda: game.getEndOfTurn().addUntil(until))
+        elif "UntilStateBasedActionChecked" == duration:
+            game.addSBACheckedCommand(until)
+        elif "UntilHostLeavesPlay" == duration:
+            host.addLeavesPlayCommand(until)
+        elif "UntilHostLeavesPlayOrEOT" == duration:
+            host.addLeavesPlayCommand(until)
+            game.getEndOfTurn().addUntil(until)
+        elif "UntilHostLeavesPlayOrEndOfCombat" == duration:
+            host.addLeavesPlayCommand(until)
+            game.getEndOfCombat().addUntil(until)
+        elif "UntilLoseControlOfHost" == duration:
+            host.addLeavesPlayCommand(until)
+            host.addChangeControllerCommand(until)
+        elif "AsLongAsControl" == duration:
+            host.addLeavesPlayCommand(until)
+            host.addChangeControllerCommand(until)
+            host.addPhaseOutCommand(until)
+        elif "AsLongAsInPlay" == duration:
+            host.addLeavesPlayCommand(until)
+            host.addPhaseOutCommand(until)
+        elif "UntilUntaps" == duration:
+            host.addLeavesPlayCommand(until)
+            host.addUntapCommand(until)
+            host.addPhaseOutCommand(until)
+        elif "UntilTargetedUntaps" == duration:
+            tgt = sa.getSATargetingCard().getTargetCard()
+            tgt.addLeavesPlayCommand(until)
+            tgt.addUntapCommand(until)
+        elif "UntilUnattached" == duration:
+            host.addLeavesPlayCommand(until)  # if it leaves play, it's unattached
+            host.addUnattachCommand(until)
+            host.addPhaseOutCommand(until)
+        elif "UntilFacedown" == duration:
+            host.addFacedownCommand(until)
+        else:
+            game.getEndOfTurn().addUntil(until)
+
+    @staticmethod
+    def checkValidDuration(duration, sa):
+        if duration is None:
+            return True
+        hostCard = sa.getHostCard()
+
+        # if host is not on the battlefield don't apply
+        # Suspend should does Affect the Stack
+        if (duration.startswith("UntilHostLeavesPlay") or "UntilLoseControlOfHost" == duration or "UntilUntaps" == duration
+                or "AsLongAsControl" == duration or "AsLongAsInPlay" == duration) \
+                and not (hostCard.isInPlay() or hostCard.isInZone(ZoneType.Stack)):
+            return False
+        if ("AsLongAsControl" == duration or "AsLongAsInPlay" == duration) and hostCard.isPhasedOut():
+            return False
+        if ("UntilLoseControlOfHost" == duration or "AsLongAsControl" == duration) and hostCard.getController() != sa.getActivatingPlayer():
+            return False
+        if "UntilUntaps" == duration and not hostCard.isTapped():
+            return False
+        if "UntilTargetedUntaps" == sa.getParam("Duration"):
+            tgt = sa.getSATargetingCard().getTargetCard()
+            if not tgt.isTapped() or tgt.isPhasedOut():
+                return False
+        return True
+
+    @staticmethod
+    def getNewChooser(sa, loser):
+        # CR 800.4g
+        activator = sa.getActivatingPlayer()
+        if loser.isOpponentOf(activator):
+            options = activator.getOpponents()
+        else:
+            options = activator.getAllOtherPlayers()
+        return activator.getController().chooseSingleEntityForEffect(options, sa, Localizer.getInstance().getMessage("lblChoosePlayer"), None)
+
+    @staticmethod
+    def handleExiledWith(movedCard, cause, exilingSource=_UNSET):
+        if exilingSource is _UNSET:
+            # could be (Iterable<Card>, cause) or (Card, cause)
+            if hasattr(movedCard, "isToken"):
+                SpellAbilityEffect.handleExiledWith(movedCard, cause, cause.getHostCard())
+                return
+            for c in movedCard:
+                SpellAbilityEffect.handleExiledWith(c, cause)
+            return
+
+        if movedCard.isToken():
+            return
+
+        if cause.hasParam("ExiledWithEffectSource"):
+            exilingSource = exilingSource.getEffectSource()
+
+        # during replacement LKI might be used
+        if cause.isReplacementAbility() and exilingSource.isLKI():
+            exilingSource = exilingSource.getGame().getCardState(exilingSource)
+        # avoid storing this on "inactive" cards
+        if exilingSource.isImmutable() or exilingSource.isInPlay() or exilingSource.isInZone(ZoneType.Stack) or exilingSource.isInZone(ZoneType.Command):
+            # make sure it gets updated
+            exilingSource.removeExiledCard(movedCard)
+            exilingSource.addExiledCard(movedCard)
+        # if ability was granted use that source so they can be kept apart later
+        if cause.isCopiedTrait():
+            exilingSource = cause.getOriginalHost()
+        elif not cause.isSpell() and cause.getKeyword() is not None and cause.getKeyword().getStatic() is not None:
+            exilingSource = cause.getKeyword().getStatic().getOriginalHost()
+        movedCard.setExiledWith(exilingSource)
+        exiler = SpellAbilityEffect.getDefinedPlayersOrTargeted(cause, "DefinedExiler")[0] \
+            if cause.hasParam("DefinedExiler") else cause.getActivatingPlayer()
+        movedCard.setExiledBy(exiler)
+        movedCard.setExiledSA(cause)
 ```

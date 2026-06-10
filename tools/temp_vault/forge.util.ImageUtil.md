@@ -53,6 +53,12 @@ classDiagram
 - [[forge.item.PaperToken|PaperToken]]
 - [[forge.token.TokenDb|TokenDb]]
 
+## Design Description
+
+The ImageUtil class is a stateless utility in `forge.util` that centralizes the logic for constructing and resolving Magic card image identifiers and download URLs. Its static methods translate between in-memory card models and image-storage conventions: resolving `PaperCard` and `PaperToken` instances from prefixed image keys via `StaticData`'s `CardDb`/`TokenDb` registries, computing relative image paths and keys, and building Scryfall download URLs for both cards and tokens.
+
+Collaborating loosely (all dependencies are usage-only) with `IPaperCard`, `PaperCard`, `CardRules`, and `MagicColor`, the class encapsulates the engine's many image-naming edge casesâ€”double-faced and meld backs, split and specialize faces, art-index selection, MWS filename sanitization, and per-set Scryfall collector-number overrides. Its purely static, dependency-light design reflects an intent to serve as a shared helper across UI and download subsystems without holding state.
+
 ## Source
 `forge-core/src/main/java/forge/util/ImageUtil.java`
 
@@ -311,7 +317,7 @@ public class ImageUtil {
             }
         }
 
-        if (cardCollectorNumber.endsWith("☇")) {
+        if (cardCollectorNumber.endsWith("Ã¢Ëœâ€¡")) {
             faceParam = "&face=back";
             cardCollectorNumber = cardCollectorNumber.substring(0, cardCollectorNumber.length() - 1);
         }
@@ -325,7 +331,7 @@ public class ImageUtil {
         if (!faceParam.isEmpty()) {
             faceParam = (faceParam.equals("back") ? "&face=back" : "&face=front");
         }
-        if (collectorNumber.endsWith("☇")) {
+        if (collectorNumber.endsWith("Ã¢Ëœâ€¡")) {
             faceParam = "&face=back";
             collectorNumber = collectorNumber.substring(0, collectorNumber.length() - 1);
         }
@@ -362,4 +368,277 @@ public class ImageUtil {
         return out.toString();
     }
 }
+```
+
+## Python
+`forge/util/ImageUtil.py`
+
+```python
+from forge.ImageKeys import ImageKeys
+from forge.StaticData import StaticData
+from forge.card.CardDb import CardDb
+from forge.card.CardEdition import CardEdition
+from forge.card.CardRules import CardRules
+from forge.card.CardSplitType import CardSplitType
+from forge.card.MagicColor import MagicColor
+from forge.card.MagicColor.Color import Color
+from forge.item.IPaperCard import IPaperCard
+from forge.item.PaperCard import PaperCard
+from forge.item.PaperToken import PaperToken
+from forge.token.TokenDb import TokenDb
+from forge.util.TextUtil import TextUtil
+
+import math
+import re
+import sys
+import unicodedata
+from urllib.parse import quote_plus
+
+
+class ImageUtil:
+    @staticmethod
+    def getNearestHQSize(baseSize: float, actualSize: float) -> float:
+        # get nearest power of actualSize to baseSize so that the image renders good
+        return float(round(actualSize)) * float(pow(2, round(math.log(baseSize / actualSize) / math.log(2))))
+
+    @staticmethod
+    def getPaperCardFromImageKey(imageKey: str) -> PaperCard:
+        if imageKey is None or len(imageKey) < 2:
+            return None
+        if imageKey.startswith(ImageKeys.CARD_PREFIX):
+            key = imageKey[len(ImageKeys.CARD_PREFIX):]
+        else:
+            return None
+        if not key:
+            return None
+
+        db = StaticData.instance().getCommonCards()
+        cp = None
+        # db shouldn't be null
+        if db is not None:
+            cp = db.getCard(key)
+            if cp is None:
+                db = StaticData.instance().getVariantCards()
+                if db is not None:
+                    cp = db.getCard(key)
+        if cp is None:
+            sys.stderr.write("Can't find PaperCard from key: " + key + "\n")
+        # return cp regardless if it's null
+        return cp
+
+    @staticmethod
+    def getPaperTokenFromImageKey(imageKey: str) -> PaperToken:
+        if imageKey is None or not imageKey.startswith(ImageKeys.TOKEN_PREFIX):
+            return None
+
+        key = imageKey[len(ImageKeys.TOKEN_PREFIX):]
+
+        if not key:
+            return None
+
+        db = StaticData.instance().getAllTokens()
+        if db is None:
+            return None
+
+        split = key.split("|")
+        if not db.containsRule(split[0]):
+            return None
+
+        if len(split) == 1:
+            pt = db.getToken(split[0])
+        elif len(split) in (2, 3):
+            pt = db.getToken(split[0], split[1])
+        else:
+            pt = db.getToken(split[0], split[1], int(split[3]))
+
+        if pt is None:
+            sys.stderr.write("Can't find PaperToken from key: " + key + "\n")
+
+        return pt
+
+    @staticmethod
+    def transformKey(imageKey: str) -> str:
+        edition = imageKey[0:imageKey.index("/")]
+        artIndex = re.sub("[^0-9]", "", imageKey[imageKey.index("/") + 1:imageKey.index(".")])
+        if artIndex == "":
+            name = imageKey[imageKey.index("/") + 1:imageKey.index(".")]
+        else:
+            name = imageKey[imageKey.index("/") + 1:imageKey.index(artIndex)]
+        key = name + "|" + edition
+        if artIndex != "":
+            key += "|" + artIndex
+        return key
+
+    @staticmethod
+    def getImageRelativePath(cp: IPaperCard, face: str, includeSet: bool, isDownloadUrl: bool) -> str:
+        nameToUse = None if cp is None else ImageUtil.getNameToUse(cp, face)
+        if nameToUse is None:
+            return None
+        s = []
+
+        card = cp.getRules()
+        edition = CardEdition.UNKNOWN_SET_NAME if cp.getEdition() == CardEdition.UNKNOWN_CODE else cp.getEdition()
+        s.append(ImageUtil.toMWSFilename(nameToUse))
+
+        db = StaticData.instance().getCommonCards() if not card.isVariant() else StaticData.instance().getVariantCards()
+        if includeSet:
+            cntPictures = db.getArtCount(card.getName(), edition, cp.getFunctionalVariant())
+            hasManyPictures = cntPictures > 1
+        else:
+            cntPictures = 1
+            # raise the art index limit to the maximum of the sets this card was printed in
+            maxCntPictures = db.getMaxArtIndex(card.getName())
+            hasManyPictures = maxCntPictures > 1
+
+        artIdx = cp.getArtIndex() - 1
+        if hasManyPictures:
+            if cntPictures <= artIdx:  # prevent overflow
+                artIdx = artIdx % cntPictures
+            s.append(str(artIdx + 1))
+
+        # for whatever reason, MWS-named plane cards don't have the ".full" infix
+        if not card.getType().isPlane() and not card.getType().isPhenomenon():
+            s.append(".full")
+
+        if isDownloadUrl:
+            s.append(".jpg")
+            fname = re.sub(r"\s", "%20", "".join(s))
+        else:
+            fname = "".join(s)
+
+        if includeSet:
+            editionAliased = StaticData.instance().getEditions().getCode2ByCode(edition) if isDownloadUrl else ImageKeys.getSetFolder(edition)
+            if editionAliased == "":  # FIXME: Custom Cards Workaround
+                editionAliased = edition
+            return TextUtil.concatNoSpace(editionAliased, "/", fname)
+        else:
+            return fname
+
+    @staticmethod
+    def getNameToUse(cp: IPaperCard, face: str) -> str:
+        card = cp.getRules()
+        if face == "back":
+            if cp.hasBackFace():
+                if card.getOtherPart() is not None:
+                    return card.getOtherPart().getName()
+                elif card.getMeldWith():
+                    db = StaticData.instance().getCommonCards()
+                    return db.getRulesOrElseUnsupported(card.getMeldWith()).getOtherPart().getName()
+                else:
+                    return None
+            else:
+                return None
+        elif face == "white":
+            if card.getWSpecialize() is not None:
+                return card.getWSpecialize().getName()
+        elif face == "blue":
+            if card.getUSpecialize() is not None:
+                return card.getUSpecialize().getName()
+        elif face == "black":
+            if card.getBSpecialize() is not None:
+                return card.getBSpecialize().getName()
+        elif face == "red":
+            if card.getRSpecialize() is not None:
+                return card.getRSpecialize().getName()
+        elif face == "green":
+            if card.getGSpecialize() is not None:
+                return card.getGSpecialize().getName()
+        elif CardSplitType.Split == cp.getRules().getSplitType():
+            return card.getMainPart().getName() + card.getOtherPart().getName()
+        elif cp.hasFlavorName():
+            return cp.getDisplayName()
+        elif IPaperCard.NO_FUNCTIONAL_VARIANT != cp.getFunctionalVariant():
+            return cp.getName() + " " + cp.getFunctionalVariant()
+        return cp.getName()
+
+    @staticmethod
+    def getImageKey(cp: IPaperCard, face: str, includeSet: bool) -> str:
+        return ImageUtil.getImageRelativePath(cp, face, includeSet, False)
+
+    @staticmethod
+    def getDownloadUrl(cp: PaperCard, face: str) -> str:
+        return ImageUtil.getImageRelativePath(cp, face, True, True)
+
+    @staticmethod
+    def getScryfallDownloadUrl(cp: PaperCard, face: str, setCode: str, langCode: str, useArtCrop: bool) -> str:
+        funnyCardCollectorNumberPattern = re.compile(r"^F\d+")
+        if setCode is not None and setCode != "":
+            editionCode = setCode
+        else:
+            editionCode = cp.getEdition().lower()
+        cardCollectorNumber = cp.getCollectorNumber()
+        # override old planechase sets from their modified id since scryfall move the planechase cards outside their original setcode
+        if cardCollectorNumber.startswith("OHOP"):
+            editionCode = "ohop"
+            cardCollectorNumber = cardCollectorNumber[len("OHOP"):]
+        elif cardCollectorNumber.startswith("OPCA"):
+            editionCode = "opca"
+            cardCollectorNumber = cardCollectorNumber[len("OPCA"):]
+        elif cardCollectorNumber.startswith("OPC2"):
+            editionCode = "opc2"
+            cardCollectorNumber = cardCollectorNumber[len("OPC2"):]
+
+        if funnyCardCollectorNumberPattern.match(cardCollectorNumber):
+            cardCollectorNumber = cardCollectorNumber[1:]
+
+        versionParam = "art_crop" if useArtCrop else "normal"
+        faceParam = ""
+
+        if cp.getRules().getSplitType() == CardSplitType.Meld:
+            if face == "back":
+                cardCollectorNumber = re.sub(r"(\d+)([sp]?)", r"\1b\2", cp.getMeldBaseCard().getCollectorNumber())
+            faceParam = "&face=front"
+        elif cp.getRules().getOtherPart() is not None:
+            faceParam = ("&face=back" if (face == "back" and cp.getRules().getSplitType() != CardSplitType.Flip)
+                         else "&face=front")
+        elif cp.getRules().getSplitType() == CardSplitType.Specialize:
+            # Specialize faces have their own Scryfall entries with collector
+            # number = base number + color letter (e.g. "2w", "2u", "2b", "2r", "2g")
+            colorSuffix = ImageUtil.specFaceToCollectorSuffix(face)
+            if colorSuffix is not None:
+                cardCollectorNumber += colorSuffix
+
+        if cardCollectorNumber.endswith("???????"):
+            faceParam = "&face=back"
+            cardCollectorNumber = cardCollectorNumber[0:len(cardCollectorNumber) - 1]
+
+        return "%s/%s/%s?format=image&version=%s%s" % (editionCode, ImageUtil.encodeUtf8(cardCollectorNumber),
+                                                       langCode, versionParam, faceParam)
+
+    @staticmethod
+    def getScryfallTokenDownloadUrl(collectorNumber: str, setCode: str, langCode: str, faceParam: str) -> str:
+        versionParam = "normal"
+        if faceParam != "":
+            faceParam = "&face=back" if faceParam == "back" else "&face=front"
+        if collectorNumber.endswith("???????"):
+            faceParam = "&face=back"
+            collectorNumber = collectorNumber[0:len(collectorNumber) - 1]
+        return "%s/%s/%s?format=image&version=%s%s" % (setCode, ImageUtil.encodeUtf8(collectorNumber),
+                                                       langCode, versionParam, faceParam)
+
+    @staticmethod
+    def specFaceToCollectorSuffix(face: str) -> str:
+        color = Color.fromName(face)
+        if color is None:
+            return None
+        return color.getShortName().lower()
+
+    @staticmethod
+    def encodeUtf8(s: str) -> str:
+        try:
+            return quote_plus(s, encoding="UTF-8")
+        except Exception:
+            # Unlikely, for the possibility that "UTF-8" is not supported.
+            sys.stderr.write("UTF-8 encoding not supported on this device.\n")
+            return s
+
+    @staticmethod
+    def toMWSFilename(in_: str) -> str:
+        in_ = "".join(c for c in unicodedata.normalize("NFKD", in_) if not unicodedata.combining(c))
+        out = []
+        for i in range(len(in_)):
+            c = in_[i]
+            if c != '"' and c != '/' and c != ':' and c != '?':
+                out.append(c)
+        return "".join(out)
 ```

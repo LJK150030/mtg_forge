@@ -41,7 +41,7 @@ classDiagram
 
 DetainEffect implements the game logic for the Magic: The Gathering "detain" keyword action as a concrete spell ability resolver. As a subclass of SpellAbilityEffect, it overrides `getStackDescription` to render a human-readable stack entry and `resolve` to apply the effect when the ability resolves, fitting into Forge's effect-dispatch framework where each keyword or ability maps to a dedicated effect class.
 
-On resolution it detains each targeted Card on behalf of the activating Player, then registers a cleanup callback with the Game's cleanup scheduler to lift the detained state at the appropriate time. Collaborating with Card, Player, Game, and SpellAbility, the class keeps its responsibility narrow—delegating the actual state changes to Card.detain and deferring removal through the game's until-cleanup mechanism rather than tracking duration itself.
+On resolution it detains each targeted Card on behalf of the activating Player, then registers a cleanup callback with the Game's cleanup scheduler to lift the detained state at the appropriate time. Collaborating with Card, Player, Game, and SpellAbility, the class keeps its responsibility narrowâ€”delegating the actual state changes to Card.detain and deferring removal through the game's until-cleanup mechanism rather than tracking duration itself.
 
 ## Source
 `forge-game/src/main/java/forge/game/ability/effects/DetainEffect.java`
@@ -72,4 +72,28 @@ public class DetainEffect extends SpellAbilityEffect {
         }
     }
 }
+```
+
+## Python
+`forge/game/ability/effects/DetainEffect.py`
+
+```python
+from forge.game.Game import Game
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+
+
+class DetainEffect(SpellAbilityEffect):
+
+    def getStackDescription(self, sa: SpellAbility) -> str:
+        return "Detain " + str(self.getTargetCards(sa)) + " ."
+
+    def resolve(self, sa: SpellAbility) -> None:
+        pl = sa.getActivatingPlayer()
+        game = pl.getGame()
+        for c in self.getTargetCards(sa):
+            c.detain(pl)
+            game.getCleanup().addUntil(pl, lambda c=c: c.removeDetainedBy(pl))
 ```

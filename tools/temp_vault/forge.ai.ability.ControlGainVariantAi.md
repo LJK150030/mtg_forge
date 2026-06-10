@@ -122,3 +122,42 @@ public class ControlGainVariantAi extends SpellAbilityAi {
 
 }
 ```
+
+## Python
+`forge/ai/ability/ControlGainVariantAi.py`
+
+```python
+from com.google.common.collect.Iterables import Iterables
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.ai.ComputerUtilCard import ComputerUtilCard
+from forge.ai.SpellAbilityAi import SpellAbilityAi
+from forge.game.card.Card import Card
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CardPredicates import CardPredicates
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+
+
+class ControlGainVariantAi(SpellAbilityAi):
+    def canPlay(self, ai: Player, sa: SpellAbility) -> AiAbilityDecision:
+        logic = sa.getParam("AILogic")
+
+        if "GainControlOwns" == logic:
+            list = CardLists.filter(ai.getGame().getCardsIn(ZoneType.Battlefield), lambda crd: crd.isCreature() and not crd.getController().equals(crd.getOwner()))
+            if not list:
+                return AiAbilityDecision(0, AiPlayDecision.TargetingFailed)
+            for c in list:
+                if ai.equals(c.getController()):
+                    return AiAbilityDecision(0, AiPlayDecision.MissingNeededCards)
+
+        return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+    def chooseSingleCard(self, ai: Player, sa: SpellAbility, options, isOptional: bool, targetedPlayer: Player, params: dict[str, object]) -> Card:
+        otherCtrl = CardLists.filter(options, CardPredicates.isController(ai).negate())
+        if Iterables.isEmpty(otherCtrl):
+            return ComputerUtilCard.getWorstAI(options)
+        else:
+            return ComputerUtilCard.getBestAI(otherCtrl)
+```

@@ -42,6 +42,12 @@ classDiagram
 - [[forge.game.trigger.Trigger|Trigger]]
 - [[forge.game.trigger.TriggerType|TriggerType]]
 
+## Design Description
+
+TriggerWaiting is a lightweight data-holder in the `forge.game.trigger` package that records a triggered event awaiting resolution, bundling together its TriggerType mode and the AbilityKey-keyed parameter map captured when the event occurred. It is a plain object with no supertype, serving purely as a transient queue entry within Forge's trigger-handling pipeline rather than participating in any inheritance hierarchy.
+
+Its chief responsibility is associating each pending Trigger with the Player who controls it: setTriggers eagerly resolves and caches each trigger's controller (via its host card) into a Trigger-to-Player map at registration time, so the controller is snapshotted when triggers are queued rather than re-derived later, guarding against intervening board changes. Accessors expose the mode, params, the trigger keyset, and per-trigger controller lookups, with null-guards reflecting that triggers may never be set. The toString implementation aids debugging by summarizing the waiting trigger's mode and parameters.
+
 ## Source
 `forge-game/src/main/java/forge/game/trigger/TriggerWaiting.java`
 
@@ -104,4 +110,53 @@ public class TriggerWaiting {
         return TextUtil.concatWithSpace("Waiting trigger:", mode.toString(),"with", params.toString());
     }
 }
+```
+
+## Python
+`forge/game/trigger/TriggerWaiting.py`
+
+```python
+from typing import Iterable
+
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.player.Player import Player
+from forge.game.trigger.Trigger import Trigger
+from forge.game.trigger.TriggerType import TriggerType
+from forge.util.TextUtil import TextUtil
+
+
+class TriggerWaiting:
+    """TriggerWaiting is just a small object to keep track of things that occurred that need to be run."""
+
+    def __init__(self, m: TriggerType, p: dict[AbilityKey, object]):
+        self.mode: TriggerType = m
+        self.params: dict[AbilityKey, object] = p
+        self.triggers: dict[Trigger, Player] = None
+
+    def getMode(self) -> TriggerType:
+        return self.mode
+
+    def getParams(self) -> dict[AbilityKey, object]:
+        return self.params
+
+    def getTriggers(self) -> Iterable[Trigger]:
+        if self.triggers is None:
+            return None
+        return self.triggers.keys()
+
+    def setTriggers(self, trigs: list[Trigger]) -> None:
+        self.triggers = {}
+        for t in trigs:
+            self.triggers[t] = t.getHostCard().getController()
+
+    def getController(self, t: Trigger) -> Player:
+        if self.triggers is None:
+            return None
+        return self.triggers.get(t)
+
+    def toString(self) -> str:
+        return TextUtil.concatWithSpace("Waiting trigger:", self.mode.toString(), "with", self.params.toString())
+
+    def __str__(self) -> str:
+        return self.toString()
 ```

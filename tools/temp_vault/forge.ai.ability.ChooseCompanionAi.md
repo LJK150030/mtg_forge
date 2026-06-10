@@ -38,7 +38,7 @@ classDiagram
 
 ChooseCompanionAi is the forge-ai decision handler for selecting a companion card, plugging into Forge's AI ability framework by extending `SpellAbilityAi` and overriding its `chooseSingleCard` hook. When the engine asks the AI to pick a single card from a set of companion options, this class supplies that choice on behalf of a `Player`, working with the `SpellAbility` being resolved and the candidate `Card` objects.
 
-Its design intent is deliberately minimal: it materializes the `Iterable<Card>` options into a list, returns `null` when none are available, and otherwise shuffles and returns the first element — effectively a random pick. This placeholder strategy satisfies the contract without encoding any real evaluation of companion deck-building restrictions, leaving room for smarter selection logic later while keeping the AI functional.
+Its design intent is deliberately minimal: it materializes the `Iterable<Card>` options into a list, returns `null` when none are available, and otherwise shuffles and returns the first element â€” effectively a random pick. This placeholder strategy satisfies the contract without encoding any real evaluation of companion deck-building restrictions, leaving room for smarter selection logic later while keeping the AI functional.
 
 ## Source
 `forge-ai/src/main/java/forge/ai/ability/ChooseCompanionAi.java`
@@ -72,4 +72,30 @@ public class ChooseCompanionAi extends SpellAbilityAi {
         return cards.get(0);
     }
 }
+```
+
+## Python
+`forge/ai/ability/ChooseCompanionAi.py`
+
+```python
+from forge.ai.SpellAbilityAi import SpellAbilityAi
+from forge.game.card.Card import Card
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+
+import random
+from typing import Iterable, Optional
+
+
+class ChooseCompanionAi(SpellAbilityAi):
+
+    # (non-Javadoc)
+    # @see forge.card.ability.SpellAbilityAi#chooseSingleCard(forge.card.spellability.SpellAbility, java.util.List, boolean)
+    def chooseSingleCard(self, ai: Player, sa: SpellAbility, options: Iterable[Card], isOptional: bool, targetedPlayer: Player, params: dict[str, object]) -> Optional[Card]:
+        cards = list(options)
+        if not cards:
+            return None
+
+        random.shuffle(cards)
+        return cards[0]
 ```

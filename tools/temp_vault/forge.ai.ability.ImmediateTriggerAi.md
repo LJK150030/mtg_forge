@@ -48,7 +48,7 @@ classDiagram
 
 ## Design Description
 
-ImmediateTriggerAi supplies the artificial-intelligence decision logic for spell abilities that create an immediate (rather than delayed) triggered effect. As a concrete subclass of SpellAbilityAi, it overrides the standard hooks—canPlay, doTriggerNoCost, and chkDrawback—to decide whether the AI should activate or chain such an ability. Its core strategy is delegation: it extracts the nested "Execute" SpellAbility and defers the real evaluation to the appropriate handler, either recursing through SpellApiToAi for AbilitySub drawbacks or routing to the AiController via the player's PlayerControllerAi.
+ImmediateTriggerAi supplies the artificial-intelligence decision logic for spell abilities that create an immediate (rather than delayed) triggered effect. As a concrete subclass of SpellAbilityAi, it overrides the standard hooksâ€”canPlay, doTriggerNoCost, and chkDrawbackâ€”to decide whether the AI should activate or chain such an ability. Its core strategy is delegation: it extracts the nested "Execute" SpellAbility and defers the real evaluation to the appropriate handler, either recursing through SpellApiToAi for AbilitySub drawbacks or routing to the AiController via the player's PlayerControllerAi.
 
 The class layers a few lightweight policy shortcuts over that delegation: an "Always" AILogic forces a play, mandatory triggers are always stacked, and a "WeakerCreature" branch uses ComputerUtilCard heuristics to confirm the opponent fields a meaningfully stronger creature before committing. Decisions are returned as scored AiAbilityDecision/AiPlayDecision pairs. A TODO notes the logic was largely copied from DelayedTriggerAi, signaling intended future consolidation.
 
@@ -147,4 +147,85 @@ public class ImmediateTriggerAi extends SpellAbilityAi {
     }
 
 }
+```
+
+## Python
+`forge/ai/ability/ImmediateTriggerAi.py`
+
+```python
+from forge.ai.SpellAbilityAi import SpellAbilityAi
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiController import AiController
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.ai.PlayerControllerAi import PlayerControllerAi
+from forge.ai.SpellApiToAi import SpellApiToAi
+from forge.ai.ComputerUtilCard import ComputerUtilCard
+from forge.game.card.Card import Card
+from forge.game.player.Player import Player
+from forge.game.spellability.AbilitySub import AbilitySub
+from forge.game.spellability.SpellAbility import SpellAbility
+
+
+class ImmediateTriggerAi(SpellAbilityAi):
+    # TODO: this class is largely reused from DelayedTriggerAi, consider updating
+
+    def chkDrawback(self, ai: Player, sa: SpellAbility) -> AiAbilityDecision:
+        logic = sa.getParamOrDefault("AILogic", "")
+        if logic == "Always":
+            return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+        trigsa = sa.getAdditionalAbility("Execute")
+        if trigsa is None:
+            return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+        trigsa.setActivatingPlayer(ai)
+
+        if isinstance(trigsa, AbilitySub):
+            return SpellApiToAi.Converter.get(trigsa).chkDrawbackWithSubs(ai, trigsa)
+
+        decision = ai.getController().getAi().canPlaySa(trigsa)
+        if decision == AiPlayDecision.WillPlay:
+            return AiAbilityDecision(100, decision)
+
+        return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+    def doTriggerNoCost(self, ai: Player, sa: SpellAbility, mandatory: bool) -> AiAbilityDecision:
+        # always add to stack, targeting happens after payment
+        if mandatory:
+            return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+        trigsa = sa.getAdditionalAbility("Execute")
+        if trigsa is None:
+            return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+        aic = ai.getController().getAi()
+        trigsa.setActivatingPlayer(ai)
+
+        return AiAbilityDecision(100, AiPlayDecision.WillPlay) if aic.doTrigger(trigsa, "You" != sa.getParamOrDefault("OptionalDecider", "You")) else AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+    def canPlay(self, ai: Player, sa: SpellAbility) -> AiAbilityDecision:
+        logic = sa.getParamOrDefault("AILogic", "")
+        if logic == "Always":
+            return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+        trigsa = sa.getAdditionalAbility("Execute")
+        if trigsa is None:
+            return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+        if logic == "WeakerCreature":
+            ownCreature = ComputerUtilCard.getWorstCreatureAI(ai.getCreaturesInPlay())
+            if ownCreature is None:
+                return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+            eval = ComputerUtilCard.evaluateCreature(ownCreature)
+            foundWorse = False
+            for c in ai.getOpponents().getCreaturesInPlay():
+                if eval + 100 < ComputerUtilCard.evaluateCreature(c):
+                    foundWorse = True
+                    break
+            if not foundWorse:
+                return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+        trigsa.setActivatingPlayer(ai)
+        return AiAbilityDecision(100, AiPlayDecision.WillPlay) if ai.getController().getAi().canPlaySa(trigsa) == AiPlayDecision.WillPlay else AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
 ```

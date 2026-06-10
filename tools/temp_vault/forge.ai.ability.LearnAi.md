@@ -48,7 +48,7 @@ classDiagram
 
 ## Design Description
 
-LearnAi is the AI decision handler for the "Learn" mechanic, extending `SpellAbilityAi` to plug into Forge's ability-evaluation framework. It overrides the standard hooks—`canPlay`, `doTriggerNoCost`, `chkDrawback`, and `confirmAction`—to report the action as universally favorable (a perfect score with `WillPlay`, always confirming), reflecting the design assumption that Learn is optional and therefore never harmful to take.
+LearnAi is the AI decision handler for the "Learn" mechanic, extending `SpellAbilityAi` to plug into Forge's ability-evaluation framework. It overrides the standard hooksâ€”`canPlay`, `doTriggerNoCost`, `chkDrawback`, and `confirmAction`â€”to report the action as universally favorable (a perfect score with `WillPlay`, always confirming), reflecting the design assumption that Learn is optional and therefore never harmful to take.
 
 Its substantive logic lives in the static `chooseCardToLearn` helper, which collaborates with `Player`, `SpellAbility`, and `CardCollection` to pick the best outcome: it partitions the offered cards by zone, preferring to fetch the strongest "Lesson" from the sideboard (`ComputerUtilCard.getBestAI`), and otherwise falling back to discarding the least valuable card the AI is willing to part with (via `PlayerControllerAi`'s discard evaluation), returning `null` when no choice is worthwhile.
 
@@ -114,4 +114,57 @@ public class LearnAi extends SpellAbilityAi {
         return null;
     }
 }
+```
+
+## Python
+`forge/ai/ability/LearnAi.py`
+
+```python
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.ai.ComputerUtilCard import ComputerUtilCard
+from forge.ai.PlayerControllerAi import PlayerControllerAi
+from forge.ai.SpellAbilityAi import SpellAbilityAi
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CardPredicates import CardPredicates
+from forge.game.player.Player import Player
+from forge.game.player.PlayerActionConfirmMode import PlayerActionConfirmMode
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+
+
+class LearnAi(SpellAbilityAi):
+    def canPlay(self, aiPlayer: Player, sa: SpellAbility) -> AiAbilityDecision:
+        # For the time being, Learn is treated as universally positive due to being optional
+        return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+    def doTriggerNoCost(self, aiPlayer: Player, sa: SpellAbility, mandatory: bool) -> AiAbilityDecision:
+        if mandatory:
+            return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+        return self.canPlay(aiPlayer, sa)
+
+    def chkDrawback(self, aiPlayer: Player, sa: SpellAbility) -> AiAbilityDecision:
+        return self.canPlay(aiPlayer, sa)
+
+    def confirmAction(self, player: Player, sa: SpellAbility, mode: PlayerActionConfirmMode, message: str, params: dict[str, object]) -> bool:
+        return True
+
+    @staticmethod
+    def chooseCardToLearn(options: CardCollection, ai: Player, sa: SpellAbility) -> Card:
+        sideboard = CardLists.filter(options, CardPredicates.inZone(ZoneType.Sideboard))
+        hand = CardLists.filter(options, CardPredicates.inZone(ZoneType.Hand))
+        hand.remove(sa.getHostCard())  # this card will be used in the process, don't consider it for discard
+
+        lessons = CardLists.getType(sideboard, "Lesson")
+        goodDiscards = ai.getController().getAi().getCardsToDiscard(1, 1, hand, sa)
+
+        if not lessons.isEmpty():
+            return ComputerUtilCard.getBestAI(lessons)
+        elif goodDiscards is not None and not goodDiscards.isEmpty():
+            return ComputerUtilCard.getWorstAI(goodDiscards)
+
+        # Don't choose anything if there's no good option
+        return None
 ```

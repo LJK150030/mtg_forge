@@ -48,7 +48,7 @@ Supertype enumerates Magic: The Gathering card supertypes (Basic, Elite, Host, L
 The class also provides a static lookup facility: a precomputed `stringToSupertype` map (built via `EnumUtils.getEnumMap`) backs `getEnum` and `isValidEnum`, giving callers cheap, null-tolerant parsing of supertype names from card data rather than relying on exception-throwing `valueOf`. The immutable `final label` field and package-private constructor reflect the enum's intent as a fixed, read-only vocabulary.
 
 ## Source
-`forge-core/src/main/java/forge/card/CardType.java` â€” declaration excerpt
+`forge-core/src/main/java/forge/card/CardType.java` Ã¢â‚¬â€ declaration excerpt
 
 ```java
     public enum Supertype implements ITranslatable {
@@ -87,4 +87,43 @@ The class also provides a static lookup facility: a precomputed `stringToSuperty
             return Localizer.getInstance().getMessage(label);
         }
     }
+```
+
+## Python
+`forge/card/CardType/Supertype.py`
+
+```python
+from forge.util.ITranslatable import ITranslatable
+from forge.util.EnumUtils import EnumUtils
+from forge.util.Localizer import Localizer
+
+
+class Supertype(ITranslatable):
+    Basic = ("lblBasic",)
+    Elite = ("lblElite",)
+    Host = ("lblHost",)
+    Legendary = ("lblLegendary",)
+    Snow = ("lblSnow",)
+    Ongoing = ("lblOngoing",)
+    World = ("lblWorld",)
+
+    def __init__(self, label: str):
+        self.label = label
+
+    @staticmethod
+    def getEnum(name: str) -> "Supertype":
+        return stringToSupertype.get(name)
+
+    @staticmethod
+    def isValidEnum(name: str) -> bool:
+        return name in stringToSupertype
+
+    def getName(self) -> str:
+        return self.name()
+
+    def getTranslatedName(self) -> str:
+        return Localizer.getInstance().getMessage(self.label)
+
+
+stringToSupertype: dict[str, Supertype] = EnumUtils.getEnumMap(Supertype)
 ```

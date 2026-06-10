@@ -37,6 +37,12 @@ classDiagram
 - [[forge.game.card.Card|Card]]
 - [[forge.game.spellability.SpellAbility|SpellAbility]]
 
+## Design Description
+
+The class TriggerSacrificed is a concrete trigger that fires when a card is sacrificed, modeling Magic: the Gathering's "whenever ... is sacrificed" triggered abilities. Extending the abstract Trigger base class, it supplies the event-specific behavior the framework expects: performTest filters the sacrifice event against the ability's optional ValidCard, ValidPlayer, and ValidCause restrictions (plus a WhileKeyword condition), setTriggeringObjects binds the sacrificed Card into the resolving SpellAbility, and getImportantStackObjects produces a localized stack description.
+
+Its collaborators reflect this role: AbilityKey provides typed keys into the runtime parameter map, Card is the sacrificed permanent, and SpellAbility is the triggered ability being set up. The design follows a template-method patternâ€”the parent orchestrates trigger evaluation while this subclass overrides only the sacrifice-specific hooksâ€”keeping each trigger type small, declarative, and data-driven through string parameters.
+
 ## Source
 `forge-game/src/main/java/forge/game/trigger/TriggerSacrificed.java`
 
@@ -126,4 +132,42 @@ public class TriggerSacrificed extends Trigger {
     }
 
 }
+```
+
+## Python
+`forge/game/trigger/TriggerSacrificed.py`
+
+```python
+package forge.game.trigger
+
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Localizer import Localizer
+from forge.game.trigger.Trigger import Trigger
+
+
+class TriggerSacrificed(Trigger):
+
+    def __init__(self, params: dict[str, str], host: Card, intrinsic: bool):
+        super().__init__(params, host, intrinsic)
+
+    def performTest(self, runParams: dict[AbilityKey, object]) -> bool:
+        if not self.matchesValidParam("ValidCard", runParams.get(AbilityKey.Card)):
+            return False
+        if not self.matchesValidParam("ValidPlayer", runParams.get(AbilityKey.Player)):
+            return False
+        if not self.matchesValidParam("ValidCause", runParams.get(AbilityKey.Cause)):
+            return False
+        if self.hasParam("WhileKeyword") and not self.whileKeywordCheck(self.getParam("WhileKeyword"), runParams):
+            return False
+
+        return True
+
+    def setTriggeringObjects(self, sa: SpellAbility, runParams: dict[AbilityKey, object]) -> None:
+        sa.setTriggeringObjectsFrom(runParams, AbilityKey.Card)
+
+    def getImportantStackObjects(self, sa: SpellAbility) -> str:
+        return Localizer.getInstance().getMessage("lblSacrificed") + ": " + \
+                str(sa.getTriggeringObject(AbilityKey.Card))
 ```

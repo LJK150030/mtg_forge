@@ -63,3 +63,29 @@ public record GameEventPlayerRadiation(PlayerView receiver, PlayerView source, i
     }
 }
 ```
+
+## Python
+`forge/game/event/GameEventPlayerRadiation.py`
+
+```python
+package forge.game.event;
+
+from forge.game.player.Player import Player
+from forge.game.player.PlayerView import PlayerView
+from forge.game.event.GameEvent import GameEvent
+from forge.game.event.IGameEventVisitor import IGameEventVisitor
+
+
+class GameEventPlayerRadiation(GameEvent):
+    def __init__(self, receiver, source, change: int):
+        if isinstance(receiver, Player) or isinstance(source, Player):
+            self.receiver = PlayerView.get(receiver)
+            self.source = PlayerView.get(source)
+        else:
+            self.receiver = receiver
+            self.source = source
+        self.change = change
+
+    def visit(self, visitor: "IGameEventVisitor"):
+        return visitor.visit(self)
+```

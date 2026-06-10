@@ -31,6 +31,7 @@ classDiagram
     ActivateAbilityAi ..> TargetRestrictions : uses
 ```
 
+
 ## Relationships
 **Extends:**
 - [[forge.ai.SpellAbilityAi|SpellAbilityAi]]
@@ -43,9 +44,9 @@ classDiagram
 
 ## Design Description
 
-`ActivateAbilityAi` is the AI decision-handler for spell abilities whose effect activates or manipulates abilities targeting an opponent, residing in the `forge.ai.ability` package alongside Forge's other per-API AI helpers. As a concrete subclass of `SpellAbilityAi`, it overrides the framework's hook methods—`checkApiLogic`, `doTriggerNoCost`, `chkDrawback`, and `chooseSingleSpellAbility`—to supply ability-specific reasoning rather than the inherited defaults. Its consistent design intent is opponent-directed targeting: it queries the strongest opponent, filters that player's battlefield by the ability's `Type` parameter, and either validates `Defined` players or resets and assigns targets through the `SpellAbility`/`TargetRestrictions` API.
+`ActivateAbilityAi` is the AI decision-handler for spell abilities whose effect activates or manipulates abilities targeting an opponent, residing in the `forge.ai.ability` package alongside Forge's other per-API AI helpers. As a concrete subclass of `SpellAbilityAi`, it overrides the framework's hook methodsâ€”`checkApiLogic`, `doTriggerNoCost`, `chkDrawback`, and `chooseSingleSpellAbility`â€”to supply ability-specific reasoning rather than the inherited defaults. Its consistent design intent is opponent-directed targeting: it queries the strongest opponent, filters that player's battlefield by the ability's `Type` parameter, and either validates `Defined` players or resets and assigns targets through the `SpellAbility`/`TargetRestrictions` API.
 
-Each decision is returned as an `AiAbilityDecision` pairing a numeric score with an `AiPlayDecision` enum, signaling outcomes like `MissingNeededCards`, `TargetingFailed`, or `WillPlay`. Collaborating with `Card`, `Player`, and `AbilityUtils`, the class encapsulates a focused heuristic—favor disrupting the opponent, decline self-targeting—while delegating cost and broader play evaluation upward to its supertype.
+Each decision is returned as an `AiAbilityDecision` pairing a numeric score with an `AiPlayDecision` enum, signaling outcomes like `MissingNeededCards`, `TargetingFailed`, or `WillPlay`. Collaborating with `Card`, `Player`, and `AbilityUtils`, the class encapsulates a focused heuristicâ€”favor disrupting the opponent, decline self-targetingâ€”while delegating cost and broader play evaluation upward to its supertype.
 
 ## Source
 `forge-ai/src/main/java/forge/ai/ability/ActivateAbilityAi.java`
@@ -141,4 +142,80 @@ public class ActivateAbilityAi extends SpellAbilityAi {
         return spells.get(0);
     }
 }
+```
+
+## Python
+`forge/ai/ability/ActivateAbilityAi.py`
+
+```python
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.ai.SpellAbilityAi import SpellAbilityAi
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.card.Card import Card
+from forge.game.card.CardLists import CardLists
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.spellability.TargetRestrictions import TargetRestrictions
+from forge.game.zone.ZoneType import ZoneType
+
+from typing import List, Map
+
+
+class ActivateAbilityAi(SpellAbilityAi):
+
+    def checkApiLogic(self, ai: Player, sa: SpellAbility) -> AiAbilityDecision:
+        source = sa.getHostCard()
+        opp = ai.getStrongestOpponent()
+
+        list = CardLists.getType(opp.getCardsIn(ZoneType.Battlefield), sa.getParamOrDefault("Type", "Card"))
+        if not list:
+            return AiAbilityDecision(0, AiPlayDecision.MissingNeededCards)
+
+        if not sa.usesTargeting():
+            defined = AbilityUtils.getDefinedPlayers(source, sa.getParam("Defined"), sa)
+            if opp not in defined:
+                return AiAbilityDecision(0, AiPlayDecision.MissingNeededCards)
+        else:
+            sa.resetTargets()
+            if sa.canTarget(opp):
+                sa.getTargets().add(opp)
+            else:
+                return AiAbilityDecision(0, AiPlayDecision.TargetingFailed)
+
+        return super().checkApiLogic(ai, sa)
+
+    def doTriggerNoCost(self, ai: Player, sa: SpellAbility, mandatory: bool) -> AiAbilityDecision:
+        opp = ai.getStrongestOpponent()
+        tgt = sa.getTargetRestrictions()
+        source = sa.getHostCard()
+
+        if tgt is None:
+            if mandatory:
+                return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+            else:
+                defined = AbilityUtils.getDefinedPlayers(source, sa.getParam("Defined"), sa)
+                if opp in defined:
+                    return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+                else:
+                    return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+        else:
+            sa.resetTargets()
+            sa.getTargets().add(opp)
+        return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+    def chkDrawback(self, ai: Player, sa: SpellAbility) -> AiAbilityDecision:
+        source = sa.getHostCard()
+        if not sa.usesTargeting():
+            defined = AbilityUtils.getDefinedPlayers(source, sa.getParam("Defined"), sa)
+            if ai in defined:
+                return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+        else:
+            sa.resetTargets()
+            sa.getTargets().add(ai.getWeakestOpponent())
+        return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+    def chooseSingleSpellAbility(self, player: Player, sa: SpellAbility, spells: List[SpellAbility],
+            params: Map[str, object]) -> SpellAbility:
+        return spells.get(0)
 ```

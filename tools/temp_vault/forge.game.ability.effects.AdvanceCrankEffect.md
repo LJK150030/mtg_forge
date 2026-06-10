@@ -73,3 +73,32 @@ public class AdvanceCrankEffect extends SpellAbilityEffect {
     }
 }
 ```
+
+## Python
+`forge/game/ability/effects/AdvanceCrankEffect.py`
+
+```python
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Lang import Lang
+
+from typing import List
+
+
+class AdvanceCrankEffect(SpellAbilityEffect):
+    def getStackDescription(self, sa: SpellAbility) -> str:
+        sb = []
+        tgtPlayers: List[Player] = self.getDefinedPlayersOrTargeted(sa)
+
+        if not tgtPlayers:
+            return ""
+
+        sb.append(Lang.joinHomogenous(tgtPlayers))
+        sb.append(" advances their CRANK! counter to the next sprocket and cranks any number of that sprocket's contraptions")
+        return "".join(sb)
+
+    def resolve(self, sa: SpellAbility) -> None:
+        for player in self.getDefinedPlayersOrTargeted(sa):
+            player.advanceCrankCounter()
+```

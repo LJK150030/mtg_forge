@@ -44,6 +44,12 @@ classDiagram
 - [[forge.game.replacement.ReplacementType|ReplacementType]]
 - [[forge.game.spellability.SpellAbility|SpellAbility]]
 
+## Design Description
+
+ReplaceAddCounter is a concrete replacement effect that intercepts attempts to place counters on cards or players, allowing card abilities to substitute or modify the counter-adding event. Extending `ReplacementEffect`, it overrides `canReplace` to gate firing on the standard valid-target parameters (`ValidCard`, `ValidPlayer`, `ValidObject`, `ValidCause`), an optional ETB destination check, and the presence of qualifying counters; `setReplacingObjects` then exposes the counter map and affected object (typed as `Card` or `Player`) to the triggered `SpellAbility`.
+
+Its central design intent lives in `hasAnyInCounterMap`, which walks the nested `Map<Optional<Player>, Map<CounterType, Integer>>` counter map to confirm at least one positive counter matches the configured `ValidSource` and optional `ValidCounterType`. The overridden `modeCheck` additionally treats `Moved` events carrying a counter map as applicable, letting the effect catch counters added during zone changes. It collaborates closely with `AbilityKey`, `CounterType`, and `ReplacementType` to read and classify the game's runtime parameters.
+
 ## Source
 `forge-game/src/main/java/forge/game/replacement/ReplaceAddCounter.java`
 
@@ -167,4 +173,91 @@ public class ReplaceAddCounter extends ReplacementEffect {
         return false;
     }
 }
+```
+
+## Python
+`forge/game/replacement/ReplaceAddCounter.py`
+
+```python
+package forge.game.replacement;
+
+from typing import Optional
+
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.card.CounterType import CounterType
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.replacement.ReplacementEffect import ReplacementEffect
+from forge.game.replacement.ReplacementType import ReplacementType
+
+
+# TODO: Write javadoc for this type.
+class ReplaceAddCounter(ReplacementEffect):
+
+    #
+    # ReplaceProduceMana.
+    # @param mapParams &emsp; HashMap<String, String>
+    # @param host &emsp; Card
+    def __init__(self, mapParams: dict[str, str], host: Card, intrinsic: bool):
+        super().__init__(mapParams, host, intrinsic)
+
+    def canReplace(self, runParams: dict[AbilityKey, object]) -> bool:
+        if self.hasParam("EffectOnly"):
+            effectOnly = runParams.get(AbilityKey.EffectOnly)
+            if not effectOnly:
+                return False
+
+        if not self.matchesValidParam("ValidCard", runParams.get(AbilityKey.Affected)):
+            return False
+        if not self.matchesValidParam("ValidPlayer", runParams.get(AbilityKey.Affected)):
+            return False
+        if not self.matchesValidParam("ValidObject", runParams.get(AbilityKey.Affected)):
+            return False
+
+        if not self.matchesValidParam("ValidCause", runParams.get(AbilityKey.Cause)):
+            return False
+
+        if not self.hasAnyInCounterMap(runParams):
+            return False
+
+        if AbilityKey.Destination in runParams and not self.canReplaceETB(runParams):
+            return False
+
+        return True
+
+    def setReplacingObjects(self, runParams: dict[AbilityKey, object], sa: SpellAbility) -> None:
+        sa.setReplacingObject(AbilityKey.CounterMap, runParams.get(AbilityKey.CounterMap))
+        o = runParams.get(AbilityKey.Affected)
+        if isinstance(o, Card):
+            sa.setReplacingObject(AbilityKey.Card, o)
+        elif isinstance(o, Player):
+            sa.setReplacingObject(AbilityKey.Player, o)
+        sa.setReplacingObject(AbilityKey.Object, o)
+
+    def hasAnyInCounterMap(self, runParams: dict[AbilityKey, object]) -> bool:
+        counterMap: dict[Optional[Player], dict[CounterType, int]] = runParams.get(AbilityKey.CounterMap)
+
+        for key, value in counterMap.items():
+            if not self.matchesValidParam("ValidSource", key if key is not None else None):
+                continue
+            if self.hasParam("ValidCounterType"):
+                ct = CounterType.getType(self.getParam("ValidCounterType"))
+                if ct not in value:
+                    continue
+                if 0 >= (value.get(ct) if value.get(ct) is not None else 0):
+                    continue
+                return True
+            for i in value.values():
+                if i > 0:
+                    return True
+
+        return False
+
+    def modeCheck(self, event: ReplacementType, runParams: dict[AbilityKey, object]) -> bool:
+        if super().modeCheck(event, runParams):
+            return True
+        if event == ReplacementType.Moved and AbilityKey.CounterMap in runParams:
+            return True
+        return False
 ```

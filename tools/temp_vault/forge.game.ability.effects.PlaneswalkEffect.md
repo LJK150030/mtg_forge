@@ -42,7 +42,7 @@ classDiagram
 
 PlaneswalkEffect implements the resolution logic for the Planechase "planeswalk" action. As a concrete subclass of `SpellAbilityEffect`, it overrides `resolve(SpellAbility)` to hook into Forge's ability-effect dispatch, recovering the activating `Player` and `Game` from the supplied `SpellAbility`.
 
-It first guards against non-Planechase games and an optional player confirmation, then publishes a `ReplacementType.Planeswalk` event through an `AbilityKey`-keyed parameter map so other effects may intercept or replace the move. If unreplaced, it makes every player leave the current plane and sends the activator either to `Defined` destinations—resolved via `AbilityUtils` into a `CardCollectionView`—or on a default random planeswalk. Its parameter-driven branches (`Optional`, `Cause`, `DontPlaneswalkAway`, `Defined`) reflect Forge's data-defined card scripting, keeping behavior configurable rather than hard-coded.
+It first guards against non-Planechase games and an optional player confirmation, then publishes a `ReplacementType.Planeswalk` event through an `AbilityKey`-keyed parameter map so other effects may intercept or replace the move. If unreplaced, it makes every player leave the current plane and sends the activator either to `Defined` destinationsâ€”resolved via `AbilityUtils` into a `CardCollectionView`â€”or on a default random planeswalk. Its parameter-driven branches (`Optional`, `Cause`, `DontPlaneswalkAway`, `Defined`) reflect Forge's data-defined card scripting, keeping behavior configurable rather than hard-coded.
 
 ## Source
 `forge-game/src/main/java/forge/game/ability/effects/PlaneswalkEffect.java`
@@ -99,4 +99,48 @@ public class PlaneswalkEffect extends SpellAbilityEffect {
         }
     }
 }
+```
+
+## Python
+`forge/game/ability/effects/PlaneswalkEffect.py`
+
+```python
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.Game import Game
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.player.Player import Player
+from forge.game.replacement.ReplacementResult import ReplacementResult
+from forge.game.replacement.ReplacementType import ReplacementType
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Localizer import Localizer
+
+
+class PlaneswalkEffect(SpellAbilityEffect):
+    def resolve(self, sa: SpellAbility) -> None:
+        activator = sa.getActivatingPlayer()
+        game = activator.getGame()
+
+        if game.getActivePlanes() is None:  # not a planechase game, nothing happens
+            return
+
+        if sa.hasParam("Optional") and not activator.getController().confirmAction(sa, None,
+                Localizer.getInstance().getMessage("lblWouldYouLikeToPlaneswalk"), None):
+            return
+
+        repParams: dict[AbilityKey, object] = AbilityKey.mapFromAffected(activator)
+        cause = sa.getParam("Cause") if sa.hasParam("Cause") else sa
+        repParams[AbilityKey.Cause] = cause
+        if game.getReplacementHandler().run(ReplacementType.Planeswalk, repParams) == ReplacementResult.Replaced:
+            return
+
+        if not sa.hasParam("DontPlaneswalkAway"):
+            for p in game.getPlayers():
+                p.leaveCurrentPlane()
+        if sa.hasParam("Defined"):
+            destinations = AbilityUtils.getDefinedCards(sa.getHostCard(), sa.getParam("Defined"), sa)
+            activator.planeswalkTo(sa, destinations)
+        else:
+            activator.planeswalk(sa)
 ```

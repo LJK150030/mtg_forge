@@ -329,7 +329,7 @@ classDiagram
 
 The SpellApiToAi enum is a singleton registry that maps each gameplay effect type to the AI logic responsible for evaluating it. Implemented as a single-constant enum (`Converter`), it holds an immutable `ApiType`-to-class table pairing every `ApiType` with a concrete `SpellAbilityAi` subclass, alongside a lazily populated `EnumMap` cache of instantiated handlers. Its overloaded `get` methods resolve a `SpellAbility` (via its `ApiType`) to the appropriate `SpellAbilityAi`, reflectively constructing and caching one instance per type on first request.
 
-The design centralizes the AI dispatch wiring in one place, decoupling the core `SpellAbility`/`ApiType` model in forge-game from the forge-ai handler hierarchy. It favors `EnumMap`s for fast, type-safe lookups and shares stateless handlers like `AlwaysPlayAi` and `CannotPlayAi` across many APIs. Unmapped or unsupported effects fall back to `CannotPlayAi` (with a logged warning), while non-API-based abilities are rejected outright—so the AI degrades gracefully rather than failing when an effect has no dedicated strategy.
+The design centralizes the AI dispatch wiring in one place, decoupling the core `SpellAbility`/`ApiType` model in forge-game from the forge-ai handler hierarchy. It favors `EnumMap`s for fast, type-safe lookups and shares stateless handlers like `AlwaysPlayAi` and `CannotPlayAi` across many APIs. Unmapped or unsupported effects fall back to `CannotPlayAi` (with a logged warning), while non-API-based abilities are rejected outrightâ€”so the AI degrades gracefully rather than failing when an effect has no dedicated strategy.
 
 ## Source
 `forge-ai/src/main/java/forge/ai/SpellApiToAi.java`
@@ -573,4 +573,384 @@ public enum SpellApiToAi {
         return result;
     }
 }
+```
+
+## Python
+`forge/ai/SpellApiToAi.py`
+
+```python
+from enum import Enum
+import sys
+
+from forge.ai.SpellAbilityAi import SpellAbilityAi
+from forge.ai.ability.ActivateAbilityAi import ActivateAbilityAi
+from forge.ai.ability.AddPhaseAi import AddPhaseAi
+from forge.ai.ability.AddTurnAi import AddTurnAi
+from forge.ai.ability.AdvanceCrankAi import AdvanceCrankAi
+from forge.ai.ability.AirbendAi import AirbendAi
+from forge.ai.ability.AlterAttributeAi import AlterAttributeAi
+from forge.ai.ability.AlwaysPlayAi import AlwaysPlayAi
+from forge.ai.ability.AmassAi import AmassAi
+from forge.ai.ability.AnimateAi import AnimateAi
+from forge.ai.ability.AnimateAllAi import AnimateAllAi
+from forge.ai.ability.AssembleContraptionAi import AssembleContraptionAi
+from forge.ai.ability.AssignGroupAi import AssignGroupAi
+from forge.ai.ability.AttachAi import AttachAi
+from forge.ai.ability.BalanceAi import BalanceAi
+from forge.ai.ability.BecomesBlockedAi import BecomesBlockedAi
+from forge.ai.ability.BidLifeAi import BidLifeAi
+from forge.ai.ability.BlightAi import BlightAi
+from forge.ai.ability.BondAi import BondAi
+from forge.ai.ability.BranchAi import BranchAi
+from forge.ai.ability.CannotPlayAi import CannotPlayAi
+from forge.ai.ability.ChangeCombatantsAi import ChangeCombatantsAi
+from forge.ai.ability.ChangeTargetsAi import ChangeTargetsAi
+from forge.ai.ability.ChangeZoneAi import ChangeZoneAi
+from forge.ai.ability.ChangeZoneAllAi import ChangeZoneAllAi
+from forge.ai.ability.CharmAi import CharmAi
+from forge.ai.ability.ChooseCardAi import ChooseCardAi
+from forge.ai.ability.ChooseCardNameAi import ChooseCardNameAi
+from forge.ai.ability.ChooseColorAi import ChooseColorAi
+from forge.ai.ability.ChooseCompanionAi import ChooseCompanionAi
+from forge.ai.ability.ChooseDirectionAi import ChooseDirectionAi
+from forge.ai.ability.ChooseEvenOddAi import ChooseEvenOddAi
+from forge.ai.ability.ChooseGenericAi import ChooseGenericAi
+from forge.ai.ability.ChooseNumberAi import ChooseNumberAi
+from forge.ai.ability.ChoosePlayerAi import ChoosePlayerAi
+from forge.ai.ability.ChooseSourceAi import ChooseSourceAi
+from forge.ai.ability.ChooseTypeAi import ChooseTypeAi
+from forge.ai.ability.ClashAi import ClashAi
+from forge.ai.ability.ClassLevelUpAi import ClassLevelUpAi
+from forge.ai.ability.CloakAi import CloakAi
+from forge.ai.ability.CloneAi import CloneAi
+from forge.ai.ability.ConniveAi import ConniveAi
+from forge.ai.ability.ControlExchangeAi import ControlExchangeAi
+from forge.ai.ability.ControlGainAi import ControlGainAi
+from forge.ai.ability.ControlGainVariantAi import ControlGainVariantAi
+from forge.ai.ability.CopyPermanentAi import CopyPermanentAi
+from forge.ai.ability.CopySpellAbilityAi import CopySpellAbilityAi
+from forge.ai.ability.CounterAi import CounterAi
+from forge.ai.ability.CountersMoveAi import CountersMoveAi
+from forge.ai.ability.CountersMultiplyAi import CountersMultiplyAi
+from forge.ai.ability.CountersProliferateAi import CountersProliferateAi
+from forge.ai.ability.CountersPutAi import CountersPutAi
+from forge.ai.ability.CountersPutAllAi import CountersPutAllAi
+from forge.ai.ability.CountersPutOrRemoveAi import CountersPutOrRemoveAi
+from forge.ai.ability.CountersRemoveAi import CountersRemoveAi
+from forge.ai.ability.DamageAllAi import DamageAllAi
+from forge.ai.ability.DamageDealAi import DamageDealAi
+from forge.ai.ability.DamageEachAi import DamageEachAi
+from forge.ai.ability.DamagePreventAi import DamagePreventAi
+from forge.ai.ability.DayTimeAi import DayTimeAi
+from forge.ai.ability.DebuffAi import DebuffAi
+from forge.ai.ability.DelayedTriggerAi import DelayedTriggerAi
+from forge.ai.ability.DestroyAi import DestroyAi
+from forge.ai.ability.DestroyAllAi import DestroyAllAi
+from forge.ai.ability.DetainAi import DetainAi
+from forge.ai.ability.DigAi import DigAi
+from forge.ai.ability.DigMultipleAi import DigMultipleAi
+from forge.ai.ability.DigUntilAi import DigUntilAi
+from forge.ai.ability.DiscardAi import DiscardAi
+from forge.ai.ability.DiscoverAi import DiscoverAi
+from forge.ai.ability.DrainManaAi import DrainManaAi
+from forge.ai.ability.DrawAi import DrawAi
+from forge.ai.ability.EarthbendAi import EarthbendAi
+from forge.ai.ability.EffectAi import EffectAi
+from forge.ai.ability.EncodeAi import EncodeAi
+from forge.ai.ability.EndTurnAi import EndTurnAi
+from forge.ai.ability.EndureAi import EndureAi
+from forge.ai.ability.ExploreAi import ExploreAi
+from forge.ai.ability.FightAi import FightAi
+from forge.ai.ability.FlipCoinAi import FlipCoinAi
+from forge.ai.ability.FlipOntoBattlefieldAi import FlipOntoBattlefieldAi
+from forge.ai.ability.FogAi import FogAi
+from forge.ai.ability.GameLossAi import GameLossAi
+from forge.ai.ability.GameWinAi import GameWinAi
+from forge.ai.ability.GoadAi import GoadAi
+from forge.ai.ability.HauntAi import HauntAi
+from forge.ai.ability.ImmediateTriggerAi import ImmediateTriggerAi
+from forge.ai.ability.InvestigateAi import InvestigateAi
+from forge.ai.ability.LearnAi import LearnAi
+from forge.ai.ability.LegendaryRuleAi import LegendaryRuleAi
+from forge.ai.ability.LifeExchangeAi import LifeExchangeAi
+from forge.ai.ability.LifeExchangeVariantAi import LifeExchangeVariantAi
+from forge.ai.ability.LifeGainAi import LifeGainAi
+from forge.ai.ability.LifeLoseAi import LifeLoseAi
+from forge.ai.ability.LifeSetAi import LifeSetAi
+from forge.ai.ability.ManaAi import ManaAi
+from forge.ai.ability.ManifestAi import ManifestAi
+from forge.ai.ability.MeldAi import MeldAi
+from forge.ai.ability.MillAi import MillAi
+from forge.ai.ability.MustBlockAi import MustBlockAi
+from forge.ai.ability.MutateAi import MutateAi
+from forge.ai.ability.PeekAndRevealAi import PeekAndRevealAi
+from forge.ai.ability.PermanentCreatureAi import PermanentCreatureAi
+from forge.ai.ability.PermanentNoncreatureAi import PermanentNoncreatureAi
+from forge.ai.ability.PhasesAi import PhasesAi
+from forge.ai.ability.PlayAi import PlayAi
+from forge.ai.ability.PoisonAi import PoisonAi
+from forge.ai.ability.PowerExchangeAi import PowerExchangeAi
+from forge.ai.ability.ProtectAi import ProtectAi
+from forge.ai.ability.ProtectAllAi import ProtectAllAi
+from forge.ai.ability.PumpAi import PumpAi
+from forge.ai.ability.PumpAllAi import PumpAllAi
+from forge.ai.ability.RearrangeTopOfLibraryAi import RearrangeTopOfLibraryAi
+from forge.ai.ability.RegenerateAi import RegenerateAi
+from forge.ai.ability.RemoveFromCombatAi import RemoveFromCombatAi
+from forge.ai.ability.RepeatAi import RepeatAi
+from forge.ai.ability.RepeatEachAi import RepeatEachAi
+from forge.ai.ability.ReplaceDamageAi import ReplaceDamageAi
+from forge.ai.ability.RestartGameAi import RestartGameAi
+from forge.ai.ability.RevealAi import RevealAi
+from forge.ai.ability.RevealHandAi import RevealHandAi
+from forge.ai.ability.RollDiceAi import RollDiceAi
+from forge.ai.ability.RollPlanarDiceAi import RollPlanarDiceAi
+from forge.ai.ability.SacrificeAi import SacrificeAi
+from forge.ai.ability.SacrificeAllAi import SacrificeAllAi
+from forge.ai.ability.ScryAi import ScryAi
+from forge.ai.ability.SetStateAi import SetStateAi
+from forge.ai.ability.ShuffleAi import ShuffleAi
+from forge.ai.ability.SkipPhaseAi import SkipPhaseAi
+from forge.ai.ability.SkipTurnAi import SkipTurnAi
+from forge.ai.ability.StoreSVarAi import StoreSVarAi
+from forge.ai.ability.SurveilAi import SurveilAi
+from forge.ai.ability.TapAi import TapAi
+from forge.ai.ability.TapAllAi import TapAllAi
+from forge.ai.ability.TapOrUntapAi import TapOrUntapAi
+from forge.ai.ability.TapOrUntapAllAi import TapOrUntapAllAi
+from forge.ai.ability.TimeTravelAi import TimeTravelAi
+from forge.ai.ability.TokenAi import TokenAi
+from forge.ai.ability.TwoPilesAi import TwoPilesAi
+from forge.ai.ability.UnattachAi import UnattachAi
+from forge.ai.ability.UntapAi import UntapAi
+from forge.ai.ability.UntapAllAi import UntapAllAi
+from forge.ai.ability.VentureAi import VentureAi
+from forge.ai.ability.VoteAi import VoteAi
+from forge.ai.ability.ZoneExchangeAi import ZoneExchangeAi
+from forge.game.ability.ApiType import ApiType
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.ReflectionUtil import ReflectionUtil
+
+
+class SpellApiToAi(Enum):
+    Converter = ()
+
+    def __init__(self):
+        self.apiToInstance: dict[ApiType, SpellAbilityAi] = {}
+
+        # Do the extra copy to make an actual EnumMap (faster)
+        self.apiToClass: dict[ApiType, type] = {
+            ApiType.Abandon: AlwaysPlayAi,
+            ApiType.ActivateAbility: ActivateAbilityAi,
+            ApiType.AddOrRemoveCounter: CountersPutOrRemoveAi,
+            ApiType.AddPhase: AddPhaseAi,
+            ApiType.AddTurn: AddTurnAi,
+            ApiType.AdvanceCrank: AdvanceCrankAi,
+            ApiType.Airbend: AirbendAi,
+            ApiType.AlterAttribute: AlterAttributeAi,
+            ApiType.Amass: AmassAi,
+            ApiType.Animate: AnimateAi,
+            ApiType.AnimateAll: AnimateAllAi,
+            ApiType.Attach: AttachAi,
+            ApiType.Ascend: AlwaysPlayAi,
+            ApiType.AssembleContraption: AssembleContraptionAi,
+            ApiType.AssignGroup: AssignGroupAi,
+            ApiType.Balance: BalanceAi,
+            ApiType.BecomeMonarch: AlwaysPlayAi,
+            ApiType.BecomesBlocked: BecomesBlockedAi,
+            ApiType.BidLife: BidLifeAi,
+            ApiType.BlankLine: AlwaysPlayAi,
+            ApiType.Blight: BlightAi,
+            ApiType.Bond: BondAi,
+            ApiType.Branch: BranchAi,
+            ApiType.Camouflage: ChooseCardAi,
+            ApiType.ChangeCombatants: ChangeCombatantsAi,
+            ApiType.ChangeSpeed: AlwaysPlayAi,
+            ApiType.ChangeTargets: ChangeTargetsAi,
+            ApiType.ChangeX: AlwaysPlayAi,
+            ApiType.ChangeZone: ChangeZoneAi,
+            ApiType.ChangeZoneAll: ChangeZoneAllAi,
+            ApiType.ChaosEnsues: AlwaysPlayAi,
+            ApiType.Charm: CharmAi,
+            ApiType.ChooseCard: ChooseCardAi,
+            ApiType.ChooseColor: ChooseColorAi,
+            ApiType.ChooseDirection: ChooseDirectionAi,
+            ApiType.ChooseEvenOdd: ChooseEvenOddAi,
+            ApiType.ChooseNumber: ChooseNumberAi,
+            ApiType.ChoosePlayer: ChoosePlayerAi,
+            ApiType.ChooseSector: AlwaysPlayAi,
+            ApiType.ChooseSource: ChooseSourceAi,
+            ApiType.ChooseType: ChooseTypeAi,
+            ApiType.ClaimThePrize: AlwaysPlayAi,
+            ApiType.Clash: ClashAi,
+            ApiType.ClassLevelUp: ClassLevelUpAi,
+            ApiType.Cleanup: AlwaysPlayAi,
+            ApiType.Cloak: CloakAi,
+            ApiType.Clone: CloneAi,
+            ApiType.CompanionChoose: ChooseCompanionAi,
+            ApiType.Connive: ConniveAi,
+            ApiType.CopyPermanent: CopyPermanentAi,
+            ApiType.CopySpellAbility: CopySpellAbilityAi,
+            ApiType.ControlPlayer: CannotPlayAi,
+            ApiType.ControlSpell: CannotPlayAi,
+            ApiType.Counter: CounterAi,
+            ApiType.DamageAll: DamageAllAi,
+            ApiType.DayTime: DayTimeAi,
+            ApiType.DealDamage: DamageDealAi,
+            ApiType.Debuff: DebuffAi,
+            ApiType.DelayedTrigger: DelayedTriggerAi,
+            ApiType.Destroy: DestroyAi,
+            ApiType.DestroyAll: DestroyAllAi,
+            ApiType.Detain: DetainAi,
+            ApiType.Dig: DigAi,
+            ApiType.DigMultiple: DigMultipleAi,
+            ApiType.DigUntil: DigUntilAi,
+            ApiType.Discard: DiscardAi,
+            ApiType.Discover: DiscoverAi,
+            ApiType.Draft: ChooseCardNameAi,
+            ApiType.DrainMana: DrainManaAi,
+            ApiType.Draw: DrawAi,
+            ApiType.EachDamage: DamageEachAi,
+            ApiType.Earthbend: EarthbendAi,
+            ApiType.Effect: EffectAi,
+            ApiType.Encode: EncodeAi,
+            ApiType.Endure: EndureAi,
+            ApiType.EndCombatPhase: EndTurnAi,
+            ApiType.EndTurn: EndTurnAi,
+            ApiType.ExchangeLife: LifeExchangeAi,
+            ApiType.ExchangeLifeVariant: LifeExchangeVariantAi,
+            ApiType.ExchangeControl: ControlExchangeAi,
+            ApiType.ExchangeControlVariant: CannotPlayAi,
+            ApiType.ExchangePower: PowerExchangeAi,
+            ApiType.ExchangeZone: ZoneExchangeAi,
+            ApiType.Explore: ExploreAi,
+            ApiType.Fight: FightAi,
+            ApiType.FlipCoin: FlipCoinAi,
+            ApiType.FlipOntoBattlefield: FlipOntoBattlefieldAi,
+            ApiType.Fog: FogAi,
+            ApiType.GainControl: ControlGainAi,
+            ApiType.GainControlVariant: ControlGainVariantAi,
+            ApiType.GainLife: LifeGainAi,
+            ApiType.GainOwnership: CannotPlayAi,
+            ApiType.GameDrawn: CannotPlayAi,
+            ApiType.GenericChoice: ChooseGenericAi,
+            ApiType.Goad: GoadAi,
+            ApiType.Heist: AlwaysPlayAi,
+            ApiType.Haunt: HauntAi,
+            ApiType.ImmediateTrigger: ImmediateTriggerAi,
+            ApiType.Investigate: InvestigateAi,
+            ApiType.Learn: LearnAi,
+            ApiType.LoseLife: LifeLoseAi,
+            ApiType.LosePerpetual: AlwaysPlayAi,
+            ApiType.LosesGame: GameLossAi,
+            ApiType.MakeCard: AlwaysPlayAi,
+            ApiType.Mana: ManaAi,
+            ApiType.ManaReflected: CannotPlayAi,
+            ApiType.Manifest: ManifestAi,
+            ApiType.ManifestDread: ManifestAi,
+            ApiType.Meld: MeldAi,
+            ApiType.Mill: MillAi,
+            ApiType.MoveCounter: CountersMoveAi,
+            ApiType.MultiplePiles: CannotPlayAi,
+            ApiType.MultiplyCounter: CountersMultiplyAi,
+            ApiType.MustBlock: MustBlockAi,
+            ApiType.Mutate: MutateAi,
+            ApiType.NameCard: ChooseCardNameAi,
+            # ApiType.NoteCounters: AlwaysPlayAi,
+            ApiType.OpenAttraction: AssembleContraptionAi,
+            ApiType.PeekAndReveal: PeekAndRevealAi,
+            ApiType.PermanentCreature: PermanentCreatureAi,
+            ApiType.PermanentNoncreature: PermanentNoncreatureAi,
+            ApiType.Phases: PhasesAi,
+            ApiType.Planeswalk: AlwaysPlayAi,
+            ApiType.Play: PlayAi,
+            ApiType.PlayLandVariant: CannotPlayAi,
+            ApiType.Poison: PoisonAi,
+            ApiType.PreventDamage: DamagePreventAi,
+            ApiType.Proliferate: CountersProliferateAi,
+            ApiType.Protection: ProtectAi,
+            ApiType.ProtectionAll: ProtectAllAi,
+            ApiType.Pump: PumpAi,
+            ApiType.PumpAll: PumpAllAi,
+            ApiType.PutCounter: CountersPutAi,
+            ApiType.PutCounterAll: CountersPutAllAi,
+            ApiType.Radiation: AlwaysPlayAi,
+            ApiType.RearrangeTopOfLibrary: RearrangeTopOfLibraryAi,
+            ApiType.Regenerate: RegenerateAi,
+            ApiType.Regeneration: AlwaysPlayAi,
+            ApiType.RemoveCounter: CountersRemoveAi,
+            ApiType.RemoveCounterAll: CannotPlayAi,
+            ApiType.RemoveFromCombat: RemoveFromCombatAi,
+            ApiType.RemoveFromGame: AlwaysPlayAi,
+            ApiType.RemoveFromMatch: AlwaysPlayAi,
+            ApiType.ReorderZone: AlwaysPlayAi,
+            ApiType.Repeat: RepeatAi,
+            ApiType.RepeatEach: RepeatEachAi,
+            ApiType.ReplaceCounter: AlwaysPlayAi,
+            ApiType.ReplaceEffect: AlwaysPlayAi,
+            ApiType.ReplaceDamage: ReplaceDamageAi,
+            ApiType.ReplaceMana: AlwaysPlayAi,
+            ApiType.ReplaceSplitDamage: ReplaceDamageAi,
+            ApiType.ReplaceToken: AlwaysPlayAi,
+            ApiType.RestartGame: RestartGameAi,
+            ApiType.Reveal: RevealAi,
+            ApiType.RevealHand: RevealHandAi,
+            ApiType.ReverseTurnOrder: AlwaysPlayAi,
+            ApiType.RingTemptsYou: AlwaysPlayAi,
+            ApiType.RollDice: RollDiceAi,
+            ApiType.RollPlanarDice: RollPlanarDiceAi,
+            ApiType.RunChaos: AlwaysPlayAi,
+            ApiType.Sacrifice: SacrificeAi,
+            ApiType.SacrificeAll: SacrificeAllAi,
+            ApiType.Scry: ScryAi,
+            ApiType.Seek: AlwaysPlayAi,
+            ApiType.SetInMotion: AlwaysPlayAi,
+            ApiType.SetLife: LifeSetAi,
+            ApiType.SetState: SetStateAi,
+            ApiType.Shuffle: ShuffleAi,
+            ApiType.SkipPhase: SkipPhaseAi,
+            ApiType.SkipTurn: SkipTurnAi,
+            ApiType.StoreSVar: StoreSVarAi,
+            ApiType.Subgame: AlwaysPlayAi,
+            ApiType.Surveil: SurveilAi,
+            ApiType.TakeInitiative: AlwaysPlayAi,
+            ApiType.Tap: TapAi,
+            ApiType.TapAll: TapAllAi,
+            ApiType.TapOrUntap: TapOrUntapAi,
+            ApiType.TapOrUntapAll: TapOrUntapAllAi,
+            ApiType.TimeTravel: TimeTravelAi,
+            ApiType.Token: TokenAi,
+            ApiType.TwoPiles: TwoPilesAi,
+            ApiType.Unattach: UnattachAi,
+            ApiType.UnlockDoor: AlwaysPlayAi,
+            ApiType.Untap: UntapAi,
+            ApiType.UntapAll: UntapAllAi,
+            ApiType.Venture: VentureAi,
+            ApiType.VillainousChoice: AlwaysPlayAi,
+            ApiType.Vote: VoteAi,
+            ApiType.WinsGame: GameWinAi,
+
+            ApiType.DamageResolve: AlwaysPlayAi,
+            ApiType.InternalLegendaryRule: LegendaryRuleAi,
+            ApiType.InternalIgnoreEffect: CannotPlayAi,
+            ApiType.InternalRadiation: AlwaysPlayAi,
+        }
+
+    def get(self, sa):
+        if isinstance(sa, SpellAbility):
+            api = sa.getApi()
+            if api is None:
+                raise ValueError("SA is not api-based, this is not supported yet")
+            return self.get(api)
+
+        api = sa
+        result = self.apiToInstance.get(api)
+        if result is None:
+            clz = self.apiToClass.get(api)
+            if clz is None:
+                print("No AI assigned for API: " + str(api), file=sys.stderr)
+                clz = CannotPlayAi
+            result = ReflectionUtil.makeDefaultInstanceOf(clz)
+            self.apiToInstance[api] = result
+        return result
 ```

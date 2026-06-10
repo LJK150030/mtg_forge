@@ -162,12 +162,12 @@ classDiagram
 
 ## Design Description
 
-CardStateView is a lightweight, serializable view object representing a single named state (e.g., front, back, or face-down) of a card for presentation to the UI and remote clients. As a nested non-static class of CardView, it accesses its enclosing card instance directly while extending TrackableObject to store all displayable attributes—name, colors, mana cost, type, power/toughness, loyalty, keywords, rarity, image key, and rules text—as tracked properties whose changes propagate automatically to observers. It implements ITranslatable to supply localization keys for the card's name and type.
+CardStateView is a lightweight, serializable view object representing a single named state (e.g., front, back, or face-down) of a card for presentation to the UI and remote clients. As a nested non-static class of CardView, it accesses its enclosing card instance directly while extending TrackableObject to store all displayable attributesâ€”name, colors, mana cost, type, power/toughness, loyalty, keywords, rarity, image key, and rules textâ€”as tracked properties whose changes propagate automatically to observers. It implements ITranslatable to supply localization keys for the card's name and type.
 
 The design cleanly separates the mutable game model from its observable projection: package-private `update*` methods pull values from the live `Card` or `CardState` and write them via `set(TrackableProperty.*)`, while public getters expose them. Visibility logic (face-down handling, viewer-based image masking, clone source substitution) and convenience type-predicate methods keep display concerns encapsulated within the view rather than the engine.
 
 ## Source
-`forge-game/src/main/java/forge/game/card/CardView.java` â€” declaration excerpt
+`forge-game/src/main/java/forge/game/card/CardView.java` Ã¢â‚¬â€ declaration excerpt
 
 ```java
     public class CardStateView extends TrackableObject implements ITranslatable {
@@ -648,4 +648,452 @@ The design cleanly separates the mutable game model from its observable projecti
             return CardTranslation.getTranslatedName(this);
         }
     }
+```
+
+## Python
+`forge/game/card/CardView/CardStateView.py`
+
+```python
+from typing import Iterable
+
+from forge.trackable.TrackableObject import TrackableObject
+from forge.util.ITranslatable import ITranslatable
+from forge.card.CardRarity import CardRarity
+from forge.card.CardRules import CardRules
+from forge.card.CardStateName import CardStateName
+from forge.card.CardTypeView import CardTypeView
+from forge.card.ColorSet import ColorSet
+from forge.card.mana.ManaCost import ManaCost
+from forge.game.card.Card import Card
+from forge.game.card.CardState import CardState
+from forge.game.card.CardView import CardView
+from forge.game.keyword.Keyword import Keyword
+from forge.game.keyword.KeywordCollectionView import KeywordCollectionView
+from forge.game.player.PlayerView import PlayerView
+from forge.game.spellability.AbilityManaPart import AbilityManaPart
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.trackable.Tracker import Tracker
+
+from forge.trackable.TrackableProperty import TrackableProperty
+from forge.StaticData import StaticData
+from forge.ImageKeys import ImageKeys
+from forge.game.card.CardType import CardType
+from forge.game.zone.ZoneType import ZoneType
+from forge.card.CardEdition import CardEdition
+from forge.card.MagicColor import MagicColor
+from forge.util.Localizer import Localizer
+from forge.util.CardTranslation import CardTranslation
+
+
+class CardStateView(TrackableObject, ITranslatable):
+    serialVersionUID = 6673944200513430607
+
+    def __init__(self, id0: int, state0: CardStateName, tracker: Tracker):
+        super().__init__(id0, tracker)
+        self.state = state0
+        self.foilIndexOverride = -1
+
+    def getDisplayId(self) -> str:
+        if self.getState() == CardStateName.FaceDown:
+            return "H" + str(self.getCard().getHiddenId())
+        id = self.getId()
+        if id > 0:
+            return str(self.getId())
+        return ""
+
+    def hashCode(self) -> int:
+        return hash((self.getId(), self.state))
+
+    def toString(self) -> str:
+        return (self.getName() + " (" + self.getDisplayId() + ")").strip()
+
+    def getCard(self) -> CardView:
+        return CardView.this
+
+    def getState(self) -> CardStateName:
+        return self.state
+
+    def getName(self) -> str:
+        return self.get(TrackableProperty.Name)
+
+    def updateName(self, c: CardState) -> None:
+        card = c.getCard()
+        self.setName(card.getDisplayName(c))
+        self.setOracleName(card.getName(c))
+
+        if self.getCard().getCurrentState() == self:
+            self.getCard().updateName(card)
+
+    def setName(self, name: str) -> None:
+        self.set(TrackableProperty.Name, name)
+
+    def getOracleName(self) -> str:
+        """The name of the card, unaltered by flavor names."""
+        return self.get(TrackableProperty.OracleName)
+
+    def setOracleName(self, name: str) -> None:
+        self.set(TrackableProperty.OracleName, name)
+
+    def getColors(self) -> ColorSet:
+        return self.get(TrackableProperty.Colors)
+
+    def getOriginalColors(self) -> ColorSet:
+        return self.get(TrackableProperty.OriginalColors)
+
+    def updateColors(self, c) -> None:
+        self.set(TrackableProperty.Colors, c.getColor())
+
+    def setOriginalColors(self, c: Card) -> None:
+        self.set(TrackableProperty.OriginalColors, c.getColor())
+
+    def updateHasChangeColors(self, hasChangeColor: bool) -> None:
+        self.set(TrackableProperty.HasChangedColors, hasChangeColor)
+
+    def hasChangeColors(self) -> bool:
+        return self.get(TrackableProperty.HasChangedColors)
+
+    def getImageKey(self, viewers: Iterable[PlayerView] = None) -> str:
+        if self.getState() == CardStateName.FaceDown:
+            return self.getCard().getFacedownImageKey()
+        if self.getCard().canBeShownToAny(viewers):
+            if self.getCard().isCloned() and StaticData.instance().useSourceImageForClone():
+                return self.getCard().getBackup().getCurrentState().getImageKey(viewers)
+            return self.get(TrackableProperty.ImageKey)
+        return ImageKeys.getTokenKey(ImageKeys.HIDDEN_CARD)
+
+    def getTrackableImageKey(self) -> str:
+        # Use this for revealing purposes only
+        return self.get(TrackableProperty.ImageKey)
+
+    def updateImageKey(self, c) -> None:
+        self.set(TrackableProperty.ImageKey, c.getImageKey())
+
+    def getType(self) -> CardTypeView:
+        if self.getState() != CardStateName.Original and self.getCard().isFaceDown() and not self.getCard().isInZone({ZoneType.Battlefield, ZoneType.Stack}):
+            return CardType.EMPTY
+        return self.get(TrackableProperty.Type)
+
+    def updateType(self, c: CardState) -> None:
+        self.set(TrackableProperty.Type, c.getTypeWithChanges())
+
+    def getManaCost(self) -> ManaCost:
+        return self.get(TrackableProperty.ManaCost)
+
+    def getOriginalManaCost(self) -> ManaCost:
+        return self.get(TrackableProperty.OriginalManaCost)
+
+    def updateManaCost(self, c) -> None:
+        if isinstance(c, Card):
+            self.set(TrackableProperty.ManaCost, c.getCurrentState().getPerpetualAdjustedManaCost())
+            self.set(TrackableProperty.OriginalManaCost, c.getManaCost())
+        else:
+            self.set(TrackableProperty.ManaCost, c.getPerpetualAdjustedManaCost())
+            self.set(TrackableProperty.OriginalManaCost, c.getManaCost())
+
+    def getOracleText(self) -> str:
+        return self.get(TrackableProperty.OracleText)
+
+    def setOracleText(self, oracleText: str) -> None:
+        self.set(TrackableProperty.OracleText, oracleText.replace("\\n", "\r\n\r\n").strip())
+
+    def getFunctionalVariantName(self) -> str:
+        return self.get(TrackableProperty.FunctionalVariant)
+
+    def setFunctionalVariantName(self, functionalVariant: str) -> None:
+        self.set(TrackableProperty.FunctionalVariant, functionalVariant)
+
+    def getRulesText(self) -> str:
+        return self.get(TrackableProperty.RulesText)
+
+    def updateRulesText(self, rules: CardRules) -> None:
+        rulesText = None
+
+        if rules is not None and rules.getType().isVanguard():
+            decHand = rules.getHand() < 0
+            decLife = rules.getLife() < 0
+            handSize = Localizer.getInstance().getMessageorUseDefault("lblHandSize", "Hand Size") \
+                + ((": +" if not decHand else ": ")) + str(rules.getHand())
+            startingLife = Localizer.getInstance().getMessageorUseDefault("lblStartingLife", "Starting Life") \
+                + ((": +" if not decLife else ": ")) + str(rules.getLife())
+            rulesText = handSize + "\r\n" + startingLife
+        self.set(TrackableProperty.RulesText, rulesText)
+
+    def getPower(self) -> int:
+        return self.get(TrackableProperty.Power)
+
+    def updatePower(self, c) -> None:
+        if isinstance(c, CardState):
+            card = c.getCard()
+            if card is not None:
+                self.updatePower(card)  # TODO: find a better way to do this
+                return
+            self.set(TrackableProperty.Power, c.getBasePower())
+            return
+        if self.hasPrintedPT() and not self.isCreature():
+            # use printed value so user can still see it
+            num = c.getCurrentPower()
+        else:
+            num = c.getNetPower()
+        if c.getCurrentState().getView() != self and c.getAlternateState() is not None:
+            num = num - c.getBasePower() + c.getAlternateState().getBasePower()
+        self.set(TrackableProperty.Power, num)
+
+    def getToughness(self) -> int:
+        return self.get(TrackableProperty.Toughness)
+
+    def updateToughness(self, c) -> None:
+        if isinstance(c, CardState):
+            card = c.getCard()
+            if card is not None:
+                self.updateToughness(card)  # TODO: find a better way to do this
+                return
+            self.set(TrackableProperty.Toughness, c.getBaseToughness())
+            return
+        if self.hasPrintedPT() and not self.isCreature():
+            # use printed value so user can still see it
+            num = c.getCurrentToughness()
+        else:
+            num = c.getNetToughness()
+        if c.getCurrentState().getView() != self and c.getAlternateState() is not None:
+            num = num - c.getBaseToughness() + c.getAlternateState().getBaseToughness()
+        self.set(TrackableProperty.Toughness, num)
+
+    def getLoyalty(self) -> str:
+        return self.get(TrackableProperty.Loyalty)
+
+    def updateLoyalty(self, c) -> None:
+        if isinstance(c, str):
+            self.set(TrackableProperty.Loyalty, c)
+            return
+        if isinstance(c, CardState):
+            if self.getCard().getCurrentState() == self:
+                card = c.getCard()
+                if card is not None:
+                    if card.isInZone(ZoneType.Battlefield):
+                        self.updateLoyalty(card)
+                    else:
+                        self.updateLoyalty(c.getBaseLoyalty())
+                    return
+            self.set(TrackableProperty.Loyalty, "0")  # alternates don't need loyalty
+            return
+        # Card
+        if c.isInZone(ZoneType.Battlefield):
+            self.updateLoyalty(str(c.getCurrentLoyalty()))
+        else:
+            self.updateLoyalty(c.getCurrentState().getBaseLoyalty())
+
+    def getDefense(self) -> str:
+        return self.get(TrackableProperty.Defense)
+
+    def updateDefense(self, c) -> None:
+        if isinstance(c, str):
+            self.set(TrackableProperty.Defense, c)
+            return
+        if isinstance(c, CardState):
+            if self.getCard().getCurrentState() == self:
+                card = c.getCard()
+                if card is not None:
+                    if card.isInZone(ZoneType.Battlefield):
+                        self.updateDefense(card)
+                    else:
+                        self.updateDefense(c.getBaseDefense())
+                    return
+            self.updateDefense("0")
+            return
+        # Card
+        if c.isInZone(ZoneType.Battlefield):
+            self.updateDefense(str(c.getCurrentDefense()))
+        else:
+            self.updateDefense(c.getCurrentState().getBaseDefense())
+
+    def getAttractionLights(self) -> set[int]:
+        return self.get(TrackableProperty.AttractionLights)
+
+    def updateAttractionLights(self, c: CardState) -> None:
+        self.set(TrackableProperty.AttractionLights, c.getAttractionLights())
+
+    def hasPrintedPT(self) -> bool:
+        return self.get(TrackableProperty.HasPrintedPT)
+
+    def updateHasPrintedPT(self, v: bool) -> None:
+        self.set(TrackableProperty.HasPrintedPT, v)
+
+    def getSetCode(self) -> str:
+        return self.get(TrackableProperty.SetCode)
+
+    def updateSetCode(self, c: CardState) -> None:
+        self.set(TrackableProperty.SetCode, c.getSetCode())
+
+    def getRarity(self) -> CardRarity:
+        return self.get(TrackableProperty.Rarity)
+
+    def updateRarity(self, c: CardState) -> None:
+        self.set(TrackableProperty.Rarity, c.getRarity())
+
+    def getFoilIndex(self) -> int:
+        if self.foilIndexOverride >= 0:
+            return self.foilIndexOverride
+        return self.get(TrackableProperty.FoilIndex)
+
+    def updateFoilIndex(self, c) -> None:
+        if isinstance(c, Card):
+            self.updateFoilIndex(c.getCurrentState())
+        else:
+            self.set(TrackableProperty.FoilIndex, c.getFoil())
+
+    def setFoilIndexOverride(self, index0: int) -> None:
+        if index0 < 0:
+            index0 = CardEdition.getRandomFoil(self.getSetCode())
+        self.foilIndexOverride = index0
+
+    def getKeywords(self) -> KeywordCollectionView:
+        return self.get(TrackableProperty.Keywords)
+
+    def hasKeyword(self, keyword: Keyword) -> bool:
+        return self.getKeywords().contains(keyword)
+
+    def hasAnnihilator(self) -> bool:
+        return self.get(TrackableProperty.HasAnnihilator)
+
+    def hasWard(self) -> bool:
+        return self.get(TrackableProperty.HasWard)
+
+    def hasDeathtouch(self) -> bool:
+        return self.hasKeyword(Keyword.DEATHTOUCH)
+
+    def hasDevoid(self) -> bool:
+        return self.hasKeyword(Keyword.DEVOID)
+
+    def hasTrample(self) -> bool:
+        return self.hasKeyword(Keyword.TRAMPLE)
+
+    def hasHaste(self) -> bool:
+        return self.hasKeyword(Keyword.HASTE)
+
+    def hasInfect(self) -> bool:
+        return self.hasKeyword(Keyword.INFECT)
+
+    def hasStorm(self) -> bool:
+        return self.hasKeyword(Keyword.STORM)
+
+    def hasAftermath(self) -> bool:
+        return self.hasKeyword(Keyword.AFTERMATH)
+
+    def hasDivideDamage(self) -> bool:
+        return self.get(TrackableProperty.HasDivideDamage)
+
+    def origProduceAnyMana(self) -> bool:
+        return self.get(TrackableProperty.OrigProduceAnyMana)
+
+    def origProduceMana(self) -> ColorSet:
+        return self.get(TrackableProperty.OrigProduceMana)
+
+    def getAbilityText(self) -> str:
+        return self.get(TrackableProperty.AbilityText)
+
+    def updateAbilityText(self, c: Card, state: CardState) -> None:
+        self.set(TrackableProperty.AbilityText, c.getAbilityText(state))
+
+    def updateKeywords(self, c: Card, state: CardState) -> None:
+        c.updateKeywordsCache(state)
+        self.set(TrackableProperty.Keywords, state.getCachedKeywords().getView())
+        # deeper check for Idris
+        self.set(TrackableProperty.HasAnnihilator, c.hasKeyword(Keyword.ANNIHILATOR, state) or any(t.isKeyword(Keyword.ANNIHILATOR) for t in state.getTriggers()))
+        self.set(TrackableProperty.HasWard, c.hasKeyword(Keyword.WARD, state) or any(t.isKeyword(Keyword.WARD) for t in state.getTriggers()))
+        self.updateAbilityText(c, state)
+        # update Trackable Mana Color for BG Colors
+        self.updateManaColorBG(state)
+
+        self.set(TrackableProperty.HasDivideDamage, c.hasKeyword("You may assign CARDNAME's combat damage divided as "
+                 "you choose among defending player and/or any number of creatures they control."))
+
+    def updateManaColorBG(self, state: CardState) -> None:
+        anyMana = False
+        cMana = False
+        colors = 0
+        for sa in state.getManaAbilities():
+            if sa is None:
+                continue
+            for mp in sa.getAllManaParts():
+                if mp.isAnyMana():
+                    anyMana = True
+                    continue
+
+                colorsProduced = mp.mana(sa).split(" ")
+
+                # todo improve this
+                for s in colorsProduced:
+                    u = s.upper()
+                    if u == "R":
+                        colors |= MagicColor.RED
+                    elif u == "G":
+                        colors |= MagicColor.GREEN
+                    elif u == "B":
+                        colors |= MagicColor.BLACK
+                    elif u == "U":
+                        colors |= MagicColor.BLUE
+                    elif u == "W":
+                        colors |= MagicColor.WHITE
+                    elif u == "C":
+                        cMana = True
+        self.set(TrackableProperty.OrigProduceMana, ColorSet.fromMask(colors) if colors > 0 else (ColorSet.C if cMana else None))
+        self.set(TrackableProperty.OrigProduceAnyMana, anyMana)
+
+    def isBasicLand(self) -> bool:
+        return self.getType().isBasicLand()
+
+    def isCreature(self) -> bool:
+        return self.getType().isCreature()
+
+    def isLand(self) -> bool:
+        return self.getType().isLand()
+
+    def isPlane(self) -> bool:
+        return self.getType().isPlane()
+
+    def isPhenomenon(self) -> bool:
+        return self.getType().isPhenomenon()
+
+    def isPlaneswalker(self) -> bool:
+        return self.getType().isPlaneswalker()
+
+    def isBattle(self) -> bool:
+        return self.getType().isBattle()
+
+    def isVehicle(self) -> bool:
+        return self.getType().hasSubtype("Vehicle")
+
+    def isArtifact(self) -> bool:
+        return self.getType().isArtifact()
+
+    def isEnchantment(self) -> bool:
+        return self.getType().isEnchantment()
+
+    def isSpaceCraft(self) -> bool:
+        return self.getType().hasSubtype("Spacecraft")
+
+    def isAttraction(self) -> bool:
+        return self.getType().isAttraction()
+
+    def isContraption(self) -> bool:
+        return self.getType().isContraption()
+
+    def isInstant(self) -> bool:
+        return self.getType().isInstant()
+
+    def isSorcery(self) -> bool:
+        return self.getType().isSorcery()
+
+    def getTranslationKey(self) -> str:
+        key = self.getName()
+        variant = self.getFunctionalVariantName()
+        if variant is not None and len(variant) > 0:
+            key = key + " $" + variant
+        return key
+
+    def getUntranslatedType(self) -> str:
+        return self.getType().toString()
+
+    def getTranslatedName(self) -> str:
+        return CardTranslation.getTranslatedName(self)
 ```

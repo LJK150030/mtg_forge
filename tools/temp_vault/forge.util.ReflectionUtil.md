@@ -25,6 +25,12 @@ classDiagram
     }
 ```
 
+## Design Description
+
+Static utility class providing reflection-based helper methods for the forge-core module. As a `final` class with a private constructor, it is explicitly designed to be non-instantiable, exposing only static operations: instantiating a class via its default constructor (`makeDefaultInstanceOf`), safely casting an object to a target type with a `null` fallback (`safeCast`), and testing type membership including special handling for array types (`isInstance`).
+
+Having no supertype beyond `Object` and implementing no interfaces, it is a self-contained, stateless toolkit rather than a participant in any class hierarchy. It collaborates with `java.lang.Class` and the reflection API, delegates string assembly to the sibling utility `TextUtil`, and leans on Apache Commons' `TypeUtils` for robust instance checks. The design intent favors fail-fast safetyâ€”wrapping checked reflection exceptions in descriptive `RuntimeException`s and guarding against null inputs.
+
 ## Source
 `forge-core/src/main/java/forge/util/ReflectionUtil.java`
 
@@ -103,4 +109,68 @@ public final class ReflectionUtil {
         return TypeUtils.isInstance(obj, type);
     }
 }
+```
+
+## Python
+`forge/util/ReflectionUtil.py`
+
+```python
+from forge.util.TextUtil import TextUtil
+
+
+class ReflectionUtil:
+    """
+    Static utilities related to reflection.
+
+    @see java.lang.Class
+    """
+
+    def __init__(self):
+        """
+        Private constructor to prevent instantiation.
+        """
+        raise NotImplementedError("ReflectionUtil is not instantiable")
+
+    @staticmethod
+    def makeDefaultInstanceOf(cls):
+        """
+        Generates a default instance of the supplied class, using that class'
+        default constructor.
+
+        @param cls a class.
+        @return an instance of the supplied class.
+        @throws RuntimeException if the supplied class has no visible default
+                constructor, or if an exception is thrown by the constructor.
+        @see Class#newInstance()
+        """
+        if cls is None:
+            raise ValueError("Class<? extends T> cls must not be null")
+
+        try:
+            return cls()
+        except TypeError:
+            raise RuntimeError(TextUtil.concatWithSpace("No default constructor found in class", cls.__name__))
+        except Exception:
+            raise RuntimeError(TextUtil.concatWithSpace("Can't instantiate class", cls.__name__, "using default constructor"))
+
+    @staticmethod
+    def safeCast(obj, type):
+        """
+        Cast object to a given type if possible, returning null if not possible
+
+        @param obj an object.
+        @param type the class to which to cast the object.
+        @return a reference to the object if it's an instance of the given class,
+                or None if it isn't.
+        @see Class#isInstance(Object)
+        """
+        if isinstance(obj, type):
+            return obj
+        return None
+
+    @staticmethod
+    def isInstance(obj, type):
+        if type is list:
+            return isinstance(obj, (list, tuple))
+        return isinstance(obj, type)
 ```

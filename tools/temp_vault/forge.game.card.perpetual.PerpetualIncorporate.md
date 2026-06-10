@@ -40,7 +40,7 @@ classDiagram
 
 The `PerpetualIncorporate` record captures a continuous, "perpetual" modification that grafts an Incorporate ability's color and mana characteristics onto a card. Implementing `PerpetualInterface`, it pairs a `timestamp` (exposed via `getTimestamp()`) with a `ManaCost`, letting the engine order and reconcile competing perpetual effects deterministically.
 
-Its sole behavioral method, `applyEffect(Card)`, derives a `ColorSet` from the incorporate cost's color profile and reapplies it to the target `Card`, while also layering in the additional mana cost—both stamped with the record's timestamp so they integrate with Forge's timestamp-based continuous-effect system. The record form signals that the effect is immutable value data: once created it simply describes what to reapply whenever the card's state is recomputed, keeping the perpetual modification self-contained and side-effect-free apart from its deliberate mutation of the card.
+Its sole behavioral method, `applyEffect(Card)`, derives a `ColorSet` from the incorporate cost's color profile and reapplies it to the target `Card`, while also layering in the additional mana costâ€”both stamped with the record's timestamp so they integrate with Forge's timestamp-based continuous-effect system. The record form signals that the effect is immutable value data: once created it simply describes what to reapply whenever the card's state is recomputed, keeping the perpetual modification self-contained and side-effect-free apart from its deliberate mutation of the card.
 
 ## Source
 `forge-game/src/main/java/forge/game/card/perpetual/PerpetualIncorporate.java`
@@ -65,4 +65,30 @@ public record PerpetualIncorporate(long timestamp, ManaCost incorporate) impleme
         c.addColorByText(colors, true, timestamp, null);
     }
 }
+```
+
+## Python
+`forge/game/card/perpetual/PerpetualIncorporate.py`
+
+```python
+package forge.game.card.perpetual
+
+from forge.card.ColorSet import ColorSet
+from forge.card.mana.ManaCost import ManaCost
+from forge.game.card.Card import Card
+from forge.game.card.perpetual.PerpetualInterface import PerpetualInterface
+
+
+class PerpetualIncorporate(PerpetualInterface):
+    def __init__(self, timestamp: int, incorporate: ManaCost):
+        self.timestamp = timestamp
+        self.incorporate = incorporate
+
+    def getTimestamp(self) -> int:
+        return self.timestamp
+
+    def applyEffect(self, c: Card) -> None:
+        colors = ColorSet.fromMask(self.incorporate.getColorProfile())
+        c.addChangedManaCost(self.incorporate, True, self.timestamp, 0)
+        c.addColorByText(colors, True, self.timestamp, None)
 ```

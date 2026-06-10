@@ -39,7 +39,7 @@ classDiagram
 
 ## Design Description
 
-AddTurnAi supplies the computer-opponent decision logic for spell abilities that grant extra turns (the AddTurn effect). Extending the `SpellAbilityAi` base class, it overrides `canPlay` and `doTriggerNoCost` to determine whether and how the AI should resolve such an ability, returning an `AiAbilityDecision` that pairs a score with an `AiPlayDecision` outcome. When the ability uses targeting, it prefers granting the extra turn to itself—unless a replacement effect would cause that turn to be skipped—and falls back to allies or, under mandatory resolution, the weakest targetable opponent (chosen via `PlayerCollection` life comparison). For non-targeted variants it inspects the defined players and `NumTurns` parameter, declining cases it cannot evaluate. The design intent is conservative, never voluntarily handing extra turns to opponents and only doing so when forced.
+AddTurnAi supplies the computer-opponent decision logic for spell abilities that grant extra turns (the AddTurn effect). Extending the `SpellAbilityAi` base class, it overrides `canPlay` and `doTriggerNoCost` to determine whether and how the AI should resolve such an ability, returning an `AiAbilityDecision` that pairs a score with an `AiPlayDecision` outcome. When the ability uses targeting, it prefers granting the extra turn to itselfâ€”unless a replacement effect would cause that turn to be skippedâ€”and falls back to allies or, under mandatory resolution, the weakest targetable opponent (chosen via `PlayerCollection` life comparison). For non-targeted variants it inspects the defined players and `NumTurns` parameter, declining cases it cannot evaluate. The design intent is conservative, never voluntarily handing extra turns to opponents and only doing so when forced.
 
 ## Source
 `forge-ai/src/main/java/forge/ai/ability/AddTurnAi.java`
@@ -134,4 +134,54 @@ public class AddTurnAi extends SpellAbilityAi {
     }
 
 }
+```
+
+## Python
+`forge/ai/ability/AddTurnAi.py`
+
+```python
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.ai.SpellAbilityAi import SpellAbilityAi
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.player.Player import Player
+from forge.game.player.PlayerCollection import PlayerCollection
+from forge.game.player.PlayerPredicates import PlayerPredicates
+from forge.game.spellability.SpellAbility import SpellAbility
+from org.apache.commons.lang3.StringUtils import StringUtils
+
+
+class AddTurnAi(SpellAbilityAi):
+
+    def doTriggerNoCost(self, ai: Player, sa: SpellAbility, mandatory: bool) -> AiAbilityDecision:
+        targetableOpps = ai.getOpponents().filter(PlayerPredicates.isTargetableBy(sa))
+        opp = targetableOpps.min(PlayerPredicates.compareByLife())
+
+        if sa.usesTargeting():
+            sa.resetTargets()
+            if sa.canTarget(ai) and (mandatory or not ai.getGame().getReplacementHandler().wouldExtraTurnBeSkipped(ai)):
+                sa.getTargets().add(ai)
+            elif mandatory:
+                for ally in ai.getAllies():
+                    if sa.canTarget(ally):
+                        sa.getTargets().add(ally)
+                        break
+                if not sa.getTargetRestrictions().isMinTargetsChosen(sa.getHostCard(), sa) and opp is not None:
+                    sa.getTargets().add(opp)
+                else:
+                    return AiAbilityDecision(0, AiPlayDecision.TargetingFailed)
+            else:
+                return AiAbilityDecision(0, AiPlayDecision.TargetingFailed)
+        else:
+            tgtPlayers = AbilityUtils.getDefinedPlayers(sa.getHostCard(), sa.getParam("Defined"), sa)
+            for p in tgtPlayers:
+                if p.isOpponentOf(ai) and not mandatory:
+                    return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+            # TODO: improve ai for Sage of Hours
+            if not StringUtils.isNumeric(sa.getParam("NumTurns")):
+                return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+        return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+    def canPlay(self, aiPlayer: Player, sa: SpellAbility) -> AiAbilityDecision:
+        return self.doTriggerNoCost(aiPlayer, sa, False)
 ```

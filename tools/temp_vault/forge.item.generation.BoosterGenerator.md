@@ -53,6 +53,12 @@ classDiagram
 - [[forge.item.SealedTemplate|SealedTemplate]]
 - [[forge.item.SealedTemplateWithSlots|SealedTemplateWithSlots]]
 
+## Design Description
+
+BoosterGenerator is a stateless utility class that assembles Magic: The Gathering booster packs from a set's print sheets and rarity rules. Its central responsibility is `getBoosterPack`, which expands a `SealedTemplate` (or slot-driven `SealedTemplateWithSlots`) into a randomized `List<PaperCard>`, drawing each slot from a `PrintSheet` built and memoized via `makeSheet`/`getPrintSheet`. It encapsulates the considerable complexity of real-world boosters: per-edition foil chances, special slots (mythic/uncommon-rare ratios, time-shifted, dual-faced), guaranteed-card constraints, and extra-sheet substitutions.
+
+Rather than implementing an interface, it acts as a collaborating engine over the data model: it consults `CardEdition` for set-specific parameters, `CardRarity` and `BoosterSlot(s)` to classify and replace cards, and `StaticData` for the global card pool. The design favors static methods with caching and predicate-composition (`buildExtraPredicate`) to translate textual sheet keys into flexible, set-aware filtering, keeping booster logic centralized and data-driven.
+
 ## Source
 `forge-core/src/main/java/forge/item/generation/BoosterGenerator.java`
 
@@ -836,4 +842,642 @@ public class BoosterGenerator {
     }
 
 }
+```
+
+## Python
+`forge/item/generation/BoosterGenerator.py`
+
+```python
+from forge.StaticData import StaticData
+from forge.card.CardEdition import CardEdition
+from forge.card.CardEdition.FoilType import FoilType
+from forge.card.CardRarity import CardRarity
+from forge.card.CardSplitType import CardSplitType
+from forge.card.PrintSheet import PrintSheet
+from forge.item.BoosterSlot import BoosterSlot
+from forge.item.BoosterSlots import BoosterSlots
+from forge.item.PaperCard import PaperCard
+from forge.item.PaperCardPredicates import PaperCardPredicates
+from forge.item.SealedTemplate import SealedTemplate
+from forge.item.SealedTemplateWithSlots import SealedTemplateWithSlots
+from forge.util.Aggregates import Aggregates
+from forge.util.IterableUtil import IterableUtil
+from forge.util.MyRandom import MyRandom
+from forge.util.TextUtil import TextUtil
+import re
+
+
+class BoosterGenerator:
+    staticSheetsCorrespondance: dict[str, str] = {}
+    cachedSheets: dict[str, PrintSheet] = {}
+
+    @staticmethod
+    def getPrintSheet(key: str) -> PrintSheet:
+        if key not in BoosterGenerator.cachedSheets:
+            BoosterGenerator.cachedSheets[key] = BoosterGenerator.makeSheet(
+                key, StaticData.instance().getCommonCards().getAllCards())
+        return BoosterGenerator.cachedSheets[key]
+
+    @staticmethod
+    def generateFoilCard(sheet) -> PaperCard:
+        # Overloaded in Java: PrintSheet variant and List<PaperCard> variant.
+        if isinstance(sheet, list):
+            cardList = sheet
+            MyRandom.getRandom().shuffle(cardList)
+            randomCard = cardList[0]
+            return randomCard.getFoiled()
+        randomCard = sheet.random(1, True)[0]
+        return randomCard.getFoiled()
+
+    @staticmethod
+    def tryGetStaticSheet(sheetName: str) -> PrintSheet:
+        if sheetName in BoosterGenerator.staticSheetsCorrespondance:
+            return StaticData.instance().getPrintSheets().get(
+                BoosterGenerator.staticSheetsCorrespondance.get(sheetName))
+
+        passedEdition = sheetName.split(" ")[0]
+        realEdition = StaticData.instance().getEditions().get(passedEdition)
+
+        if realEdition.getCode() == passedEdition:
+            BoosterGenerator.staticSheetsCorrespondance[sheetName] = sheetName
+            return StaticData.instance().getPrintSheets().get(sheetName)
+
+        realEditionCode = realEdition.getCode()
+        alteredSheetName = sheetName.replace(passedEdition, realEditionCode, 1)
+
+        BoosterGenerator.staticSheetsCorrespondance[sheetName] = alteredSheetName
+
+        return StaticData.instance().getPrintSheets().get(alteredSheetName)
+
+    @staticmethod
+    def getBoosterPack(template) -> list[PaperCard]:
+        if isinstance(template, SealedTemplateWithSlots):
+            # SealedTemplateWithSlots ignores all Edition level params
+            # Instead each slot defines their percentages on their own
+            result = []
+            boosterSlots = template.getNamedSlots()
+
+            for slot in template.getSlots():
+                slotType = slot.getLeft().strip()
+                numCards = slot.getRight()
+                print(str(numCards) + " of type " + slotType)
+
+                # For cards that end in '+', attempt to convert this card to foil.
+                convertAllToFoil = slotType.endswith("+")
+                if convertAllToFoil:
+                    slotType = slotType[:-1]
+
+                boosterSlot = boosterSlots.get(slotType)
+
+                paperCards = []
+                for determineSheet, value in BoosterGenerator.bulkSlotReplacement(boosterSlot, numCards).items():
+                    numCardsToGenerate = int(value)
+
+                    if determineSheet is None or determineSheet == "" or numCardsToGenerate == 0:
+                        continue
+
+                    # If the sheet ends with a '+', convert all cards in replacement section to foil
+                    convertThisToFoil = False
+                    if determineSheet.endswith("+"):
+                        determineSheet = determineSheet[:-1]
+                        convertThisToFoil = True
+
+                    setCode = template.getEdition()
+                    try:
+                        # Apply the edition to the sheet name by default. We'll try again if that's not a real sheet
+                        ps = BoosterGenerator.getPrintSheet(determineSheet + " " + setCode)
+                    except Exception:
+                        ps = BoosterGenerator.getPrintSheet(determineSheet)
+                    if convertAllToFoil or convertThisToFoil:
+                        for pc in ps.random(numCardsToGenerate, True):
+                            paperCards.append(pc.getFoiled())
+                    else:
+                        paperCards.extend(ps.random(numCardsToGenerate, True))
+                result.extend(paperCards)
+
+            return result
+
+        result = []
+
+        edition = StaticData.instance().getEditions().get(template.getEdition())
+
+        hasFoil = (edition is not None
+                   and len(template.getSlots()) > 0
+                   and MyRandom.getRandom().nextDouble() < edition.getFoilChanceInBooster()
+                   and edition.getFoilType() != FoilType.NOT_SUPPORTED)
+        foilAtEndOfPack = hasFoil and edition.getFoilAlwaysInCommonSlot()
+
+        # Foil chances
+        # 1 Rare or Mythic rare (distribution ratio same as nonfoils)
+        # 2-3 Uncommons
+        # 4-6 Commons or Basic Lands
+        # 7 Time Shifted
+        # 8 VMA Special
+        # 9 DFC
+        # 10 Planeshift alternate art foil
+        # if result not valid for pack, reroll
+        # Other special types of foil slots, add here
+        foilCard = CardRarity.Unknown
+        while foilCard == CardRarity.Unknown:
+            randomNum = MyRandom.getRandom().nextInt(10) + 1
+            if randomNum == 1:
+                # Rare or Mythic
+                foilCard = CardRarity.Rare
+            elif randomNum == 2 or randomNum == 3:
+                # Uncommon
+                foilCard = CardRarity.Uncommon
+            elif randomNum == 4 or randomNum == 5 or randomNum == 6:
+                # Common or Basic Land
+                foilCard = CardRarity.Common
+            elif randomNum == 7:
+                # Time Spiral
+                if edition is not None:
+                    if edition.getName() == "Time Spiral":
+                        foilCard = CardRarity.Special
+            elif randomNum == 8:
+                if edition is not None:
+                    if edition.getName() == "Vintage Masters":
+                        # 1 in 53 packs, with 7 possibilities for the slot itself in VMA
+                        # (1 RareMythic, 2 Uncommon, 3 Common, 1 Special)
+                        if MyRandom.getRandom().nextInt(53) <= 7:
+                            foilCard = CardRarity.Special
+            elif randomNum == 9:
+                if edition is not None:
+                    # every sixth foil - same as rares
+                    if template.hasSlot("dfc"):
+                        foilCard = CardRarity.Special
+            elif randomNum == 10:
+                if edition is not None:
+                    if edition.getName() == "Planeshift":
+                        # Chance equals chance of getting the same card as non-alter foil rare.
+                        # so 3 out of the 53 rares in the set.
+                        # while information cannot be found, my personal (subjective) experience from that time was
+                        # that they were indeed similar chance, at least not significantly less.
+                        if MyRandom.getRandom().nextInt(53) <= 3:
+                            foilCard = CardRarity.Special
+            # Insert any additional special rarities/slot types for special
+            # sets here, for 11 and up
+            else:
+                foilCard = CardRarity.Common
+                # otherwise, default is Common or Basic Land
+
+        extraFoilSheetKey = edition.getAdditionalSheetForFoils() if edition is not None else ""
+        replaceCommon = (edition is not None and len(template.getSlots()) > 0
+                         and MyRandom.getRandom().nextDouble() < edition.getChanceReplaceCommonWith())
+
+        foilSlot = ""
+
+        if hasFoil:
+            # Default, if no matching slot type is found : equal chance for each slot
+            # should not have effect unless new sets that do not match existing
+            # rarities are added
+            foilSlot = re.split(r"[ :!]", Aggregates.random(template.getSlots()).getLeft())[0]
+
+            if foilCard == CardRarity.Rare:
+                # Take whichever rare slot the pack has.
+                # Not the "MYTHIC" slot, no pack has that AFAIK
+                # and chance was for rare/mythic.
+                if template.hasSlot(BoosterSlots.RARE_MYTHIC):
+                    foilSlot = BoosterSlots.RARE_MYTHIC
+                elif template.hasSlot(BoosterSlots.RARE):
+                    foilSlot = BoosterSlots.RARE
+                elif template.hasSlot(BoosterSlots.UNCOMMON_RARE):
+                    foilSlot = BoosterSlots.UNCOMMON_RARE
+            elif foilCard == CardRarity.Uncommon:
+                if template.hasSlot(BoosterSlots.UNCOMMON):
+                    foilSlot = BoosterSlots.UNCOMMON
+                elif template.hasSlot(BoosterSlots.UNCOMMON_RARE):
+                    foilSlot = BoosterSlots.UNCOMMON_RARE
+            elif foilCard == CardRarity.Common:
+                foilSlot = BoosterSlots.COMMON
+                if template.hasSlot(BoosterSlots.BASIC_LAND):
+                    # According to information I found, Basic Lands
+                    # are on the common foil sheet, each type appearing once.
+                    # Large Sets usually have 110 commons and 20 lands.
+                    if MyRandom.getRandom().nextInt(130) <= 20:
+                        foilSlot = BoosterSlots.BASIC_LAND
+            elif foilCard == CardRarity.Special:
+                if template.hasSlot(BoosterSlots.TIME_SHIFTED):
+                    foilSlot = BoosterSlots.TIME_SHIFTED
+                elif template.hasSlot(BoosterSlots.DUAL_FACED_CARD):
+                    foilSlot = BoosterSlots.DUAL_FACED_CARD
+                elif template.hasSlot(BoosterSlots.SPECIAL):
+                    foilSlot = BoosterSlots.SPECIAL
+
+        foilCardGeneratedAndHeld = []
+
+        for slot in template.getSlots():
+            slotType = slot.getLeft()  # add expansion symbol here?
+            numCards = slot.getRight()
+
+            convertCardFoil = slotType.endswith("+")
+            if convertCardFoil:
+                slotType = slotType[:-1]
+
+            sType = TextUtil.splitWithParenthesis(slotType, ' ')
+            setCode = template.getEdition() if (len(sType) == 1 and template.getEdition() is not None) else None
+            sheetKey = (slotType.strip() + " " + setCode) \
+                if StaticData.instance().getEditions().contains(setCode) else slotType.strip()
+
+            if sheetKey.startswith("wholeSheet"):
+                ps = BoosterGenerator.getPrintSheet(sheetKey)
+                result.extend(ps.toFlatList())
+                continue
+
+            slotType = re.split(r"[ :!]", slotType)[0]  # add expansion symbol here?
+
+            foilInThisSlot = hasFoil and (slotType == foilSlot)
+
+            if ((not foilAtEndOfPack and foilInThisSlot)
+                    or (foilAtEndOfPack and hasFoil and slotType.startswith(BoosterSlots.COMMON))):
+                numCards -= 1
+
+            # Planeshift foil alternate art replaces rare slot even though it comes from the
+            # special slot that normally has no cards!
+            if edition is not None:
+                if ((edition.getName() == "Planeshift")
+                        and (slotType.startswith(BoosterSlots.RARE))
+                        and (foilSlot.startswith(BoosterSlots.SPECIAL))):
+                    numCards -= 1
+
+            if replaceCommon and slotType.startswith(BoosterSlots.COMMON):
+                numCards -= 1
+                replaceKey = (edition.getSlotReplaceCommonWith().strip() + " " + setCode) \
+                    if StaticData.instance().getEditions().contains(setCode) \
+                    else edition.getSlotReplaceCommonWith().strip()
+                replaceSheet = BoosterGenerator.getPrintSheet(replaceKey)
+                result.extend(replaceSheet.random(1, True))
+                print("Common was replaced with something from the replace sheet...")
+                replaceCommon = False
+
+            ps = BoosterGenerator.getPrintSheet(sheetKey)
+
+            # For cards that end in '+', attempt to convert this card to foil.
+            if convertCardFoil:
+                paperCards = []
+                for pc in ps.random(numCards, True):
+                    paperCards.append(pc.getFoiled())
+            else:
+                paperCards = ps.random(numCards, True)
+
+            result.extend(paperCards)
+
+            if foilInThisSlot:
+                if not foilAtEndOfPack:
+                    hasFoil = False
+                    if extraFoilSheetKey != "":
+                        # TODO: extra foil sheets are currently reliably supported
+                        # only for boosters with FoilAlwaysInCommonSlot=True.
+                        # If FoilAlwaysInCommonSlot is false, a card from the extra
+                        # sheet may still replace a card in any slot.
+                        foilCards = []
+                        for card in ps.toFlatList():
+                            if card not in foilCards:
+                                foilCards.append(card)
+                        BoosterGenerator.addCardsFromExtraSheet(foilCards, extraFoilSheetKey)
+                        result.append(BoosterGenerator.generateFoilCard(foilCards))
+                    else:
+                        result.append(BoosterGenerator.generateFoilCard(ps))
+                else:  # foilAtEndOfPack
+                    if extraFoilSheetKey != "":
+                        # TODO: extra foil sheets are currently reliably supported
+                        # only for boosters with FoilAlwaysInCommonSlot=True.
+                        # If FoilAlwaysInCommonSlot is false, a card from the extra
+                        # sheet may still replace a card in any slot.
+                        foilCards = []
+                        for card in ps.toFlatList():
+                            if card not in foilCards:
+                                foilCards.append(card)
+                        BoosterGenerator.addCardsFromExtraSheet(foilCards, extraFoilSheetKey)
+                        foilCardGeneratedAndHeld.append(BoosterGenerator.generateFoilCard(foilCards))
+                    else:
+                        if edition is not None:
+                            if edition.getName() == "Vintage Masters":
+                                # Vintage Masters foil slot
+                                # If "Special" was picked here, either foil or
+                                # nonfoil P9 needs to be generated
+                                # 1 out of ~30 normal and mythic rares are foil,
+                                # match that.
+                                # If not special card, make it always foil.
+                                if ((MyRandom.getRandom().nextInt(30) == 1)
+                                        or (foilSlot != BoosterSlots.SPECIAL)):
+                                    foilCardGeneratedAndHeld.append(BoosterGenerator.generateFoilCard(ps))
+                                else:
+                                    # Otherwise it's not foil (even though this is the
+                                    # foil slot!)
+                                    result.extend(ps.random(1, True))
+                            else:
+                                foilCardGeneratedAndHeld.append(BoosterGenerator.generateFoilCard(ps))
+
+        if hasFoil and foilAtEndOfPack:
+            result.extend(foilCardGeneratedAndHeld)
+
+        # Guaranteed cards, e.g. Dominaria guaranteed legendary creatures
+        if edition is not None:
+            boosterMustContain = edition.getBoosterMustContain()
+            if boosterMustContain != "":
+                BoosterGenerator.ensureGuaranteedCardInBooster(result, template, boosterMustContain)
+
+            boosterReplaceSlotFromPrintSheet = edition.getBoosterReplaceSlotFromPrintSheet()
+            if boosterReplaceSlotFromPrintSheet != "":
+                BoosterGenerator.replaceCardFromExtraSheet(result, boosterReplaceSlotFromPrintSheet)
+
+            sheetReplaceCardFromSheet = edition.getSheetReplaceCardFromSheet()
+            if sheetReplaceCardFromSheet != "":
+                split = sheetReplaceCardFromSheet.split("_")
+                replaceThis = BoosterGenerator.tryGetStaticSheet(split[0])
+                candidates = []
+                for p in result:
+                    if replaceThis.contains(p):
+                        candidates.append(p)
+                result = [x for x in result if x not in candidates]
+                BoosterGenerator.replaceCardFromExtraSheet(candidates, split[1])
+                result.extend(candidates)
+            sheetReplaceCardFromSheet2 = edition.getSheetReplaceCardFromSheet2()
+            if sheetReplaceCardFromSheet2 != "":
+                split = sheetReplaceCardFromSheet2.split("_")
+                replaceThis = BoosterGenerator.tryGetStaticSheet(split[0])
+                candidates = []
+                for p in result:
+                    if replaceThis.contains(p):
+                        candidates.append(p)
+                result = [x for x in result if x not in candidates]
+                BoosterGenerator.replaceCardFromExtraSheet(candidates, split[1])
+                result.extend(candidates)
+
+        return result
+
+    @staticmethod
+    def bulkSlotReplacement(boosterSlot: BoosterSlot, numCards: int) -> dict[str, int]:
+        result = {}
+        for _ in range(numCards):
+            key = boosterSlot.replaceSlot()
+            result[key] = result.get(key, 0) + 1
+        return result
+
+    @staticmethod
+    def ensureGuaranteedCardInBooster(result: list[PaperCard], template: SealedTemplate, boosterMustContain: str) -> None:
+        # First, see if there's already a card of the given type
+        types = TextUtil.split(boosterMustContain, ' ')
+        alreadyHaveCard = False
+        for pc in result:
+            cardHasAllTypes = True
+            for type in types:
+                if not pc.getRules().getType().hasStringType(type):
+                    cardHasAllTypes = False
+                    break
+            if cardHasAllTypes:
+                alreadyHaveCard = True
+                break
+
+        if not alreadyHaveCard:
+            # Create a list of all cards that match the criteria
+            possibleCards = []
+            for slot in template.getSlots():
+                slotType = slot.getLeft()
+                setCode = template.getEdition()
+                sheetKey = (slotType.strip() + " " + setCode) \
+                    if StaticData.instance().getEditions().contains(setCode) else slotType.strip()
+
+                ps = BoosterGenerator.getPrintSheet(sheetKey)
+                cardsInSlot = list(ps.toFlatList())
+
+                for pc in cardsInSlot:
+                    cardHasAllTypes = True
+                    for type in types:
+                        if not pc.getRules().getType().hasStringType(type):
+                            cardHasAllTypes = False
+                            break
+                    if cardHasAllTypes and pc not in possibleCards:
+                        possibleCards.append(pc)
+
+            if len(possibleCards) > 0:
+                toAdd = Aggregates.random(possibleCards)
+                BoosterGenerator.replaceCard(result, toAdd)
+
+    @staticmethod
+    def replaceCardFromExtraSheet(booster: list[PaperCard], printSheetKey: str) -> None:
+        """
+        Replaces an already present card in the booster with a card from the supplied print sheet.
+        Nothing is replaced if there is no matching rarity found.
+        :param booster: in which a card gets replaced
+        :param printSheetKey: print sheet key from which take the replacement card
+        """
+        replacementSheet = BoosterGenerator.tryGetStaticSheet(printSheetKey)
+        toAdd = replacementSheet.random(1, False)[0]
+        BoosterGenerator.replaceCard(booster, toAdd)
+
+    @staticmethod
+    def replaceCard(booster: list[PaperCard], toAdd: PaperCard) -> None:
+        """
+        Replaces an already present card with the supplied card of the same (or similar in case or rare/mythic)
+        rarity in the supplied booster. Nothing is replaced if there is no matching rarity found.
+        :param booster: in which a card gets replaced
+        :param toAdd: new card which replaces a card in the booster
+        """
+        rarity = toAdd.getRarity()
+        if rarity == CardRarity.BasicLand:
+            rarityPredicate = PaperCardPredicates.IS_BASIC_LAND_RARITY
+        elif rarity == CardRarity.Common:
+            rarityPredicate = PaperCardPredicates.IS_COMMON
+        elif rarity == CardRarity.Uncommon:
+            rarityPredicate = PaperCardPredicates.IS_UNCOMMON
+        elif rarity == CardRarity.Rare or rarity == CardRarity.MythicRare:
+            rarityPredicate = PaperCardPredicates.IS_RARE_OR_MYTHIC
+        else:
+            rarityPredicate = PaperCardPredicates.IS_SPECIAL
+
+        toReplace = None
+        # Find first card in booster that matches the rarity
+        for card in booster:
+            if rarityPredicate(card):
+                toReplace = card
+                break
+
+        # Replace card if match is found
+        if toReplace is not None:
+            # Keep the foil state
+            if toReplace.isFoil():
+                toAdd = toAdd.getFoiled()
+            booster.remove(toReplace)
+            booster.append(toAdd)
+
+    @staticmethod
+    def addCardsFromExtraSheet(dest: list[PaperCard], printSheetKey: str) -> None:
+        extraSheet = BoosterGenerator.getPrintSheet(printSheetKey)
+
+        # try to determine the allowed rarity of the cards in dest
+        allowedRarity = set()
+        if len(dest) > 0:
+            for inDest in dest:
+                allowedRarity.add(inDest.getRarity())
+
+        for card in extraSheet.toFlatList():
+            if card not in dest and card.getRarity() in allowedRarity:
+                dest.append(card)
+
+    @staticmethod
+    def makeSheet(sheetKey: str, src) -> PrintSheet:
+        ps = PrintSheet(sheetKey)
+        sKey = TextUtil.splitWithParenthesis(sheetKey, ' ', 2)
+        if len(sKey) > 1:
+            setPred = PaperCardPredicates.printedInSets(sKey[1].split(" "))
+        else:
+            setPred = lambda x1: True
+
+        operators = list(TextUtil.splitWithParenthesis(sKey[0], ':'))
+        extraPred = BoosterGenerator.buildExtraPredicate(operators)
+
+        # source replacement operators - if one is applied setPredicate will be ignored
+        i = 0
+        while i < len(operators):
+            mainCode = operators[i]
+
+            if (mainCode[0:9].lower() == "fromsheet") or (mainCode[0:10].lower() == "wholesheet"):  # custom print sheet
+                print("Parsing from main code: " + mainCode)
+                sheetName = mainCode[10:].strip("()\" ")
+                print("Attempting to lookup: " + sheetName)
+                fromSheet = BoosterGenerator.tryGetStaticSheet(sheetName)
+                if fromSheet is None:
+                    raise RuntimeError("PrintSheet Error: " + ps.getName() + " didn't find " + sheetName + " from " + mainCode)
+                src = fromSheet.toFlatList()
+                setPred = lambda x: True
+
+            elif mainCode.startswith("promo") or mainCode.startswith("name"):  # get exactly the named cards, that's a tiny inlined print sheet
+                list_ = mainCode[5:].strip("() ")
+                cardNames = TextUtil.splitWithParenthesis(list_, ',', '"', '"')
+                srcList = []
+
+                for cardName in cardNames:
+                    srcList.append(StaticData.instance().getCommonCards().getCard(cardName))
+
+                src = srcList
+                setPred = lambda x: True
+            else:
+                i += 1
+                continue
+
+            operators.pop(i)
+
+        # only special operators should remain by now - the ones that could not be turned into one predicate
+        mainCode = None if len(operators) == 0 else operators[0].strip()
+
+        if mainCode is None or mainCode.lower() == BoosterSlots.ANY.lower():  # no restriction on rarity
+            predicate = lambda c: setPred(c) and extraPred(c)
+            ps.addAll(IterableUtil.filter(src, predicate))
+
+        elif mainCode.lower() == BoosterSlots.UNCOMMON_RARE.lower():  # for sets like ARN, where U1 cards are considered rare and U3 are uncommon
+            predicateRares = lambda c: setPred(c) and PaperCardPredicates.IS_RARE(c) and extraPred(c)
+            ps.addAll(IterableUtil.filter(src, predicateRares))
+
+            predicateUncommon = lambda c: setPred(c) and PaperCardPredicates.IS_UNCOMMON(c) and extraPred(c)
+            ps.addAll(IterableUtil.filter(src, predicateUncommon), 3)
+
+        elif mainCode.lower() == BoosterSlots.RARE_MYTHIC.lower():
+            # Typical ratio of rares to mythics is 53:15, changing to 35:10 in smaller sets.
+            # To achieve the desired 1:8 are all mythics are added once, and all rares added twice per print sheet.
+
+            predicateMythic = lambda c: setPred(c) and PaperCardPredicates.IS_MYTHIC_RARE(c) and extraPred(c)
+            ps.addAll(IterableUtil.filter(src, predicateMythic))
+
+            predicateRare = lambda c: setPred(c) and PaperCardPredicates.IS_RARE(c) and extraPred(c)
+            ps.addAll(IterableUtil.filter(src, predicateRare), 2)
+        elif mainCode.lower() == BoosterSlots.UNCOMMON_RARE_MYTHIC.lower():
+            # Extended version of RARE_MYTHIC, used for Alchemy slots
+
+            predicateMythic = lambda c: setPred(c) and PaperCardPredicates.IS_MYTHIC_RARE(c) and extraPred(c)
+            ps.addAll(IterableUtil.filter(src, predicateMythic))
+
+            predicateRare = lambda c: setPred(c) and PaperCardPredicates.IS_RARE(c) and extraPred(c)
+            ps.addAll(IterableUtil.filter(src, predicateRare), 2)
+
+            predicateUncommon = lambda c: setPred(c) and PaperCardPredicates.IS_UNCOMMON(c) and extraPred(c)
+            ps.addAll(IterableUtil.filter(src, predicateUncommon), 4)
+        else:
+            raise ValueError("Booster generator: operator could not be parsed - " + mainCode)
+
+        return ps
+
+    @staticmethod
+    def buildExtraPredicate(operators: list[str]):
+        """
+        This method also modifies passed parameter
+        """
+        conditions = []
+
+        i = 0
+        while i < len(operators):
+            operator = operators[i]
+            if operator is None or operator == "":
+                operators.pop(i)
+                continue
+
+            if operator.endswith("s"):
+                operator = operator[:-1]
+
+            invert = operator[0] == '!'
+            if invert:
+                operator = operator[1:]
+
+            toAdd = None
+            if operator.lower() == BoosterSlots.DUAL_FACED_CARD.lower():
+                toAdd = lambda card: CardSplitType.DUAL_FACED_CARDS.contains(card.getRules().getSplitType())
+            elif operator.lower() == BoosterSlots.LAND.lower():
+                toAdd = PaperCardPredicates.IS_LAND
+            elif operator.lower() == BoosterSlots.BASIC_LAND.lower():
+                toAdd = PaperCardPredicates.IS_BASIC_LAND_RARITY
+            elif operator.lower() == BoosterSlots.TIME_SHIFTED.lower():
+                toAdd = PaperCardPredicates.IS_SPECIAL
+            elif operator.lower() == BoosterSlots.SPECIAL.lower():
+                toAdd = PaperCardPredicates.IS_SPECIAL
+            elif operator.lower() == BoosterSlots.MYTHIC.lower():
+                toAdd = PaperCardPredicates.IS_MYTHIC_RARE
+            elif operator.lower() == BoosterSlots.RARE.lower():
+                toAdd = PaperCardPredicates.IS_RARE
+            elif operator.lower() == BoosterSlots.UNCOMMON.lower():
+                toAdd = PaperCardPredicates.IS_UNCOMMON
+            elif operator.lower() == BoosterSlots.COMMON.lower():
+                toAdd = PaperCardPredicates.IS_COMMON
+            elif operator.startswith("name("):
+                operator = operator[4:].strip("() ")
+                cardNames = TextUtil.splitWithParenthesis(operator, ',', '"', '"')
+                toAdd = PaperCardPredicates.names(list(cardNames))
+            elif operator.startswith("color("):
+                operator = operator[len("color(") + 1:].strip("()\" ")
+                low = operator.lower()
+                if low == "black":
+                    toAdd = PaperCardPredicates.IS_BLACK
+                elif low == "blue":
+                    toAdd = PaperCardPredicates.IS_BLUE
+                elif low == "green":
+                    toAdd = PaperCardPredicates.IS_GREEN
+                elif low == "red":
+                    toAdd = PaperCardPredicates.IS_RED
+                elif low == "white":
+                    toAdd = PaperCardPredicates.IS_WHITE
+                elif low == "colorless":
+                    toAdd = PaperCardPredicates.IS_COLORLESS
+            elif operator.startswith("fromSets("):
+                operator = operator[len("fromSets(") + 1:].strip("()\" ")
+                sets = operator.split(",")
+                toAdd = PaperCardPredicates.printedInSets(sets)
+            elif operator.startswith("fromSheet(") and invert:
+                sheetName = operator[9:].strip("()\" ")
+                cards = set(BoosterGenerator.tryGetStaticSheet(sheetName).toFlatList())
+                toAdd = lambda card, cards=cards: card in cards
+
+            if toAdd is None:
+                i += 1
+                continue
+
+            operators.pop(i)
+
+            if invert:
+                toAdd = (lambda f: (lambda c: not f(c)))(toAdd)
+            conditions.append(toAdd)
+
+        if len(conditions) == 0:
+            return lambda x: True
+
+        return IterableUtil.and_(conditions)
 ```

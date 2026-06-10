@@ -486,3 +486,216 @@ public enum ColorSet implements Iterable<Color>, Serializable {
     }
 }
 ```
+
+## Python
+`forge/card/ColorSet.py`
+
+```python
+from forge.card.MagicColor.Color import Color
+from forge.card.mana.ManaCost import ManaCost
+from forge.card.MagicColor import MagicColor
+from forge.util.BinaryUtil import BinaryUtil
+
+import enum
+from typing import Iterator, List, Set
+
+
+class ColorSet(enum.Enum):
+    """
+    Represents a set of any number of colors out of 5 possible in the game.
+    This class is immutable, do not generate any setters here.
+    Implements Iterable[Color] and is serializable.
+    """
+
+    C = (Color.COLORLESS,)
+    W = (Color.WHITE,)
+    U = (Color.BLUE,)
+    WU = (Color.WHITE, Color.BLUE)
+    B = (Color.BLACK,)
+    WB = (Color.WHITE, Color.BLACK)
+    UB = (Color.BLUE, Color.BLACK)
+    WUB = (Color.WHITE, Color.BLUE, Color.BLACK)
+    R = (Color.RED,)
+    RW = (Color.RED, Color.WHITE)
+    UR = (Color.BLUE, Color.RED)
+    URW = (Color.BLUE, Color.RED, Color.WHITE)
+    BR = (Color.BLACK, Color.RED)
+    RWB = (Color.RED, Color.WHITE, Color.BLACK)
+    UBR = (Color.BLUE, Color.BLACK, Color.RED)
+    WUBR = (Color.WHITE, Color.BLUE, Color.BLACK, Color.RED)
+    G = (Color.GREEN,)
+    GW = (Color.GREEN, Color.WHITE)
+    GU = (Color.GREEN, Color.BLUE)
+    GWU = (Color.GREEN, Color.WHITE, Color.BLUE)
+    BG = (Color.BLACK, Color.GREEN)
+    WBG = (Color.WHITE, Color.BLACK, Color.GREEN)
+    BGU = (Color.BLACK, Color.GREEN, Color.BLUE)
+    GWUB = (Color.GREEN, Color.WHITE, Color.BLUE, Color.BLACK)
+    RG = (Color.RED, Color.GREEN)
+    RGW = (Color.RED, Color.GREEN, Color.WHITE)
+    GUR = (Color.GREEN, Color.BLUE, Color.RED)
+    RGWU = (Color.RED, Color.GREEN, Color.WHITE, Color.BLUE)
+    BRG = (Color.BLACK, Color.RED, Color.GREEN)
+    BRGW = (Color.BLACK, Color.RED, Color.GREEN, Color.WHITE)
+    UBRG = (Color.BLUE, Color.BLACK, Color.RED, Color.GREEN)
+    WUBRG = (Color.WHITE, Color.BLUE, Color.BLACK, Color.RED, Color.GREEN)
+
+    def __init__(self, *ordered: Color):
+        self.orderedShards: List[Color] = list(ordered)
+        # The set bits of a constant's ordered colors equal its ordinal/bitmask.
+        mask = 0
+        for c in ordered:
+            mask |= c.getColorMask()
+        self._ordinal = mask
+        self.orderWeight = self.calcOrderWeight()
+
+    def ordinal(self) -> int:
+        return self._ordinal
+
+    @staticmethod
+    def fromMask(mask: int) -> "ColorSet":
+        mask32 = mask & MagicColor.ALL_COLORS
+        return list(ColorSet)[mask32]
+
+    @staticmethod
+    def fromEnums(*colors) -> "ColorSet":
+        if len(colors) == 1 and not isinstance(colors[0], Color):
+            colors = colors[0]
+        mask = 0
+        for e in colors:
+            mask |= e.getColorMask()
+        return ColorSet.fromMask(mask)
+
+    @staticmethod
+    def fromNames(*colors) -> "ColorSet":
+        if len(colors) == 1 and not isinstance(colors[0], str):
+            colors = colors[0]
+        mask = 0
+        for s in colors:
+            mask |= MagicColor.fromName(s)
+        return ColorSet.fromMask(mask)
+
+    @staticmethod
+    def fromManaCost(mana: ManaCost) -> "ColorSet":
+        return ColorSet.fromMask(mana.getColorProfile())
+
+    @staticmethod
+    def combine(*colors: "ColorSet") -> "ColorSet":
+        mask = 0
+        for c in colors:
+            mask |= c.getColor()
+        return ColorSet.fromMask(mask)
+
+    def hasAnyColor(self, colormask) -> bool:
+        if isinstance(colormask, Color):
+            return colormask in self.orderedShards
+        return (self.ordinal() & colormask) != 0
+
+    def hasAllColors(self, colormask: int) -> bool:
+        return (self.ordinal() & colormask) == colormask
+
+    def hasExactlyColor(self, colormask: int) -> bool:
+        return self.ordinal() == colormask
+
+    def hasNoColorsExcept(self, other) -> bool:
+        if isinstance(other, ColorSet):
+            return self.hasNoColorsExcept(other.getColor())
+        return (self.ordinal() & ~other) == 0
+
+    def getMissingColors(self, colormask: int) -> "ColorSet":
+        return ColorSet.fromMask(self.ordinal() & ~colormask)
+
+    def containsAllColorsFrom(self, colorProfile: int) -> bool:
+        return (~self.ordinal() & colorProfile) == 0
+
+    def countColors(self) -> int:
+        return BinaryUtil.bitCount(self.ordinal())
+
+    # order has to be: W U B R G multi colorless - same as cards numbering
+    # through a set
+    def calcOrderWeight(self) -> float:
+        res = float(self.countColors())
+        if self.hasWhite():
+            res += 0.0005
+        if self.hasBlue():
+            res += 0.0020
+        if self.hasBlack():
+            res += 0.0080
+        if self.hasRed():
+            res += 0.0320
+        if self.hasGreen():
+            res += 0.1280
+        return res
+
+    def getOrderWeight(self) -> float:
+        return self.orderWeight
+
+    def isColorless(self) -> bool:
+        return self is ColorSet.C
+
+    def isMulticolor(self) -> bool:
+        return self.countColors() > 1
+
+    def isAllColors(self) -> bool:
+        return self is ColorSet.WUBRG
+
+    def isMonoColor(self) -> bool:
+        return self.countColors() == 1
+
+    def isEqual(self, color: int) -> bool:
+        return color == self.ordinal()
+
+    # Presets
+    def hasWhite(self) -> bool:
+        return self.hasAnyColor(MagicColor.WHITE)
+
+    def hasBlue(self) -> bool:
+        return self.hasAnyColor(MagicColor.BLUE)
+
+    def hasBlack(self) -> bool:
+        return self.hasAnyColor(MagicColor.BLACK)
+
+    def hasRed(self) -> bool:
+        return self.hasAnyColor(MagicColor.RED)
+
+    def hasGreen(self) -> bool:
+        return self.hasAnyColor(MagicColor.GREEN)
+
+    def inverse(self) -> "ColorSet":
+        mask = self.ordinal()
+        mask ^= MagicColor.ALL_COLORS
+        return ColorSet.fromMask(mask)
+
+    def getColor(self) -> int:
+        return self.ordinal()
+
+    def sharesColorWith(self, ccOther: "ColorSet") -> bool:
+        return (self.ordinal() & ccOther.ordinal()) != 0
+
+    def getSharedColors(self, ccOther: "ColorSet") -> "ColorSet":
+        return ColorSet.fromMask(self.getColor() & ccOther.getColor())
+
+    def getOffColors(self, ccOther: "ColorSet") -> "ColorSet":
+        return ColorSet.fromMask(~self.ordinal() & ccOther.ordinal())
+
+    def toEnumSet(self) -> Set[Color]:
+        return set(self.orderedShards)
+
+    def iterator(self) -> Iterator[Color]:
+        return iter(self.orderedShards)
+
+    def __iter__(self) -> Iterator[Color]:
+        return self.iterator()
+
+    def stream(self) -> Iterator[Color]:
+        return iter(self.orderedShards)
+
+    # Get array of mana cost shards for color set in the proper order
+    def getOrderedColors(self) -> List[Color]:
+        return self.orderedShards
+
+
+# needs to be before other static (set outside the enum body so it is not
+# interpreted as an enum member)
+ColorSet.serialVersionUID = 794691267379929080
+```

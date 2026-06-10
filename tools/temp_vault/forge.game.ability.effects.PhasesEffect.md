@@ -45,7 +45,7 @@ classDiagram
 
 ## Design Description
 
-PhasesEffect implements the resolution logic for abilities that phase permanents in or out, extending `SpellAbilityEffect` and slotting into Forge's ability-effect framework through the inherited `resolve` and `getStackDescription` contract. Driven by script parameters (`PhaseInOrOut`, `AllValid`, `AnyNumber`, `WontPhaseInNormal`, `RememberAffected`, and tap-state flags), it assembles its target set—either from defined/targeted cards or by filtering the battlefield via `AbilityUtils`—then toggles each card's phased state through `Card.phase`, collaborating with `Game`, `Player`, `CardCollection`, and `SpellAbility`.
+PhasesEffect implements the resolution logic for abilities that phase permanents in or out, extending `SpellAbilityEffect` and slotting into Forge's ability-effect framework through the inherited `resolve` and `getStackDescription` contract. Driven by script parameters (`PhaseInOrOut`, `AllValid`, `AnyNumber`, `WontPhaseInNormal`, `RememberAffected`, and tap-state flags), it assembles its target setâ€”either from defined/targeted cards or by filtering the battlefield via `AbilityUtils`â€”then toggles each card's phased state through `Card.phase`, collaborating with `Game`, `Player`, `CardCollection`, and `SpellAbility`.
 
 Notably, it re-resolves every target against live game state using `getCardState` and `equalsWithGameTimestamp` to skip stale last-known-information copies, and consults `StaticAbilityCantPhase` to honor cant-phase restrictions in both directions. After phasing it preserves tap status, optionally remembers affected cards on the source, and fires a single batched `PhaseOutAll` trigger carrying the collected cards through `AbilityKey`-keyed runtime parameters, centralizing trigger bookkeeping.
 
@@ -179,4 +179,107 @@ public class PhasesEffect extends SpellAbilityEffect {
         }
     }
 }
+```
+
+## Python
+`forge/game/ability/effects/PhasesEffect.py`
+
+```python
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.CardCollection import CardCollection
+from forge.game.trigger.TriggerType import TriggerType
+from forge.util.Lang import Lang
+
+from forge.game.Game import Game
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.staticability.StaticAbilityCantPhase import StaticAbilityCantPhase
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.Localizer import Localizer
+
+
+class PhasesEffect(SpellAbilityEffect):
+
+    # (non-Javadoc)
+    # @see forge.card.abilityfactory.SpellEffect#resolve(java.util.Map, forge.card.spellability.SpellAbility)
+    def getStackDescription(self, sa: SpellAbility) -> str:
+        # when getStackDesc is called, just build exactly what is happening
+        sb = []
+        tgtCards = self.getTargetCards(sa)
+        sb.append(Lang.joinHomogenous(tgtCards))
+        sb.append(" phases out." if len(tgtCards) == 1 else " phase out.")
+        return "".join(sb)
+
+    def resolve(self, sa: SpellAbility) -> None:
+        activator = sa.getActivatingPlayer()
+        game = activator.getGame()
+        source = sa.getHostCard()
+        phaseInOrOut = sa.hasParam("PhaseInOrOut")
+        wontPhaseInNormal = sa.hasParam("WontPhaseInNormal")
+
+        if sa.hasParam("AllValid"):
+            if phaseInOrOut:
+                tgtCards = game.getCardsIncludePhasingIn(ZoneType.Battlefield)
+            else:
+                tgtCards = game.getCardsIn(ZoneType.Battlefield)
+            tgtCards = AbilityUtils.filterListByType(tgtCards, sa.getParam("AllValid"), sa)
+        else:
+            tgtCards = self.getDefinedCardsOrTargeted(sa)
+        if sa.hasParam("AnyNumber"):
+            tgtCards = activator.getController().chooseCardsForEffect(tgtCards, sa,
+                    Localizer.getInstance().getMessage("lblChooseAnyNumberToPhase"),
+                    0, tgtCards.size(), True, None)
+
+        phasedOut = CardCollection()
+        if phaseInOrOut:  # Time and Tide and Oubliette
+            toPhase = CardCollection()
+            for tgtC in tgtCards:
+                if tgtC.isPhasedOut() and StaticAbilityCantPhase.cantPhaseIn(tgtC):
+                    continue
+                if not tgtC.isPhasedOut() and StaticAbilityCantPhase.cantPhaseOut(tgtC):
+                    continue
+                toPhase.add(tgtC)
+            for tgtC in toPhase:
+                gameCard = game.getCardState(tgtC, None)
+                # gameCard is LKI in that case, the card is not in game anymore
+                # or the timestamp did change
+                # this should check Self too
+                if gameCard is None or not tgtC.equalsWithGameTimestamp(gameCard):
+                    continue
+                gameCard.phase(False)
+                if gameCard.isPhasedOut():
+                    phasedOut.add(gameCard)
+                    gameCard.setWontPhaseInNormal(wontPhaseInNormal)
+                else:
+                    # won't trigger tap or untap triggers when phase in
+                    if sa.hasParam("Tapped"):
+                        gameCard.setTapped(True)
+                    elif sa.hasParam("Untapped"):
+                        gameCard.setTapped(False)
+                    gameCard.setWontPhaseInNormal(False)
+        else:  # just phase out
+            for tgtC in tgtCards:
+                gameCard = game.getCardState(tgtC, None)
+                # gameCard is LKI in that case, the card is not in game anymore
+                # or the timestamp did change
+                # this should check Self too
+                if gameCard is None or not tgtC.equalsWithGameTimestamp(gameCard):
+                    continue
+                if not gameCard.isPhasedOut() and not StaticAbilityCantPhase.cantPhaseOut(gameCard):
+                    gameCard.phase(False)
+                    if gameCard.isPhasedOut():
+                        if sa.hasParam("RememberAffected"):
+                            source.addRemembered(gameCard)
+                        phasedOut.add(gameCard)
+                        gameCard.setWontPhaseInNormal(wontPhaseInNormal)
+        if sa.hasParam("RememberValids"):
+            source.addRemembered(tgtCards)
+        if not phasedOut.isEmpty():
+            runParams = AbilityKey.newMap()
+            runParams[AbilityKey.Cards] = phasedOut
+            game.getTriggerHandler().runTrigger(TriggerType.PhaseOutAll, runParams, False)
 ```

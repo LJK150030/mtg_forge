@@ -42,6 +42,10 @@ classDiagram
 - [[forge.game.player.Player|Player]]
 - [[forge.game.spellability.SpellAbility|SpellAbility]]
 
+## Design Description
+
+ReplaceDamage is a concrete replacement effect that intercepts damage events before they resolve, deciding whether the effect applies and rewiring the relevant objects when it does. Extending ReplacementEffect, it overrides `canReplace` to test an event's run parametersâ€”damage amount, source, target, cause, combat status, and redirection eligibilityâ€”against the card's configured Valid* filters and comparison expressions, and overrides `setReplacingObjects` to expose the damage amount, target, and source to the resolving SpellAbility. It collaborates with the AbilityKey-keyed parameter map to read event data, and with Game, Card, Player, and GameEntity to validate redirection targets (creatures, planeswalkers, battles, or in-game players). The design centers on declarative, data-driven matching: behavior is parameterized by string maps parsed at evaluation time, with special-cased handling for redirection (e.g., "Replaced" defined objects and no-redirection keywords) reflecting the rules' edge cases.
+
 ## Source
 `forge-game/src/main/java/forge/game/replacement/ReplaceDamage.java`
 
@@ -195,4 +199,99 @@ public class ReplaceDamage extends ReplacementEffect {
     }
 
 }
+```
+
+## Python
+`forge/game/replacement/ReplaceDamage.py`
+
+```python
+from forge.game.replacement.ReplacementEffect import ReplacementEffect
+from forge.game.Game import Game
+from forge.game.GameEntity import GameEntity
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.card.Card import Card
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Expressions import Expressions
+
+
+# TODO: Write javadoc for this type.
+class ReplaceDamage(ReplacementEffect):
+
+    # TODO: Write javadoc for Constructor.
+    #
+    # @param map the map
+    # @param host the host
+    def __init__(self, map: dict[str, str], host: Card, intrinsic: bool):
+        super().__init__(map, host, intrinsic)
+
+    def canReplace(self, runParams: dict[AbilityKey, object]) -> bool:
+        game = self.getHostCard().getGame()
+
+        if runParams.get(AbilityKey.DamageAmount) == 0:
+            # If no actual damage is dealt, there is nothing to replace
+            return False
+        if not self.matchesValidParam("ValidSource", runParams.get(AbilityKey.DamageSource)):
+            return False
+        if not self.matchesValidParam("ValidTarget", runParams.get(AbilityKey.Affected)):
+            return False
+        if not self.matchesValidParam("ValidCause", runParams.get(AbilityKey.Cause)):
+            return False
+        if self.hasParam("CauseIsSource"):
+            cause = runParams.get(AbilityKey.Cause)
+            if not cause.getHostCard() == runParams.get(AbilityKey.DamageSource):
+                return False
+        if self.hasParam("RelativeToSource"):
+            source = runParams.get(AbilityKey.DamageSource)
+            validRelative = self.getParam("RelativeToSource")
+            if not self.matchesValid(runParams.get(AbilityKey.Affected), validRelative.split(","), source):
+                return False
+        if self.hasParam("DamageAmount"):
+            full = self.getParam("DamageAmount")
+            operator = full[0:2]
+            operand = full[2:]
+            intoperand = AbilityUtils.calculateAmount(self.getHostCard(), operand, self)
+
+            if not Expressions.compare(runParams.get(AbilityKey.DamageAmount), operator, intoperand):
+                return False
+        if self.hasParam("IsCombat"):
+            if (self.getParam("IsCombat") == "True") != runParams.get(AbilityKey.IsCombat):
+                return False
+
+        if self.hasParam("DamageTarget"):
+            # Lava Burst and Whippoorwill check
+            cause = runParams.get(AbilityKey.Cause)
+            affected = runParams.get(AbilityKey.Affected)
+            if (cause is not None and cause.hasParam("NoRedirection")) or affected.hasKeyword("Damage that would be dealt to CARDNAME can't be redirected."):
+                return False
+            # check for DamageRedirection, the Thing where the damage is redirected to must be a creature or planeswalker or a player
+            def_ = self.getParam("DamageTarget")
+            if def_.startswith("Replaced"):
+                # this can't work with the Defined below because the replaced objects aren't set to a possible SA yet
+                if def_ == "ReplacedSourceController":
+                    source = runParams.get(AbilityKey.DamageSource)
+                    if source.getController() not in game.getPlayers():
+                        return False
+                elif def_ == "ReplacedTargetController":
+                    if not isinstance(affected, Card) or affected.getController() not in game.getPlayers():
+                        return False
+                else:
+                    return False
+            else:
+                for p in AbilityUtils.getDefinedPlayers(self.getHostCard(), def_, self):
+                    if not p.isInGame():
+                        return False
+                for c in AbilityUtils.getDefinedCards(self.getHostCard(), def_, self):
+                    if not c.isCreature() and not c.isPlaneswalker() and not c.isBattle():
+                        return False
+                    if not c.isInPlay():
+                        return False
+
+        return True
+
+    def setReplacingObjects(self, runParams: dict[AbilityKey, object], sa: SpellAbility) -> None:
+        sa.setReplacingObject(AbilityKey.DamageAmount, runParams.get(AbilityKey.DamageAmount))
+        sa.setReplacingObject(AbilityKey.Target, runParams.get(AbilityKey.Affected))
+        sa.setReplacingObject(AbilityKey.Source, runParams.get(AbilityKey.DamageSource))
 ```

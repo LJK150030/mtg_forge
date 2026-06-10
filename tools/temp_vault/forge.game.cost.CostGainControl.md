@@ -48,7 +48,7 @@ classDiagram
 
 ## Design Description
 
-CostGainControl models a payment cost in which a player gains control of one or more permanents in order to play a spell or ability. As a concrete subclass of CostPartWithList, it plugs into Forge's composite cost framework: it parses the standard `Num/Type/TypeDescription` syntax through its superclass constructor, reports a fixed `paymentOrder` of 8 to sequence itself among other cost parts, and renders a human-readable label ("Gain control of …") via `toString`. Its core responsibility is validating and executing the control-change: `canPay` filters the battlefield for valid, controllable cards and checks that enough exist, while `doPayment` performs the effect by attaching a temporary controller to the target with a fresh game timestamp.
+CostGainControl models a payment cost in which a player gains control of one or more permanents in order to play a spell or ability. As a concrete subclass of CostPartWithList, it plugs into Forge's composite cost framework: it parses the standard `Num/Type/TypeDescription` syntax through its superclass constructor, reports a fixed `paymentOrder` of 8 to sequence itself among other cost parts, and renders a human-readable label ("Gain control of â€¦") via `toString`. Its core responsibility is validating and executing the control-change: `canPay` filters the battlefield for valid, controllable cards and checks that enough exist, while `doPayment` performs the effect by attaching a temporary controller to the target with a fresh game timestamp.
 
 The class collaborates with SpellAbility and Card to resolve the host and targets, Player to scope ownership and game access, and CardCollectionView with CardLists for battlefield filtering. It supports the cost framework's visitor pattern through `accept(ICostVisitor)` and supplies stable hash keys ("ControlGained"/"ControlGainedCards") so the engine can track gained-control cards in last-known-information and card lists.
 
@@ -166,4 +166,62 @@ public class CostGainControl extends CostPartWithList {
     }
 
 }
+```
+
+## Python
+`forge/game/cost/CostGainControl.py`
+
+```python
+from forge.game.cost.CostPartWithList import CostPartWithList
+from forge.game.cost.Cost import Cost
+from forge.game.cost.ICostVisitor import ICostVisitor
+from forge.game.card.Card import Card
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.card.CardLists import CardLists
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+
+
+class CostGainControl(CostPartWithList):
+    # GainControl<Num/Type{/TypeDescription}>
+
+    serialVersionUID = 1
+
+    def __init__(self, amount: str, type: str, description: str):
+        super().__init__(amount, type, description)
+
+    def paymentOrder(self) -> int:
+        return 8
+
+    def toString(self) -> str:
+        sb = []
+        desc = self.getType() if self.getTypeDescription() is None else self.getTypeDescription()
+        sb.append("Gain control of ")
+        sb.append(Cost.convertAmountTypeToWords(self.getAmount(), desc))
+        return "".join(sb)
+
+    def __str__(self) -> str:
+        return self.toString()
+
+    def canPay(self, ability: SpellAbility, payer: Player, effect: bool) -> bool:
+        source = ability.getHostCard()
+        typeList = payer.getGame().getCardsIn(ZoneType.Battlefield)
+        typeList = CardLists.getValidCards(typeList, self.getType().split(";"), payer, source, ability)
+        typeList = CardLists.filter(typeList, lambda c: c.canBeControlledBy(payer))
+
+        return typeList.size() >= self.getAbilityAmount(ability)
+
+    def doPayment(self, payer: Player, ability: SpellAbility, targetCard: Card, effect: bool) -> Card:
+        targetCard.addTempController(payer, payer.getGame().getNextTimestamp())
+        return targetCard
+
+    def getHashForLKIList(self) -> str:
+        return "ControlGained"
+
+    def getHashForCardList(self) -> str:
+        return "ControlGainedCards"
+
+    def accept(self, visitor: ICostVisitor):
+        return visitor.visit(self)
 ```

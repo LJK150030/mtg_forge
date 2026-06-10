@@ -35,6 +35,12 @@ classDiagram
 **Uses:**
 - [[forge.util.LineReader.LineIterator|LineIterator]]
 
+## Design Description
+
+LineReader adapts a byte-oriented `InputStream` into an iterable sequence of text lines, wrapping it in a `BufferedReader` (with an optional `Charset`) and exposing the lines either lazily through an iterator or eagerly via `readLines()`. By implementing `Iterable<String>` it integrates directly with the enhanced for-loop, and by implementing `Closeable` it participates in standard resource-management idioms.
+
+Its central design intent is convenience and automatic cleanup: the private inner `LineIterator` reads one line at a time through `BufferedReader.readLine()` and closes the underlying stream as soon as `hasNext()` reaches end-of-input, so a completed for-loop needs no manual close. Checked `IOException`s are rethrown as unchecked `IllegalStateException`s to keep the iterator contract clean, `remove()` is unsupported, and `finalize()` offers a last-resort close. The class explicitly disclaims thread safety, favoring a simple single-threaded streaming reader.
+
 ## Source
 `forge-core/src/main/java/forge/util/LineReader.java`
 
@@ -209,4 +215,131 @@ public class LineReader implements Iterable<String>, Closeable {
         }
     }
 }
+```
+
+## Python
+`forge/util/LineReader.py`
+
+```python
+from forge.util.LineReader.LineIterator import LineIterator
+import io
+
+
+class LineReader:
+    """
+    Represents the lines found in an InputStream. The lines are read one
+    at a time using BufferedReader.readLine() and may be streamed through
+    an iterator or returned all at once.
+
+    This class does not handle any concurrency issues.
+
+    The stream is closed automatically when the for loop is done :)
+
+        for line in LineReader(stream):
+            # ...
+
+    An IllegalStateException will be thrown if any IOExceptions occur when
+    reading or closing the stream.
+
+    @author Torleif Berger
+    http://creativecommons.org/licenses/by/3.0/
+    @see http://www.geekality.net/?p=1614
+    """
+
+    def __init__(self, stream, charset=None):
+        """
+        Instantiates a new line reader.
+
+        :param stream: the stream
+        :param charset: the charset
+        """
+        encoding = charset if charset is not None else None
+        self.reader = io.TextIOWrapper(stream, encoding=encoding)
+
+    def close(self):
+        """
+        Closes the underlying stream.
+        """
+        self.reader.close()
+
+    def __del__(self):
+        """
+        Makes sure the underlying stream is closed.
+        """
+        try:
+            self.close()
+        except Exception:
+            pass
+
+    def iterator(self):
+        """
+        Returns an iterator over the lines remaining to be read.
+
+        The underlying stream is closed automatically once hasNext() returns
+        false. This means that the stream should be closed after using a for
+        loop.
+
+        :return: This iterator.
+        """
+        return LineReader.LineIterator(self)
+
+    def __iter__(self):
+        return self.iterator()
+
+    def readLines(self):
+        """
+        Returns all lines remaining to be read and closes the stream.
+
+        :return: The lines read from the stream.
+        """
+        lines = []
+        for line in self:
+            lines.append(line)
+        return lines
+
+    class LineIterator:
+        def __init__(self, outer):
+            self._outer = outer
+            self.nextLine = None
+
+        def bufferNext(self):
+            try:
+                line = self._outer.reader.readline()
+                self.nextLine = line if line != "" else None
+                return self.nextLine
+            except IOError as e:
+                raise IllegalStateException("I/O error while reading stream.", e)
+
+        def hasNext(self):
+            hasNext = (self.nextLine is not None) or (self.bufferNext() is not None)
+
+            if not hasNext:
+                try:
+                    self._outer.reader.close()
+                except IOError as e:
+                    raise IllegalStateException("I/O error when closing stream.", e)
+
+            return hasNext
+
+        def __next__(self):
+            if not self.hasNext():
+                raise StopIteration()
+
+            result = self.nextLine
+            self.nextLine = None
+            return result
+
+        def __iter__(self):
+            return self
+
+        def next(self):
+            if not self.hasNext():
+                raise NoSuchElementException()
+
+            result = self.nextLine
+            self.nextLine = None
+            return result
+
+        def remove(self):
+            raise UnsupportedOperationException()
 ```

@@ -633,7 +633,7 @@ classDiagram
 
 The `ApiType` enum is the central registry that maps every Magic: The Gathering ability keyword in Forge's card-scripting language to the `SpellAbilityEffect` subclass that resolves it. Each constant pairs a script-facing API name (e.g., `DealDamage`, `ChangeZone`, `Counter`) with a concrete effect class from the `forge.game.ability.effects` package, so the enum acts as the single dispatch table the engine consults to turn a parsed ability declaration into executable game behavior.
 
-Its design favors fast, mostly stateless resolution: a static `Map` populated at class-load time backs `smartValueOf` for case-insensitive name lookup from card scripts, and each constant eagerly caches a shared stateless effect instance via `ReflectionUtil`, while a secondary constructor flag lets non-stateless effects defer to fresh instantiation on each `getSpellEffect` call. Internal-only constants such as `InternalLegendaryRule`, `InternalRadiation`, and `BlankLine`—several reusing `CharmEffect`—show the enum also backs engine-internal mechanics beyond directly scripted abilities.
+Its design favors fast, mostly stateless resolution: a static `Map` populated at class-load time backs `smartValueOf` for case-insensitive name lookup from card scripts, and each constant eagerly caches a shared stateless effect instance via `ReflectionUtil`, while a secondary constructor flag lets non-stateless effects defer to fresh instantiation on each `getSpellEffect` call. Internal-only constants such as `InternalLegendaryRule`, `InternalRadiation`, and `BlankLine`â€”several reusing `CharmEffect`â€”show the enum also backs engine-internal mechanics beyond directly scripted abilities.
 
 ## Source
 `forge-game/src/main/java/forge/game/ability/ApiType.java`
@@ -886,4 +886,447 @@ public enum ApiType {
         return instanceEffect != null ? instanceEffect : ReflectionUtil.makeDefaultInstanceOf(clsEffect);
     }
 }
+```
+
+## Python
+`forge/game/ability/ApiType.py`
+
+```python
+package forge.game.ability -> module forge/game/ability/ApiType.py
+
+I'll produce the faithful Python port directly.
+
+from enum import Enum
+
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.util.ReflectionUtil import ReflectionUtil
+
+from forge.game.ability.effects.AbandonEffect import AbandonEffect
+from forge.game.ability.effects.ActivateAbilityEffect import ActivateAbilityEffect
+from forge.game.ability.effects.AddPhaseEffect import AddPhaseEffect
+from forge.game.ability.effects.AddTurnEffect import AddTurnEffect
+from forge.game.ability.effects.AdvanceCrankEffect import AdvanceCrankEffect
+from forge.game.ability.effects.AirbendEffect import AirbendEffect
+from forge.game.ability.effects.AlterAttributeEffect import AlterAttributeEffect
+from forge.game.ability.effects.AmassEffect import AmassEffect
+from forge.game.ability.effects.AnimateAllEffect import AnimateAllEffect
+from forge.game.ability.effects.AnimateEffect import AnimateEffect
+from forge.game.ability.effects.AscendEffect import AscendEffect
+from forge.game.ability.effects.AssembleContraptionEffect import AssembleContraptionEffect
+from forge.game.ability.effects.AssignGroupEffect import AssignGroupEffect
+from forge.game.ability.effects.AttachEffect import AttachEffect
+from forge.game.ability.effects.BalanceEffect import BalanceEffect
+from forge.game.ability.effects.BecomeMonarchEffect import BecomeMonarchEffect
+from forge.game.ability.effects.BecomesBlockedEffect import BecomesBlockedEffect
+from forge.game.ability.effects.BidLifeEffect import BidLifeEffect
+from forge.game.ability.effects.BlankLineEffect import BlankLineEffect
+from forge.game.ability.effects.BlightEffect import BlightEffect
+from forge.game.ability.effects.BlockEffect import BlockEffect
+from forge.game.ability.effects.BondEffect import BondEffect
+from forge.game.ability.effects.BranchEffect import BranchEffect
+from forge.game.ability.effects.CamouflageEffect import CamouflageEffect
+from forge.game.ability.effects.ChangeCombatantsEffect import ChangeCombatantsEffect
+from forge.game.ability.effects.ChangeSpeedEffect import ChangeSpeedEffect
+from forge.game.ability.effects.ChangeTargetsEffect import ChangeTargetsEffect
+from forge.game.ability.effects.ChangeTextEffect import ChangeTextEffect
+from forge.game.ability.effects.ChangeXEffect import ChangeXEffect
+from forge.game.ability.effects.ChangeZoneAllEffect import ChangeZoneAllEffect
+from forge.game.ability.effects.ChangeZoneEffect import ChangeZoneEffect
+from forge.game.ability.effects.ChangeZoneResolveEffect import ChangeZoneResolveEffect
+from forge.game.ability.effects.ChaosEnsuesEffect import ChaosEnsuesEffect
+from forge.game.ability.effects.CharmEffect import CharmEffect
+from forge.game.ability.effects.ChooseCardEffect import ChooseCardEffect
+from forge.game.ability.effects.ChooseCardNameEffect import ChooseCardNameEffect
+from forge.game.ability.effects.ChooseColorEffect import ChooseColorEffect
+from forge.game.ability.effects.ChooseDirectionEffect import ChooseDirectionEffect
+from forge.game.ability.effects.ChooseEvenOddEffect import ChooseEvenOddEffect
+from forge.game.ability.effects.ChooseGenericEffect import ChooseGenericEffect
+from forge.game.ability.effects.ChooseNumberEffect import ChooseNumberEffect
+from forge.game.ability.effects.ChoosePlayerEffect import ChoosePlayerEffect
+from forge.game.ability.effects.ChooseSectorEffect import ChooseSectorEffect
+from forge.game.ability.effects.ChooseSourceEffect import ChooseSourceEffect
+from forge.game.ability.effects.ChooseTypeEffect import ChooseTypeEffect
+from forge.game.ability.effects.ClaimThePrizeEffect import ClaimThePrizeEffect
+from forge.game.ability.effects.ClashEffect import ClashEffect
+from forge.game.ability.effects.ClassLevelUpEffect import ClassLevelUpEffect
+from forge.game.ability.effects.CleanUpEffect import CleanUpEffect
+from forge.game.ability.effects.CloakEffect import CloakEffect
+from forge.game.ability.effects.CloneEffect import CloneEffect
+from forge.game.ability.effects.ConniveEffect import ConniveEffect
+from forge.game.ability.effects.ControlExchangeEffect import ControlExchangeEffect
+from forge.game.ability.effects.ControlExchangeVariantEffect import ControlExchangeVariantEffect
+from forge.game.ability.effects.ControlGainEffect import ControlGainEffect
+from forge.game.ability.effects.ControlGainVariantEffect import ControlGainVariantEffect
+from forge.game.ability.effects.ControlPlayerEffect import ControlPlayerEffect
+from forge.game.ability.effects.ControlSpellEffect import ControlSpellEffect
+from forge.game.ability.effects.CopyPermanentEffect import CopyPermanentEffect
+from forge.game.ability.effects.CopySpellAbilityEffect import CopySpellAbilityEffect
+from forge.game.ability.effects.CounterEffect import CounterEffect
+from forge.game.ability.effects.CountersMoveEffect import CountersMoveEffect
+from forge.game.ability.effects.CountersMultiplyEffect import CountersMultiplyEffect
+from forge.game.ability.effects.CountersProliferateEffect import CountersProliferateEffect
+from forge.game.ability.effects.CountersPutAllEffect import CountersPutAllEffect
+from forge.game.ability.effects.CountersPutEffect import CountersPutEffect
+from forge.game.ability.effects.CountersPutOrRemoveEffect import CountersPutOrRemoveEffect
+from forge.game.ability.effects.CountersRemoveAllEffect import CountersRemoveAllEffect
+from forge.game.ability.effects.CountersRemoveEffect import CountersRemoveEffect
+from forge.game.ability.effects.DamageAllEffect import DamageAllEffect
+from forge.game.ability.effects.DamageDealEffect import DamageDealEffect
+from forge.game.ability.effects.DamageEachEffect import DamageEachEffect
+from forge.game.ability.effects.DamagePreventEffect import DamagePreventEffect
+from forge.game.ability.effects.DamageResolveEffect import DamageResolveEffect
+from forge.game.ability.effects.DayTimeEffect import DayTimeEffect
+from forge.game.ability.effects.DebuffEffect import DebuffEffect
+from forge.game.ability.effects.DelayedTriggerEffect import DelayedTriggerEffect
+from forge.game.ability.effects.DestroyAllEffect import DestroyAllEffect
+from forge.game.ability.effects.DestroyEffect import DestroyEffect
+from forge.game.ability.effects.DetainEffect import DetainEffect
+from forge.game.ability.effects.DigEffect import DigEffect
+from forge.game.ability.effects.DigMultipleEffect import DigMultipleEffect
+from forge.game.ability.effects.DigUntilEffect import DigUntilEffect
+from forge.game.ability.effects.DiscardEffect import DiscardEffect
+from forge.game.ability.effects.DiscoverEffect import DiscoverEffect
+from forge.game.ability.effects.DraftEffect import DraftEffect
+from forge.game.ability.effects.DrainManaEffect import DrainManaEffect
+from forge.game.ability.effects.DrawEffect import DrawEffect
+from forge.game.ability.effects.EarthbendEffect import EarthbendEffect
+from forge.game.ability.effects.EffectEffect import EffectEffect
+from forge.game.ability.effects.EncodeEffect import EncodeEffect
+from forge.game.ability.effects.EndCombatPhaseEffect import EndCombatPhaseEffect
+from forge.game.ability.effects.EndTurnEffect import EndTurnEffect
+from forge.game.ability.effects.EndureEffect import EndureEffect
+from forge.game.ability.effects.ExploreEffect import ExploreEffect
+from forge.game.ability.effects.FightEffect import FightEffect
+from forge.game.ability.effects.FlipCoinEffect import FlipCoinEffect
+from forge.game.ability.effects.FlipOntoBattlefieldEffect import FlipOntoBattlefieldEffect
+from forge.game.ability.effects.FogEffect import FogEffect
+from forge.game.ability.effects.GameDrawEffect import GameDrawEffect
+from forge.game.ability.effects.GameLossEffect import GameLossEffect
+from forge.game.ability.effects.GameWinEffect import GameWinEffect
+from forge.game.ability.effects.GoadEffect import GoadEffect
+from forge.game.ability.effects.HauntEffect import HauntEffect
+from forge.game.ability.effects.HeistEffect import HeistEffect
+from forge.game.ability.effects.ImmediateTriggerEffect import ImmediateTriggerEffect
+from forge.game.ability.effects.IncubateEffect import IncubateEffect
+from forge.game.ability.effects.IntensifyEffect import IntensifyEffect
+from forge.game.ability.effects.InternalRadiationEffect import InternalRadiationEffect
+from forge.game.ability.effects.InvestigateEffect import InvestigateEffect
+from forge.game.ability.effects.LearnEffect import LearnEffect
+from forge.game.ability.effects.LifeExchangeEffect import LifeExchangeEffect
+from forge.game.ability.effects.LifeExchangeVariantEffect import LifeExchangeVariantEffect
+from forge.game.ability.effects.LifeGainEffect import LifeGainEffect
+from forge.game.ability.effects.LifeLoseEffect import LifeLoseEffect
+from forge.game.ability.effects.LifeSetEffect import LifeSetEffect
+from forge.game.ability.effects.LookAtEffect import LookAtEffect
+from forge.game.ability.effects.LosePerpetualEffect import LosePerpetualEffect
+from forge.game.ability.effects.MakeCardEffect import MakeCardEffect
+from forge.game.ability.effects.ManaEffect import ManaEffect
+from forge.game.ability.effects.ManaReflectedEffect import ManaReflectedEffect
+from forge.game.ability.effects.ManifestDreadEffect import ManifestDreadEffect
+from forge.game.ability.effects.ManifestEffect import ManifestEffect
+from forge.game.ability.effects.MeldEffect import MeldEffect
+from forge.game.ability.effects.MillEffect import MillEffect
+from forge.game.ability.effects.MultiplePilesEffect import MultiplePilesEffect
+from forge.game.ability.effects.MustBlockEffect import MustBlockEffect
+from forge.game.ability.effects.MutateEffect import MutateEffect
+from forge.game.ability.effects.OpenAttractionEffect import OpenAttractionEffect
+from forge.game.ability.effects.OwnershipGainEffect import OwnershipGainEffect
+from forge.game.ability.effects.PeekAndRevealEffect import PeekAndRevealEffect
+from forge.game.ability.effects.PermanentCreatureEffect import PermanentCreatureEffect
+from forge.game.ability.effects.PermanentNoncreatureEffect import PermanentNoncreatureEffect
+from forge.game.ability.effects.PhasesEffect import PhasesEffect
+from forge.game.ability.effects.PlaneswalkEffect import PlaneswalkEffect
+from forge.game.ability.effects.PlayEffect import PlayEffect
+from forge.game.ability.effects.PlayLandVariantEffect import PlayLandVariantEffect
+from forge.game.ability.effects.PoisonEffect import PoisonEffect
+from forge.game.ability.effects.PowerExchangeEffect import PowerExchangeEffect
+from forge.game.ability.effects.ProtectAllEffect import ProtectAllEffect
+from forge.game.ability.effects.ProtectEffect import ProtectEffect
+from forge.game.ability.effects.PumpAllEffect import PumpAllEffect
+from forge.game.ability.effects.PumpEffect import PumpEffect
+from forge.game.ability.effects.RadiationEffect import RadiationEffect
+from forge.game.ability.effects.RearrangeTopOfLibraryEffect import RearrangeTopOfLibraryEffect
+from forge.game.ability.effects.RegenerateEffect import RegenerateEffect
+from forge.game.ability.effects.RegenerationEffect import RegenerationEffect
+from forge.game.ability.effects.RemoveFromCombatEffect import RemoveFromCombatEffect
+from forge.game.ability.effects.RemoveFromGameEffect import RemoveFromGameEffect
+from forge.game.ability.effects.RemoveFromMatchEffect import RemoveFromMatchEffect
+from forge.game.ability.effects.ReorderZoneEffect import ReorderZoneEffect
+from forge.game.ability.effects.RepeatEachEffect import RepeatEachEffect
+from forge.game.ability.effects.RepeatEffect import RepeatEffect
+from forge.game.ability.effects.ReplaceCounterEffect import ReplaceCounterEffect
+from forge.game.ability.effects.ReplaceDamageEffect import ReplaceDamageEffect
+from forge.game.ability.effects.ReplaceEffect import ReplaceEffect
+from forge.game.ability.effects.ReplaceManaEffect import ReplaceManaEffect
+from forge.game.ability.effects.ReplaceSplitDamageEffect import ReplaceSplitDamageEffect
+from forge.game.ability.effects.ReplaceTokenEffect import ReplaceTokenEffect
+from forge.game.ability.effects.RestartGameEffect import RestartGameEffect
+from forge.game.ability.effects.RevealEffect import RevealEffect
+from forge.game.ability.effects.RevealHandEffect import RevealHandEffect
+from forge.game.ability.effects.ReverseTurnOrderEffect import ReverseTurnOrderEffect
+from forge.game.ability.effects.RingTemptsYouEffect import RingTemptsYouEffect
+from forge.game.ability.effects.RollDiceEffect import RollDiceEffect
+from forge.game.ability.effects.RollPlanarDiceEffect import RollPlanarDiceEffect
+from forge.game.ability.effects.RunChaosEffect import RunChaosEffect
+from forge.game.ability.effects.SacrificeAllEffect import SacrificeAllEffect
+from forge.game.ability.effects.SacrificeEffect import SacrificeEffect
+from forge.game.ability.effects.ScryEffect import ScryEffect
+from forge.game.ability.effects.SeekEffect import SeekEffect
+from forge.game.ability.effects.SetInMotionEffect import SetInMotionEffect
+from forge.game.ability.effects.SetStateEffect import SetStateEffect
+from forge.game.ability.effects.ShuffleEffect import ShuffleEffect
+from forge.game.ability.effects.SkipPhaseEffect import SkipPhaseEffect
+from forge.game.ability.effects.SkipTurnEffect import SkipTurnEffect
+from forge.game.ability.effects.StoreSVarEffect import StoreSVarEffect
+from forge.game.ability.effects.SubgameEffect import SubgameEffect
+from forge.game.ability.effects.SurveilEffect import SurveilEffect
+from forge.game.ability.effects.SwitchBlockEffect import SwitchBlockEffect
+from forge.game.ability.effects.TakeInitiativeEffect import TakeInitiativeEffect
+from forge.game.ability.effects.TapAllEffect import TapAllEffect
+from forge.game.ability.effects.TapEffect import TapEffect
+from forge.game.ability.effects.TapOrUntapAllEffect import TapOrUntapAllEffect
+from forge.game.ability.effects.TapOrUntapEffect import TapOrUntapEffect
+from forge.game.ability.effects.TextBoxExchangeEffect import TextBoxExchangeEffect
+from forge.game.ability.effects.TimeTravelEffect import TimeTravelEffect
+from forge.game.ability.effects.TokenEffect import TokenEffect
+from forge.game.ability.effects.TwoPilesEffect import TwoPilesEffect
+from forge.game.ability.effects.UnattachEffect import UnattachEffect
+from forge.game.ability.effects.UnlockDoorEffect import UnlockDoorEffect
+from forge.game.ability.effects.UntapAllEffect import UntapAllEffect
+from forge.game.ability.effects.UntapEffect import UntapEffect
+from forge.game.ability.effects.VentureEffect import VentureEffect
+from forge.game.ability.effects.VillainousChoiceEffect import VillainousChoiceEffect
+from forge.game.ability.effects.VoteEffect import VoteEffect
+from forge.game.ability.effects.ZoneExchangeEffect import ZoneExchangeEffect
+
+
+# TODO: Write javadoc for this type.
+class ApiType(Enum):
+    def __new__(cls, clsEf, isStateLess=True):
+        obj = object.__new__(cls)
+        obj._value_ = len(cls.__members__) + 1
+        return obj
+
+    def __init__(self, clsEf, isStateLess=True):
+        self.clsEffect = clsEf
+        self.instanceEffect = ReflectionUtil.makeDefaultInstanceOf(clsEf) if isStateLess else None
+
+    Abandon = (AbandonEffect,)
+    ActivateAbility = (ActivateAbilityEffect,)
+    AddOrRemoveCounter = (CountersPutOrRemoveEffect,)
+    AddPhase = (AddPhaseEffect,)
+    AddTurn = (AddTurnEffect,)
+    AdvanceCrank = (AdvanceCrankEffect,)
+    Airbend = (AirbendEffect,)
+    AlterAttribute = (AlterAttributeEffect,)
+    Amass = (AmassEffect,)
+    Animate = (AnimateEffect,)
+    AnimateAll = (AnimateAllEffect,)
+    Attach = (AttachEffect,)
+    Ascend = (AscendEffect,)
+    AssembleContraption = (AssembleContraptionEffect,)
+    AssignGroup = (AssignGroupEffect,)
+    Balance = (BalanceEffect,)
+    BecomeMonarch = (BecomeMonarchEffect,)
+    BecomesBlocked = (BecomesBlockedEffect,)
+    BidLife = (BidLifeEffect,)
+    Blight = (BlightEffect,)
+    Block = (BlockEffect,)
+    Bond = (BondEffect,)
+    Branch = (BranchEffect,)
+    Camouflage = (CamouflageEffect,)
+    ChangeCombatants = (ChangeCombatantsEffect,)
+    ChangeSpeed = (ChangeSpeedEffect,)
+    ChangeTargets = (ChangeTargetsEffect,)
+    ChangeText = (ChangeTextEffect,)
+    ChangeX = (ChangeXEffect,)
+    ChangeZone = (ChangeZoneEffect,)
+    ChangeZoneAll = (ChangeZoneAllEffect,)
+    ChaosEnsues = (ChaosEnsuesEffect,)
+    Charm = (CharmEffect,)
+    ChooseCard = (ChooseCardEffect,)
+    ChooseColor = (ChooseColorEffect,)
+    ChooseDirection = (ChooseDirectionEffect,)
+    ChooseEvenOdd = (ChooseEvenOddEffect,)
+    ChooseNumber = (ChooseNumberEffect,)
+    ChoosePlayer = (ChoosePlayerEffect,)
+    ChooseSector = (ChooseSectorEffect,)
+    ChooseSource = (ChooseSourceEffect,)
+    ChooseType = (ChooseTypeEffect,)
+    ClaimThePrize = (ClaimThePrizeEffect,)
+    Clash = (ClashEffect,)
+    ClassLevelUp = (ClassLevelUpEffect,)
+    Cleanup = (CleanUpEffect,)
+    Cloak = (CloakEffect,)
+    Clone = (CloneEffect,)
+    Connive = (ConniveEffect,)
+    CopyPermanent = (CopyPermanentEffect,)
+    CopySpellAbility = (CopySpellAbilityEffect,)
+    ControlSpell = (ControlSpellEffect,)
+    ControlPlayer = (ControlPlayerEffect,)
+    Counter = (CounterEffect,)
+    DamageAll = (DamageAllEffect,)
+    DealDamage = (DamageDealEffect,)
+    Detain = (DetainEffect,)
+    DayTime = (DayTimeEffect,)
+    Debuff = (DebuffEffect,)
+    DelayedTrigger = (DelayedTriggerEffect,)
+    Destroy = (DestroyEffect,)
+    DestroyAll = (DestroyAllEffect,)
+    Dig = (DigEffect,)
+    DigMultiple = (DigMultipleEffect,)
+    DigUntil = (DigUntilEffect,)
+    Discard = (DiscardEffect,)
+    Discover = (DiscoverEffect,)
+    DrainMana = (DrainManaEffect,)
+    Draft = (DraftEffect,)
+    Draw = (DrawEffect,)
+    EachDamage = (DamageEachEffect,)
+    Earthbend = (EarthbendEffect,)
+    Effect = (EffectEffect,)
+    Encode = (EncodeEffect,)
+    EndCombatPhase = (EndCombatPhaseEffect,)
+    EndTurn = (EndTurnEffect,)
+    Endure = (EndureEffect,)
+    ExchangeLife = (LifeExchangeEffect,)
+    ExchangeLifeVariant = (LifeExchangeVariantEffect,)
+    ExchangeControl = (ControlExchangeEffect,)
+    ExchangeControlVariant = (ControlExchangeVariantEffect,)
+    ExchangePower = (PowerExchangeEffect,)
+    ExchangeZone = (ZoneExchangeEffect,)
+    ExchangeTextBox = (TextBoxExchangeEffect,)
+    Explore = (ExploreEffect,)
+    Fight = (FightEffect,)
+    FlipCoin = (FlipCoinEffect,)
+    FlipOntoBattlefield = (FlipOntoBattlefieldEffect,)
+    Fog = (FogEffect,)
+    GainControl = (ControlGainEffect,)
+    GainControlVariant = (ControlGainVariantEffect,)
+    GainLife = (LifeGainEffect,)
+    GainOwnership = (OwnershipGainEffect,)
+    GameDrawn = (GameDrawEffect,)
+    GenericChoice = (ChooseGenericEffect,)
+    Goad = (GoadEffect,)
+    Haunt = (HauntEffect,)
+    Heist = (HeistEffect,)
+    Investigate = (InvestigateEffect,)
+    Intensify = (IntensifyEffect,)
+    ImmediateTrigger = (ImmediateTriggerEffect,)
+    Incubate = (IncubateEffect,)
+    Learn = (LearnEffect,)
+    LookAt = (LookAtEffect,)
+    LoseLife = (LifeLoseEffect,)
+    LosePerpetual = (LosePerpetualEffect,)
+    LosesGame = (GameLossEffect,)
+    MakeCard = (MakeCardEffect,)
+    Mana = (ManaEffect,)
+    ManaReflected = (ManaReflectedEffect,)
+    Manifest = (ManifestEffect,)
+    ManifestDread = (ManifestDreadEffect,)
+    Meld = (MeldEffect,)
+    Mill = (MillEffect,)
+    MoveCounter = (CountersMoveEffect,)
+    MultiplePiles = (MultiplePilesEffect,)
+    MultiplyCounter = (CountersMultiplyEffect,)
+    MustBlock = (MustBlockEffect,)
+    Mutate = (MutateEffect,)
+    NameCard = (ChooseCardNameEffect,)
+    # NoteCounters (CountersNoteEffect.class),
+    OpenAttraction = (OpenAttractionEffect,)
+    PeekAndReveal = (PeekAndRevealEffect,)
+    PermanentCreature = (PermanentCreatureEffect,)
+    PermanentNoncreature = (PermanentNoncreatureEffect,)
+    Phases = (PhasesEffect,)
+    Planeswalk = (PlaneswalkEffect,)
+    Play = (PlayEffect,)
+    PlayLandVariant = (PlayLandVariantEffect,)
+    Poison = (PoisonEffect,)
+    PreventDamage = (DamagePreventEffect,)
+    Proliferate = (CountersProliferateEffect,)
+    Protection = (ProtectEffect,)
+    ProtectionAll = (ProtectAllEffect,)
+    Pump = (PumpEffect,)
+    PumpAll = (PumpAllEffect,)
+    PutCounter = (CountersPutEffect,)
+    PutCounterAll = (CountersPutAllEffect,)
+    Radiation = (RadiationEffect,)
+    RearrangeTopOfLibrary = (RearrangeTopOfLibraryEffect,)
+    Regenerate = (RegenerateEffect,)
+    Regeneration = (RegenerationEffect,)
+    RemoveCounter = (CountersRemoveEffect,)
+    RemoveCounterAll = (CountersRemoveAllEffect,)
+    RemoveFromCombat = (RemoveFromCombatEffect,)
+    RemoveFromGame = (RemoveFromGameEffect,)
+    RemoveFromMatch = (RemoveFromMatchEffect,)
+    ReorderZone = (ReorderZoneEffect,)
+    Repeat = (RepeatEffect,)
+    RepeatEach = (RepeatEachEffect,)
+    ReplaceCounter = (ReplaceCounterEffect,)
+    ReplaceEffect = (ReplaceEffect,)
+    ReplaceMana = (ReplaceManaEffect,)
+    ReplaceDamage = (ReplaceDamageEffect,)
+    ReplaceToken = (ReplaceTokenEffect,)
+    ReplaceSplitDamage = (ReplaceSplitDamageEffect,)
+    RestartGame = (RestartGameEffect,)
+    Reveal = (RevealEffect,)
+    RevealHand = (RevealHandEffect,)
+    ReverseTurnOrder = (ReverseTurnOrderEffect,)
+    RingTemptsYou = (RingTemptsYouEffect,)
+    RollDice = (RollDiceEffect,)
+    RollPlanarDice = (RollPlanarDiceEffect,)
+    RunChaos = (RunChaosEffect,)
+    Sacrifice = (SacrificeEffect,)
+    SacrificeAll = (SacrificeAllEffect,)
+    Scry = (ScryEffect,)
+    Seek = (SeekEffect,)
+    SetInMotion = (SetInMotionEffect,)
+    SetLife = (LifeSetEffect,)
+    SetState = (SetStateEffect,)
+    Shuffle = (ShuffleEffect,)
+    SkipPhase = (SkipPhaseEffect,)
+    SkipTurn = (SkipTurnEffect,)
+    StoreSVar = (StoreSVarEffect,)
+    Subgame = (SubgameEffect,)
+    Surveil = (SurveilEffect,)
+    SwitchBlock = (SwitchBlockEffect,)
+    TakeInitiative = (TakeInitiativeEffect,)
+    Tap = (TapEffect,)
+    TapAll = (TapAllEffect,)
+    TapOrUntap = (TapOrUntapEffect,)
+    TapOrUntapAll = (TapOrUntapAllEffect,)
+    TimeTravel = (TimeTravelEffect,)
+    Token = (TokenEffect,)
+    TwoPiles = (TwoPilesEffect,)
+    Unattach = (UnattachEffect,)
+    UnlockDoor = (UnlockDoorEffect,)
+    Untap = (UntapEffect,)
+    UntapAll = (UntapAllEffect,)
+    Venture = (VentureEffect,)
+    VillainousChoice = (VillainousChoiceEffect,)
+    Vote = (VoteEffect,)
+    WinsGame = (GameWinEffect,)
+
+    BlankLine = (BlankLineEffect,)
+    DamageResolve = (DamageResolveEffect,)
+    ChangeZoneResolve = (ChangeZoneResolveEffect,)
+    CompanionChoose = (CharmEffect,)
+    InternalLegendaryRule = (CharmEffect,)
+    InternalIgnoreEffect = (CharmEffect,)
+    InternalRadiation = (InternalRadiationEffect,)
+
+    @staticmethod
+    def smartValueOf(value):
+        v = ApiType.allValues.get(value.lower())
+        if v is None:
+            raise RuntimeError("Element " + value + " not found in ApiType enum")
+        return v
+
+    def getSpellEffect(self):
+        return self.instanceEffect if self.instanceEffect is not None else ReflectionUtil.makeDefaultInstanceOf(self.clsEffect)
+
+
+allValues: dict[str, ApiType] = {}
+for t in ApiType:
+    allValues[t.name.lower()] = t
+ApiType.allValues = allValues
 ```

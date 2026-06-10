@@ -177,3 +177,117 @@ public class ConniveAi extends SpellAbilityAi {
 
 }
 ```
+
+## Python
+`forge/ai/ability/ConniveAi.py`
+
+```python
+from forge.ai.SpellAbilityAi import SpellAbilityAi
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.ai.ComputerUtil import ComputerUtil
+from forge.ai.ComputerUtilCard import ComputerUtilCard
+from forge.ai.ComputerUtilMana import ComputerUtilMana
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardLists import CardLists
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+
+
+class ConniveAi(SpellAbilityAi):
+    def canPlay(self, ai: Player, sa: SpellAbility) -> AiAbilityDecision:
+        if not ai.canDraw():
+            return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+        host = sa.getHostCard()
+
+        num = AbilityUtils.calculateAmount(host, sa.getParamOrDefault("ConniveNum", "1"), sa)
+        if num == 0:
+            return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+        list = CardLists.getTargetableCards(ai.getCardsIn(ZoneType.Battlefield), sa)
+
+        # Filter AI-specific targets if provided
+        list = ComputerUtil.filterAITgts(sa, ai, list, False)
+
+        if "X" == sa.getParam("TargetMax") and "Count$xPaid" == sa.getSVar("X"):
+            # TODO: consider making the library margin (currently hardcoded to 5) a configurable AI parameter
+            maxTargets = min(list.size(), max(0, ai.getCardsIn(ZoneType.Library).size() - 5))
+            maxTargets = min(maxTargets, ComputerUtilMana.getAvailableManaEstimate(ai))
+            sa.setXManaCostPaid(maxTargets)
+
+        sa.resetTargets()
+        while sa.canAddMoreTarget():
+            if list.isEmpty() and sa.isTargetNumberValid() and not sa.getTargets().isEmpty():
+                return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+            if list.isEmpty():
+                # Still an empty list, but we have to choose something (mandatory); expand targeting to
+                # include AI's own cards to see if there's anything targetable (e.g. Plague Belcher).
+                list = CardLists.getTargetableCards(ai.getCardsIn(ZoneType.Battlefield), sa)
+
+            if list.isEmpty():
+                # Not mandatory, or the the list was regenerated and is still empty,
+                # so return whether or not we found enough targets
+                return AiAbilityDecision(100 if sa.isTargetNumberValid() else 0, AiPlayDecision.WillPlay if sa.isTargetNumberValid() else AiPlayDecision.CantPlayAi)
+
+            choice = ComputerUtilCard.getBestCreatureAI(list)
+
+            if choice is not None:
+                sa.getTargets().add(choice)
+                list.remove(choice)
+            else:
+                # Didn't want to choose anything?
+                list.clear()
+        if not sa.getTargets().isEmpty() and sa.isTargetNumberValid():
+            return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+        else:
+            return AiAbilityDecision(0, AiPlayDecision.TargetingFailed)
+
+    def doTriggerNoCost(self, ai: Player, sa: SpellAbility, mandatory: bool) -> AiAbilityDecision:
+        if not ai.canDraw() and not mandatory:
+            return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+        preferred = True
+        list = CardLists.getTargetableCards(ai.getCardsIn(ZoneType.Battlefield), sa)
+
+        # Filter AI-specific targets if provided
+        list = ComputerUtil.filterAITgts(sa, ai, list, False)
+
+        sa.resetTargets()
+        while sa.canAddMoreTarget():
+            if mandatory:
+                if (list.isEmpty() or not preferred) and sa.isTargetNumberValid():
+                    return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+                if list.isEmpty() and preferred:
+                    # If it's required to choose targets and the list is empty, get a new list
+                    list = CardLists.getTargetableCards(ai.getOpponents().getCardsIn(ZoneType.Battlefield), sa)
+                    preferred = False
+
+                if list.isEmpty():
+                    # Still an empty list, but we have to choose something (mandatory); expand targeting to
+                    # include AI's own cards to see if there's anything targetable (e.g. Plague Belcher).
+                    list = CardLists.getTargetableCards(ai.getCardsIn(ZoneType.Battlefield), sa)
+
+            if list.isEmpty():
+                # Not mandatory, or the the list was regenerated and is still empty,
+                # so return whether or not we found enough targets
+                return AiAbilityDecision(100 if sa.isTargetNumberValid() else 0, AiPlayDecision.WillPlay if sa.isTargetNumberValid() else AiPlayDecision.CantPlayAi)
+
+            choice = ComputerUtilCard.getBestCreatureAI(list)
+
+            if choice is not None:
+                sa.getTargets().add(choice)
+                list.remove(choice)
+            else:
+                # Didn't want to choose anything?
+                list.clear()
+        return AiAbilityDecision(
+            100 if sa.isTargetNumberValid() else 0,
+            AiPlayDecision.WillPlay if sa.isTargetNumberValid() else AiPlayDecision.TargetingFailed
+        )
+```

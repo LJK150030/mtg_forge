@@ -36,7 +36,7 @@ The MultipleChoice class is a small, stateless AI helper nested within SpecialCa
 Acting as a pure utility rather than part of a class hierarchy, it has no supertype and collaborates only transiently with `Player` and `SpellAbility`, delegating affordability and board evaluation to cost and card-evaluation utilities. The cascading boolean guards encode a greedy preference for the highest worthwhile mode, with hardcoded heuristic thresholds (and TODO notes) revealing intent to later generalize these values into AI profiles.
 
 ## Source
-`forge-ai/src/main/java/forge/ai/SpecialCardAi.java` â€” declaration excerpt
+`forge-ai/src/main/java/forge/ai/SpecialCardAi.java` Ã¢â‚¬â€ declaration excerpt
 
 ```java
     // Multiple Choice
@@ -71,4 +71,45 @@ Acting as a pure utility rather than part of a class hierarchy, it has no supert
             return false;
         }
     }
+```
+
+## Python
+`forge/ai/SpecialCardAi/MultipleChoice.py`
+
+```python
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.ai.ComputerUtilCost import ComputerUtilCost
+from forge.ai.ComputerUtilCard import ComputerUtilCard
+from forge.game.zone.ZoneType import ZoneType
+
+
+class MultipleChoice:
+    @staticmethod
+    def consider(ai: Player, sa: SpellAbility) -> bool:
+        maxX = ComputerUtilCost.setMaxXValue(sa, ai, False)
+
+        if maxX == 0:
+            return False
+
+        canScryDraw = maxX >= 1 and len(ai.getCardsIn(ZoneType.Library)) >= 3  # TODO: generalize / use profile values
+        canBounce = maxX >= 2 and not ai.getOpponents().getCreaturesInPlay().isEmpty()
+        shouldBounce = canBounce and ComputerUtilCard.evaluateCreature(ComputerUtilCard.getWorstCreatureAI(ai.getOpponents().getCreaturesInPlay())) > 210  # 180 is the level of a 4/4 token creature
+        canMakeToken = maxX >= 3
+        canDoAll = maxX >= 4 and canScryDraw and shouldBounce
+
+        if canDoAll:
+            sa.setXManaCostPaid(4)
+            return True
+        elif canMakeToken:
+            sa.setXManaCostPaid(3)
+            return True
+        elif shouldBounce:
+            sa.setXManaCostPaid(2)
+            return True
+        elif canScryDraw:
+            sa.setXManaCostPaid(1)
+            return True
+
+        return False
 ```

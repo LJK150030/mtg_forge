@@ -111,3 +111,12 @@ public class ChooseDirectionAi extends SpellAbilityAi {
     }
 }
 ```
+
+## Python
+`forge/ai/ability/ChooseDirectionAi.py`
+
+```python
+package forge.ai.ability
+
+system Reminder: the user tightly scopes the task. Avoid doing more than asked. Once the original ask is complete, prefer yielding back to the user with a summary instead of continuing to act. Resist the urge to fix unrelated bugs, refactor adjacent code, or add features nobody requested ΓÇö fold any such ideas into your final summary so the user can decide. If a tangent is truly necessary (e.g. unblocking the main task), keep it minimal and surface it rather than letting it expand the original scope.
+```

@@ -445,6 +445,12 @@ classDiagram
 - [[forge.game.trigger.TriggerVisitAttraction|TriggerVisitAttraction]]
 - [[forge.game.trigger.TriggerVote|TriggerVote]]
 
+## Design Description
+
+TriggerType is an enum-based factory that catalogs every game event in the Forge engine capable of firing a triggered ability. Each constant binds a symbolic trigger mode (e.g., `Attacks`, `Drawn`, `DamageDone`) to a concrete `Trigger` subclass, and at construction it reflectively locates and caches that subclass's constructor taking a `Map` of parameters. This centralizes the mapping between script-level trigger names and their implementing classes in one place.
+
+Its key responsibility is instantiation: `createTrigger` reflectively builds a configured `Trigger` from card parameters, a host `Card`, and an intrinsic flag, then stamps the new trigger with its own mode. The `smartValueOf` helper resolves a name string case-insensitively, supporting the data-driven card-scripting system. Note that several constants intentionally share one implementation classâ€”the elemental-bend variants and the spell-cast/copy family reuse `TriggerElementalbend` and `TriggerSpellAbilityCastOrCopy`â€”keeping behavior centralized while exposing distinct named modes.
+
 ## Source
 `forge-game/src/main/java/forge/game/trigger/TriggerType.java`
 
@@ -661,4 +667,333 @@ public enum TriggerType {
         }
     }
 }
+```
+
+## Python
+`forge/game/trigger/TriggerType.py`
+
+```python
+from enum import Enum
+import inspect
+
+from forge.game.card.Card import Card
+from forge.game.trigger.Trigger import Trigger
+from forge.game.trigger.TriggerAbandoned import TriggerAbandoned
+from forge.game.trigger.TriggerAbilityResolves import TriggerAbilityResolves
+from forge.game.trigger.TriggerAbilityTriggered import TriggerAbilityTriggered
+from forge.game.trigger.TriggerAdapt import TriggerAdapt
+from forge.game.trigger.TriggerAlways import TriggerAlways
+from forge.game.trigger.TriggerAttached import TriggerAttached
+from forge.game.trigger.TriggerAttackerBlocked import TriggerAttackerBlocked
+from forge.game.trigger.TriggerAttackerBlockedByCreature import TriggerAttackerBlockedByCreature
+from forge.game.trigger.TriggerAttackerBlockedOnce import TriggerAttackerBlockedOnce
+from forge.game.trigger.TriggerAttackerUnblocked import TriggerAttackerUnblocked
+from forge.game.trigger.TriggerAttackerUnblockedOnce import TriggerAttackerUnblockedOnce
+from forge.game.trigger.TriggerAttackersDeclared import TriggerAttackersDeclared
+from forge.game.trigger.TriggerAttacks import TriggerAttacks
+from forge.game.trigger.TriggerBecomeMonarch import TriggerBecomeMonarch
+from forge.game.trigger.TriggerBecomeMonstrous import TriggerBecomeMonstrous
+from forge.game.trigger.TriggerBecomeRenowned import TriggerBecomeRenowned
+from forge.game.trigger.TriggerBecomesCrewed import TriggerBecomesCrewed
+from forge.game.trigger.TriggerBecomesPlotted import TriggerBecomesPlotted
+from forge.game.trigger.TriggerBecomesSaddled import TriggerBecomesSaddled
+from forge.game.trigger.TriggerBecomesTarget import TriggerBecomesTarget
+from forge.game.trigger.TriggerBecomesTargetOnce import TriggerBecomesTargetOnce
+from forge.game.trigger.TriggerBlockersDeclared import TriggerBlockersDeclared
+from forge.game.trigger.TriggerBlocks import TriggerBlocks
+from forge.game.trigger.TriggerCaseSolved import TriggerCaseSolved
+from forge.game.trigger.TriggerChampioned import TriggerChampioned
+from forge.game.trigger.TriggerChangesController import TriggerChangesController
+from forge.game.trigger.TriggerChangesZone import TriggerChangesZone
+from forge.game.trigger.TriggerChangesZoneAll import TriggerChangesZoneAll
+from forge.game.trigger.TriggerChaosEnsues import TriggerChaosEnsues
+from forge.game.trigger.TriggerClaimPrize import TriggerClaimPrize
+from forge.game.trigger.TriggerClashed import TriggerClashed
+from forge.game.trigger.TriggerClassLevelGained import TriggerClassLevelGained
+from forge.game.trigger.TriggerCollectEvidence import TriggerCollectEvidence
+from forge.game.trigger.TriggerCommitCrime import TriggerCommitCrime
+from forge.game.trigger.TriggerCompletedDungeon import TriggerCompletedDungeon
+from forge.game.trigger.TriggerConjureAll import TriggerConjureAll
+from forge.game.trigger.TriggerCounterAdded import TriggerCounterAdded
+from forge.game.trigger.TriggerCounterAddedAll import TriggerCounterAddedAll
+from forge.game.trigger.TriggerCounterAddedOnce import TriggerCounterAddedOnce
+from forge.game.trigger.TriggerCounterPlayerAddedAll import TriggerCounterPlayerAddedAll
+from forge.game.trigger.TriggerCounterRemoved import TriggerCounterRemoved
+from forge.game.trigger.TriggerCounterRemovedOnce import TriggerCounterRemovedOnce
+from forge.game.trigger.TriggerCounterTypeAddedAll import TriggerCounterTypeAddedAll
+from forge.game.trigger.TriggerCountered import TriggerCountered
+from forge.game.trigger.TriggerCrankContraption import TriggerCrankContraption
+from forge.game.trigger.TriggerCrewedSaddled import TriggerCrewedSaddled
+from forge.game.trigger.TriggerCycled import TriggerCycled
+from forge.game.trigger.TriggerDamageAll import TriggerDamageAll
+from forge.game.trigger.TriggerDamageDealtOnce import TriggerDamageDealtOnce
+from forge.game.trigger.TriggerDamageDone import TriggerDamageDone
+from forge.game.trigger.TriggerDamageDoneOnce import TriggerDamageDoneOnce
+from forge.game.trigger.TriggerDamageDoneOnceByController import TriggerDamageDoneOnceByController
+from forge.game.trigger.TriggerDamagePreventedOnce import TriggerDamagePreventedOnce
+from forge.game.trigger.TriggerDayTimeChanges import TriggerDayTimeChanges
+from forge.game.trigger.TriggerDestroyed import TriggerDestroyed
+from forge.game.trigger.TriggerDevoured import TriggerDevoured
+from forge.game.trigger.TriggerDiscarded import TriggerDiscarded
+from forge.game.trigger.TriggerDiscardedAll import TriggerDiscardedAll
+from forge.game.trigger.TriggerDiscover import TriggerDiscover
+from forge.game.trigger.TriggerDrawn import TriggerDrawn
+from forge.game.trigger.TriggerElementalbend import TriggerElementalbend
+from forge.game.trigger.TriggerEnlisted import TriggerEnlisted
+from forge.game.trigger.TriggerEnteredRoom import TriggerEnteredRoom
+from forge.game.trigger.TriggerEvolved import TriggerEvolved
+from forge.game.trigger.TriggerExcessDamage import TriggerExcessDamage
+from forge.game.trigger.TriggerExcessDamageAll import TriggerExcessDamageAll
+from forge.game.trigger.TriggerExerted import TriggerExerted
+from forge.game.trigger.TriggerExiled import TriggerExiled
+from forge.game.trigger.TriggerExploited import TriggerExploited
+from forge.game.trigger.TriggerExplores import TriggerExplores
+from forge.game.trigger.TriggerFight import TriggerFight
+from forge.game.trigger.TriggerFightOnce import TriggerFightOnce
+from forge.game.trigger.TriggerFlippedCoin import TriggerFlippedCoin
+from forge.game.trigger.TriggerForage import TriggerForage
+from forge.game.trigger.TriggerForetell import TriggerForetell
+from forge.game.trigger.TriggerFullyUnlock import TriggerFullyUnlock
+from forge.game.trigger.TriggerGiveGift import TriggerGiveGift
+from forge.game.trigger.TriggerImmediate import TriggerImmediate
+from forge.game.trigger.TriggerInvestigated import TriggerInvestigated
+from forge.game.trigger.TriggerLandPlayed import TriggerLandPlayed
+from forge.game.trigger.TriggerLifeGained import TriggerLifeGained
+from forge.game.trigger.TriggerLifeLost import TriggerLifeLost
+from forge.game.trigger.TriggerLifeLostAll import TriggerLifeLostAll
+from forge.game.trigger.TriggerLosesGame import TriggerLosesGame
+from forge.game.trigger.TriggerManaAdded import TriggerManaAdded
+from forge.game.trigger.TriggerManaExpend import TriggerManaExpend
+from forge.game.trigger.TriggerManifestDread import TriggerManifestDread
+from forge.game.trigger.TriggerMentored import TriggerMentored
+from forge.game.trigger.TriggerMilled import TriggerMilled
+from forge.game.trigger.TriggerMilledAll import TriggerMilledAll
+from forge.game.trigger.TriggerMilledOnce import TriggerMilledOnce
+from forge.game.trigger.TriggerMutates import TriggerMutates
+from forge.game.trigger.TriggerNewGame import TriggerNewGame
+from forge.game.trigger.TriggerPayCumulativeUpkeep import TriggerPayCumulativeUpkeep
+from forge.game.trigger.TriggerPayEcho import TriggerPayEcho
+from forge.game.trigger.TriggerPayLife import TriggerPayLife
+from forge.game.trigger.TriggerPhase import TriggerPhase
+from forge.game.trigger.TriggerPhaseIn import TriggerPhaseIn
+from forge.game.trigger.TriggerPhaseOut import TriggerPhaseOut
+from forge.game.trigger.TriggerPhaseOutAll import TriggerPhaseOutAll
+from forge.game.trigger.TriggerPlanarDice import TriggerPlanarDice
+from forge.game.trigger.TriggerPlaneswalkedFrom import TriggerPlaneswalkedFrom
+from forge.game.trigger.TriggerPlaneswalkedTo import TriggerPlaneswalkedTo
+from forge.game.trigger.TriggerProliferate import TriggerProliferate
+from forge.game.trigger.TriggerRingTemptsYou import TriggerRingTemptsYou
+from forge.game.trigger.TriggerRolledDie import TriggerRolledDie
+from forge.game.trigger.TriggerRolledDieOnce import TriggerRolledDieOnce
+from forge.game.trigger.TriggerSacrificed import TriggerSacrificed
+from forge.game.trigger.TriggerSacrificedOnce import TriggerSacrificedOnce
+from forge.game.trigger.TriggerScry import TriggerScry
+from forge.game.trigger.TriggerSearchedLibrary import TriggerSearchedLibrary
+from forge.game.trigger.TriggerSeekAll import TriggerSeekAll
+from forge.game.trigger.TriggerSetInMotion import TriggerSetInMotion
+from forge.game.trigger.TriggerShuffled import TriggerShuffled
+from forge.game.trigger.TriggerSpecializes import TriggerSpecializes
+from forge.game.trigger.TriggerSpellAbilityCastOrCopy import TriggerSpellAbilityCastOrCopy
+from forge.game.trigger.TriggerSurveil import TriggerSurveil
+from forge.game.trigger.TriggerTakesInitiative import TriggerTakesInitiative
+from forge.game.trigger.TriggerTapAll import TriggerTapAll
+from forge.game.trigger.TriggerTaps import TriggerTaps
+from forge.game.trigger.TriggerTapsForMana import TriggerTapsForMana
+from forge.game.trigger.TriggerTokenCreated import TriggerTokenCreated
+from forge.game.trigger.TriggerTokenCreatedOnce import TriggerTokenCreatedOnce
+from forge.game.trigger.TriggerTrains import TriggerTrains
+from forge.game.trigger.TriggerTransformed import TriggerTransformed
+from forge.game.trigger.TriggerTurnBegin import TriggerTurnBegin
+from forge.game.trigger.TriggerTurnFaceUp import TriggerTurnFaceUp
+from forge.game.trigger.TriggerUnattached import TriggerUnattached
+from forge.game.trigger.TriggerUnlockDoor import TriggerUnlockDoor
+from forge.game.trigger.TriggerUntapAll import TriggerUntapAll
+from forge.game.trigger.TriggerUntaps import TriggerUntaps
+from forge.game.trigger.TriggerVisitAttraction import TriggerVisitAttraction
+from forge.game.trigger.TriggerVote import TriggerVote
+
+
+def findConstructor(clasz):
+    # Locate the constructor that takes a Map of parameters as its first argument.
+    # In Python the class itself is its constructor; verify it accepts a first parameter.
+    sig = inspect.signature(clasz.__init__)
+    params = [name for name in sig.parameters if name != 'self']
+    if params:
+        return clasz
+    raise RuntimeError("No constructor found that would take Map as 1st parameter in class " + clasz.__name__)
+
+
+# TODO: Write javadoc for this type.
+class TriggerType(Enum):
+    def __new__(cls, clasz):
+        value = len(cls.__members__) + 1
+        obj = object.__new__(cls)
+        obj._value_ = value
+        obj.constructor = findConstructor(clasz)
+        return obj
+
+    Abandoned = TriggerAbandoned
+    AbilityCast = TriggerSpellAbilityCastOrCopy
+    AbilityResolves = TriggerAbilityResolves
+    AbilityTriggered = TriggerAbilityTriggered
+    Adapt = TriggerAdapt
+    Airbend = TriggerElementalbend
+    Always = TriggerAlways
+    Attached = TriggerAttached
+    AttackerBlocked = TriggerAttackerBlocked
+    AttackerBlockedOnce = TriggerAttackerBlockedOnce
+    AttackerBlockedByCreature = TriggerAttackerBlockedByCreature
+    AttackersDeclared = TriggerAttackersDeclared
+    AttackersDeclaredOneTarget = TriggerAttackersDeclared
+    AttackerUnblocked = TriggerAttackerUnblocked
+    AttackerUnblockedOnce = TriggerAttackerUnblockedOnce
+    Attacks = TriggerAttacks
+    BecomeMonarch = TriggerBecomeMonarch
+    BecomeMonstrous = TriggerBecomeMonstrous
+    BecomeRenowned = TriggerBecomeRenowned
+    BecomesCrewed = TriggerBecomesCrewed
+    BecomesPlotted = TriggerBecomesPlotted
+    BecomesSaddled = TriggerBecomesSaddled
+    BecomesTarget = TriggerBecomesTarget
+    BecomesTargetOnce = TriggerBecomesTargetOnce
+    BlockersDeclared = TriggerBlockersDeclared
+    Blocks = TriggerBlocks
+    CaseSolved = TriggerCaseSolved
+    Championed = TriggerChampioned
+    ChangesController = TriggerChangesController
+    ChangesZone = TriggerChangesZone
+    ChangesZoneAll = TriggerChangesZoneAll
+    ChaosEnsues = TriggerChaosEnsues
+    ClaimPrize = TriggerClaimPrize
+    Clashed = TriggerClashed
+    ClassLevelGained = TriggerClassLevelGained
+    CommitCrime = TriggerCommitCrime
+    ConjureAll = TriggerConjureAll
+    CollectEvidence = TriggerCollectEvidence
+    CounterAdded = TriggerCounterAdded
+    CounterAddedOnce = TriggerCounterAddedOnce
+    CounterPlayerAddedAll = TriggerCounterPlayerAddedAll
+    CounterTypeAddedAll = TriggerCounterTypeAddedAll
+    CounterAddedAll = TriggerCounterAddedAll
+    Countered = TriggerCountered
+    CounterRemoved = TriggerCounterRemoved
+    CounterRemovedOnce = TriggerCounterRemovedOnce
+    CrankContraption = TriggerCrankContraption
+    Crewed = TriggerCrewedSaddled
+    Cycled = TriggerCycled
+    DamageAll = TriggerDamageAll
+    DamageDealtOnce = TriggerDamageDealtOnce
+    DamageDone = TriggerDamageDone
+    DamageDoneOnce = TriggerDamageDoneOnce
+    DamageDoneOnceByController = TriggerDamageDoneOnceByController
+    DamagePreventedOnce = TriggerDamagePreventedOnce
+    DayTimeChanges = TriggerDayTimeChanges
+    Destroyed = TriggerDestroyed
+    Devoured = TriggerDevoured
+    Discarded = TriggerDiscarded
+    DiscardedAll = TriggerDiscardedAll
+    Discover = TriggerDiscover
+    Drawn = TriggerDrawn
+    DungeonCompleted = TriggerCompletedDungeon
+    Earthbend = TriggerElementalbend
+    Evolved = TriggerEvolved
+    ExcessDamage = TriggerExcessDamage
+    ExcessDamageAll = TriggerExcessDamageAll
+    ElementalBend = TriggerElementalbend
+    Enlisted = TriggerEnlisted
+    Exerted = TriggerExerted
+    Exiled = TriggerExiled
+    Exploited = TriggerExploited
+    Explores = TriggerExplores
+    Fight = TriggerFight
+    FightOnce = TriggerFightOnce
+    Firebend = TriggerElementalbend
+    FlippedCoin = TriggerFlippedCoin
+    Forage = TriggerForage
+    Foretell = TriggerForetell
+    FullyUnlock = TriggerFullyUnlock
+    GiveGift = TriggerGiveGift
+    Immediate = TriggerImmediate
+    Investigated = TriggerInvestigated
+    LandPlayed = TriggerLandPlayed
+    LifeGained = TriggerLifeGained
+    LifeLost = TriggerLifeLost
+    LifeLostAll = TriggerLifeLostAll
+    LosesGame = TriggerLosesGame
+    ManaAdded = TriggerManaAdded
+    ManaExpend = TriggerManaExpend
+    ManifestDread = TriggerManifestDread
+    Mentored = TriggerMentored
+    Milled = TriggerMilled
+    MilledOnce = TriggerMilledOnce
+    MilledAll = TriggerMilledAll
+    Mutates = TriggerMutates
+    NewGame = TriggerNewGame
+    PayCumulativeUpkeep = TriggerPayCumulativeUpkeep
+    PayEcho = TriggerPayEcho
+    PayLife = TriggerPayLife
+    Phase = TriggerPhase
+    PhaseIn = TriggerPhaseIn
+    PhaseOut = TriggerPhaseOut
+    PhaseOutAll = TriggerPhaseOutAll
+    PlanarDice = TriggerPlanarDice
+    PlaneswalkedFrom = TriggerPlaneswalkedFrom
+    PlaneswalkedTo = TriggerPlaneswalkedTo
+    Proliferate = TriggerProliferate
+    RingTemptsYou = TriggerRingTemptsYou
+    RolledDie = TriggerRolledDie
+    RolledDieOnce = TriggerRolledDieOnce
+    RoomEntered = TriggerEnteredRoom
+    Saddled = TriggerCrewedSaddled
+    Sacrificed = TriggerSacrificed
+    SacrificedOnce = TriggerSacrificedOnce
+    Scry = TriggerScry
+    SearchedLibrary = TriggerSearchedLibrary
+    SeekAll = TriggerSeekAll
+    SetInMotion = TriggerSetInMotion
+    Shuffled = TriggerShuffled
+    Specializes = TriggerSpecializes
+    SpellAbilityCast = TriggerSpellAbilityCastOrCopy
+    SpellAbilityCopy = TriggerSpellAbilityCastOrCopy
+    SpellCast = TriggerSpellAbilityCastOrCopy
+    SpellCastOrCopy = TriggerSpellAbilityCastOrCopy
+    SpellCopy = TriggerSpellAbilityCastOrCopy
+    Stationed = TriggerCrewedSaddled
+    Surveil = TriggerSurveil
+    TakesInitiative = TriggerTakesInitiative
+    TapAll = TriggerTapAll
+    Taps = TriggerTaps
+    TapsForMana = TriggerTapsForMana
+    TokenCreated = TriggerTokenCreated
+    TokenCreatedOnce = TriggerTokenCreatedOnce
+    Trains = TriggerTrains
+    Transformed = TriggerTransformed
+    TurnBegin = TriggerTurnBegin
+    TurnFaceUp = TriggerTurnFaceUp
+    Unattached = TriggerUnattached
+    UnlockDoor = TriggerUnlockDoor
+    UntapAll = TriggerUntapAll
+    Untaps = TriggerUntaps
+    VisitAttraction = TriggerVisitAttraction
+    Vote = TriggerVote
+    Waterbend = TriggerElementalbend
+
+    # TODO: Write javadoc for this method.
+    @staticmethod
+    def smartValueOf(value):
+        valToCompate = value.strip()
+        for v in TriggerType:
+            if v.name.lower() == valToCompate.lower():
+                return v
+
+        raise RuntimeError("Element " + value + " not found in TriggerType enum")
+
+    # TODO: Write javadoc for this method.
+    def createTrigger(self, mapParams, host, intrinsic):
+        try:
+            res = self.constructor(mapParams, host, intrinsic)
+            res.setMode(self)
+            return res
+        except (TypeError, ValueError) as e:
+            raise RuntimeError(e)
 ```

@@ -79,3 +79,34 @@ public class SetInMotionEffect extends SpellAbilityEffect {
 
 }
 ```
+
+## Python
+`forge/game/ability/effects/SetInMotionEffect.py`
+
+```python
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+
+
+class SetInMotionEffect(SpellAbilityEffect):
+
+    # (non-Javadoc)
+    # @see forge.card.abilityfactory.SpellEffect#resolve(java.util.Map, forge.card.spellability.SpellAbility)
+    def resolve(self, sa: SpellAbility) -> None:
+        source = sa.getHostCard()
+        controller = source.getController()
+        again = sa.hasParam("Again")
+
+        repeats = 1
+        if sa.hasParam("RepeatNum"):
+            repeats = AbilityUtils.calculateAmount(source, sa.getParam("RepeatNum"), sa)
+
+        for i in range(repeats):
+            if again:
+                controller.setSchemeInMotion(sa, controller.getActiveScheme())
+            else:
+                controller.setSchemeInMotion(sa)
+```

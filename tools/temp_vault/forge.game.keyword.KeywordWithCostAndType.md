@@ -47,6 +47,12 @@ classDiagram
 **Uses:**
 - [[forge.game.cost.Cost|Cost]]
 
+## Design Description
+
+KeywordWithCostAndType models a Magic keyword ability that pairs an activation cost with a subject card type, supporting variants such as typecycling, splice, basic landcycling, and affinity. As a concrete `KeywordInstance` subclass, it inherits the engine's generic keyword lifecycle while satisfying both `KeywordWithCostInterface` and `KeywordWithTypeInterface`, exposing the cost and the (sometimes remapped) valid type to the rest of the game. It collaborates with `Cost`, which it builds from a parsed cost string and renders into display titles and reminder text.
+
+The `parse` method drives the design: it splits a colon-delimited details string into type, cost, and an optional description, deriving human-readable type descriptions (special-casing "Basic" and "Affinity") via `Lang` when none is given. Title and reminder formatting branch on the specific `Keyword`, distinguishing mana-only costs and keyword-specific phrasing, keeping presentation concerns localized while reusing the shared keyword infrastructure.
+
 ## Source
 `forge-game/src/main/java/forge/game/keyword/KeywordWithCostAndType.java`
 
@@ -82,7 +88,7 @@ public class KeywordWithCostAndType extends KeywordInstance<KeywordWithCostAndTy
         StringBuilder sb = new StringBuilder();
         sb.append(getTitleWithoutCost());
         if (!cost.isOnlyManaCost()) {
-            sb.append("—");
+            sb.append("Ã¢â‚¬â€");
         } else {
             sb.append(" ");
         }
@@ -132,4 +138,79 @@ public class KeywordWithCostAndType extends KeywordInstance<KeywordWithCostAndTy
         return String.format(reminderText, cost.toSimpleString(), str);
     }
 }
+```
+
+## Python
+`forge/game/keyword/KeywordWithCostAndType.py`
+
+```python
+from forge.game.keyword.KeywordInstance import KeywordInstance
+from forge.game.keyword.KeywordWithCostInterface import KeywordWithCostInterface
+from forge.game.keyword.KeywordWithTypeInterface import KeywordWithTypeInterface
+from forge.game.keyword.Keyword import Keyword
+from forge.game.cost.Cost import Cost
+from forge.util.Lang import Lang
+
+
+class KeywordWithCostAndType(KeywordInstance, KeywordWithCostInterface, KeywordWithTypeInterface):
+    def __init__(self):
+        super().__init__()
+        self.cost = None
+        self.costString = None
+        self.type = None
+        self.descType = None
+        self.reminderType = None
+
+    def getValidType(self) -> str:
+        return "Card.withAffinity" if "Affinity" == self.type else self.type
+
+    def getTypeDescription(self) -> str:
+        return self.descType
+
+    def getCost(self) -> Cost:
+        return self.cost
+
+    def getCostString(self) -> str:
+        return self.costString
+
+    def getTitle(self) -> str:
+        sb = []
+        sb.append(self.getTitleWithoutCost())
+        if not self.cost.isOnlyManaCost():
+            sb.append("????????")
+        else:
+            sb.append(" ")
+        sb.append(self.cost.toSimpleString())
+        return "".join(sb)
+
+    def getTitleWithoutCost(self) -> str:
+        if self.getKeyword() == Keyword.SPLICE:
+            return "Splice onto " + self.descType
+        return StringUtils.capitalize(self.descType) + "cycling"
+
+    def parse(self, details: str) -> None:
+        k = details.split(":")
+        self.type = k[0]
+        self.costString = k[1]
+        self.cost = Cost(self.costString, False)
+        if len(k) > 2:
+            self.reminderType = self.descType = k[2]
+        else:
+            if self.type == "Basic":
+                self.descType = "basic land"
+            else:
+                self.descType = Lang.getInstance().buildValidDesc(self.type.split(","), False)
+
+            self.reminderType = self.descType
+            if "Affinity" == self.type:
+                self.reminderType = "card with affinity"
+
+    def formatReminderText(self, reminderText: str) -> str:
+        str_ = self.reminderType
+        if self.getKeyword() == Keyword.TYPECYCLING:
+            if "Affinity" == self.type:
+                str_ = "a card with affinity"
+            else:
+                str_ = Lang.nounWithAmount(1, self.reminderType + " card")
+        return reminderText % (self.cost.toSimpleString(), str_)
 ```

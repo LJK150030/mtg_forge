@@ -54,7 +54,7 @@ classDiagram
 
 ## Design Description
 
-`CountersPutOrRemoveAi` is the AI decision handler for spell abilities that place or remove counters, extending `SpellAbilityAi` to override the engine's generic targeting and choice logic with counter-specific heuristics. Its `checkApiLogic` and `doTriggerNoCost` hooks gate playability on whether a worthwhile target can be found, delegating to the private `doTgt` routine that scans the relevant `ZoneType` for `Card`s carrying counters and ranks them via `ComputerUtilCard`/`ComputerUtil` utilities — prioritizing combo lines (Dark Depths/Marit Lage), lethal Planeswalker loyalty removal, and Persist/Undying interactions on `-1/-1` and `+1/+1` counters.
+`CountersPutOrRemoveAi` is the AI decision handler for spell abilities that place or remove counters, extending `SpellAbilityAi` to override the engine's generic targeting and choice logic with counter-specific heuristics. Its `checkApiLogic` and `doTriggerNoCost` hooks gate playability on whether a worthwhile target can be found, delegating to the private `doTgt` routine that scans the relevant `ZoneType` for `Card`s carrying counters and ranks them via `ComputerUtilCard`/`ComputerUtil` utilities â€” prioritizing combo lines (Dark Depths/Marit Lage), lethal Planeswalker loyalty removal, and Persist/Undying interactions on `-1/-1` and `+1/+1` counters.
 
 It also overrides `chooseCounterType` and `chooseBinary` so that, given a chosen `Card` and `CounterType`, the AI removes harmful counters from its own cards and beneficial ones from opponents, encoding the same combo- and keyword-aware intent. The design keeps all decision policy stateless and parameter-driven, collaborating with `SpellAbility`/`TargetRestrictions` and the `Game` rather than mutating game state directly.
 
@@ -374,4 +374,236 @@ public class CountersPutOrRemoveAi extends SpellAbilityAi {
     }
 
 }
+```
+
+## Python
+`forge/ai/ability/CountersPutOrRemoveAi.py`
+
+```python
+from forge.ai.SpellAbilityAi import SpellAbilityAi
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.ai.ComputerUtil import ComputerUtil
+from forge.ai.ComputerUtilCard import ComputerUtilCard
+from forge.game.Game import Game
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CardPredicates import CardPredicates
+from forge.game.card.CounterType import CounterType
+from forge.game.card.CounterEnumType import CounterEnumType
+from forge.game.keyword.Keyword import Keyword
+from forge.game.player.Player import Player
+from forge.game.player.PlayerController.BinaryChoiceType import BinaryChoiceType
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.spellability.TargetRestrictions import TargetRestrictions
+from forge.game.zone.ZoneType import ZoneType
+
+from typing import List, Map
+
+
+class CountersPutOrRemoveAi(SpellAbilityAi):
+
+    def checkApiLogic(self, ai: Player, sa: SpellAbility) -> AiAbilityDecision:
+        if sa.usesTargeting():
+            if self.doTgt(ai, sa, False):
+                return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+            else:
+                return AiAbilityDecision(0, AiPlayDecision.TargetingFailed)
+        return super().checkApiLogic(ai, sa)
+
+    def doTgt(self, ai: Player, sa: SpellAbility, mandatory: bool) -> bool:
+        game = ai.getGame()
+
+        # remove counter with Time might use Exile Zone too
+        tgt = sa.getTargetRestrictions()
+        # need to targetable
+        list = CardLists.getTargetableCards(game.getCardsIn(tgt.getZone()), sa)
+
+        if list.isEmpty():
+            return False
+
+        # Filter AI-specific targets if provided
+        list = ComputerUtil.filterAITgts(sa, ai, list, False)
+
+        amount = AbilityUtils.calculateAmount(sa.getHostCard(), sa.getParamOrDefault("CounterNum", "1"), sa)
+
+        if sa.hasParam("CounterType"):
+            # currently only Jhoira's Timebug
+            type = CounterType.getType(sa.getParam("CounterType"))
+
+            countersList = CardLists.filter(list, CardPredicates.hasCounter(type, amount))
+
+            if countersList.isEmpty():
+                return False
+
+            # currently can only target cards you control or you own
+            best = ComputerUtilCard.getBestAI(countersList)
+
+            # currently both cards only has one target
+            sa.getTargets().add(best)
+            return True
+        else:
+            # currently only Clockspinning
+
+            # logic to remove some counter
+            countersList = CardLists.filter(list, CardPredicates.hasCounters())
+
+            if not countersList.isEmpty():
+                marit = ai.getCardsIn(ZoneType.Battlefield, "Marit Lage")
+                maritEmpty = marit.isEmpty() or any(c.ignoreLegendRule() for c in marit)
+                if maritEmpty:
+                    depthsList = CardLists.filter(countersList,
+                            CardPredicates.nameEquals("Dark Depths"), CardPredicates.hasCounter(CounterType.getType("ICE")))
+
+                    if not depthsList.isEmpty():
+                        sa.getTargets().add(depthsList.getFirst())
+                        return True
+
+                # Get rid of Planeswalkers, currently only if it can kill them
+                # with one touch
+                planeswalkerList = CardLists.filter(
+                        CardLists.filterControlledBy(countersList, ai.getOpponents()),
+                        CardPredicates.PLANESWALKERS,
+                        CardPredicates.hasLessCounter(CounterEnumType.LOYALTY, amount))
+
+                if not planeswalkerList.isEmpty():
+                    sa.getTargets().add(ComputerUtilCard.getBestPlaneswalkerAI(planeswalkerList))
+                    return True
+
+                # do as M1M1 part
+                aiList = CardLists.filterControlledBy(countersList, ai)
+
+                aiM1M1List = CardLists.filter(aiList, CardPredicates.hasCounter(CounterEnumType.M1M1))
+
+                aiPersistList = CardLists.getKeyword(aiM1M1List, Keyword.PERSIST)
+                if not aiPersistList.isEmpty():
+                    aiM1M1List = aiPersistList
+
+                if not aiM1M1List.isEmpty():
+                    sa.getTargets().add(ComputerUtilCard.getBestCreatureAI(aiM1M1List))
+                    return True
+
+                # do as P1P1 part
+                aiP1P1List = CardLists.filter(aiList, CardPredicates.hasCounter(CounterEnumType.P1P1))
+                aiUndyingList = CardLists.getKeyword(aiM1M1List, Keyword.UNDYING)
+
+                if not aiUndyingList.isEmpty():
+                    aiP1P1List = aiUndyingList
+                if not aiP1P1List.isEmpty():
+                    sa.getTargets().add(ComputerUtilCard.getBestCreatureAI(aiP1P1List))
+                    return True
+
+                # fallback to remove any counter from opponent
+                oppList = CardLists.filterControlledBy(countersList, ai.getOpponents())
+                oppList = CardLists.filter(oppList, CardPredicates.hasCounters())
+                if not oppList.isEmpty():
+                    best = ComputerUtilCard.getBestAI(oppList)
+
+                    for aType in best.getCounters().keySet():
+                        if not ComputerUtil.isNegativeCounter(aType, best):
+                            sa.getTargets().add(best)
+                            return True
+                        elif not ComputerUtil.isUselessCounter(aType, best):
+                            # would remove positive counter
+                            if best.getCounters(aType) <= amount:
+                                sa.getTargets().add(best)
+                                return True
+
+        if mandatory:
+            sa.getTargets().add(ComputerUtilCard.getWorstAI(list))
+            return True
+        return False
+
+    def doTriggerNoCost(self, ai: Player, sa: SpellAbility, mandatory: bool) -> AiAbilityDecision:
+        if sa.usesTargeting():
+            if self.doTgt(ai, sa, mandatory):
+                # if we can target, then we can play it
+                if sa.isTargetNumberValid():
+                    return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+                else:
+                    return AiAbilityDecision(0, AiPlayDecision.TargetingFailed)
+            else:
+                # if we can't target, then we can't play it
+                return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+        if mandatory:
+            # if mandatory, just play it
+            return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+        else:
+            # if not mandatory, check if we can play it
+            return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+    def chooseCounterType(self, options: List[CounterType], sa: SpellAbility, params: Map[str, object]) -> CounterType:
+        ai = sa.getActivatingPlayer()
+
+        tgt = params.get("Target")
+
+        ice = CounterType.getType("ICE")
+
+        # planeswalker has high priority for loyalty counters
+        if tgt.isPlaneswalker() and CounterEnumType.LOYALTY in options:
+            return CounterEnumType.LOYALTY
+
+        if tgt.getController().isOpponentOf(ai):
+            # creatures with BaseToughness below or equal zero might be
+            # killed if their counters are removed
+            if tgt.isCreature() and tgt.getBaseToughness() <= 0:
+                if CounterEnumType.P1P1 in options:
+                    return CounterEnumType.P1P1
+                elif CounterEnumType.M1M1 in options:
+                    return CounterEnumType.M1M1
+
+            # fallback logic, select positive counter to remove it
+            for type in options:
+                if not ComputerUtil.isNegativeCounter(type, tgt):
+                    return type
+        else:
+            # this counters are treat first to be removed
+            if "Dark Depths" == tgt.getName() and ice in options:
+                marit = ai.getCardsIn(ZoneType.Battlefield, "Marit Lage")
+                maritEmpty = marit.isEmpty() or any(c.ignoreLegendRule() for c in marit)
+
+                if maritEmpty:
+                    return ice
+            elif tgt.hasKeyword(Keyword.UNDYING) and CounterEnumType.P1P1 in options:
+                return CounterEnumType.P1P1
+            elif tgt.hasKeyword(Keyword.PERSIST) and CounterEnumType.M1M1 in options:
+                return CounterEnumType.M1M1
+
+            # fallback logic, select positive counter to add more
+            for type in options:
+                if not ComputerUtil.isNegativeCounter(type, tgt):
+                    return type
+
+        return super().chooseCounterType(options, sa, params)
+
+    def chooseBinary(self, kindOfChoice: BinaryChoiceType, sa: SpellAbility, params: Map[str, object]) -> bool:
+        if kindOfChoice.equals(BinaryChoiceType.AddOrRemove):
+            ai = sa.getActivatingPlayer()
+
+            tgt = params.get("Target")
+            type = params.get("CounterType")
+            ice = CounterType.getType("ICE")
+
+            if tgt.getController().isOpponentOf(ai):
+                if type.is_(CounterEnumType.LOYALTY) and tgt.isPlaneswalker():
+                    return False
+
+                return ComputerUtil.isNegativeCounter(type, tgt)
+
+            if type == ice and "Dark Depths" == tgt.getName():
+                marit = ai.getCardsIn(ZoneType.Battlefield, "Marit Lage")
+                maritEmpty = marit.isEmpty() or any(c.ignoreLegendRule() for c in marit)
+
+                if maritEmpty:
+                    return False
+            elif type.is_(CounterEnumType.M1M1) and tgt.hasKeyword(Keyword.PERSIST):
+                return False
+            elif type.is_(CounterEnumType.P1P1) and tgt.hasKeyword(Keyword.UNDYING):
+                return False
+
+            return not ComputerUtil.isNegativeCounter(type, tgt)
+        return super().chooseBinary(kindOfChoice, sa, params)
 ```

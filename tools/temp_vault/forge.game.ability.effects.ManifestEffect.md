@@ -73,3 +73,27 @@ public class ManifestEffect extends ManifestBaseEffect {
     }
 }
 ```
+
+## Python
+`forge/game/ability/effects/ManifestEffect.py`
+
+```python
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Localizer import Localizer
+from forge.game.ability.effects.ManifestBaseEffect import ManifestBaseEffect
+
+
+class ManifestEffect(ManifestBaseEffect):
+    def getDefaultMessage(self) -> str:
+        return Localizer.getInstance().getMessage("lblChooseCardToManifest")
+
+    def internalEffect(self, c: Card, p: Player, sa: SpellAbility, moveParams: dict[AbilityKey, object]) -> Card:
+        source = sa.getHostCard()
+        rem = c.manifest(p, sa, moveParams)
+        if rem is not None and sa.hasParam("RememberManifested") and rem.isManifested():
+            source.addRemembered(rem)
+        return rem
+```

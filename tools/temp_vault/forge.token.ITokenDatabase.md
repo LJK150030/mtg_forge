@@ -47,6 +47,12 @@ classDiagram
 - [[forge.card.CardDb.CardArtPreference|CardArtPreference]]
 - [[forge.item.PaperToken|PaperToken]]
 
+## Design Description
+
+The ITokenDatabase interface defines the contract for a catalog of Magic: The Gathering token cards, exposing lookup, enumeration, and metadata operations over `PaperToken` instances. It provides overloaded `getToken` and `getTokenFromEditions` methods that resolve tokens by name, edition, art index, printing date, and art-preference policy, alongside accessors for print and art counts, foil variants, and filtered or unique token collections.
+
+By extending `Iterable<PaperToken>`, it allows clients to traverse the full token catalog directly. It collaborates closely with `CardDb` and its `CardArtPreference` enum to mirror the card database's edition-selection semantics for tokens, and uses `Predicate<PaperToken>` for composable filteringâ€”exposing `wasPrintedInSets` as a reusable predicate factory. The interface-only design decouples consumers from concrete storage, allowing alternative token-database implementations.
+
 ## Source
 `forge-core/src/main/java/forge/token/ITokenDatabase.java`
 
@@ -83,4 +89,56 @@ public interface ITokenDatabase extends Iterable<PaperToken> {
 
     Predicate<? super PaperToken> wasPrintedInSets(List<String> allowedSetCodes);
 }
+```
+
+## Python
+`forge/token/ITokenDatabase.py`
+
+```python
+from abc import ABC, abstractmethod
+from datetime import datetime
+from typing import Callable, Collection, Iterable, List
+
+from forge.card.CardDb import CardDb
+from forge.card.CardDb.CardArtPreference import CardArtPreference
+from forge.item.PaperToken import PaperToken
+
+
+class ITokenDatabase(Iterable, ABC):
+    @abstractmethod
+    def getToken(self, tokenName: str, edition: str = None, artIndex: int = None) -> PaperToken:
+        ...
+
+    @abstractmethod
+    def getTokenFromEditions(self, tokenName: str, printedBefore: datetime = None,
+                             fromSet: CardArtPreference = None, artIndex: int = None) -> PaperToken:
+        ...
+
+    @abstractmethod
+    def getFoiled(self, cpi: PaperToken) -> PaperToken:
+        ...
+
+    @abstractmethod
+    def getPrintCount(self, tokenName: str, edition: str) -> int:
+        ...
+
+    @abstractmethod
+    def getMaxPrintCount(self, tokenName: str) -> int:
+        ...
+
+    @abstractmethod
+    def getArtCount(self, tokenName: str, edition: str) -> int:
+        ...
+
+    @abstractmethod
+    def getUniqueTokens(self) -> Collection[PaperToken]:
+        ...
+
+    @abstractmethod
+    def getAllTokens(self, arg=None) -> List[PaperToken]:
+        ...
+
+    @abstractmethod
+    def wasPrintedInSets(self, allowedSetCodes: List[str]) -> Callable[[PaperToken], bool]:
+        ...
 ```

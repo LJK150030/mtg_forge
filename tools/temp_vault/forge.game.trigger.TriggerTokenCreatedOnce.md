@@ -39,6 +39,12 @@ classDiagram
 - [[forge.game.player.PlayerCollection|PlayerCollection]]
 - [[forge.game.spellability.SpellAbility|SpellAbility]]
 
+## Design Description
+
+TriggerTokenCreatedOnce is a concrete trigger that fires in response to token-creation events, extending the abstract `Trigger` base class and conforming to its template-method contract by overriding `performTest`, `setTriggeringObjects`, and `getImportantStackObjects`. Its responsibility is to recognize when tokens are created, optionally filter them, and expose the matching tokens to the resolving ability.
+
+In `setTriggeringObjects` it reads the created `Card` tokens from the `AbilityKey.Cards` run parameter, narrows them via the card-script `ValidToken` restriction, and publishes the result as the triggering object for the consuming `SpellAbility`. `performTest` gates activation on the same `ValidToken` match and, when `OnlyFirst` is specified, checks the `PlayerCollection` under `AbilityKey.FirstTime` against the host's defined players so the trigger fires only on a player's first token creation. The design keeps all behavior data-driven through card-script parameters, delegating restriction and player resolution to shared `AbilityUtils`/`CardPredicates` utilities rather than hardcoding logic.
+
 ## Source
 `forge-game/src/main/java/forge/game/trigger/TriggerTokenCreatedOnce.java`
 
@@ -113,4 +119,43 @@ public class TriggerTokenCreatedOnce extends Trigger {
     }
 
 }
+```
+
+## Python
+`forge/game/trigger/TriggerTokenCreatedOnce.py`
+
+```python
+from forge.game.trigger.Trigger import Trigger
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.card.Card import Card
+from forge.game.card.CardPredicates import CardPredicates
+from forge.game.player.PlayerCollection import PlayerCollection
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.IterableUtil import IterableUtil
+
+
+class TriggerTokenCreatedOnce(Trigger):
+
+    def __init__(self, params: dict[str, str], host: Card, intrinsic: bool):
+        super().__init__(params, host, intrinsic)
+
+    def getImportantStackObjects(self, sa: SpellAbility) -> str:
+        return ""
+
+    def setTriggeringObjects(self, sa: SpellAbility, runParams: dict[AbilityKey, object]) -> None:
+        tokens = runParams.get(AbilityKey.Cards)
+        if self.hasParam("ValidToken"):
+            tokens = IterableUtil.filter(tokens, CardPredicates.restriction(self.getParam("ValidToken").split(","), self.getHostCard().getController(), self.getHostCard(), self))
+
+        sa.setTriggeringObject(AbilityKey.Cards, tokens)
+
+    def performTest(self, runParams: dict[AbilityKey, object]) -> bool:
+        if not self.matchesValidParam("ValidToken", runParams.get(AbilityKey.Cards)):
+            return False
+
+        if self.hasParam("OnlyFirst"):
+            if set(runParams.get(AbilityKey.FirstTime)).isdisjoint(AbilityUtils.getDefinedPlayers(self.getHostCard(), self.getParam("OnlyFirst"), self)):
+                return False
+        return True
 ```

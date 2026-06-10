@@ -690,6 +690,12 @@ classDiagram
 - [[forge.util.Localizer|Localizer]]
 - [[forge.util.collect.FCollection|FCollection]]
 
+## Design Description
+
+The Player class models a single participant in a Magic: the Gathering match, serving as the central aggregate for all per-player game state: life, counters, keywords, mana, the full set of zones (library, hand, battlefield, graveyard, command, and variant decks), and a large body of per-turn statistics tracking draws, lands, spells cast, sacrifices, and format-specific mechanics like commander damage, the monarchy, the Ring, radiation, and speed. Extending GameEntity, it inherits damage and counter handling while implementing Comparable for ordering by name, and it delegates decision-making to a pluggable PlayerController, enabling AI or human play and mind-slave control via timestamped overrides.
+
+Its design intent is rules-faithful mutation: life changes, draws, mills, and counter additions route through the Game's ReplacementHandler and TriggerHandler and fire GameEvents to keep the PlayerView synchronized, cleanly separating game logic from presentation. It collaborates closely with Card/CardCollection, the zone system, and numerous StaticAbility helpers, and constructs in-game effect cards (commander, monarch, Ring) to embody special-format rules as ordinary triggered abilities.
+
 ## Source
 `forge-game/src/main/java/forge/game/player/Player.java`
 
@@ -2630,7 +2636,7 @@ public class Player extends GameEntity implements Comparable<Player> {
         speedEffect.setOverlayText(label);
 
         // 702.179d There is an inherent triggered ability associated with a player having 1 or more speed. This ability has no source and is controlled by that player.
-        // That ability is “Whenever one or more opponents lose life during your turn, if your speed is less than 4, your speed increases by 1. This ability triggers only once each turn.”
+        // That ability is Ã¢â‚¬Å“Whenever one or more opponents lose life during your turn, if your speed is less than 4, your speed increases by 1. This ability triggers only once each turn.Ã¢â‚¬Â
         String trigger = "Mode$ LifeLostAll | ValidPlayer$ Opponent | TriggerZones$ Command | ActivationLimit$ 1 | " +
                 "PlayerTurn$ True | CheckSVar$ Count$YourSpeed | SVarCompare$ LT4 | "
                 + "TriggerDescription$ Whenever one or more opponents lose life during your turn, if your speed is less than 4, your speed increases by 1. This ability triggers only once each turn.";
@@ -2742,7 +2748,7 @@ public class Player extends GameEntity implements Comparable<Player> {
         }
 
         // Rule 704.5c - If a player has ten or more poison counters, he or she loses the game.
-        // 704.6b In a Two-Headed Giant game, if a team has fifteen or more poison counters, that team loses the game. See rule 810, “Two-Headed Giant Variant.”
+        // 704.6b In a Two-Headed Giant game, if a team has fifteen or more poison counters, that team loses the game. See rule 810, Ã¢â‚¬Å“Two-Headed Giant Variant.Ã¢â‚¬Â
         if (getCounters(CounterEnumType.POISON) >= 10 && loseConditionMet(GameLossReason.Poisoned, null)) {
             return true;
         }
@@ -4756,4 +4762,966 @@ public class Player extends GameEntity implements Comparable<Player> {
         return elementalBendThisTurn.size() >= 4;
     }
 }
+```
+
+## Python
+`forge/game/player/Player.py`
+
+```python
+# Planes
+        l = CardCollection()
+        for cp in registeredPlayer.getPlanes():
+            l.add(Card.fromPaperCard(cp, self))
+        if not l.isEmpty():
+            for c in l:
+                c.setCollectible(True)
+                self.getZone(ZoneType.PlanarDeck).add(c)
+            self.getZone(ZoneType.PlanarDeck).shuffle()
+
+        # Commander
+        if not registeredPlayer.getCommanders().isEmpty():
+            for pc in registeredPlayer.getCommanders():
+                cmd = Card.fromPaperCard(pc, self)
+                self.initCommanderColor(cmd)
+                cmd.setCollectible(True)
+                com.add(cmd)
+                self.addCommander(cmd)
+        elif registeredPlayer.getPlaneswalker() is not None:  # Planeswalker
+            cmd = Card.fromPaperCard(registeredPlayer.getPlaneswalker(), self)
+            cmd.setCollectible(True)
+            cmd.setCommander(True)
+            com.add(cmd)
+            self.addCommander(cmd)
+
+        # Conspiracies
+        for cp in registeredPlayer.getConspiracies():
+            conspire = Card.fromPaperCard(cp, self)
+            addToCommand = True
+            for ki in conspire.getKeywords(Keyword.HIDDEN_AGENDA):
+                if not CardFactoryUtil.handleHiddenAgenda(self, conspire, ki):
+                    addToCommand = False
+            for ki in conspire.getKeywords(Keyword.DOUBLE_AGENDA):
+                if not CardFactoryUtil.handleHiddenAgenda(self, conspire, ki):
+                    addToCommand = False
+
+            if conspire.getName() == "Backup Plan":
+                hand = PlayerZone(ZoneType.ExtraHand, self)
+                if self.extraZones is None:
+                    self.extraZones = []
+                self.extraZones.append(hand)
+
+            if addToCommand:
+                com.add(conspire)
+
+        # Attractions
+        attractionDeck = self.getZone(ZoneType.AttractionDeck)
+        for cp in registeredPlayer.getAttractions():
+            c = Card.fromPaperCard(cp, self)
+            c.setCollectible(True)
+            attractionDeck.add(c)
+        if not attractionDeck.isEmpty():
+            attractionDeck.shuffle()
+
+        # Contraptions
+        contraptionDeck = self.getZone(ZoneType.ContraptionDeck)
+        for cp in registeredPlayer.getContraptions():
+            c = Card.fromPaperCard(cp, self)
+            c.setCollectible(True)
+            contraptionDeck.add(c)
+        if not contraptionDeck.isEmpty():
+            contraptionDeck.shuffle()
+
+        # Adventure Mode items
+        adventureItemCards = registeredPlayer.getExtraCardsInCommandZone()
+        if adventureItemCards is not None:
+            for cp in adventureItemCards:
+                c = Card.fromPaperCard(cp, self)
+                com.add(c)
+                c.setStartsGameInPlay(True)
+
+        for c in self.getCardsIn(ZoneType.Library):
+            for inst in c.getKeywords():
+                kw = inst.getOriginal()
+                if kw.startswith("MayEffectFromOpeningDeck"):
+                    split = kw.split(":")
+                    effName = split[1]
+
+                    effect = AbilityFactory.getAbility(c.getSVar(effName), c)
+                    effect.setActivatingPlayer(self)
+
+                    self.getController().playSpellAbilityNoStack(effect, True)
+
+    def initCommanderColor(self, cmd):
+        if cmd.getRules().getAddsWildCardColor():
+            p = cmd.getController()
+            prompt = Localizer.getInstance().getMessage("lblChooseAColorFor", cmd.getName())
+            cmdColorsa = EmptySa(ApiType.ChooseColor, cmd, p)
+            chosenColor = p.getController().chooseColor(prompt, cmdColorsa, ColorSet.WUBRG)
+            cmd.setChosenColors([MagicColor.toLongString(chosenColor)])
+            p.getGame().getAction().notifyOfValue(cmdColorsa, cmd,
+                    Localizer.getInstance().getMessage("lblPlayerPickedChosen", p.getName(), MagicColor.toLongString(chosenColor)), p)
+
+    def allCardsUniqueManaSymbols(self):
+        for c in self.getCardsIn(ZoneType.Library):
+            cardStateNames = {CardStateName.LeftSplit, CardStateName.RightSplit} if c.isSplitCard() else {CardStateName.Original}
+            coloredManaSymbols = set()
+            genericManaSymbols = set()
+
+            for cardStateName in cardStateNames:
+                manaCost = c.getState(cardStateName).getManaCost()
+                for manaSymbol in manaCost:
+                    if manaSymbol in coloredManaSymbols:
+                        return False
+                    coloredManaSymbols.add(manaSymbol)
+                generic = manaCost.getGenericCost()
+                if generic > 0 or manaCost.getCMC() == 0:
+                    if generic in genericManaSymbols:
+                        return False
+                    genericManaSymbols.add(generic)
+        return True
+
+    def assignCompanion(self, game, player):
+        legalCompanions = []
+
+        uniqueNames = True
+        cardNames = set()
+        cardTypes = set(CardType.CoreType)
+        nonLandInDeck = CardLists.getNotType(self.getCardsIn(ZoneType.Library), "Land")
+        for c in nonLandInDeck:
+            if uniqueNames:
+                if c.getName() in cardNames:
+                    uniqueNames = False
+                else:
+                    cardNames.add(c.getName())
+
+            cardTypes.intersection_update(c.getPaperCard().getRules().getType().getCoreTypes())
+
+        deckSize = self.getCardsIn(ZoneType.Library).size()
+        minSize = game.getMatch().getRules().getGameType().getDeckFormat().getMainRange().getMinimum()
+
+        game.getAction().checkStaticAbilities(False)
+
+        for c in self.getCardsIn(ZoneType.Sideboard):
+            for inst in c.getKeywords(Keyword.COMPANION):
+                if not isinstance(inst, Companion):
+                    continue
+                kwInstance = inst
+
+                if kwInstance.hasSpecialRestriction():
+                    specialRules = kwInstance.getSpecialRules()
+                    if specialRules == "UniqueNames":
+                        if uniqueNames:
+                            legalCompanions.append(c)
+                    elif specialRules == "UniqueManaSymbols":
+                        if self.allCardsUniqueManaSymbols():
+                            legalCompanions.append(c)
+                    elif specialRules == "DeckSizePlus20":
+                        # +20 deck size to min deck size
+                        if deckSize >= minSize + 20:
+                            legalCompanions.append(c)
+                    elif specialRules == "SharesCardType":
+                        # Shares card type
+                        if len(cardTypes) != 0:
+                            legalCompanions.append(c)
+                else:
+                    restriction = kwInstance.getDeckRestriction()
+                    if self.deckMatchesDeckRestriction(c, restriction):
+                        legalCompanions.append(c)
+
+        if len(legalCompanions) == 0:
+            return
+
+        view = CardCollection.getView(legalCompanions)
+
+        fakeSa = EmptySa(ApiType.CompanionChoose, legalCompanions[0], self)
+        companion = player.chooseSingleEntityForEffect(view, fakeSa, Localizer.getInstance().getMessage("lblChooseACompanion"), True, None)
+
+        commandZone = self.getZone(ZoneType.Command)
+        companion = game.getAction().moveTo(ZoneType.Command, companion, None, AbilityKey.newMap())
+        commandZone.add(Player.createCompanionEffect(companion))
+        self.updateZoneForView(commandZone)
+
+    def deckMatchesDeckRestriction(self, source, restriction):
+        for c in self.getCardsIn(ZoneType.Library):
+            if not c.isValid(restriction.split(","), self, source, None):
+                return False
+        return True
+
+    @staticmethod
+    def createCompanionEffect(companion):
+        name = Lang.getInstance().getPossesive(companion.getDisplayName()) + " Companion Effect"
+        eff = DetachedCardEffect(companion, name)
+
+        addToHandAbility = "Mode$ Continuous | EffectZone$ Command | Affected$ Card.YouOwn+EffectSource | AffectedZone$ Command | AddAbility$ MoveToHand"
+        moveToHand = "ST$ ChangeZone | Cost$ 3 | Defined$ Self | Origin$ Command | Destination$ Hand | SorcerySpeed$ True | ActivationZone$ Command | SpellDescription$ Companion - Put CARDNAME in to your hand"
+
+        stAb = StaticAbility.create(addToHandAbility, eff, eff.getCurrentState(), True)
+        stAb.setSVar("MoveToHand", moveToHand)
+        eff.addStaticAbility(stAb)
+
+        return eff
+
+    def createCommanderEffect(self):
+        com = self.getZone(ZoneType.Command)
+        if self.commanderEffect is not None:
+            com.remove(self.commanderEffect)
+
+        eff = DetachedCardEffect(self, "Commander Effect")
+
+        validCommander = "Card.IsCommander+YouOwn"
+        if self.game.getRules().hasAppliedVariant(GameType.Oathbreaker):
+            # signature spells can only reside on the stack or in the command zone
+            effStr = "DB$ ChangeZone | Origin$ Stack | Destination$ Command | Defined$ ReplacedCard"
+
+            moved = ("Event$ Moved | ValidCard$ Spell.IsCommander+YouOwn | Secondary$ True | Destination$ Graveyard,Exile,Hand,Library | "
+                     "Description$ If a signature spell would be put into another zone from the stack, put it into the command zone instead.")
+            re_ = ReplacementHandler.parseReplacement(moved, eff, True)
+            re_.setOverridingAbility(AbilityFactory.getAbility(effStr, eff))
+            eff.addReplacementEffect(re_)
+
+            # TODO: Actual recognition for signature spells as their own thing, separate from commanders.
+            validCommander = "Permanent.IsCommander+YouOwn"
+
+            # signature spells can only be cast if your oathbreaker is in on the battlefield under your control
+            castRestriction = ("Mode$ CantBeCast | ValidCard$ Spell.IsCommander+YouOwn | EffectZone$ Command | IsPresent$ Permanent.IsCommander+YouOwn+YouCtrl | PresentZone$ Battlefield | PresentCompare$ EQ0 | "
+                               "Description$ Signature spell can only be cast if your oathbreaker is on the battlefield under your control.")
+            eff.addStaticAbility(castRestriction)
+
+        effStr = "DB$ ChangeZone | Origin$ Battlefield,Graveyard,Exile,Library,Hand | Destination$ Command | Defined$ ReplacedCard"
+
+        moved = "Event$ Moved | ValidCard$ " + validCommander + " | Secondary$ True | Optional$ True | OptionalDecider$ You | CommanderMoveReplacement$ True "
+        if self.game.getRules().hasAppliedVariant(GameType.TinyLeaders):
+            moved += " | Destination$ Graveyard,Exile | Description$ If a commander would be put into its owner's graveyard or exile from anywhere, that player may put it into the command zone instead."
+        elif self.game.getRules().hasAppliedVariant(GameType.Oathbreaker):
+            moved += " | Destination$ Graveyard,Exile,Hand,Library | Description$ If a commander would be exiled or put into hand, graveyard, or library from anywhere, that player may put it into the command zone instead."
+        else:
+            # rule 903.9b
+            moved += " | Destination$ Hand,Library | Description$ If a commander would be put into its owner's hand or library from anywhere, its owner may put it into the command zone instead."
+        re_ = ReplacementHandler.parseReplacement(moved, eff, True)
+        re_.setOverridingAbility(AbilityFactory.getAbility(effStr, eff))
+        eff.addReplacementEffect(re_)
+
+        mayBePlayedAbility = "Mode$ Continuous | EffectZone$ Command | MayPlay$ True | Affected$ Card.IsCommander+YouOwn | AffectedZone$ Command"
+        if self.game.getRules().hasAppliedVariant(GameType.Planeswalker):  # support paying for Planeswalker with any color mana
+            mayBePlayedAbility += " | MayPlayIgnoreColor$ True"
+        eff.addStaticAbility(mayBePlayedAbility)
+        self.commanderEffect = eff
+        com.add(eff)
+
+    def createPlanechaseEffects(self, game):
+        com = self.getZone(ZoneType.Command)
+        name = "Planar Dice"
+        eff = Card(game.nextCardId(), game)
+        eff.setGameTimestamp(game.getNextTimestamp())
+        eff.setName(name)
+        eff.setOwner(self)
+        eff.setGamePieceType(GamePieceType.EFFECT)
+        image = ImageKeys.getTokenKey("planechase")
+        eff.setImageKey(image)
+
+        trigger = ("Mode$ PlanarDice | Result$ Planeswalk | TriggerZones$ Command | ValidPlayer$ You | Secondary$ True | "
+                   "TriggerDescription$ Whenever you roll the Planeswalker symbol on the planar die, planeswalk.")
+        rolledWalk = "DB$ Planeswalk | Cause$ PlanarDie"
+        planesWalkTrigger = TriggerHandler.parseTrigger(trigger, eff, True)
+        planesWalkTrigger.setOverridingAbility(AbilityFactory.getAbility(rolledWalk, eff))
+        eff.addTrigger(planesWalkTrigger)
+
+        specialA = ("ST$ RollPlanarDice | Cost$ X | SorcerySpeed$ True | Activator$ Player | SpecialAction$ True"
+                    " | ActivationZone$ Command | SpellDescription$ Roll the planar dice. X is equal to the number of "
+                    "times you have previously taken this action this turn. | CostDesc$ {X}: ")
+        planarRoll = AbilityFactory.getAbility(specialA, eff)
+        planarRoll.setSVar("X", "Count$PlanarDiceSpecialActionThisTurn")
+        eff.addSpellAbility(planarRoll)
+
+        eff.updateStateForView()
+        com.add(eff)
+        self.updateZoneForView(com)
+
+    def createTheRing(self, set):
+        if self.theRing is None:
+            com = self.getZone(ZoneType.Command)
+            self.theRing = Card(self.game.nextCardId(), None, self.game)
+            self.theRing.setOwner(self)
+            self.theRing.setGamePieceType(GamePieceType.EFFECT)
+            self.theRing.setImageKey(StaticData.instance().getOtherImageKey(ImageKeys.THE_RING_IMAGE, set))
+            if set is not None:
+                self.theRing.setSetCode(set)
+            self.theRing.setName("The Ring")
+            self.theRing.updateStateForView()
+            com.add(self.theRing)
+            self.updateZoneForView(com)
+
+    def setRingLevel(self, level):
+        if self.getTheRing() is None:
+            self.createTheRing(None)
+        if level == 1:
+            legendary = "Mode$ Continuous | EffectZone$ Command | Affected$ Card.YouCtrl+IsRingbearer | AddType$ Legendary | Description$ Your Ring-bearer is legendary."
+            cantBeBlocked = "Mode$ CantBlockBy | EffectZone$ Command | ValidAttacker$ Card.YouCtrl+IsRingbearer | ValidBlockerRelative$ Creature.powerGTX | Description$ Your Ring-bearer can't be blocked by creatures with greater power."
+            self.getTheRing().addStaticAbility(legendary)
+            st = self.getTheRing().addStaticAbility(cantBeBlocked)
+            st.setSVar("X", "Count$CardPower")
+        elif level == 2:
+            attackTrig = "Mode$ Attacks | ValidCard$ Card.YouCtrl+IsRingbearer | TriggerDescription$ Whenever your ring-bearer attacks, draw a card, then discard a card. | TriggerZones$ Command"
+            drawEffect = "DB$ Draw | Defined$ You | NumCards$ 1"
+            discardEffect = "DB$ Discard | Defined$ You | NumCards$ 1 | Mode$ TgtChoose"
+
+            attackTrigger = TriggerHandler.parseTrigger(attackTrig, self.getTheRing(), True)
+
+            drawExecute = AbilityFactory.getAbility(drawEffect, self.getTheRing())
+            discardExecute = AbilityFactory.getAbility(discardEffect, self.getTheRing())
+
+            drawExecute.setSubAbility(discardExecute)
+            attackTrigger.setOverridingAbility(drawExecute)
+            self.getTheRing().addTrigger(attackTrigger)
+        elif level == 3:
+            becomesBlockedTrig = "Mode$ AttackerBlockedByCreature | ValidCard$ Card.YouCtrl+IsRingbearer| ValidBlocker$ Creature | TriggerZones$ Command | TriggerDescription$ Whenever your Ring-bearer becomes blocked a creature, that creature's controller sacrifices it at the end of combat."
+            endOfCombatTrig = "DB$ DelayedTrigger | Mode$ Phase | Phase$ EndCombat | RememberObjects$ TriggeredBlockerLKICopy | TriggerDescription$ At end of combat, the controller of the creature that blocked CARDNAME sacrifices that creature."
+            sacBlockerEffect = "DB$ SacrificeAll | Defined$ DelayTriggerRememberedLKI"
+
+            becomesBlockedTrigger = TriggerHandler.parseTrigger(becomesBlockedTrig, self.getTheRing(), True)
+
+            endCombatExecute = AbilityFactory.getAbility(endOfCombatTrig, self.getTheRing())
+            sacExecute = AbilityFactory.getAbility(sacBlockerEffect, self.getTheRing())
+
+            endCombatExecute.setAdditionalAbility("Execute", sacExecute)
+            becomesBlockedTrigger.setOverridingAbility(endCombatExecute)
+            self.getTheRing().addTrigger(becomesBlockedTrigger)
+        elif level == 4:
+            damageTrig = "Mode$ DamageDone | ValidSource$ Card.YouCtrl+IsRingbearer | ValidTarget$ Player | CombatDamage$ True | TriggerZones$ Command | TriggerDescription$ Whenever your Ring-bearer deals combat damage to a player, each opponent loses 3 life."
+            loseEffect = "DB$ LoseLife | Defined$ Opponent | LifeAmount$ 3"
+
+            damageTrigger = TriggerHandler.parseTrigger(damageTrig, self.getTheRing(), True)
+            loseExecute = AbilityFactory.getAbility(loseEffect, self.getTheRing())
+
+            damageTrigger.setOverridingAbility(loseExecute)
+            self.getTheRing().addTrigger(damageTrigger)
+        self.getTheRing().updateStateForView()
+
+    def getNumRingTemptedYou(self):
+        return self.numRingTemptedYou
+
+    def incrementRingTemptedYou(self):
+        self.numRingTemptedYou += 1
+
+    def setNumRingTemptedYou(self, value):
+        self.numRingTemptedYou = value
+
+    def resetRingTemptedYou(self):
+        self.numRingTemptedYou = 0
+
+    def changeOwnership(self, card):
+        # If lost then gained, just clear out of lost.
+        # If gained then lost, just clear out of gained.
+        oldOwner = card.getOwner()
+
+        if self.equals(oldOwner):
+            return
+        card.setOwner(self)
+
+        if not card.isCollectible():
+            return
+
+        if not card.getGame().getRules().useAnte():
+            # Only track permanent ownership changes when ante is used
+            return
+
+        if self.lostOwnership.contains(card):
+            self.lostOwnership.remove(card)
+        else:
+            self.gainedOwnership.add(card)
+
+        if oldOwner.gainedOwnership.contains(card):
+            oldOwner.gainedOwnership.remove(card)
+        else:
+            oldOwner.lostOwnership.add(card)
+
+    def destroyPhysicalCard(self, card):
+        if not card.isCollectible():
+            return
+
+        card.getOwner().lostOwnership.add(card)
+
+    def getLostOwnership(self):
+        return self.lostOwnership
+
+    def getGainedOwnership(self):
+        return self.gainedOwnership
+
+    def getView(self):
+        return self.view
+
+    def getPaidForSA(self):
+        return self.paidForStack[0] if self.paidForStack else None
+
+    def pushPaidForSA(self, sa):
+        self.paidForStack.appendleft(sa)
+
+    def popPaidForSA(self):
+        # it could be empty if spell couldn't be cast
+        if self.paidForStack:
+            self.paidForStack.popleft()
+
+    def clearPaidForSA(self):
+        self.paidForStack.clear()
+
+    def isStartingPlayer(self):
+        return self.equals(self.game.getStartingPlayer())
+
+    def isMonarch(self):
+        return self.equals(self.game.getMonarch())
+
+    def getMonarchSet(self):
+        return self.monarchEffect.getSetCode() if self.monarchEffect is None else None
+
+    def createMonarchEffect(self, set):
+        com = self.getZone(ZoneType.Command)
+        if self.monarchEffect is None:
+            self.monarchEffect = Card(self.game.nextCardId(), None, self.game)
+            self.monarchEffect.setOwner(self)
+            self.monarchEffect.setGamePieceType(GamePieceType.EFFECT)
+            self.monarchEffect.setImageKey(StaticData.instance().getOtherImageKey(ImageKeys.MONARCH_IMAGE, set))
+            self.monarchEffect.setSetCode(set)
+            self.monarchEffect.setName("The Monarch")
+
+            drawTrig = ("Mode$ Phase | Phase$ End of Turn | TriggerZones$ Command | "
+                        "ValidPlayer$ You |  TriggerDescription$ At the beginning of your end step, draw a card.")
+            drawEff = "DB$ Draw | Defined$ You"
+
+            drawTrigger = TriggerHandler.parseTrigger(drawTrig, self.monarchEffect, True)
+
+            drawTrigger.setOverridingAbility(AbilityFactory.getAbility(drawEff, self.monarchEffect))
+            self.monarchEffect.addTrigger(drawTrigger)
+
+            damageTrig = ("Mode$ DamageDone | ValidSource$ Creature | ValidTarget$ You | CombatDamage$ True | TriggerZones$ Command |"
+                          " TriggerDescription$ Whenever a creature deals combat damage to you, its controller becomes the monarch.")
+            damageEff = "DB$ BecomeMonarch | Defined$ TriggeredSourceController"
+
+            damageTrigger = TriggerHandler.parseTrigger(damageTrig, self.monarchEffect, True)
+
+            damageTrigger.setOverridingAbility(AbilityFactory.getAbility(damageEff, self.monarchEffect))
+            self.monarchEffect.addTrigger(damageTrigger)
+            self.monarchEffect.updateStateForView()
+        com.add(self.monarchEffect)
+
+        self.updateZoneForView(com)
+
+    def removeMonarchEffect(self):
+        com = self.getZone(ZoneType.Command)
+        if self.monarchEffect is not None:
+            com.remove(self.monarchEffect)
+            self.updateZoneForView(com)
+
+    def canBecomeMonarch(self):
+        return not StaticAbilityCantBecomeMonarch.anyCantBecomeMonarch(self)
+
+    def getInitiativeSet(self):
+        return self.initiativeEffect.getSetCode() if self.initiativeEffect is not None else None
+
+    def createInitiativeEffect(self, set):
+        com = self.getZone(ZoneType.Command)
+        if self.initiativeEffect is None:
+            self.initiativeEffect = Card(self.game.nextCardId(), None, self.game)
+            self.initiativeEffect.setOwner(self)
+            self.initiativeEffect.setGamePieceType(GamePieceType.EFFECT)
+            self.initiativeEffect.setImageKey(StaticData.instance().getOtherImageKey(ImageKeys.INITIATIVE_IMAGE, set))
+            self.initiativeEffect.setSetCode(set)
+            self.initiativeEffect.setName("The Initiative")
+
+            # Set up damage trigger
+            damageTrig = ("Mode$ DamageDoneOnceByController | ValidSource$ Player | ValidTarget$ You | "
+                          "CombatDamage$ True | TriggerZones$ Command | TriggerDescription$ Whenever one or more "
+                          "creatures a player controls deal combat damage to you, that player takes the initiative.")
+            damageEff = "DB$ TakeInitiative | Defined$ TriggeredSource"
+
+            damageTrigger = TriggerHandler.parseTrigger(damageTrig, self.initiativeEffect, True)
+
+            damageTrigger.setOverridingAbility(AbilityFactory.getAbility(damageEff, self.initiativeEffect))
+            self.initiativeEffect.addTrigger(damageTrigger)
+
+            # Set up triggers to venture into Undercity
+            ventureTakeTrig = ("Mode$ TakesInitiative | ValidPlayer$ You | TriggerZones$ Command | "
+                               "TriggerDescription$ Whenever you take the initiative and at the beginning of your upkeep, "
+                               "venture into Undercity. (If you're in a dungeon, advance to the next room. If not, enter "
+                               "Undercity. You can take the initiative even if you already have it.)")
+
+            ventureUpkpTrig = ("Mode$ Phase | Phase$ Upkeep | TriggerZones$ Command | ValidPlayer$ You "
+                               "| TriggerDescription$ Whenever you take the initiative and at the beginning of your upkeep, "
+                               "venture into Undercity. (If you're in a dungeon, advance to the next room. If not, enter "
+                               "Undercity. You can take the initiative even if you already have it.) | Secondary$ True")
+
+            ventureEff = "DB$ Venture | Dungeon$ Undercity"
+
+            ventureUTrigger = TriggerHandler.parseTrigger(ventureUpkpTrig, self.initiativeEffect, True)
+            ventureUTrigger.setOverridingAbility(AbilityFactory.getAbility(ventureEff, self.initiativeEffect))
+            self.initiativeEffect.addTrigger(ventureUTrigger)
+
+            ventureTTrigger = TriggerHandler.parseTrigger(ventureTakeTrig, self.initiativeEffect, True)
+            ventureTTrigger.setOverridingAbility(AbilityFactory.getAbility(ventureEff, self.initiativeEffect))
+            self.initiativeEffect.addTrigger(ventureTTrigger)
+
+            self.initiativeEffect.updateStateForView()
+
+        triggerHandler = self.game.getTriggerHandler()
+        com.add(self.initiativeEffect)
+        triggerHandler.clearActiveTriggers(self.initiativeEffect, None)
+        triggerHandler.registerActiveTrigger(self.initiativeEffect, False)
+
+        self.updateZoneForView(com)
+
+    def hasInitiative(self):
+        return self.equals(self.game.getHasInitiative())
+
+    def removeInitiativeEffect(self):
+        com = self.getZone(ZoneType.Command)
+        if self.initiativeEffect is not None:
+            com.remove(self.initiativeEffect)
+            self.updateZoneForView(com)
+
+    def getRadiationEffect(self):
+        return self.radiationEffect
+
+    def createRadiationEffect(self, setCode):
+        com = self.getZone(ZoneType.Command)
+        if self.radiationEffect is None:
+            self.radiationEffect = Card(self.game.nextCardId(), None, self.game)
+            self.radiationEffect.setOwner(self)
+            self.radiationEffect.setGamePieceType(GamePieceType.EFFECT)
+            self.radiationEffect.setImageKey(StaticData.instance().getOtherImageKey(ImageKeys.RADIATION_IMAGE, setCode))
+            self.radiationEffect.setName("Radiation")
+            if setCode is not None:
+                self.radiationEffect.setSetCode(setCode)
+
+            trigStr = ("Mode$ Phase | Phase$ Main1 | ValidPlayer$ You | TriggerZones$ Command | TriggerDescription$ "
+                       "At the beginning of your precombat main phase, if you have any rad counters, mill that many cards. For each nonland card milled this way, you lose 1 life and a rad counter.")
+
+            tr = TriggerHandler.parseTrigger(trigStr, self.radiationEffect, True)
+            sa = AbilityFactory.getAbility("DB$ InternalRadiation", self.radiationEffect)
+            tr.setOverridingAbility(sa)
+
+            self.radiationEffect.addTrigger(tr)
+            self.radiationEffect.updateStateForView()
+        com.add(self.radiationEffect)
+        self.updateZoneForView(com)
+
+    def removeRadiationEffect(self):
+        com = self.getZone(ZoneType.Command)
+        if self.radiationEffect is not None:
+            com.remove(self.radiationEffect)
+            self.radiationEffect = None
+            self.updateZoneForView(com)
+
+    def hasRadiationEffect(self):
+        return self.radiationEffect is not None
+
+    def getKeywordCard(self):
+        if self.keywordEffect is not None:
+            return self.keywordEffect
+
+        com = self.getZone(ZoneType.Command)
+
+        self.keywordEffect = Card(self.game.nextCardId(), None, self.game)
+        self.keywordEffect.setGamePieceType(GamePieceType.EFFECT)
+        self.keywordEffect.setOwner(self)
+        self.keywordEffect.setName("Keyword Effects")
+        self.keywordEffect.setImageKey(ImageKeys.HIDDEN_CARD)
+
+        self.keywordEffect.updateStateForView()
+
+        com.add(self.keywordEffect)
+
+        self.updateZoneForView(com)
+        return self.keywordEffect
+
+    def updateKeywordCardAbilityText(self):
+        if self.getKeywordCard() is None:
+            return
+        com = self.getZone(ZoneType.Command)
+        self.keywordEffect.setText("")
+        headerAdded = False
+        kw = ""
+        for k in self.keywords:
+            if not headerAdded:
+                headerAdded = True
+                kw += self.getName() + " has: \n"
+            kw += str(k) + "\n"
+        if kw != "":
+            self.keywordEffect.setText(self.trimKeywords(kw))
+        self.keywordEffect.updateAbilityTextForView()
+        self.updateZoneForView(com)
+
+    def trimKeywords(self, keywordTexts):
+        if "Protection:" in keywordTexts:
+            lines = keywordTexts.split("\n")
+            for line in lines:
+                if line.startswith("Protection:"):
+                    parts = line.split(":")
+                    if len(parts) > 2:
+                        keywordTexts = TextUtil.fastReplace(keywordTexts, line, parts[2])
+        keywordTexts = TextUtil.fastReplace(keywordTexts, ":Card.named", " from ")
+        keywordTexts = TextUtil.fastReplace(keywordTexts, ":Card.Black:", " from ")
+        keywordTexts = TextUtil.fastReplace(keywordTexts, ":Card.Blue:", " from ")
+        keywordTexts = TextUtil.fastReplace(keywordTexts, ":Card.Red:", " from ")
+        keywordTexts = TextUtil.fastReplace(keywordTexts, ":Card.Green:", " from ")
+        keywordTexts = TextUtil.fastReplace(keywordTexts, ":Card.White:", " from ")
+        keywordTexts = TextUtil.fastReplace(keywordTexts, ":Card.MonoColor:", " from ")
+        keywordTexts = TextUtil.fastReplace(keywordTexts, ":Card.MultiColor:", " from ")
+        keywordTexts = TextUtil.fastReplace(keywordTexts, ":Card.Colorless:", " from ")
+        return keywordTexts
+
+    def checkKeywordCard(self):
+        if self.keywordEffect is None:
+            return
+        com = self.getZone(ZoneType.Command)
+        if self.keywordEffect.getAbilityText().isEmpty():
+            com.remove(self.keywordEffect)
+            self.updateZoneForView(com)
+            self.keywordEffect = None
+
+    def hasBlessing(self):
+        return self.blessingEffect is not None
+
+    def setBlessing(self, bless, setCode):
+        # no need to to change
+        if (self.blessingEffect is not None) == bless:
+            return
+
+        com = self.getZone(ZoneType.Command)
+
+        if bless:
+            self.blessingEffect = Card(self.game.nextCardId(), None, self.game)
+            self.blessingEffect.setOwner(self)
+            self.blessingEffect.setImageKey(StaticData.instance().getOtherImageKey(ImageKeys.BLESSING_IMAGE, setCode))
+            self.blessingEffect.setName("City's Blessing")
+            self.blessingEffect.setGamePieceType(GamePieceType.EFFECT)
+            if setCode is not None:
+                self.blessingEffect.setSetCode(setCode)
+
+            self.blessingEffect.updateStateForView()
+
+            com.add(self.blessingEffect)
+
+            # 702.131d. After a player gets the city's blessing, continuous effects are reapplied
+            self.game.getAction().checkStaticAbilities()
+        else:
+            com.remove(self.blessingEffect)
+            self.blessingEffect = None
+
+        self.updateZoneForView(com)
+
+    def sameTeam(self, other):
+        if self.equals(other):
+            return True
+        if self.teamNumber < 0 or other.getTeam() < 0:
+            return False
+        return self.teamNumber == other.getTeam()
+
+    def isCursed(self):
+        return CardLists.count(self.getAttachedCards(), Card.isCurse) > 0
+
+    def canDiscardBy(self, sa, effect):
+        if sa is None:
+            return True
+
+        return not StaticAbilityCantDiscard.cantDiscard(self, sa, effect)
+
+    def canSearchLibraryWith(self, sa, targetPlayer):
+        if sa is None:
+            return True
+
+        if self.hasKeyword("CantSearchLibrary"):
+            return False
+        return (targetPlayer is None or not targetPlayer.equals(sa.getActivatingPlayer())
+                or not self.hasKeyword("Spells and abilities you control can't cause you to search your library."))
+
+    def addAdditionalVote(self, timestamp, value):
+        self.additionalVotes[timestamp] = value
+        self.getView().updateAdditionalVote(self)
+        self.getGame().fireEvent(GameEventPlayerStatsChanged(self, False))
+
+    def removeAdditionalVote(self, timestamp):
+        if self.additionalVotes.pop(timestamp, None) is not None:
+            self.getView().updateAdditionalVote(self)
+            self.getGame().fireEvent(GameEventPlayerStatsChanged(self, False))
+
+    def getAdditionalVotesAmount(self):
+        value = 0
+        for i in self.additionalVotes.values():
+            value += i
+        return value
+
+    def addAdditionalOptionalVote(self, timestamp, value):
+        self.additionalOptionalVotes[timestamp] = value
+        self.getView().updateOptionalAdditionalVote(self)
+        self.getGame().fireEvent(GameEventPlayerStatsChanged(self, False))
+
+    def removeAdditionalOptionalVote(self, timestamp):
+        if self.additionalOptionalVotes.pop(timestamp, None) is not None:
+            self.getView().updateOptionalAdditionalVote(self)
+            self.getGame().fireEvent(GameEventPlayerStatsChanged(self, False))
+
+    def getAdditionalOptionalVotesAmount(self):
+        value = 0
+        for i in self.additionalOptionalVotes.values():
+            value += i
+        return value
+
+    def addControlVote(self, timestamp):
+        if timestamp not in self.controlVotes:
+            self.controlVotes.add(timestamp)
+            self.updateControlVote()
+            return True
+        return False
+
+    def removeControlVote(self, timestamp):
+        if timestamp in self.controlVotes:
+            self.controlVotes.remove(timestamp)
+            self.updateControlVote()
+            return True
+        return False
+
+    def updateControlVote(self):
+        # need to update all players because it can't know
+        control = self.getGame().getControlVote()
+        for pl in self.getGame().getPlayers():
+            pl.getView().updateControlVote(pl.equals(control))
+            self.getGame().fireEvent(GameEventPlayerStatsChanged(pl, False))
+
+    def getControlVote(self):
+        return self.controlVotes
+
+    def setControlVote(self, value):
+        self.controlVotes.clear()
+        self.controlVotes.update(value)
+        self.updateControlVote()
+
+    def getHighestControlVote(self):
+        if len(self.controlVotes) == 0:
+            return None
+        return max(self.controlVotes)
+
+    def addAdditionalVillainousChoices(self, timestamp, value):
+        self.additionalVillainousChoices[timestamp] = value
+        self.getView().updateAdditionalVillainousChoices(self)
+        self.getGame().fireEvent(GameEventPlayerStatsChanged(self, False))
+
+    def removeAdditionalVillainousChoices(self, timestamp):
+        if self.additionalVillainousChoices.pop(timestamp, None) is not None:
+            self.getView().updateAdditionalVillainousChoices(self)
+            self.getGame().fireEvent(GameEventPlayerStatsChanged(self, False))
+
+    def getAdditionalVillainousChoices(self):
+        value = 0
+        for i in self.additionalVillainousChoices.values():
+            value += i
+        return value
+
+    def addCycled(self, sp):
+        cycleParams = AbilityKey.mapFromCard(CardCopyService.getLKICopy(self.game.getCardState(sp.getHostCard())))
+        cycleParams[AbilityKey.Cause] = sp
+        cycleParams[AbilityKey.Player] = self
+        cycleParams[AbilityKey.FirstTime] = CardUtil.getThisTurnActivated("Activated.Cycling+YouCtrl", sp.getHostCard(), sp, self).size() == 1
+        self.game.getTriggerHandler().runTrigger(TriggerType.Cycled, cycleParams, False)
+
+    def hasUrzaLands(self):
+        landsControlled = self.getCardsIn(ZoneType.Battlefield)
+        return (landsControlled.anyMatch(CardPredicates.isType("Urza's").and_(CardPredicates.isType("Mine")))
+                and landsControlled.anyMatch(CardPredicates.isType("Urza's").and_(CardPredicates.isType("Power-Plant")))
+                and landsControlled.anyMatch(CardPredicates.isType("Urza's").and_(CardPredicates.isType("Tower"))))
+
+    def revealFaceDownCards(self):
+        revealZones = [[ZoneType.Battlefield, ZoneType.Merged], [ZoneType.Exile]]
+        otherPlayers = PlayerCollection(self.game.getRegisteredPlayers())
+        otherPlayers.remove(self)
+
+        for z in revealZones:
+            revealCards = CardCollection()
+            for c in self.game.getCardsInOwnedBy(z, self):
+                if not c.isRealFaceDown():
+                    continue
+
+                lki = CardCopyService.getLKICopy(c)
+                lki.forceTurnFaceUp()
+                lki.setZone(c.getZone())
+                revealCards.add(lki)
+            self.game.getAction().revealTo(revealCards, otherPlayers, Localizer.getInstance().getMessage("lblRevealFaceDownCards"), True)
+
+    def learnLesson(self, sa, params):
+        if self.hasLost():
+            return
+
+        repParams = AbilityKey.mapFromAffected(self)
+        repParams[AbilityKey.Cause] = sa
+        repParams.update(params)
+        if self.game.getReplacementHandler().run(ReplacementType.Learn, repParams) != ReplacementResult.NotReplaced:
+            return
+
+        list_ = CardCollection()
+        if not self.isControlled():
+            list_.addAll(CardLists.getType(self.getZone(ZoneType.Sideboard), "Lesson"))
+        list_.addAll(self.getZone(ZoneType.Hand))
+        if list_.isEmpty():
+            return
+
+        c = self.getController().chooseSingleCardForZoneChange(ZoneType.Hand, [ZoneType.Sideboard, ZoneType.Hand],
+                sa, list_, None, Localizer.getInstance().getMessage("lblLearnALesson"), True, self)
+        if c is None:
+            return
+        if c.isInZone(ZoneType.Sideboard):  # Sideboard Lesson to Hand
+            self.game.getAction().reveal(CardCollection(c), c.getOwner(), True)
+            self.game.getAction().moveTo(ZoneType.Hand, c, sa, params)
+        elif c.isInZone(ZoneType.Hand):  # Discard and Draw
+            discardedBefore = list(self.getDiscardedThisTurn())
+            moved = self.discard(c, sa, True, params)
+            if moved is not None:
+                # Change this if something would make multiple player learn at the same time
+
+                # Discard Trigger outside Effect
+                runParams = AbilityKey.mapFromPlayer(self)
+                runParams[AbilityKey.Cards] = CardCollection(moved)
+                runParams[AbilityKey.Cause] = sa
+                runParams[AbilityKey.DiscardedBefore] = discardedBefore
+                if params is not None:
+                    runParams.update(params)
+                self.getGame().getTriggerHandler().runTrigger(TriggerType.DiscardedAll, runParams, False)
+
+                self.drawCards(1, sa, params)
+
+    def commitCrime(self):
+        # boolean firstTime = this.commitedCrimeThisTurn == 0;
+        self.committedCrimeThisTurn += 1
+
+        runParams = AbilityKey.mapFromPlayer(self)
+        self.game.getTriggerHandler().runTrigger(TriggerType.CommitCrime, runParams, False)
+
+    def getCommittedCrimeThisTurn(self):
+        return self.committedCrimeThisTurn
+
+    def setCommitedCrimeThisTurn(self, v):
+        self.committedCrimeThisTurn = v
+
+    def getDiceRollsThisTurn(self):
+        return self.diceRollsThisTurn
+
+    def addDieRollThisTurn(self, rolls):
+        self.diceRollsThisTurn.extend(rolls)
+
+    def getExpentThisTurn(self):
+        return self.expentThisTurn
+
+    def setExpentThisTurn(self, v):
+        self.expentThisTurn = v
+
+    def addExpentThisTurn(self, v, sp):
+        if v <= 0:
+            return
+        startingMana = self.expentThisTurn
+        self.expentThisTurn += v
+        totalMana = self.expentThisTurn
+        for i in range(startingMana + 1, totalMana + 1):
+            expendParams = AbilityKey.mapFromPlayer(self)
+            expendParams[AbilityKey.SpellAbility] = sp
+            expendParams[AbilityKey.Amount] = i
+            self.game.getTriggerHandler().runTrigger(TriggerType.ManaExpend, expendParams, True)
+
+    def visitAttractions(self, light):
+        attractions = CardLists.filter(self.getCardsIn(ZoneType.Battlefield), CardPredicates.isAttractionWithLight(light))
+        for c in attractions:
+            if not c.wasVisitedThisTurn():
+                self.attractionsVisitedThisTurn += 1
+            c.visitAttraction(self)
+
+    def rollToVisitAttractions(self):
+        self.visitAttractions(RollDiceEffect.rollDiceForPlayerToVisitAttractions(self))
+
+    def getAttractionsVisitedThisTurn(self):
+        return self.attractionsVisitedThisTurn
+
+    def getCrankCounter(self):
+        return self.crankCounter
+
+    def setCrankCounter(self, counters):
+        self.crankCounter = counters
+        if self.contraptionSprocketEffect is not None:
+            label = Localizer.getInstance().getMessage("lblCrank", self.crankCounter)
+            self.contraptionSprocketEffect.setOverlayText(label)
+        elif self.getCardsIn(ZoneType.Battlefield).anyMatch(Card.isContraption):
+            self.createContraptionSprockets()
+
+    def advanceCrankCounter(self):
+        self.setCrankCounter(self.crankCounter % 3 + 1)
+        contraptions = CardLists.filter(self.getCardsIn(ZoneType.Battlefield), CardPredicates.isContraptionOnSprocket(self.crankCounter))
+        chosenContraptions = self.getController().chooseContraptionsToCrank(contraptions)
+        for c in chosenContraptions:
+            runParams = AbilityKey.mapFromCard(c)
+            runParams[AbilityKey.Player] = self
+            self.game.getTriggerHandler().runTrigger(TriggerType.CrankContraption, runParams, False)
+
+    def createContraptionSprockets(self):
+        if self.contraptionSprocketEffect is not None:
+            return
+
+        self.contraptionSprocketEffect = Card(self.game.nextCardId(), None, self.game)
+        self.contraptionSprocketEffect.setOwner(self)
+        self.contraptionSprocketEffect.setImageKey("t:sprockets")
+        self.contraptionSprocketEffect.setName("Contraption Sprockets")
+        self.contraptionSprocketEffect.setGamePieceType(GamePieceType.EFFECT)
+
+        label = Localizer.getInstance().getMessage("lblCrank", self.crankCounter)
+        self.contraptionSprocketEffect.setOverlayText(label)
+        self.contraptionSprocketEffect.setText("At the beginning of your upkeep, if you control a Contraption, move the CRANK! counter to the next sprocket and crank any number of that sprocket's Contraptions.")
+
+        self.contraptionSprocketEffect.updateStateForView()
+
+        com = self.getZone(ZoneType.Command)
+        com.add(self.contraptionSprocketEffect)
+        self.updateZoneForView(com)
+
+    def addDeclaresAttackers(self, ts, p):
+        self.declaresAttackers[ts] = p
+
+    def removeDeclaresAttackers(self, ts):
+        self.declaresAttackers.pop(ts, None)
+
+    def getDeclaresAttackers(self):
+        if not self.declaresAttackers:
+            return None
+        return self.declaresAttackers[max(self.declaresAttackers)]
+
+    def addDeclaresBlockers(self, ts, p):
+        self.declaresBlockers[ts] = p
+
+    def removeDeclaresBlockers(self, ts):
+        self.declaresBlockers.pop(ts, None)
+
+    def getDeclaresBlockers(self):
+        if not self.declaresBlockers:
+            return None
+        return self.declaresBlockers[max(self.declaresBlockers)]
+
+    def getUnlockedDoors(self):
+        result = []
+        for c in self.getCardsIn(ZoneType.Battlefield):
+            if c.isRoom():
+                result.extend(c.getUnlockedRoomNames())
+        return result
+
+    def getDevotionMod(self):
+        return self.devotionMod
+
+    def afterStaticAbilityLayer(self, layer):
+        if layer != StaticAbilityLayer.TEXT:
+            return
+
+        self.devotionMod = StaticAbilityDevotion.getDevotionMod(self)
+
+    def triggerElementalBend(self, type):
+        self.elementalBendThisTurn.add(type)
+
+        runParams = AbilityKey.mapFromPlayer(self)
+
+        self.getGame().getTriggerHandler().runTrigger(TriggerType.ElementalBend, runParams, False)
+        self.getGame().getTriggerHandler().runTrigger(type, runParams, False)
+
+    def hasAllElementBend(self):
+        return len(self.elementalBendThisTurn) >= 4
 ```

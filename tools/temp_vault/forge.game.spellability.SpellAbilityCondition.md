@@ -46,6 +46,12 @@ classDiagram
 - [[forge.game.spellability.TargetChoices|TargetChoices]]
 - [[forge.util.collect.FCollection|FCollection]]
 
+## Design Description
+
+SpellAbilityCondition encapsulates the gating logic that determines whether a SpellAbility may legally be played or activated under the current game state. Extending SpellAbilityVariablesâ€”which supplies the backing fields for each restriction (zone, phase, turn ownership, sorcery speed, threshold, metalcraft, kicker and other paid costs, presence checks, life totals, mana spent, SVar comparisons, etc.)â€”it adds two responsibilities: `setConditions` parses a raw `Map<String,String>` of script parameters (typically from AbilityFactory) into those typed fields, and `areMet` evaluates them against a given SpellAbility.
+
+During evaluation it collaborates with the SpellAbility's activating Player, the Game and its PhaseHandler, the host Card, and TargetChoices, using FCollection and GameObject restrictions to count matching permanents. The design favors a flat, fail-fast sequence of independent guard checksâ€”each returning false on the first unmet conditionâ€”keeping the data-driven card-scripting system declarative and easily extensible.
+
 ## Source
 `forge-game/src/main/java/forge/game/spellability/SpellAbilityCondition.java`
 
@@ -565,4 +571,387 @@ public class SpellAbilityCondition extends SpellAbilityVariables {
     }
 
 }
+```
+
+## Python
+`forge/game/spellability/SpellAbilityCondition.py`
+
+```python
+from forge.card.ColorSet import ColorSet
+from forge.game.Game import Game
+from forge.game.GameObject import GameObject
+from forge.game.GameObjectPredicates import GameObjectPredicates
+from forge.game.GameType import GameType
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.card.Card import Card
+from forge.game.phase.PhaseHandler import PhaseHandler
+from forge.game.phase.PhaseType import PhaseType
+from forge.game.player.Player import Player
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.Expressions import Expressions
+from forge.util.collect.FCollection import FCollection
+from forge.game.spellability.OptionalCost import OptionalCost
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.spellability.SpellAbilityVariables import SpellAbilityVariables
+from forge.game.spellability.TargetChoices import TargetChoices
+
+
+class SpellAbilityCondition(SpellAbilityVariables):
+    # A class for handling SpellAbility Conditions. These restrictions include:
+    # Zone, Phase, OwnTurn, Speed (instant/sorcery), Amount per Turn, Player,
+    # Threshold, Metalcraft, LevelRange, etc
+    # Each value will have a default, that can be overridden (mostly by
+    # AbilityFactory)
+    # The CanPlay function will use these values to determine if the current
+    # game state is ok with these restrictions
+
+    def __init__(self) -> None:
+        super().__init__()
+
+    def setConditions(self, params: dict[str, str]) -> None:
+        if "Condition" in params:
+            value = params.get("Condition")
+            if value == "Threshold":
+                self.setThreshold(True)
+            if value == "Metalcraft":
+                self.setMetalcraft(True)
+            if value == "Delirium":
+                self.setDelirium(True)
+            if value == "Hellbent":
+                self.setHellbent(True)
+            if value == "Revolt":
+                self.setRevolt(True)
+            if value == "Desert":
+                self.setDesert(True)
+            if value == "Blessing":
+                self.setBlessing(True)
+            if value == "Kicked":
+                self.kicked = True
+            if value == "Kicked 1":
+                self.kicked1 = True
+            if value == "Kicked 2":
+                self.kicked2 = True
+            if value == "Surge":
+                self.surgeCostPaid = True
+            if value == "Bargain":
+                self.bargain = True
+            if value == "AltCost":
+                self.altCostPaid = True
+
+            if value == "OptionalCost":
+                self.optionalCostPaid = True
+
+            if value == "Foretold":
+                self.foretold = True
+
+            if "ConditionOptionalPaid" in params:
+                self.optionalBoolean = params.get("ConditionOptionalPaid").lower() == "true"
+
+        if "ConditionSorcerySpeed" in params:
+            self.setSorcerySpeed(True)
+
+        if "ConditionPlayerTurn" in params:
+            self.setPlayerTurn(True)
+
+        if "ConditionOpponentTurn" in params:
+            self.setOpponentTurn(True)
+
+        if "ConditionPhases" in params:
+            self.setPhases(PhaseType.parseRange(params.get("ConditionPhases")))
+
+        if "ConditionFirstCombat" in params:
+            self.setFirstCombatOnly(True)
+
+        if "ConditionGameTypes" in params:
+            self.setGameTypes(GameType.listValueOf(params.get("ConditionGameTypes")))
+
+        if "ConditionActivationLimit" in params:
+            self.setLimitToCheck(params.get("ConditionActivationLimit"))
+
+        if "ConditionChosenColor" in params:
+            self.setColorToCheck(params.get("ConditionChosenColor"))
+
+        # Condition version of IsPresent stuff
+        if "ConditionPresent" in params:
+            self.setIsPresent(params.get("ConditionPresent"))
+            if "ConditionCompare" in params:
+                self.setPresentCompare(params.get("ConditionCompare"))
+            if "ConditionPresent2" in params:
+                self.setIsPresent2(params.get("ConditionPresent2"))
+                if "ConditionCompare2" in params:
+                    self.setPresentCompare2(params.get("ConditionCompare2"))
+
+        if "ConditionDefined" in params:
+            self.setPresentDefined(params.get("ConditionDefined"))
+        if "ConditionDefined2" in params:
+            self.setPresentDefined2(params.get("ConditionDefined2"))
+
+        if "ConditionZone" in params:
+            self.setPresentZone(ZoneType.smartValueOf(params.get("ConditionZone")))
+
+        if "ConditionPlayerDefined" in params:
+            self.setPlayerDefined(params.get("ConditionPlayerDefined"))
+
+        if "ConditionPlayerContains" in params:
+            self.setPlayerContains(params.get("ConditionPlayerContains"))
+
+        if "ConditionNotPresent" in params:
+            self.setIsPresent(params.get("ConditionNotPresent"))
+            self.setPresentCompare("EQ0")
+
+        # basically PresentCompare for life totals:
+        if "ConditionLifeTotal" in params:
+            self.setLifeTotal(params.get("ConditionLifeTotal"))
+            if "ConditionLifeAmount" in params:
+                self.setLifeAmount(params.get("ConditionLifeAmount"))
+
+        if "ConditionNoDifferentColors" in params:
+            self.setNoDifferentColors(params.get("ConditionNoDifferentColors"))
+
+        if "ConditionManaSpent" in params:
+            self.setManaSpent(params.get("ConditionManaSpent"))
+
+        if "ConditionManaNotSpent" in params:
+            self.setManaNotSpent(params.get("ConditionManaNotSpent"))
+
+        if "ConditionCheckSVar" in params:
+            self.setSvarToCheck(params.get("ConditionCheckSVar"))
+        if "ConditionSVarCompare" in params:
+            self.setSvarOperator(params.get("ConditionSVarCompare")[0:2])
+            self.setSvarOperand(params.get("ConditionSVarCompare")[2:])
+        if "OrOtherConditionSVarCompare" in params:
+            # unless another SVar is specified, check against the same one
+            if "OrConditionCheckSVar" in params:
+                self.setSvarToCheck2(params.get("OrConditionCheckSVar"))
+            else:
+                self.setSvarToCheck2(params.get("ConditionCheckSVar"))
+            self.setSvarOperator2(params.get("OrOtherConditionSVarCompare")[0:2])
+            self.setSvarOperand2(params.get("OrOtherConditionSVarCompare")[2:])
+        if "ConditionTargetValidTargeting" in params:
+            self.setTargetValidTargeting(params.get("ConditionTargetValidTargeting"))
+        if "ConditionTargetsSingleTarget" in params:
+            self.setTargetsSingleTarget(True)
+
+    def areMet(self, sa: SpellAbility) -> bool:
+        activator = sa.getActivatingPlayer()
+        if activator is None:
+            activator = sa.getHostCard().getController()
+            print(sa.getHostCard().getName()
+                  + " Did not have activator set in SpellAbility_Condition.checkConditions()")
+        game = activator.getGame()
+        phase = game.getPhaseHandler()
+        host = sa.getHostCard()
+
+        if self.isHellbent() and not activator.hasHellbent():
+            return False
+        if self.isThreshold() and not activator.hasThreshold():
+            return False
+        if self.isMetalcraft() and not activator.hasMetalcraft():
+            return False
+        if self.isDelirium() and not activator.hasDelirium():
+            return False
+        if self.isRevolt() and not activator.hasRevolt():
+            return False
+        if self.isDesert() and not activator.hasDesert():
+            return False
+        if self.isBlessing() and not activator.hasBlessing():
+            return False
+
+        if self.kicked and not sa.isKicked():
+            return False
+        if self.kicked1 and not sa.isOptionalCostPaid(OptionalCost.Kicker1):
+            return False
+        if self.kicked2 and not sa.isOptionalCostPaid(OptionalCost.Kicker2):
+            return False
+        if self.altCostPaid and not sa.isOptionalCostPaid(OptionalCost.AltCost):
+            return False
+        if self.surgeCostPaid and not sa.isSurged():
+            return False
+        if self.bargain and not sa.isBargained():
+            return False
+        if self.foretold and not sa.isForetold():
+            return False
+
+        if self.optionalCostPaid and self.optionalBoolean and not sa.isOptionalCostPaid(OptionalCost.Generic):
+            return False
+        if self.optionalCostPaid and not self.optionalBoolean and sa.isOptionalCostPaid(OptionalCost.Generic):
+            return False
+
+        if self.getNoDifferentColors() is not None:
+            tgts = AbilityUtils.getDefinedCards(host, self.getNoDifferentColors(), sa)
+            first = tgts[0] if tgts else None
+            if first is None:
+                return False
+            firstColor = first.getColor().getColor()
+            for c in tgts:
+                if c.getColor().getColor() != firstColor:
+                    return False
+
+        if self.isSorcerySpeed() and not activator.canCastSorcery():
+            return False
+
+        if self.isPlayerTurn():
+            b = sa.getParam("ConditionPlayerTurn") != "False"
+            if not b and phase.isPlayerTurn(activator):
+                return False
+            elif b and not phase.isPlayerTurn(activator):
+                return False
+
+        if self.isOpponentTurn() and not phase.getPlayerTurn().isOpponentOf(activator):
+            return False
+
+        if self.getFirstCombatOnly() and not phase.isFirstCombat():
+            return False
+
+        if self.getLimitToCheck() is not None:
+            comp = self.getLimitToCheck()
+            right = int(comp[2:])
+            activationNum = sa.getActivationsThisTurn()
+            if not Expressions.compare(activationNum, comp, right):
+                return False
+
+        if len(self.getPhases()) > 0:
+            if phase.getPhase() not in self.getPhases():
+                return False
+
+        if len(self.getGameTypes()) > 0:
+            if game.getRules().getGameType() not in self.getGameTypes():
+                return False
+
+        if self.getColorToCheck() is not None:
+            if not host.hasChosenColor(self.getColorToCheck()):
+                return False
+
+        if self.getIsPresent() is not None:
+            list = None
+            if self.getPresentDefined() is not None:
+                list = AbilityUtils.getDefinedObjects(host, self.getPresentDefined(), sa)
+            else:
+                usedLastState = False
+                if sa.isReplacementAbility():
+                    if self.getPresentZone() == ZoneType.Battlefield:
+                        list = FCollection(sa.getRootAbility().getLastStateBattlefield())
+                        usedLastState = True
+                    elif self.getPresentZone() == ZoneType.Graveyard:
+                        list = FCollection(sa.getRootAbility().getLastStateGraveyard())
+                        usedLastState = True
+                if not usedLastState:
+                    list = FCollection(game.getCardsIn(self.getPresentZone()))
+
+            restriction = GameObjectPredicates.restriction(self.getIsPresent().split(","), activator, host, sa)
+            left = int(sum(1 for o in list if restriction(o)))
+
+            rightString = self.getPresentCompare()[2:]
+            right = AbilityUtils.calculateAmount(host, rightString, sa)
+
+            if not Expressions.compare(left, self.getPresentCompare(), right):
+                return False
+
+        if self.getIsPresent2() is not None:
+            list = None
+            if self.getPresentDefined2() is not None:
+                list = AbilityUtils.getDefinedObjects(host, self.getPresentDefined2(), sa)
+            else:
+                usedLastState = False
+                if sa.isReplacementAbility():
+                    # for now, we will always look in the same zone as the other present
+                    if self.getPresentZone() == ZoneType.Battlefield:
+                        list = FCollection(sa.getRootAbility().getLastStateBattlefield())
+                        usedLastState = True
+                    elif self.getPresentZone() == ZoneType.Graveyard:
+                        list = FCollection(sa.getRootAbility().getLastStateGraveyard())
+                        usedLastState = True
+                if not usedLastState:
+                    list = FCollection(game.getCardsIn(self.getPresentZone()))
+
+            restriction = GameObjectPredicates.restriction(self.getIsPresent2().split(","), activator, host, sa)
+            left = int(sum(1 for o in list if restriction(o)))
+
+            rightString = self.getPresentCompare2()[2:]
+            right = AbilityUtils.calculateAmount(host, rightString, sa)
+
+            if not Expressions.compare(left, self.getPresentCompare2(), right):
+                return False
+
+        if self.getPlayerContains() is not None:
+            list = []
+            if self.getPlayerDefined() is not None:
+                list.extend(AbilityUtils.getDefinedPlayers(host, self.getPlayerDefined(), sa))
+            contains = AbilityUtils.getDefinedPlayers(host, self.getPlayerContains(), sa)
+            if len(contains) == 0 or not all(p in list for p in contains):
+                return False
+
+        if self.getLifeTotal() is not None:
+            life = AbilityUtils.getDefinedPlayers(host, self.getLifeTotal(), sa).getFirst().getLife()
+
+            right = 1
+            rightString = self.getLifeAmount()[2:]
+            if rightString == "X":
+                right = AbilityUtils.calculateAmount(host, host.getSVar("X"), sa)
+            else:
+                right = int(self.getLifeAmount()[2:])
+
+            if not Expressions.compare(life, self.getLifeAmount(), right):
+                return False
+
+        if self.getTargetValidTargeting() is not None:
+            matchTgt = sa.getTargets()
+            if matchTgt is None or matchTgt.getFirstTargetedSpell() is None \
+                    or matchTgt.getFirstTargetedSpell().getTargets() is None:
+                return False
+
+            result = False
+
+            abSub = matchTgt.getFirstTargetedSpell()
+
+            while abSub is not None and not result:
+                for o in abSub.getTargets():
+                    if o.isValid(self.getTargetValidTargeting().split(","), activator, host, sa):
+                        result = True
+                        break
+
+                abSub = sa.getSubAbility()
+
+            if not result:
+                return False
+
+        if self.targetsSingleTarget():
+            matchTgt = sa.getTargets()
+            if matchTgt is None or matchTgt.getFirstTargetedSpell() is None \
+                    or matchTgt.getFirstTargetedSpell().getTargets() is None:
+                return False
+
+            targets = set()
+            for tc in sa.getAllTargetChoices():
+                targets.update(tc)
+                if len(targets) > 1:
+                    return False
+            if len(targets) != 1:
+                return False
+
+        if self.getManaSpent():
+            castSa = host.getCastSA()
+            if castSa is None:
+                return False
+            if not castSa.getPayingColors().hasAllColors(ColorSet.fromNames(self.getManaSpent().split(" ")).getColor()):
+                return False
+        if self.getManaNotSpent():
+            castSa = host.getCastSA()
+            if castSa is not None and castSa.getPayingColors().hasAllColors(ColorSet.fromNames(self.getManaNotSpent().split(" ")).getColor()):
+                return False
+
+        if self.getsVarToCheck() is not None:
+            svarValue = AbilityUtils.calculateAmount(host, self.getsVarToCheck(), sa)
+            operandValue = AbilityUtils.calculateAmount(host, self.getsVarOperand(), sa)
+            secondCheck = False
+            if self.getsVarToCheck2() is not None:
+                svarValue2 = AbilityUtils.calculateAmount(host, self.getsVarToCheck2(), sa)
+                operandValue2 = AbilityUtils.calculateAmount(host, self.getsVarOperand2(), sa)
+                if Expressions.compare(svarValue2, self.getsVarOperator2(), operandValue2):
+                    secondCheck = True
+
+            if not Expressions.compare(svarValue, self.getsVarOperator(), operandValue) and not secondCheck:
+                return False
+
+        return True
 ```

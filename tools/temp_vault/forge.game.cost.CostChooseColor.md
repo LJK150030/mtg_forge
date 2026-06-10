@@ -161,3 +161,52 @@ public class CostChooseColor extends CostPart {
 
 }
 ```
+
+## Python
+`forge/game/cost/CostChooseColor.py`
+
+```python
+from forge.game.cost.CostPart import CostPart
+from forge.card.MagicColor import MagicColor
+from forge.game.card.Card import Card
+from forge.game.cost.ICostVisitor import ICostVisitor
+from forge.game.cost.PaymentDecision import PaymentDecision
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.cost.Cost import Cost
+
+
+class CostChooseColor(CostPart):
+    """the class CostChooseColor"""
+
+    serialVersionUID = 1
+
+    def __init__(self, amount: str):
+        self.setAmount(amount)
+
+    def canPay(self, ability: SpellAbility, payer: Player, effect: bool) -> bool:
+        return True
+
+    def payAsDecided(self, payer: Player, pd: PaymentDecision, sa: SpellAbility, effect: bool) -> bool:
+        sa.getHostCard().setChosenColors([MagicColor.Color.getName(c) for c in pd.colors])
+        return True
+
+    def paymentOrder(self) -> int:
+        return 8
+
+    def toString(self) -> str:
+        sb = []
+        i = self.convertAmount()
+        sb.append("Choose ")
+        sb.append(Cost.convertAmountTypeToWords(i, self.getAmount(), "color"))
+        return "".join(sb)
+
+    def isUndoable(self) -> bool:
+        return True
+
+    def refund(self, source: Card) -> None:
+        source.setChosenColors(None)
+
+    def accept(self, visitor: ICostVisitor):
+        return visitor.visit(self)
+```

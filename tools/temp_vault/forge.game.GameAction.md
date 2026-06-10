@@ -215,7 +215,7 @@ classDiagram
 
 ## Design Description
 
-GameAction centralizes the imperative game-mutation logic for a single `Game` instance, serving as the engine's primary action layer for moving cards between zones, applying continuous static abilities, and enforcing rules. It is a plain collaborator class (no supertype) holding a final `Game` reference, exposing a broad façade of `moveTo*`/`exile`/`sacrifice`/`destroy` operations that all funnel through the private `changeZone` method, which handles last-known-information copying, replacement effects, triggers, and counter placement.
+GameAction centralizes the imperative game-mutation logic for a single `Game` instance, serving as the engine's primary action layer for moving cards between zones, applying continuous static abilities, and enforcing rules. It is a plain collaborator class (no supertype) holding a final `Game` reference, exposing a broad faÃ§ade of `moveTo*`/`exile`/`sacrifice`/`destroy` operations that all funnel through the private `changeZone` method, which handles last-known-information copying, replacement effects, triggers, and counter placement.
 
 Beyond zone changes, it owns the comparative continuous-effect resolution (`checkStaticAbilities`, layered with dependency-graph ordering per CR 613) and the iterative state-based-action loop (`checkStateEffects`), plus game lifecycle concerns like `startGame`, mulligans, and win-condition checks. It delegates specialized work to helper services (`CardCopyService`, `MulliganService`, `BackupPlanService`) and communicates outcomes by firing `GameEvent`s and running triggers/replacements through the owning `Game`, keeping rule mechanics decoupled from UI and AI controllers.
 
@@ -317,7 +317,7 @@ public class GameAction {
     private Card changeZone(final Zone zoneFrom, Zone zoneTo, final Card c, Integer position, SpellAbility cause, Map<AbilityKey, Object> params) {
         // 111.11. A copy of a permanent spell becomes a token as it resolves.
         // The token has the characteristics of the spell that became that token.
-        // The token is not â€œcreatedâ€ for the purposes of any replacement effects or triggered abilities that refer to creating a token.
+        // The token is not Ã¢â‚¬Å“createdÃ¢â‚¬Â for the purposes of any replacement effects or triggered abilities that refer to creating a token.
         if (c.isCopiedSpell() && zoneTo.is(ZoneType.Battlefield) && c.isPermanent() && cause != null && cause.isSpell() && c.equals(cause.getHostCard())) {
             c.setGamePieceType(GamePieceType.TOKEN);
         }
@@ -454,7 +454,7 @@ public class GameAction {
                     copied.setCastSA(cause);
                     copied.setSplitStateToPlayAbility(cause);
 
-                    // CR 112.2 A spellâ€™s controller is, by default, the player who put it on the stack.
+                    // CR 112.2 A spellÃ¢â‚¬â„¢s controller is, by default, the player who put it on the stack.
                     copied.setController(cause.getActivatingPlayer(), 0);
 
                     KeywordInterface kw = cause.getKeyword();
@@ -1236,7 +1236,7 @@ public class GameAction {
         }
 
         // 702.94e A paired creature becomes unpaired if any of the following occur:
-        // another player gains control of it or the creature itâ€™s paired with
+        // another player gains control of it or the creature itÃ¢â‚¬â„¢s paired with
         if (c.isPaired()) {
             Card partner = c.getPairedWith();
             c.setPairedWith(null);
@@ -1773,7 +1773,7 @@ public class GameAction {
                     }
                 }
 
-                // 704.5z If a player controls a permanent with start your engines! and that player has no speed, that playerâ€™s speed becomes 1.
+                // 704.5z If a player controls a permanent with start your engines! and that player has no speed, that playerÃ¢â‚¬â„¢s speed becomes 1.
                 if (p.getSpeed() == 0 && p.getCardsIn(ZoneType.Battlefield).anyMatch(c -> c.hasKeyword(Keyword.START_YOUR_ENGINES))) {
                     p.increaseSpeed();
                     checkAgain = true;
@@ -1902,11 +1902,11 @@ public class GameAction {
         Player battleProtector = c.getProtectingPlayer();
         /*
          704.5w If a battle has no player in the game designated as its protector and no attacking creatures are currently
-         attacking that battle, that battleâ€™s controller chooses an appropriate player to be its protector based on its
-         battle type. If no player can be chosen this way, the battle is put into its ownerâ€™s graveyard.
+         attacking that battle, that battleÃ¢â‚¬â„¢s controller chooses an appropriate player to be its protector based on its
+         battle type. If no player can be chosen this way, the battle is put into its ownerÃ¢â‚¬â„¢s graveyard.
 
-         704.5x If a Siegeâ€™s controller is also its designated protector, that player chooses an opponent to become its
-         protector. If no player can be chosen this way, the battle is put into its ownerâ€™s graveyard.
+         704.5x If a SiegeÃ¢â‚¬â„¢s controller is also its designated protector, that player chooses an opponent to become its
+         protector. If no player can be chosen this way, the battle is put into its ownerÃ¢â‚¬â„¢s graveyard.
          */
         if (((battleProtector == null || !battleProtector.isInGame()) &&
                 (game.getCombat() == null || game.getCombat().getAttackersOf(c).isEmpty())) ||
@@ -1931,7 +1931,7 @@ public class GameAction {
             return checkAgain;
         }
         // 704.5v If a battle has defense 0 and it isn't the source of an ability that has triggered but not yet left the stack,
-        // itâ€™s put into its ownerâ€™s graveyard.
+        // itÃ¢â‚¬â„¢s put into its ownerÃ¢â‚¬â„¢s graveyard.
         if (!game.getStack().hasSourceOnStack(c, SpellAbility::isTrigger)) {
             removeList.add(c);
             checkAgain = true;
@@ -3124,3 +3124,835 @@ public class GameAction {
     }
 }
 ```
+
+## Python
+`forge/game/GameAction.py`
+
+````python
+Continuing the source:
+
+```python
+    def stateBasedAction704_5r(self, c):
+        dreamType = CounterEnumType.DREAM
+
+        old = c.getCounters(dreamType)
+        if old <= 0:
+            return False
+        max_ = c.getCounterMax(dreamType)
+        if max_ is None:
+            return False
+        if old > max_:
+            if not c.canRemoveCounters(dreamType):
+                return False
+            c.subtractCounter(dreamType, old - max_, None)
+            return True
+        return False
+
+    # If a token is in a zone other than the battlefield, it ceases to exist.
+    def stateBasedAction704_5d(self, c):
+        checkAgain = False
+        if c.isRealToken():
+            zoneFrom = self.game.getZoneOf(c)
+
+            # card copies are allowed on the stack
+            if zoneFrom.is_(ZoneType.Stack) and c.getCopiedPermanent() is not None:
+                return False
+
+            if zoneFrom.is_(ZoneType.Exile) and c.getCurrentStateName() == CardStateName.PreparedSpell:
+                return False
+
+            if not zoneFrom.is_(ZoneType.Battlefield):
+                zoneFrom.remove(c)
+                checkAgain = True
+        return checkAgain
+
+    def checkGameOverCondition(self):
+        if self.game.isGameOver():
+            return
+
+        # award loses as SBE
+        reason = None
+        losers = None
+        allPlayers = self.game.getPlayers()
+
+        # Has anyone won by spelleffect?
+        for p in allPlayers:
+            if not p.hasWon():
+                continue
+
+            # then the rest have lost!
+            reason = GameEndReason.WinsGameSpellEffect
+            for pl in allPlayers:
+                if pl == p:
+                    continue
+
+                if not pl.loseConditionMet(GameLossReason.OpponentWon, p.getOutcome().altWinSourceName):
+                    reason = None  # they cannot lose!
+                else:
+                    if losers is None:
+                        losers = []
+                    losers.append(pl)
+            break
+
+        if reason is None:
+            for p in allPlayers:
+                if p.checkLoseCondition():  # this will set appropriate outcomes
+                    if losers is None:
+                        losers = []
+                    losers.append(p)
+
+        if losers is not None:
+            for p in losers:
+                self.game.onPlayerLost(p)
+
+        if reason is None:
+            notLost = []
+            teams = set()
+            for p in allPlayers:
+                if p.getOutcome() is None or p.getOutcome().hasWon():
+                    notLost.append(p)
+                    teams.add(p.getTeam())
+            cntNotLost = len(notLost)
+            if cntNotLost == 1:
+                reason = GameEndReason.AllOpponentsLost
+            elif cntNotLost == 0:
+                reason = GameEndReason.Draw
+            elif len(teams) == 1:
+                reason = GameEndReason.AllOpposingTeamsLost
+            else:
+                return
+
+        # Clear Simultaneous triggers at the end of the game
+        self.game.setGameOver(reason)
+        self.game.getStack().clearSimultaneousStack()
+
+    def handlePlaneswalkerRule(self, p, noRegCreats):
+        list_ = p.getPlaneswalkersInPlay()
+        recheck = False
+
+        for c in list_:
+            if c.getCounters(CounterEnumType.LOYALTY) <= 0:
+                noRegCreats.add(c)
+                recheck = True
+
+        return recheck
+
+    def handleLegendRule(self, p, noRegCreats):
+        a = []
+
+        # check for ignore legend rule
+        for c in CardLists.getType(p.getCardsIn(ZoneType.Battlefield), "Legendary"):
+            if not c.ignoreLegendRule():
+                a.append(c)
+
+        if len(a) == 0:
+            return False
+        recheck = False
+
+        # Corner Case 1: Legendary with non legendary creature names
+        nonLegendaryNames = CardLists.filter(a, Card.hasNonLegendaryCreatureNames)
+
+        uniqueLegends = {}
+        for card in a:
+            uniqueLegends.setdefault(card.getName(), []).append(card)
+        removed = CardCollection()
+
+        for name in list(uniqueLegends.keys()):
+            # skip the ones with empty names
+            if name == "":
+                continue
+            cc = CardCollection(uniqueLegends[name])
+            # check if it is a non legendary creature name
+            # if yes, then add the other legendary with Spy Kit too
+            if name != "" and StaticData.instance().getCommonCards().isNonLegendaryCreatureName(name):
+                cc.addAll(nonLegendaryNames)
+            if cc.size() < 2:
+                continue
+
+            recheck = True
+
+            toKeep = p.getController().chooseSingleEntityForEffect(cc, EmptySa(ApiType.InternalLegendaryRule, Card(-1, self.game), p),
+                    "You have multiple legendary permanents named \"" + name + "\" in play.\n\nChoose the one to stay on battlefield (the rest will be moved to graveyard)", None)
+            cc.remove(toKeep)
+            removed.addAll(cc)
+
+        # Corner Case 2: with all non legendary creature names
+        emptyNameAllNonLegendary = CardCollection(nonLegendaryNames)
+        # remove the ones that got already removed by other legend rule above
+        emptyNameAllNonLegendary.removeAll(removed)
+        if emptyNameAllNonLegendary.size() > 1:
+            recheck = True
+
+            toKeep = p.getController().chooseSingleEntityForEffect(emptyNameAllNonLegendary, EmptySa(ApiType.InternalLegendaryRule, Card(-1, self.game), p),
+                    "You have multiple legendary permanents with non legendary creature names in play.\n\nChoose the one to stay on battlefield (the rest will be moved to graveyard)", None)
+            emptyNameAllNonLegendary.remove(toKeep)
+            removed.addAll(emptyNameAllNonLegendary)
+
+        noRegCreats.addAll(removed)
+
+        return recheck
+
+    def handleWorldRule(self, noRegCreats):
+        worlds = CardLists.filter(self.game.getCardsIn(ZoneType.Battlefield), lambda c: c.getType().hasSupertype(Supertype.World))
+        if len(worlds) <= 1:
+            return False
+
+        toKeep = []
+        ts = 0
+
+        for crd in worlds:
+            crdTs = crd.getWorldTimestamp()
+            if crdTs > ts:
+                ts = crdTs
+                toKeep.clear()
+            if crdTs == ts:
+                toKeep.append(crd)
+
+        if len(toKeep) == 1:
+            worlds.removeAll(toKeep)
+
+        noRegCreats.addAll(worlds)
+
+        return True
+
+    def sacrifice(self, list_, source, effect, params):
+        lki = {}
+        showRevealDialog = source is not None and source.hasParam("ShowSacrificedCards")
+
+        result = CardCollection()
+        for c in list_:
+            if c is None:
+                continue
+
+            if not c.canBeSacrificedBy(source, effect):
+                continue
+
+            lkiCopy = params.get(AbilityKey.LastStateBattlefield).get(c)
+            c.getController().addSacrificedThisTurn(lkiCopy, source)
+            lki.setdefault(c.getController(), []).append(lkiCopy)
+
+            c.updateWasDestroyed(True)
+
+            changed = self.sacrificeDestroy(c, source, params)
+            if changed is not None:
+                result.add(changed)
+            if showRevealDialog:
+                message = Localizer.getInstance().getMessage("lblSacrifice")
+                self.reveal(result, ZoneType.Graveyard, c.getOwner(), False, message, False)
+        for player, cards in lki.items():
+            runParams = AbilityKey.mapFromPlayer(player)
+            runParams[AbilityKey.Cards] = CardCollection(cards)
+            runParams[AbilityKey.Cause] = source
+            self.game.getTriggerHandler().runTrigger(TriggerType.SacrificedOnce, runParams, False)
+        return result
+
+    def destroy(self, c, sa, regenerate, params):
+        if not c.canBeDestroyed():
+            return False
+
+        repRunParams = AbilityKey.mapFromAffected(c)
+        repRunParams[AbilityKey.Cause] = sa
+        repRunParams[AbilityKey.Regeneration] = regenerate
+        if params is not None:
+            repRunParams.update(params)
+        if self.game.getReplacementHandler().run(ReplacementType.Destroy, repRunParams) != ReplacementResult.NotReplaced:
+            return False
+
+        activator = None
+        if sa is not None:
+            activator = sa.getActivatingPlayer()
+
+        # for animation
+        c.updateWasDestroyed(True)
+        # Play the Destroy sound
+        self.game.fireEvent(GameEventCardDestroyed())
+
+        runParams = AbilityKey.mapFromCard(c)
+        runParams[AbilityKey.Causer] = activator
+        if params is not None:
+            runParams.update(params)
+        self.game.getTriggerHandler().runTrigger(TriggerType.Destroyed, runParams, False)
+
+        sacrificed = self.sacrificeDestroy(c, sa, params)
+        return sacrificed is not None
+
+    def sacrificeDestroy(self, c, cause, params):
+        """Return the sacrificed Card in its new location, or None if the
+        sacrifice wasn't successful."""
+        if not c.isInPlay():
+            return None
+
+        newCard = self.moveToGraveyard(c, cause, params)
+
+        return newCard
+
+    def revealTo(self, cardOrCards, to, *rest):
+        if isinstance(cardOrCards, Card):
+            cards = CardCollection(cardOrCards)
+        else:
+            cards = cardOrCards
+        if isinstance(to, Player):
+            toPlayers = [to]
+            messagePrefix = rest[0] if len(rest) > 0 else None
+            addSuffix = True
+        else:
+            toPlayers = to
+            messagePrefix = rest[0] if len(rest) > 0 else None
+            addSuffix = rest[1] if len(rest) > 1 else True
+        if cards.isEmpty():
+            return
+
+        zone = cards.getFirst().getZone().getZoneType()
+        owner = cards.getFirst().getOwner()
+        for p in toPlayers:
+            p.getController().reveal(cards, zone, owner, messagePrefix, addSuffix)
+
+    def reveal(self, cards, *rest):
+        if rest and isinstance(rest[0], ZoneType):
+            zt = rest[0]
+            cardOwner = rest[1]
+            dontRevealToOwner = rest[2]
+            messagePrefix = rest[3]
+            msgAddSuffix = rest[4] if len(rest) > 4 else True
+            for p in self.game.getPlayers():
+                if dontRevealToOwner and cardOwner == p:
+                    continue
+                p.getController().reveal(cards, zt, cardOwner, messagePrefix, msgAddSuffix)
+            return
+        cardOwner = rest[0]
+        dontRevealToOwner = rest[1] if len(rest) > 1 else True
+        messagePrefix = rest[2] if len(rest) > 2 else None
+        msgAddSuffix = rest[3] if len(rest) > 3 else True
+        firstCard = next(iter(cards), None)
+        if firstCard is None:
+            return
+        self.reveal(cards, self.game.getZoneOf(firstCard).getZoneType(), cardOwner, dontRevealToOwner, messagePrefix, msgAddSuffix)
+
+    def revealUnplayableByAI(self, title, unplayableCards):
+        # Notify both players
+        for p in self.game.getPlayers():
+            p.getController().revealAISkipCards(title, unplayableCards)
+
+    def revealAnte(self, title, removedAnteCards):
+        # Notify both players
+        for p in self.game.getPlayers():
+            p.getController().revealAnte(title, removedAnteCards)
+
+    def revealUnsupported(self, unsupported):
+        # Notify players
+        for p in self.game.getPlayers():
+            p.getController().revealUnsupported(unsupported)
+
+    # Delivers a message to all players. (use reveal to show Cards)
+    def notifyOfValue(self, saSource, relatedTarget, value, playerExcept):
+        if saSource is not None:
+            name = saSource.getHostCard().getTranslatedName()
+            value = TextUtil.fastReplace(value, "CARDNAME", name)
+            value = TextUtil.fastReplace(value, "NICKNAME", Lang.getInstance().getNickName(name))
+        for p in self.game.getPlayers():
+            if playerExcept == p:
+                continue
+            p.getController().notifyOfValue(saSource, relatedTarget, value)
+
+    def drawStartingHand(self, p1):
+        # check initial hand
+        lib1 = list(p1.getZone(ZoneType.Library).getCards().threadSafeIterable())
+        hand1 = lib1[0:p1.getMaxHandSize()]
+
+        # shuffle
+        shuffledCards = list(p1.getZone(ZoneType.Library).getCards().threadSafeIterable())
+        random.shuffle(shuffledCards)
+
+        # check a second hand
+        hand2 = shuffledCards[0:p1.getMaxHandSize()]
+
+        # choose better hand according to land count
+        averageLandRatio = self.getLandRatio(lib1)
+        if self.getHandScore(hand1, averageLandRatio) > self.getHandScore(hand2, averageLandRatio):
+            p1.getZone(ZoneType.Library).setCards(shuffledCards)
+        p1.drawCards(p1.getMaxHandSize())
+
+    def getLandRatio(self, deck):
+        landCount = 0
+        for c in deck:
+            if c.isLand():
+                landCount += 1
+        if landCount == 0:
+            return 0
+        return float(landCount) / float(len(deck))
+
+    def getHandScore(self, hand, landRatio):
+        landCount = 0
+        for c in hand:
+            if c.isLand():
+                landCount += 1
+        averageCount = landRatio * len(hand)
+        return abs(averageCount - landCount)
+
+    def startGame(self, lastGameOutcome, startGameHook=None):
+        first = self.determineFirstTurnPlayer(lastGameOutcome)
+
+        gameType = self.game.getRules().getGameType()
+        while True:
+            if self.game.isGameOver():
+                break  # conceded during "play or draw"
+
+            # FControl should determine now if there are any human players.
+            # Where there are none, it should bring up speed controls
+            self.game.fireEvent(GameEventGameStarted(gameType, first, self.game.getPlayers()))
+
+            self.runPreOpeningHandActions(first)
+
+            self.game.setAge(GameStage.Mulligan)
+            for p1 in self.game.getPlayers():
+                # Choose starting hand for each player with multiple hands
+                if StaticData.instance().getFilteredHandsEnabled():
+                    self.drawStartingHand(p1)
+                else:
+                    p1.drawCards(p1.getStartingHandSize())
+
+                backupPlans = BackupPlanService(p1)
+                if backupPlans.initializeExtraHands():
+                    backupPlans.chooseHand()
+
+            if self.game.getRules().getGameType() != GameType.Puzzle:
+                MulliganService(first).perform()
+            if self.game.isGameOver():
+                break  # conceded during "mulligan" prompt
+
+            self.game.setAge(GameStage.Play)
+
+            # <THIS CODE WILL WORK WITH PHASE = NULL>
+            if self.game.getRules().hasAppliedVariant(GameType.Planechase):
+                first.initPlane()
+                for p1 in self.game.getPlayers():
+                    p1.createPlanechaseEffects(self.game)
+
+            first = self.runOpeningHandActions(first)
+            self.checkStateEffects(True)  # why?
+
+            # Run Trigger beginning of the game
+            self.game.getTriggerHandler().runTrigger(TriggerType.NewGame, AbilityKey.newMap(), True)
+            # </THIS CODE WILL WORK WITH PHASE = NULL>
+
+            self.game.setStartingPlayer(first)
+            self.game.getPhaseHandler().startFirstTurn(first, startGameHook)
+            # after game ends, ensure Auto-Pass canceled for all players so it doesn't apply to next game
+            for p in self.game.getRegisteredPlayers():
+                p.setNumCardsInHandStartedThisTurnWith(p.getCardsIn(ZoneType.Hand).size())
+                p.getController().autoPassCancel()
+
+            first = self.game.getPhaseHandler().getPlayerTurn()  # needed only for restart
+            if self.game.getAge() != GameStage.RestartedByKarn:
+                break
+
+    def determineFirstTurnPlayer(self, lastGameOutcome):
+        # Only cut/coin toss if it's the first game of the match
+        goesFirst = None
+
+        if self.game is not None:
+            if self.game.getRules().getGameType() == GameType.Puzzle:
+                return self.game.getPlayers().get(0)
+
+            # 904.6: in Archenemy games the Archenemy goes first
+            if self.game.getRules().hasAppliedVariant(GameType.Archenemy):
+                for p in self.game.getPlayers():
+                    if p.isArchenemy():
+                        return p
+        # Power Play - Each player with a Power Play in the CommandZone becomes the Starting Player
+        powerPlayers = set()
+        for c in self.game.getCardsIn(ZoneType.Command):
+            if c.getName() == "Power Play":
+                powerPlayers.add(c.getOwner())
+
+        if len(powerPlayers) > 0:
+            players = list(powerPlayers)
+            random.shuffle(players)
+            return players[0]
+
+        isFirstGame = lastGameOutcome is None
+        if isFirstGame:
+            self.game.fireEvent(GameEventFlipCoin())  # Play the Flip Coin sound
+            goesFirst = Aggregates.random(self.game.getPlayers())
+        else:
+            for p in self.game.getPlayers():
+                if not lastGameOutcome.isWinner(p.getRegisteredPlayer()):
+                    goesFirst = p
+                    break
+
+        if goesFirst is None:
+            # This happens in hotseat matches when 2 equal lobbyplayers play.
+            # No one of them has lost, so cannot decide who goes first .
+            goesFirst = self.game.getPlayers().get(0)  # does not really matter who plays first - it's controlled from the same computer.
+
+        for p in self.game.getPlayers():
+            if p != goesFirst:
+                p.getController().awaitNextInput()  # show "Waiting for opponent..." while first player chooses whether to go first or keep their hand
+        goesFirst = goesFirst.getController().chooseStartingPlayer(isFirstGame)
+        return goesFirst
+
+    def runPreOpeningHandActions(self, first):
+        takesAction = first
+        while True:
+            ploys = CardLists.filter(takesAction.getCardsIn(ZoneType.Command), lambda input: input.getName() == "Emissary's Ploy")
+            all_ = CardLists.filterControlledBy(self.game.getCardsInGame(), takesAction)
+            spires = CardLists.filter(all_, lambda input: input.getName() == "Cryptic Spires")
+
+            chosen = 1
+            cmc = [1, 2, 3]
+
+            for c in ploys:
+                if len(cmc) > 0:
+                    sa = EmptySa(ApiType.ChooseNumber, c, takesAction)
+                    chosen = takesAction.getController().chooseNumber(sa, "Emissary's Ploy", cmc, c.getOwner())
+                    cmc.remove(chosen)
+
+                c.setChosenNumber(chosen)
+            for c in spires:
+                # TODO: only do this for the AI, for the player part, get the encoded color from the deck file and pass
+                #  it to either player or the papercard object so it feels like rule based for the player side..
+                if not c.hasMarkedColor():
+                    if takesAction.isAI():
+                        prompt = c.getTranslatedName() + ": " + \
+                                Localizer.getInstance().getMessage("lblChooseNColors", Lang.getNumeral(2))
+                        sa = EmptySa(ApiType.ChooseColor, c, takesAction)
+                        sa.putParam("AILogic", "MostProminentInComputerDeck")
+                        c.setMarkedColors(takesAction.getController().chooseColors(prompt, sa, 2, 2, ColorSet.WUBRG))
+            takesAction = self.game.getNextPlayerAfter(takesAction)
+            if takesAction == first:
+                break
+
+    # Returns the new player to go first
+    def runOpeningHandActions(self, first):
+        takesAction = first
+        newFirst = first
+        while True:
+            usableFromOpeningHand = []
+
+            # Select what can be activated from a given hand
+            for c in takesAction.getCardsIn(ZoneType.Hand):
+                for inst in c.getKeywords():
+                    kw = inst.getOriginal()
+                    if kw.startswith("MayEffectFromOpeningHand"):
+                        split = kw.split(":")
+                        effName = split[1]
+                        if len(split) > 2 and split[2].lower() == "!playfirst" and first == takesAction:
+                            continue
+
+                        effect = AbilityFactory.getAbility(c.getSVar(effName), c)
+                        effect.setActivatingPlayer(takesAction)
+
+                        usableFromOpeningHand.append(effect)
+
+            # Players are supposed to return the effects in an order they want those to be resolved (Rule 103.5)
+            if len(usableFromOpeningHand) > 0:
+                usableFromOpeningHand = takesAction.getController().chooseSaToActivateFromOpeningHand(usableFromOpeningHand)
+
+            for sa in usableFromOpeningHand:
+                if not takesAction.getZone(ZoneType.Hand).contains(sa.getHostCard()):
+                    continue
+
+                takesAction.getController().playSpellAbilityNoStack(sa, True)
+                if sa.hasParam("BecomeStartingPlayer"):
+                    newFirst = takesAction
+            takesAction = self.game.getNextPlayerAfter(takesAction)
+            if takesAction == first:
+                break
+        # state effects are checked only when someone gets priority
+        return newFirst
+
+    # Invokes given runnable in Game thread pool - used to start game and perform actions from UI (when game-0 waits for input)
+    def invoke(self, proc):
+        if ThreadUtil.isGameThread():
+            proc.run()
+        else:
+            ThreadUtil.invokeInGameThread(proc)
+
+    def becomeMonarch(self, p, set_):
+        previous = self.game.getMonarch()
+        if p is None or p == previous:
+            return
+
+        if previous is not None:
+            previous.removeMonarchEffect()
+
+        # by Monarch losing, its a way to make the game lose the monarch
+        if not p.canBecomeMonarch():
+            return
+
+        p.createMonarchEffect(set_)
+        self.game.setMonarch(p)
+
+        runParams = AbilityKey.mapFromPlayer(p)
+        self.game.getTriggerHandler().runTrigger(TriggerType.BecomeMonarch, runParams, False)
+
+    def takeInitiative(self, p, set_):
+        previous = self.game.getHasInitiative()
+        if p is None:
+            return
+
+        if not p == previous:
+            if previous is not None:
+                previous.removeInitiativeEffect()
+
+            if p.hasLost():  # the person who should take initiative is gone, it goes to next player
+                self.takeInitiative(self.game.getNextPlayerAfter(p), set_)
+
+            self.game.setHasInitiative(p)
+            p.createInitiativeEffect(set_)
+
+        # You can take the initiative even if you already have it
+        runParams = AbilityKey.mapFromPlayer(p)
+        self.game.getTriggerHandler().runTrigger(TriggerType.TakesInitiative, runParams, False)
+
+    def scry(self, players, numScry, cause):
+        if numScry <= 0:
+            # CR 701.22b If a player is instructed to scry 0, no scry event occurs.
+            return
+
+        # in case something alters the scry amount
+        actualPlayers = {}
+
+        for p in players:
+            playerScry = numScry
+            repParams = AbilityKey.mapFromAffected(p)
+            repParams[AbilityKey.Source] = cause
+            repParams[AbilityKey.Num] = playerScry
+
+            res = self.game.getReplacementHandler().run(ReplacementType.Scry, repParams)
+            if res == ReplacementResult.NotReplaced:
+                pass
+            elif res == ReplacementResult.Updated:
+                playerScry = repParams.get(AbilityKey.Num)
+            else:
+                continue
+            if playerScry > 0:
+                actualPlayers[p] = playerScry
+
+                # no real need to separate out the look if there is only one player scrying
+                if len(players) > 1:
+                    self.revealTo(p.getCardsIn(ZoneType.Library, playerScry), p)
+
+        # make the decisions
+        decisions = {}
+        for p, value in actualPlayers.items():
+            topN = CardCollection(p.getCardsIn(ZoneType.Library, value))
+            decision = p.getController().arrangeForScry(topN)
+            decisions[p] = decision
+            numToTop = 0 if decision.getLeft() is None else decision.getLeft().size()
+            numToBottom = 0 if decision.getRight() is None else decision.getRight().size()
+
+            # publicize the decision
+            self.game.fireEvent(GameEventScry(PlayerView.get(p), numToTop, numToBottom))
+        # do the moves after all the decisions (maybe not necessary, but let's
+        # do it the official way)
+        for p, decision in decisions.items():
+            # no good iterate simultaneously in Java
+            toTop = decision.getLeft()
+            toBottom = decision.getRight()
+            numLookedAt = 0
+            if toTop is not None:
+                numLookedAt += toTop.size()
+                toTopList = list(toTop)
+                toTopList.reverse()  # reverse to get the correct order
+                for c in toTopList:
+                    self.moveToLibrary(c, cause, None)
+            if toBottom is not None:
+                numLookedAt += toBottom.size()
+                for c in toBottom:
+                    self.moveToBottomOfLibrary(c, cause, None)
+
+            if cause is not None:
+                runParams = AbilityKey.mapFromPlayer(p)
+                runParams[AbilityKey.ScryNum] = numLookedAt
+                runParams[AbilityKey.ScryBottom] = 0 if toBottom is None else toBottom.size()
+                self.game.getTriggerHandler().runTrigger(TriggerType.Scry, runParams, False)
+
+    def mill(self, millers, numCards, destination, sa, moveParams):
+        showRevealDialog = sa is not None and sa.hasParam("ShowMilledCards")
+
+        milled = CardCollection()
+
+        for p in millers:
+            if not p.isInGame():
+                continue
+
+            milledPlayer = p.mill(numCards, destination, sa, moveParams)
+            milled.addAll(milledPlayer)
+
+            # Reveal the milled cards, so players don't have to manually inspect the
+            # graveyard to figure out which ones were milled.
+            toZoneStr = "" if destination == ZoneType.Graveyard else " (" + \
+                    Localizer.getInstance().getMessage("lblMilledToZone", destination.getTranslatedName()) + ")"
+            if showRevealDialog:
+                message = Localizer.getInstance().getMessage("lblMilledCards")
+                addSuffix = toZoneStr != ""
+                self.reveal(milledPlayer, destination, p, False, message, addSuffix)
+            self.game.fireEvent(GameEventAddLog(GameLogEntryType.ZONE_CHANGE, str(p) + " milled " +
+                    Lang.joinHomogenous(milledPlayer) + toZoneStr + "."))
+
+        if not milled.isEmpty():
+            runParams = AbilityKey.newMap()
+            runParams[AbilityKey.Cards] = milled
+            self.game.getTriggerHandler().runTrigger(TriggerType.MilledAll, runParams, False)
+
+        return milled
+
+    def dealDamage(self, isCombat, damageMap, preventMap, counterTable, cause):
+        # Clear assigned damage if is combat
+        if isCombat:
+            for ge, _col in damageMap.columnMap().items():
+                if isinstance(ge, Card):
+                    ge.clearAssignedDamage()
+
+        # Run replacement effect for each entity dealt damage
+        self.game.getReplacementHandler().runReplaceDamage(isCombat, damageMap, preventMap, counterTable, cause)
+
+        lethalDamage = {}
+        lkiCache = {}
+
+        # Actually deal damage according to replaced damage map
+        for sourceLKI, inner in damageMap.rowMap().items():
+            sum_ = 0
+            for geKey in list(inner.keys()):
+                val = inner[geKey]
+                if val <= 0:
+                    continue
+
+                if isinstance(geKey, Card) and geKey not in lethalDamage:
+                    lethalDamage[geKey] = geKey.getExcessDamageValue(False)
+
+                newVal = geKey.addDamageAfterPrevention(val, sourceLKI, cause, isCombat, counterTable)
+                inner[geKey] = newVal
+                sum_ += newVal
+
+                sourceLKI.getDamageHistory().registerDamage(newVal, isCombat, sourceLKI, geKey, lkiCache)
+
+            # CR 702.15e
+            if sum_ > 0 and sourceLKI.hasKeyword(Keyword.LIFELINK):
+                sourceLKI.getController().gainLife(sum_, sourceLKI, cause)
+
+        # for Zangief do this before runWaitingTriggers DamageDone
+        damageMap.triggerExcessDamage(isCombat, lethalDamage, self.game, cause, lkiCache)
+
+        # lose life simultaneously
+        lifeLostAllDamageMap = {}
+        for p in self.game.getPlayers():
+            lost = p.processDamage()
+            if lost > 0:
+                lifeLostAllDamageMap[p] = lost
+
+        if isCombat:
+            self.game.getTriggerHandler().runWaitingTriggers()
+
+        if len(lifeLostAllDamageMap) > 0:  # Run triggers if any player actually lost life
+            runParams = AbilityKey.mapFromPIMap(lifeLostAllDamageMap)
+            self.game.getTriggerHandler().runTrigger(TriggerType.LifeLostAll, runParams, False)
+
+        if cause is not None:
+            # Remember objects as needed
+            sourceLKI = self.game.getChangeZoneLKIInfo(cause.getHostCard())
+            if cause.hasParam("RememberDamaged"):
+                for e in damageMap.row(sourceLKI).keys():
+                    cause.getHostCard().addRemembered(e)
+            if cause.hasParam("RememberAmount"):
+                cause.getHostCard().addRemembered(damageMap.totalAmount())
+
+        preventMap.triggerPreventDamage(isCombat)
+        preventMap.clear()
+
+        damageMap.triggerDamageDoneOnce(isCombat, self.game)
+        damageMap.clear()
+
+        counterTable.replaceCounterEffect(self.game, cause)
+        counterTable.clear()
+
+    def completeDungeon(self, player, dungeon):
+        player.addCompletedDungeon(dungeon)
+        self.ceaseToExist(dungeon, True)
+
+        runParams = AbilityKey.mapFromCard(dungeon)
+        runParams[AbilityKey.Player] = player
+        self.game.getTriggerHandler().runTrigger(TriggerType.DungeonCompleted, runParams, False)
+
+    def attachAuraOnIndirectETB(self, source, params):
+        """Attach aura on indirect enter battlefield. Returns True, if successful."""
+        # When an Aura ETB without being cast you can choose a valid card to attach it to
+        if not source.hasKeyword(Keyword.ENCHANT):
+            return False
+
+        aura = source.getCurrentState().getAuraSpell()
+        if aura is None:
+            return False
+        aura.setActivatingPlayer(source.getController())
+
+        zones = set()
+        canTargetPlayer = False
+        for ki in source.getKeywords(Keyword.ENCHANT):
+            o = ki.getOriginal()
+            m = o.split(":")
+            v = m[1]
+            if "inZone" in v:  # currently the only other zone is Graveyard
+                zones.add(ZoneType.Graveyard)
+            else:
+                zones.add(ZoneType.Battlefield)
+            if v.startswith("Player") or v.startswith("Opponent"):
+                canTargetPlayer = True
+        p = source.getController()
+        if canTargetPlayer:
+            players = self.game.getPlayers().filter(PlayerPredicates.canBeAttached(source, None))
+
+            pa = p.getController().chooseSingleEntityForEffect(players, aura,
+                    Localizer.getInstance().getMessage("lblSelectAPlayerAttachSourceTo", source.getTranslatedName()), None)
+            if pa is not None:
+                source.attachToEntity(pa, None, True)
+                return True
+        else:
+            list_ = CardCollection()
+            if params is not None:
+                if ZoneType.Battlefield in zones:
+                    list_.addAll(params.get(AbilityKey.LastStateBattlefield))
+                    zones.discard(ZoneType.Battlefield)
+                if ZoneType.Graveyard in zones:
+                    list_.addAll(params.get(AbilityKey.LastStateGraveyard))
+                    zones.discard(ZoneType.Graveyard)
+            list_.addAll(self.game.getCardsIn(zones))
+
+            list_ = CardLists.filter(list_, CardPredicates.canBeAttached(source, None))
+            if list_.isEmpty():
+                return False
+
+            o = p.getController().chooseSingleEntityForEffect(list_, aura,
+                    Localizer.getInstance().getMessage("lblSelectACardAttachSourceTo", source.getTranslatedName()), None)
+            if o is not None:
+                source.attachToEntity(self.game.getCardState(o), None, True)
+                return True
+        return False
+
+    def getLastState(self, key, cause, params, refreshIfEmpty):
+        lastState = None
+        if params is not None:
+            lastState = params.get(key)
+        if lastState is None and cause is not None:
+            # inside RE
+            if key == AbilityKey.LastStateBattlefield:
+                lastState = cause.getLastStateBattlefield()
+            if key == AbilityKey.LastStateGraveyard:
+                lastState = cause.getLastStateGraveyard()
+        if lastState is None:
+            # this fallback should be rare unless called when creating a new CardZoneTable
+            if key == AbilityKey.LastStateBattlefield:
+                if refreshIfEmpty:
+                    lastState = self.game.copyLastStateBattlefield()
+                else:
+                    lastState = self.game.getLastStateBattlefield()
+            if key == AbilityKey.LastStateGraveyard:
+                if refreshIfEmpty:
+                    lastState = self.game.copyLastStateGraveyard()
+                else:
+                    lastState = self.game.getLastStateGraveyard()
+        return lastState
+```
+
+That completes the `GameAction` Python port ΓÇö all methods from `changeZone` through `getLastState`, with the overloaded Java methods collapsed into single dispatching Python methods (using the `_UNSET` sentinel to distinguish omitted-vs-explicit-`None` params), and Guava/jgrapht constructs translated to native Python dicts/sets plus an inline simple-cycle finder for the CR 613 dependency graph.
+````

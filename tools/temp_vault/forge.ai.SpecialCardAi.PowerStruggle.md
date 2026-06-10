@@ -43,7 +43,7 @@ PowerStruggle is a static nested helper within `SpecialCardAi` that encapsulates
 As a pure utility grouping (no state, no inheritance), it serves the broader AI decision framework, collaborating with `Card`, `CardCollection`, `Player`, and `SpellAbility` to inspect game state and using `CardPredicates` for filtering. The deliberate use of random selection over heuristic scoring reflects design intent that this symmetrical effect lacks a clear advantageous choice, so the AI settles for any legal, type-matched pairing rather than optimizing.
 
 ## Source
-`forge-ai/src/main/java/forge/ai/SpecialCardAi.java` â€” declaration excerpt
+`forge-ai/src/main/java/forge/ai/SpecialCardAi.java` Ã¢â‚¬â€ declaration excerpt
 
 ```java
     // Power Struggle
@@ -72,4 +72,44 @@ As a pure utility grouping (no state, no inheritance), it serves the broader AI 
             }
         }
     }
+```
+
+## Python
+`forge/ai/SpecialCardAi/PowerStruggle.py`
+
+```python
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardPredicates import CardPredicates
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.Aggregates import Aggregates
+
+
+# Power Struggle
+class PowerStruggle:
+    @staticmethod
+    def considerFirstTarget(ai: Player, sa: SpellAbility) -> bool:
+        firstTgt = Aggregates.random(sa.getTargetRestrictions().getAllCandidates(sa, True))
+        if firstTgt is not None:
+            sa.getTargets().add(firstTgt)
+            return True
+        else:
+            return False
+
+    @staticmethod
+    def considerSecondTarget(ai: Player, sa: SpellAbility) -> AiAbilityDecision:
+        firstTgt = sa.getParent().getTargetCard()
+        candidates = ai.getOpponents().getCardsIn(ZoneType.Battlefield).filter(
+            CardPredicates.sharesCardTypeWith(firstTgt).and_(CardPredicates.isTargetableBy(sa)))
+        secondTgt = Aggregates.random(candidates)
+        if secondTgt is not None:
+            sa.resetTargets()
+            sa.getTargets().add(secondTgt)
+            return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+        else:
+            return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
 ```

@@ -37,10 +37,10 @@ classDiagram
 
 Force of Will's nested AI helper encapsulates the decision logic for whether the AI should cast the card, exposing a single static `consider(Player, SpellAbility)` predicate. Its responsibility is narrow: inspect the casting player's hand and the spell's pay costs to judge whether playing the card is viable, returning `true` only when the AI can realistically afford and benefit from the cast.
 
-As one of many inner classes in `SpecialCardAi`, it follows a stateless utility pattern rather than implementing a shared interface. It collaborates with `Player` to query the hand, scans each `CostPart` of the `SpellAbility` to detect the alternative "exile and pay life" cost, and uses a filtered `CardCollection` of blue cards to guard against edge cases—refusing the cast when too few blue cards exist or when no low-CMC card is available to exile. This guards against the AI wasting the card or making suboptimal exile choices given its current valuation limitations.
+As one of many inner classes in `SpecialCardAi`, it follows a stateless utility pattern rather than implementing a shared interface. It collaborates with `Player` to query the hand, scans each `CostPart` of the `SpellAbility` to detect the alternative "exile and pay life" cost, and uses a filtered `CardCollection` of blue cards to guard against edge casesâ€”refusing the cast when too few blue cards exist or when no low-CMC card is available to exile. This guards against the AI wasting the card or making suboptimal exile choices given its current valuation limitations.
 
 ## Source
-`forge-ai/src/main/java/forge/ai/SpecialCardAi.java` â€” declaration excerpt
+`forge-ai/src/main/java/forge/ai/SpecialCardAi.java` Ã¢â‚¬â€ declaration excerpt
 
 ```java
     // Force of Will
@@ -71,4 +71,42 @@ As one of many inner classes in `SpecialCardAi`, it follows a stateless utility 
             return true;
         }
     }
+```
+
+## Python
+`forge/ai/SpecialCardAi/ForceOfWill.py`
+
+```python
+from forge.game.card.CardCollection import CardCollection
+from forge.game.cost.CostPart import CostPart
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CardPredicates import CardPredicates
+from forge.game.card.MagicColor import MagicColor
+from forge.game.zone.ZoneType import ZoneType
+
+
+class ForceOfWill:
+    @staticmethod
+    def consider(ai: Player, sa: SpellAbility) -> bool:
+        blueCards = CardLists.filter(ai.getCardsIn(ZoneType.Hand), CardPredicates.isColor(MagicColor.BLUE))
+
+        isExileMode = False
+        for c in sa.getPayCosts().getCostParts():
+            if "Exile" in c.toString():
+                isExileMode = True  # the AI is trying to go for the "exile and pay life" alt cost
+                break
+
+        if isExileMode:
+            if blueCards.size() < 2:
+                # Need to have something else in hand that is blue in addition to Force of Will itself,
+                # otherwise the AI will fail to play the card and the card will disappear from the pool
+                return False
+            elif not blueCards.anyMatch(CardPredicates.lessCMC(3)):
+                # We probably need a low-CMC card to exile to it, exiling a higher CMC spell may be suboptimal
+                # since the AI does not prioritize/value cards vs. permission at the moment.
+                return False
+
+        return True
 ```

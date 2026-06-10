@@ -37,6 +37,10 @@ classDiagram
 - [[forge.game.card.Card|Card]]
 - [[forge.game.spellability.SpellAbility|SpellAbility]]
 
+## Design Description
+
+Trigger that fires when a player gains life. As a concrete subclass of `Trigger`, it overrides `performTest` to evaluate trigger conditionsâ€”filtering on `ValidPlayer` and `ValidSource`, an optional `FirstTime` flag, and an optional `Spell` requirement that checks whether the life gain originated from a spell. It reads game state through `AbilityKey`-keyed run parameters, is constructed with a parameter map plus its host `Card`, and collaborates with `SpellAbility` to expose the triggering player and life amount: `setTriggeringObjects` binds those values onto the firing ability, while `getImportantStackObjects` produces a localized, human-readable summary for the stack. The design follows the engine's data-driven trigger pattern, where declarative card parameters govern behavior rather than hardcoded logic.
+
 ## Source
 `forge-game/src/main/java/forge/game/trigger/TriggerLifeGained.java`
 
@@ -134,4 +138,58 @@ public class TriggerLifeGained extends Trigger {
         return sb.toString();
     }
 }
+```
+
+## Python
+`forge/game/trigger/TriggerLifeGained.py`
+
+```python
+from forge.game.trigger.Trigger import Trigger
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Localizer import Localizer
+
+
+class TriggerLifeGained(Trigger):
+    """
+    Trigger_LifeGained class.
+
+    @author Forge
+    """
+
+    def __init__(self, params: dict[str, str], host: Card, intrinsic: bool):
+        super().__init__(params, host, intrinsic)
+
+    def performTest(self, runParams: dict[AbilityKey, object]) -> bool:
+        if not self.matchesValidParam("ValidPlayer", runParams.get(AbilityKey.Player)):
+            return False
+
+        if not self.matchesValidParam("ValidSource", runParams.get(AbilityKey.Source)):
+            return False
+
+        if self.hasParam("FirstTime"):
+            if not runParams.get(AbilityKey.FirstTime):
+                return False
+
+        if self.hasParam("Spell"):
+            spellAbility = runParams.get(AbilityKey.SourceSA)
+            if spellAbility is None or not spellAbility.getRootAbility().isSpell():
+                return False
+
+        return True
+
+    def setTriggeringObjects(self, sa: SpellAbility, runParams: dict[AbilityKey, object]) -> None:
+        sa.setTriggeringObjectsFrom(runParams, AbilityKey.LifeAmount, AbilityKey.Player)
+
+    def getImportantStackObjects(self, sa: SpellAbility) -> str:
+        sb = []
+        sb.append(Localizer.getInstance().getMessage("lblPlayer"))
+        sb.append(": ")
+        sb.append(str(sa.getTriggeringObject(AbilityKey.Player)))
+        sb.append(", ")
+        sb.append(Localizer.getInstance().getMessage("lblGainedAmount"))
+        sb.append(": ")
+        sb.append(str(sa.getTriggeringObject(AbilityKey.LifeAmount)))
+        return "".join(sb)
 ```

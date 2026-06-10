@@ -301,6 +301,12 @@ classDiagram
 - [[forge.game.keyword.Vanishing|Vanishing]]
 - [[forge.item.PaperCard|PaperCard]]
 
+## Design Description
+
+The Keyword enum is the central registry of every Magic: The Gathering ability keyword recognized by the Forge engine. Each constant pairs a human-readable display name with metadata: the KeywordInstance subclass used to model that keyword's behavior, a flag indicating whether multiple copies are redundant, and a printf-style reminder-text template. Its core responsibility is to translate raw card-script keyword strings into live, parsed KeywordInterface instances.
+
+Acting as a factory, getInstance parses a string (splitting on delimiters via getKeywordDetails), reflectively instantiates the associated type â€” ranging from the generic SimpleKeyword to specialized handlers like Kicker, Protection, Landwalk, or the parameterized KeywordWith* family â€” and falls back to SimpleKeyword on failure. Lookups are name-based and case-insensitive (smartValueOf), with a cached per-card keyword set (keyed on PaperCard name and aware of CardSplitType) to avoid repeated parsing. This design centralizes keyword knowledge in one enum while delegating each keyword's semantics to its dedicated instance class.
+
 ## Source
 `forge-game/src/main/java/forge/game/keyword/Keyword.java`
 
@@ -372,7 +378,7 @@ public enum Keyword {
     EMERGE("Emerge", Emerge.class, false, "You may cast this spell by sacrificing {1:%2$s} and paying the emerge cost reduced by that %2$s's mana value."),
     ENCHANT("Enchant", KeywordWithType.class, false, "Target a %1$s as you cast this. This card enters attached to that %1$s."),
     ENCORE("Encore", KeywordWithCost.class, false, "%s, Exile this card from your graveyard: For each opponent, create a token copy that attacks that opponent this turn if able. They gain haste. Sacrifice them at the beginning of the next end step. Activate only as a sorcery."),
-    ENLIST("Enlist", SimpleKeyword.class, false, "As this creature attacks, you may tap a nonattacking creature you control without summoning sickness. When you do, add its power to this creature’s until end of turn."),
+    ENLIST("Enlist", SimpleKeyword.class, false, "As this creature attacks, you may tap a nonattacking creature you control without summoning sickness. When you do, add its power to this creatureÃ¢â‚¬â„¢s until end of turn."),
     ENTWINE("Entwine", KeywordWithCost.class, true, "Choose both if you pay the entwine cost."),
     EPIC("Epic", SimpleKeyword.class, true, "For the rest of the game, you can't cast spells. At the beginning of each of your upkeeps for the rest of the game, copy this spell except for its epic ability. If the spell has any targets, you may choose new targets for the copy."),
     EQUIP("Equip", Equip.class, false, "%s: Attach to target %s you control. Equip only as a sorcery."),
@@ -411,7 +417,7 @@ public enum Keyword {
     HORSEMANSHIP("Horsemanship", SimpleKeyword.class, true, "This creature can't be blocked except by creatures with horsemanship."),
     IMPENDING("Impending", KeywordWithCostAndAmount.class, false, "If you cast this spell for its impending cost, it enters with {%2$d:time counter} and isn't a creature until the last is removed. At the beginning of your end step, remove a time counter from it."),
     IMPROVISE("Improvise", SimpleKeyword.class, true, "Your artifacts can help cast this spell. Each artifact you tap after you're done activating mana abilities pays for {1}."),
-    INCREMENT("Increment", SimpleKeyword.class, false, "Whenever you cast a spell, if the amount of mana you spent is greater than this creature’s power or toughness, put a +1/+1 counter on this creature."),
+    INCREMENT("Increment", SimpleKeyword.class, false, "Whenever you cast a spell, if the amount of mana you spent is greater than this creatureÃ¢â‚¬â„¢s power or toughness, put a +1/+1 counter on this creature."),
     INDESTRUCTIBLE("Indestructible", SimpleKeyword.class, true, "Effects that say \"destroy\" don't destroy this."),
     INFECT("Infect", SimpleKeyword.class, true, "This creature deals damage to creatures in the form of -1/-1 counters and to players in the form of poison counters."),
     INGEST("Ingest", SimpleKeyword.class, false, "Whenever this creature deals combat damage to a player, that player exiles the top card of their library."),
@@ -459,7 +465,7 @@ public enum Keyword {
     RAMPAGE("Rampage", KeywordWithAmount.class, false, "Whenever this creature becomes blocked, it gets +%1$d/+%1$d until end of turn for each creature blocking it beyond the first."),
     RAVENOUS("Ravenous", SimpleKeyword.class, false, "This creature enters with X +1/+1 counters on it. If X is 5 or more, draw a card when it enters."),
     REACH("Reach", SimpleKeyword.class, true, "This creature can block creatures with flying."),
-    READ_AHEAD("Read ahead", SimpleKeyword.class, true, "Chapter abilities of this Saga can’t trigger the turn it entered the battlefield unless it has exactly the number of lore counters on it specified in the chapter symbol of that ability."),
+    READ_AHEAD("Read ahead", SimpleKeyword.class, true, "Chapter abilities of this Saga canÃ¢â‚¬â„¢t trigger the turn it entered the battlefield unless it has exactly the number of lore counters on it specified in the chapter symbol of that ability."),
     REBOUND("Rebound", SimpleKeyword.class, true, "If you cast this spell from your hand, exile it as it resolves. At the beginning of your next upkeep, you may cast this card from exile without paying its mana cost."),
     RECOVER("Recover", KeywordWithCost.class, false, "When a creature is put into your graveyard from the battlefield, you may pay %s. If you do, return this card from your graveyard to your hand. Otherwise, exile this card."),
     RECONFIGURE("Reconfigure", KeywordWithCost.class, false, "%s: Attach to target creature you control; or unattach from a creature. Reconfigure only as a sorcery. While attached, this isn't a creature."),
@@ -487,7 +493,7 @@ public enum Keyword {
     SQUAD("Squad", KeywordWithCost.class, false, "As an additional cost to cast this spell, you may pay %s any number of times. When this creature enters, create that many tokens that are copies of it."),
     START_YOUR_ENGINES("Start your engines", SimpleKeyword.class, true, "If you have no speed, it starts at 1. It increases once on each of your turns when an opponent loses life. Max speed is 4."),
     STARTING_INTENSITY("Starting intensity", KeywordWithAmount.class, true, ""),
-    STATION("Station", KeywordWithAmount.class, false, "Tap another creature you control: Put charge counters equal to its power on this Spacecraft. Station only as a sorcery. It’s an artifact creature at %d+."),
+    STATION("Station", KeywordWithAmount.class, false, "Tap another creature you control: Put charge counters equal to its power on this Spacecraft. Station only as a sorcery. ItÃ¢â‚¬â„¢s an artifact creature at %d+."),
     STORM("Storm", SimpleKeyword.class, false, "When you cast this spell, copy it for each other spell that was cast before it this turn. You may choose new targets for the copies."),
     STRIVE("Strive", KeywordWithCost.class, false, "CARDNAME costs %s more to cast for each target beyond the first."),
     SUNBURST("Sunburst", SimpleKeyword.class, false, "This enters with either a +1/+1 or charge counter on it for each color of mana spent to cast it based on whether it's a creature."),
@@ -510,7 +516,7 @@ public enum Keyword {
     VIGILANCE("Vigilance", SimpleKeyword.class, true, "Attacking doesn't cause this creature to tap."),
     WARD("Ward", KeywordWithCost.class, false, "Whenever this permanent becomes the target of a spell or ability an opponent controls, counter it unless that player pays %s."),
     WARP("Warp", KeywordWithCost.class, false, "You may cast this card from your hand for its warp cost. Exile this creature at the beginning of the next end step, then you may cast it from exile on a later turn."),
-    WEB_SLINGING("Web-slinging", KeywordWithCost.class, false, "You may cast this spell for %s if you also return a tapped creature you control to its owner’s hand."),
+    WEB_SLINGING("Web-slinging", KeywordWithCost.class, false, "You may cast this spell for %s if you also return a tapped creature you control to its ownerÃ¢â‚¬â„¢s hand."),
     WITHER("Wither", SimpleKeyword.class, true, "This deals damage to creatures in the form of -1/-1 counters."),
 
     // mayflash additional cast
@@ -656,4 +662,365 @@ public enum Keyword {
         return isMultipleRedundant;
     }
 }
+```
+
+## Python
+`forge/game/keyword/Keyword.py`
+
+```python
+from forge.card.CardSplitType import CardSplitType
+from forge.item.PaperCard import PaperCard
+from forge.game.keyword.Affinity import Affinity
+from forge.game.keyword.Amplify import Amplify
+from forge.game.keyword.Companion import Companion
+from forge.game.keyword.Compleated import Compleated
+from forge.game.keyword.Craft import Craft
+from forge.game.keyword.Devour import Devour
+from forge.game.keyword.Emerge import Emerge
+from forge.game.keyword.Equip import Equip
+from forge.game.keyword.Firebending import Firebending
+from forge.game.keyword.Hexproof import Hexproof
+from forge.game.keyword.KeywordInstance import KeywordInstance
+from forge.game.keyword.KeywordInterface import KeywordInterface
+from forge.game.keyword.KeywordWithAmount import KeywordWithAmount
+from forge.game.keyword.KeywordWithCost import KeywordWithCost
+from forge.game.keyword.KeywordWithCostAndAmount import KeywordWithCostAndAmount
+from forge.game.keyword.KeywordWithCostAndType import KeywordWithCostAndType
+from forge.game.keyword.KeywordWithType import KeywordWithType
+from forge.game.keyword.Kicker import Kicker
+from forge.game.keyword.Landwalk import Landwalk
+from forge.game.keyword.Mayhem import Mayhem
+from forge.game.keyword.Modular import Modular
+from forge.game.keyword.Ninjutsu import Ninjutsu
+from forge.game.keyword.Partner import Partner
+from forge.game.keyword.Protection import Protection
+from forge.game.keyword.SimpleKeyword import SimpleKeyword
+from forge.game.keyword.Suspend import Suspend
+from forge.game.keyword.Trample import Trample
+from forge.game.keyword.Vanishing import Vanishing
+
+from enum import Enum
+
+
+class Keyword(Enum):
+    UNDEFINED = ("", SimpleKeyword, False, "")
+    ABSORB = ("Absorb", KeywordWithAmount, False, "If a source would deal damage to this creature, prevent %d of that damage.")
+    AFFINITY = ("Affinity", Affinity, False, "This spell costs {1} less to cast for each %s you control.")
+    AFFLICT = ("Afflict", KeywordWithAmount, False, "Whenever this creature becomes blocked, defending player loses %d life.")
+    AFTERLIFE = ("Afterlife", KeywordWithAmount, False, "When this creature dies, create {%1$d:1/1 white and black Spirit creature token} with flying.")
+    AFTERMATH = ("Aftermath", SimpleKeyword, False, "Cast this spell only from your graveyard. Then exile it.")
+    AMPLIFY = ("Amplify", Amplify, False, "As this creature enters, put {%d:+1/+1 counter} on it for each %s card you reveal in your hand.")
+    ANNIHILATOR = ("Annihilator", KeywordWithAmount, False, "Whenever this creature attacks, defending player sacrifices {%d:permanent}.")
+    ASCEND = ("Ascend", SimpleKeyword, True, "If you control ten or more permanents, you get the city's blessing for the rest of the game.")
+    ASSIST = ("Assist", SimpleKeyword, True, "Another player can pay up to %s of this spell's cost.")
+    AURA_SWAP = ("Aura swap", KeywordWithCost, False, "%s: You may exchange this Aura with an Aura card in your hand.")
+    AWAKEN = ("Awaken", KeywordWithCostAndAmount, False, "If you cast this spell for %s, also put {%d:+1/+1 counter} on target land you control and it becomes a 0/0 Elemental creature with haste. It's still a land.")
+    BACKUP = ("Backup", KeywordWithAmount, False, "When this creature enters, put {%1$d:+1/+1 counter} on target creature. If that's another creature, it gains the following ability until end of turn.")
+    BANDING = ("Banding", SimpleKeyword, True, "Any creatures with banding, and up to one without, can attack in a band. Bands are blocked as a group. If any creatures with banding you control are blocking or being blocked by a creature, you divide that creature's combat damage, not its controller, among any of the creatures it's being blocked by or is blocking.")
+    BANDSWITH = ("Bands with other", KeywordWithType, False, "can attack in a band with another %s")
+    BARGAIN = ("Bargain", SimpleKeyword, False, "You may sacrifice an artifact, enchantment, or token as you cast this spell.")
+    BATTLE_CRY = ("Battle cry", SimpleKeyword, False, "Whenever this creature attacks, each other attacking creature gets +1/+0 until end of turn.")
+    BESTOW = ("Bestow", KeywordWithCost, False, "If you cast this card for its bestow cost, it's an Aura spell with enchant creature. It becomes a creature again if it's not attached to a creature.")
+    BLITZ = ("Blitz", KeywordWithCost, False, "If you cast this spell for its blitz cost, it gains haste and \"When this creature dies, draw a card.\" Sacrifice it at the beginning of the next end step.")
+    BLOODTHIRST = ("Bloodthirst", KeywordWithAmount, False, "If an opponent was dealt damage this turn, this creature enters with {%d:+1/+1 counter} on it.")
+    BUSHIDO = ("Bushido", KeywordWithAmount, False, "Whenever this creature blocks or becomes blocked, it gets +%1$d/+%1$d until end of turn.")
+    BUYBACK = ("Buyback", KeywordWithCost, False, "You may pay an additional %s as you cast this spell. If you do, put it into your hand instead of your graveyard as it resolves.")
+    CASCADE = ("Cascade", SimpleKeyword, False, "When you cast this spell, exile cards from the top of your library until you exile a nonland card whose mana value is less than this spell's mana value. You may cast that spell without paying its mana cost if its mana value is less than this spell's mana value. Then put all cards exiled this way that weren't cast on the bottom of your library in a random order.")
+    CASUALTY = ("Casualty", KeywordWithAmount, False, "As you cast this spell, you may sacrifice a creature with power %1$d or greater. When you do, copy this spell.")
+    CHAMPION = ("Champion", KeywordWithType, False, "When this permanent enters, sacrifice it unless you exile another %s you control. When this permanent leaves the battlefield, return the exiled card to the battlefield under its owner's control.")
+    CHANGELING = ("Changeling", SimpleKeyword, True, "This card is every creature type.")
+    CHOOSE_A_BACKGROUND = ("Choose a Background", Partner, True, "You can have a Background as a second commander.")
+    CIPHER = ("Cipher", SimpleKeyword, True, "Then you may exile this spell card encoded on a creature you control. Whenever that creature deals combat damage to a player, its controller may cast a copy of the encoded card without paying its mana cost.")
+    COMPANION = ("Companion", Companion, True, "Reveal your companion from outside the game if your deck meets the companion restriction.")
+    COMPLEATED = ("Compleated", Compleated, True, "This planeswalker enters with two fewer loyalty counters for each Phyrexian mana symbol life was paid for.")
+    CONSPIRE = ("Conspire", SimpleKeyword, False, "As an additional cost to cast this spell, you may tap two untapped creatures you control that each share a color with it. If you do, copy it.")
+    CONVOKE = ("Convoke", SimpleKeyword, True, "Your creatures can help cast this spell. Each creature you tap while playing this spell reduces its cost by {1} or by one mana of that creature's color.")
+    CRAFT = ("Craft", Craft, False, "%s, Exile this artifact, %s: Return this card transformed under its owner's control. Craft only as a sorcery.")
+    CREW = ("Crew", KeywordWithAmount, False, "Tap any number of creatures you control with total power %1$d or more: This Vehicle becomes an artifact creature until end of turn.")
+    CUMULATIVE_UPKEEP = ("Cumulative upkeep", KeywordWithCost, False, "At the beginning of your upkeep, put an age counter on this permanent, then sacrifice it unless you pay its upkeep cost for each age counter on it.")
+    CYCLING = ("Cycling", KeywordWithCost, False, "%s, Discard this card: Draw a card.")
+    DASH = ("Dash", KeywordWithCost, False, "You may cast this spell for its dash cost. If you do, it gains haste, and it's returned from the battlefield to its owner's hand at the beginning of the next end step.")
+    DAYBOUND = ("Daybound", SimpleKeyword, True, "If a player casts no spells during their own turn, it becomes night next turn.")
+    DEATHTOUCH = ("Deathtouch", SimpleKeyword, True, "Any amount of damage this deals to a creature is enough to destroy it.")
+    DECAYED = ("Decayed", SimpleKeyword, True, "This creature can't block. When it attacks, sacrifice it at end of combat.")
+    DEFENDER = ("Defender", SimpleKeyword, True, "This creature can't attack.")
+    DELVE = ("Delve", SimpleKeyword, True, "As an additional cost to cast this spell, you may exile any number of cards from your graveyard. Each card exiled this way reduces the cost to cast this spell by {1}.")
+    DEMONSTRATE = ("Demonstrate", SimpleKeyword, False, "When you cast this spell, you may copy it. If you do, choose an opponent to also copy it. Players may choose new targets for their copies.")
+    DETHRONE = ("Dethrone", SimpleKeyword, False, "Whenever this creature attacks the player with the most life or tied for the most life, put a +1/+1 counter on it.")
+    DEVOUR = ("Devour", Devour, False, "As this object enters, you may sacrifice any number of %2$s. This permanent enters with {%1$s:+1/+1 counter} on it for each permanent sacrificed this way.")
+    DEVOID = ("Devoid", SimpleKeyword, True, "This card has no color.")
+    DISGUISE = ("Disguise", KeywordWithCost, False, "You may cast this card face down for {3} as a 2/2 creature with ward {2}. Turn it face up any time for its disguise cost.")
+    DISTURB = ("Disturb", KeywordWithCost, False, "You may cast this card from your graveyard transformed for its disturb cost.")
+    DOCTORS_COMPANION = ("Doctor's companion", Partner, True, "You can have two commanders if the other is the Doctor.")
+    DOUBLE_AGENDA = ("Double agenda", SimpleKeyword, False, "Start the game with this conspiracy face down in the command zone and secretly choose two different card names. You may turn this conspiracy face up any time and reveal those names.")
+    DOUBLE_STRIKE = ("Double Strike", SimpleKeyword, True, "This creature deals both first-strike and regular combat damage.")
+    DOUBLE_TEAM = ("Double team", SimpleKeyword, False, "When this creature attacks, if it's not a token, conjure a duplicate of it into your hand. Then both cards perpetually lose double team.")
+    DREDGE = ("Dredge", KeywordWithAmount, False, "If you would draw a card, instead you may put exactly {%d:card} from the top of your library into your graveyard. If you do, return this card from your graveyard to your hand. Otherwise, draw a card.")
+    ECHO = ("Echo", KeywordWithCost, False, "At the beginning of your upkeep, if this permanent came under your control since the beginning of your last upkeep, sacrifice it unless you pay its echo cost.")
+    EMBALM = ("Embalm", KeywordWithCost, False, "%s, Exile this card from your graveyard: Create a token that's a copy of this card, except it's white, it has no mana cost, and it's a Zombie in addition to its other types. Embalm only as a sorcery.")
+    EMERGE = ("Emerge", Emerge, False, "You may cast this spell by sacrificing {1:%2$s} and paying the emerge cost reduced by that %2$s's mana value.")
+    ENCHANT = ("Enchant", KeywordWithType, False, "Target a %1$s as you cast this. This card enters attached to that %1$s.")
+    ENCORE = ("Encore", KeywordWithCost, False, "%s, Exile this card from your graveyard: For each opponent, create a token copy that attacks that opponent this turn if able. They gain haste. Sacrifice them at the beginning of the next end step. Activate only as a sorcery.")
+    ENLIST = ("Enlist", SimpleKeyword, False, "As this creature attacks, you may tap a nonattacking creature you control without summoning sickness. When you do, add its power to this creature????????s until end of turn.")
+    ENTWINE = ("Entwine", KeywordWithCost, True, "Choose both if you pay the entwine cost.")
+    EPIC = ("Epic", SimpleKeyword, True, "For the rest of the game, you can't cast spells. At the beginning of each of your upkeeps for the rest of the game, copy this spell except for its epic ability. If the spell has any targets, you may choose new targets for the copy.")
+    EQUIP = ("Equip", Equip, False, "%s: Attach to target %s you control. Equip only as a sorcery.")
+    ESCAPE = ("Escape", KeywordWithCost, False, "You may cast this card from your graveyard for its escape cost.")
+    ESCALATE = ("Escalate", KeywordWithCost, True, "Pay this cost for each mode chosen beyond the first.")
+    ETERNALIZE = ("Eternalize", KeywordWithCost, False, "%s, Exile this card from your graveyard: Create a token that's a copy of this card, except it's black, it's 4/4, it has no mana cost, and it's a Zombie in addition to its other types. Eternalize only as a sorcery.")
+    EVOKE = ("Evoke", KeywordWithCost, False, "You may cast this spell for its evoke cost. If you do, it's sacrificed when it enters.")
+    EVOLVE = ("Evolve", SimpleKeyword, False, "Whenever a creature you control enters, if that creature has greater power or toughness than this creature, put a +1/+1 counter on this creature.")
+    EXALTED = ("Exalted", SimpleKeyword, False, "Whenever a creature you control attacks alone, that creature gets +1/+1 until end of turn.")
+    EXPLOIT = ("Exploit", SimpleKeyword, False, "When this creature enters, you may sacrifice a creature.")
+    EXTORT = ("Extort", SimpleKeyword, False, "Whenever you cast a spell, you may pay {W/B}. If you do, each opponent loses 1 life and you gain that much life.")
+    FABRICATE = ("Fabricate", KeywordWithAmount, False, "When this creature enters, put {%1$d:+1/+1 counter} on it, or create {%1$d:1/1 colorless Servo artifact creature token}.")
+    FADING = ("Fading", KeywordWithAmount, False, "This permanent enters with {%d:fade counter} on it. At the beginning of your upkeep, remove a fade counter from it. If you can't, sacrifice it.")
+    FEAR = ("Fear", SimpleKeyword, True, "This creature can't be blocked except by artifact creatures and/or black creatures.")
+    FIREBENDING = ("Firebending", Firebending, False, "Whenever this creature attacks, add %s. This mana lasts until end of combat.")
+    FIRST_STRIKE = ("First Strike", SimpleKeyword, True, "This creature deals combat damage before creatures without first strike.")
+    FLANKING = ("Flanking", SimpleKeyword, False, "Whenever this creature becomes blocked by a creature without flanking, the blocking creature gets -1/-1 until end of turn.")
+    FLASH = ("Flash", SimpleKeyword, True, "You may cast this spell any time you could cast an instant.")
+    FLASHBACK = ("Flashback", KeywordWithCost, False, "You may cast this card from your graveyard for its flashback cost. Then exile it.")
+    FLYING = ("Flying", SimpleKeyword, True, "This creature can't be blocked except by creatures with flying or reach.")
+    FOR_MIRRODIN = ("For Mirrodin", SimpleKeyword, False, "When this Equipment enters, create a 2/2 red Rebel creature token, then attach this to it.")
+    FORETELL = ("Foretell", KeywordWithCost, False, "During your turn, you may pay {2} and exile this card from your hand face down. Cast it on a later turn for its foretell cost.")
+    FORTIFY = ("Fortify", KeywordWithCost, False, "%s: Attach to target land you control. Fortify only as a sorcery.")
+    FREERUNNING = ("Freerunning", KeywordWithCost, False, "You may cast this spell for its freerunning cost if you dealt combat damage to a player this turn with an Assassin or commander.")
+    FRENZY = ("Frenzy", KeywordWithAmount, False, "Whenever this creature attacks and isn't blocked, it gets +%d/+0 until end of turn.")
+    FUSE = ("Fuse", SimpleKeyword, True, "You may cast one or both halves of this card from your hand.")
+    GIFT = ("Gift", SimpleKeyword, True, "You may promise an opponent a gift as you cast this spell. If you do, when it enters, they %s.")
+    GRAFT = ("Graft", KeywordWithAmount, False, "This permanent enters with {%d:+1/+1 counter} on it. Whenever another creature enters, you may move a +1/+1 counter from this permanent onto it.")
+    GRAVESTORM = ("Gravestorm", SimpleKeyword, False, "When you cast this spell, copy it for each permanent that was put into a graveyard from the battlefield this turn. If the spell has any targets, you may choose new targets for any of the copies.")
+    HARMONIZE = ("Harmonize", KeywordWithCost, False, "You may cast this card from your graveyard for its harmonize cost. You may tap a creature you control to reduce that cost by {X}, where X is its power. Then exile this spell.")
+    HASTE = ("Haste", SimpleKeyword, True, "This creature can attack and {T} as soon as it comes under your control.")
+    HAUNT = ("Haunt", SimpleKeyword, False, "When this is put into a graveyard from the battlefield, exile it haunting target creature.")
+    HEXPROOF = ("Hexproof", Hexproof, True, "This can't be the target of %s spells or abilities your opponents control.")
+    HIDEAWAY = ("Hideaway", KeywordWithAmount, False, "When this permanent enters, look at the top {%d:card} of your library, exile one face down, then put the rest on the bottom of your library.")
+    HIDDEN_AGENDA = ("Hidden agenda", SimpleKeyword, False, "Start the game with this conspiracy face down in the command zone and secretly choose a card name. You may turn this conspiracy face up any time and reveal that name.")
+    HORSEMANSHIP = ("Horsemanship", SimpleKeyword, True, "This creature can't be blocked except by creatures with horsemanship.")
+    IMPENDING = ("Impending", KeywordWithCostAndAmount, False, "If you cast this spell for its impending cost, it enters with {%2$d:time counter} and isn't a creature until the last is removed. At the beginning of your end step, remove a time counter from it.")
+    IMPROVISE = ("Improvise", SimpleKeyword, True, "Your artifacts can help cast this spell. Each artifact you tap after you're done activating mana abilities pays for {1}.")
+    INCREMENT = ("Increment", SimpleKeyword, False, "Whenever you cast a spell, if the amount of mana you spent is greater than this creature????????s power or toughness, put a +1/+1 counter on this creature.")
+    INDESTRUCTIBLE = ("Indestructible", SimpleKeyword, True, "Effects that say \"destroy\" don't destroy this.")
+    INFECT = ("Infect", SimpleKeyword, True, "This creature deals damage to creatures in the form of -1/-1 counters and to players in the form of poison counters.")
+    INGEST = ("Ingest", SimpleKeyword, False, "Whenever this creature deals combat damage to a player, that player exiles the top card of their library.")
+    INTIMIDATE = ("Intimidate", SimpleKeyword, True, "This creature can't be blocked except by artifact creatures and/or creatures that share a color with it.")
+    KICKER = ("Kicker", Kicker, False, "You may pay an additional %s as you cast this spell.")
+    JOB_SELECT = ("Job select", SimpleKeyword, False, "When this Equipment enters, create a 1/1 colorless Hero creature token, then attach this to it.")
+    JUMP_START = ("Jump-start", SimpleKeyword, False, "You may cast this card from your graveyard by discarding a card in addition to paying its other costs. Then exile this card.")
+    LANDWALK = ("Landwalk", Landwalk, True, "This creature is unblockable as long as defending player controls {1:%s}.")
+    LEVEL_UP = ("Level up", KeywordWithCost, False, "%s: Put a level counter on this. Level up only as a sorcery.")
+    LIFELINK = ("Lifelink", SimpleKeyword, True, "Damage dealt by this creature also causes its controller to gain that much life.")
+    LIVING_METAL = ("Living metal", SimpleKeyword, True, "During your turn, this Vehicle is also a creature.")
+    LIVING_WEAPON = ("Living Weapon", SimpleKeyword, True, "When this Equipment enters, create a 0/0 black Phyrexian Germ creature token, then attach this to it.")
+    MADNESS = ("Madness", KeywordWithCost, False, "If you discard this card, discard it into exile. When you do, cast it for its madness cost or put it into your graveyard.")
+    MAYHEM = ("Mayhem", Mayhem, False, "You may cast this card from your graveyard for %s if you discarded it this turn. Timing rules still apply.")
+    MELEE = ("Melee", SimpleKeyword, False, "Whenever this creature attacks, it gets +1/+1 until end of turn for each opponent you attacked this combat.")
+    MENTOR = ("Mentor", SimpleKeyword, False, "Whenever this creature attacks, put a +1/+1 counter on target attacking creature with lesser power.")
+    MENACE = ("Menace", SimpleKeyword, True, "This creature can't be blocked except by two or more creatures.")
+    MEGAMORPH = ("Megamorph", KeywordWithCost, False, "You may cast this card face down as a 2/2 creature for {3}. Turn it face up any time for its megamorph cost and put a +1/+1 counter on it.")
+    MIRACLE = ("Miracle", KeywordWithCost, False, "You may cast this card for its miracle cost when you draw it if it's the first card you drew this turn.")
+    MOBILIZE = ("Mobilize", KeywordWithAmount, False, "When this creature attacks, create {%1$d:tapped and attacking 1/1 red Warrior creature token}. Sacrifice them at the beginning of the next end step.")
+    MODULAR = ("Modular", Modular, False, "This creature enters with {%d:+1/+1 counter} on it. When it dies, you may put its +1/+1 counters on target artifact creature.")
+    MORE_THAN_MEETS_THE_EYE = ("More Than Meets the Eye", KeywordWithCost, False, "You may cast this card converted for %s.")
+    MORPH = ("Morph", KeywordWithCost, False, "You may cast this card face down as a 2/2 creature for {3}. Turn it face up any time for its morph cost.")
+    MULTIKICKER = ("Multikicker", KeywordWithCost, False, "You may pay an additional %s any number of times as you cast this spell.")
+    MUTATE = ("Mutate", KeywordWithCost, True, "If you cast this spell for its mutate cost, put it over or under target non-Human creature you own. They mutate into the creature on top plus all abilities from under it.")
+    MYRIAD = ("Myriad", SimpleKeyword, False, "Whenever this creature attacks, for each opponent other than defending player, you may create a token that's a copy of this creature that's tapped and attacking that player or a planeswalker they control. Exile the tokens at end of combat.")
+    NIGHTBOUND = ("Nightbound", SimpleKeyword, True, "If a player casts at least two spells during their own turn, it becomes day next turn.")
+    NINJUTSU = ("Ninjutsu", Ninjutsu, False, "%s, Return an unblocked attacker you control to hand: Put this card onto the battlefield from your %s tapped and attacking.")
+    OUTLAST = ("Outlast", KeywordWithCost, False, "%s, {T}: Put a +1/+1 counter on this creature. Outlast only as a sorcery.")
+    OFFERING = ("Offering", KeywordWithType, False, "You may cast this card any time you could cast an instant by sacrificing a %1$s and paying the difference in mana costs between this and the sacrificed %1$s. Mana cost includes color.")
+    OFFSPRING = ("Offspring", KeywordWithCost, False, "You may pay an additional %s as you cast this spell. If you do, when this creature enters, create a 1/1 token copy of it.")
+    OVERLOAD = ("Overload", KeywordWithCost, False, "You may cast this spell for its overload cost. If you do, change its text by replacing all instances of \"target\" with \"each.\"")
+    PARADIGM = ("Paradigm", SimpleKeyword, False, "Then exile this spell. After you first resolve a spell with this name, you may cast a copy of it from exile without paying its mana cost at the beginning of each of your first main phases.")
+    PARTNER = ("Partner", Partner, True, "You can have two commanders if both have partner.")
+    PARTNER_WITH = ("Partner with", KeywordWithType, False, "When this creature enters, target player may put %s into their hand from their library, then shuffle.")
+    PERSIST = ("Persist", SimpleKeyword, False, "When this creature dies, if it had no -1/-1 counters on it, return it to the battlefield under its owner's control with a -1/-1 counter on it.")
+    PHASING = ("Phasing", SimpleKeyword, True, "This phases in or out before you untap during each of your untap steps. While it's phased out, it's treated as though it doesn't exist.")
+    PLOT = ("Plot", KeywordWithCost, False, "You may pay %s and exile this card from your hand. Cast it as a sorcery on a later turn without paying its mana cost. Plot only as a sorcery.")
+    POISONOUS = ("Poisonous", KeywordWithAmount, False, "Whenever this creature deals combat damage to a player, that player gets {%d:poison counter}.")
+    PROTECTION = ("Protection", Protection, True, "This creature can't be blocked, targeted, dealt damage, or equipped/enchanted by %s.")
+    PROTOTYPE = ("Prototype", KeywordWithCost, False, "You may cast this spell with different mana cost, color, and size. It keeps its abilities and types.")
+    PROVOKE = ("Provoke", SimpleKeyword, False, "Whenever this creature attacks, you may have target creature defending player controls untap and block it if able.")
+    PROWESS = ("Prowess", SimpleKeyword, False, "Whenever you cast a noncreature spell, this creature gets +1/+1 until end of turn.")
+    PROWL = ("Prowl", KeywordWithCost, False, "You may pay %s rather than pay this spell's mana cost if a player was dealt combat damage this turn by a source that, at the time it dealt that damage, was under your control and had any of this spell's creature types.")
+    RAMPAGE = ("Rampage", KeywordWithAmount, False, "Whenever this creature becomes blocked, it gets +%1$d/+%1$d until end of turn for each creature blocking it beyond the first.")
+    RAVENOUS = ("Ravenous", SimpleKeyword, False, "This creature enters with X +1/+1 counters on it. If X is 5 or more, draw a card when it enters.")
+    REACH = ("Reach", SimpleKeyword, True, "This creature can block creatures with flying.")
+    READ_AHEAD = ("Read ahead", SimpleKeyword, True, "Chapter abilities of this Saga can????????t trigger the turn it entered the battlefield unless it has exactly the number of lore counters on it specified in the chapter symbol of that ability.")
+    REBOUND = ("Rebound", SimpleKeyword, True, "If you cast this spell from your hand, exile it as it resolves. At the beginning of your next upkeep, you may cast this card from exile without paying its mana cost.")
+    RECOVER = ("Recover", KeywordWithCost, False, "When a creature is put into your graveyard from the battlefield, you may pay %s. If you do, return this card from your graveyard to your hand. Otherwise, exile this card.")
+    RECONFIGURE = ("Reconfigure", KeywordWithCost, False, "%s: Attach to target creature you control; or unattach from a creature. Reconfigure only as a sorcery. While attached, this isn't a creature.")
+    REFLECT = ("Reflect", KeywordWithCost, False, "As this enters, each opponent may pay %s. When they do, they create a token copy of this except it lacks this ability.")
+    REINFORCE = ("Reinforce", KeywordWithCostAndAmount, False, "%s, Discard this card: Put {%d:+1/+1 counter} on target creature.")
+    RENOWN = ("Renown", KeywordWithAmount, False, "When this creature deals combat damage to a player, if it isn't renowned, put {%d:+1/+1 counter} on it and it becomes renowned.")
+    REPLICATE = ("Replicate", KeywordWithCost, False, "As an additional cost to cast this spell, you may pay %s any number of times. If you do, copy it that many times. You may choose new targets for the copies.")
+    RETRACE = ("Retrace", SimpleKeyword, False, "You may cast this card from your graveyard by discarding a land card in addition to paying its other costs.")
+    RIOT = ("Riot", SimpleKeyword, False, "This creature enters with your choice of a +1/+1 counter or haste.")
+    RIPPLE = ("Ripple", KeywordWithAmount, False, "When you cast this spell, you may reveal the top {%d:card} of your library. You may cast any of those cards with the same name as this spell without paying their mana costs. Put the rest on the bottom of your library in any order.")
+    SADDLE = ("Saddle", KeywordWithAmount, False, "Tap any number of other creatures you control with total power %1$d or more: This Mount becomes saddled until end of turn. Saddle only as a sorcery.")
+    SCAVENGE = ("Scavenge", KeywordWithCost, False, "%s, Exile this card from your graveyard: Put a number of +1/+1 counters equal to this card's power on target creature. Scavenge only as a sorcery.")
+    SHADOW = ("Shadow", SimpleKeyword, True, "This creature can block or be blocked by only creatures with shadow.")
+    SHROUD = ("Shroud", SimpleKeyword, True, "This can't be the target of spells or abilities.")
+    SKULK = ("Skulk", SimpleKeyword, True, "This creature can't be blocked by creatures with greater power.")
+    SNEAK = ("Sneak", KeywordWithCost, False, "You may cast this spell for %s if you also return an unblocked attacker you control to hand during the declare blockers step.")
+    SOULBOND = ("Soulbond", SimpleKeyword, True, "You may pair this creature with another unpaired creature when either enters. They remain paired for as long as you control both of them.")
+    SOULSHIFT = ("Soulshift", KeywordWithAmount, False, "When this creature dies, you may return target Spirit card with mana value %d or less from your graveyard to your hand.")
+    SPACE_SCULPTOR = ("Space sculptor", SimpleKeyword, True, "CARDNAME divides the battlefield into alpha, beta, and gamma sectors. If a creature isn't assigned to a sector, its controller assigns it to one. Opponents assign first.")
+    SPECIALIZE = ("Specialize", KeywordWithCost, False, "%s, Choose a color, discard a card of that color or associated basic land type: This card perpetually specializes into that color. Activate only as a sorcery.")
+    SPECTACLE = ("Spectacle", KeywordWithCost, False, "You may cast this spell for its spectacle cost rather than its mana cost if an opponent lost life this turn.")
+    SPLICE = ("Splice", KeywordWithCostAndType, False, "As you cast an %2$s spell, you may reveal this card from your hand and pay its splice cost. If you do, add this card's effects to that spell.")
+    SPLIT_SECOND = ("Split second", SimpleKeyword, True, "As long as this spell is on the stack, players can't cast other spells or activate abilities that aren't mana abilities.")
+    SPREE = ("Spree", SimpleKeyword, True, "Choose one or more additional costs.")
+    SQUAD = ("Squad", KeywordWithCost, False, "As an additional cost to cast this spell, you may pay %s any number of times. When this creature enters, create that many tokens that are copies of it.")
+    START_YOUR_ENGINES = ("Start your engines", SimpleKeyword, True, "If you have no speed, it starts at 1. It increases once on each of your turns when an opponent loses life. Max speed is 4.")
+    STARTING_INTENSITY = ("Starting intensity", KeywordWithAmount, True, "")
+    STATION = ("Station", KeywordWithAmount, False, "Tap another creature you control: Put charge counters equal to its power on this Spacecraft. Station only as a sorcery. It????????s an artifact creature at %d+.")
+    STORM = ("Storm", SimpleKeyword, False, "When you cast this spell, copy it for each other spell that was cast before it this turn. You may choose new targets for the copies.")
+    STRIVE = ("Strive", KeywordWithCost, False, "CARDNAME costs %s more to cast for each target beyond the first.")
+    SUNBURST = ("Sunburst", SimpleKeyword, False, "This enters with either a +1/+1 or charge counter on it for each color of mana spent to cast it based on whether it's a creature.")
+    SURGE = ("Surge", KeywordWithCost, False, "You may cast this spell for its surge cost if you or a teammate has cast another spell this turn.")
+    SUSPEND = ("Suspend", Suspend, False, "If you could begin to cast this card by putting it onto the stack from your hand, you may pay %s and exile it with {%d:time counter} on it. At the beginning of your upkeep, remove a time counter. When the last is removed, play it without paying its mana cost. If you cast a creature spell this way, it gains haste until you lose control of the spell or the permanent it becomes.")
+    TIERED = ("Tiered", SimpleKeyword, True, "Choose one additional cost.")
+    TOXIC = ("Toxic", KeywordWithAmount, False, "Players dealt combat damage by this creature also get {%d:poison counter}.")
+    TRAINING = ("Training", SimpleKeyword, False, "Whenever this creature attacks with another creature with greater power, put a +1/+1 counter on this creature.")
+    TRAMPLE = ("Trample", Trample, True, "This creature can deal excess combat damage to the player or planeswalker it's attacking.")
+    TRANSFIGURE = ("Transfigure", KeywordWithCost, False, "%s, Sacrifice this creature: Search your library for a creature card with the same mana value as this creature and put that card onto the battlefield, then shuffle. Transfigure only as a sorcery.")
+    TRANSMUTE = ("Transmute", KeywordWithCost, False, "%s, Discard this card: Search your library for a card with the same mana value as this card, reveal it, and put it into your hand, then shuffle. Transmute only as a sorcery.")
+    TRIBUTE = ("Tribute", KeywordWithAmount, False, "As this creature enters, an opponent of your choice may put {%d:+1/+1 counter} on it.")
+    TYPECYCLING = ("TypeCycling", KeywordWithCostAndType, False, "%s, Discard this card: Search your library for %s, reveal it, put it into your hand, then shuffle.")
+    UMBRA_ARMOR = ("Umbra armor", SimpleKeyword, True, "If enchanted permanent would be destroyed, instead remove all damage marked on it and destroy this Aura.")
+    UNDAUNTED = ("Undaunted", SimpleKeyword, False, "This spell costs {1} less to cast for each opponent.")
+    UNDYING = ("Undying", SimpleKeyword, False, "When this creature dies, if it had no +1/+1 counters on it, return it to the battlefield under its owner's control with a +1/+1 counter on it.")
+    UNEARTH = ("Unearth", KeywordWithCost, False, "%s: Return this card from your graveyard to the battlefield. It gains haste. Exile it at the beginning of the next end step or if it would leave the battlefield. Unearth only as a sorcery.")
+    UNLEASH = ("Unleash", SimpleKeyword, False, "You may have this creature enter with a +1/+1 counter on it. It can't block as long as it has a +1/+1 counter on it.")
+    VANISHING = ("Vanishing", Vanishing, False, "This permanent enters with {%d:time counter} on it. At the beginning of your upkeep, remove a time counter from it. When the last is removed, sacrifice it.")
+    VIGILANCE = ("Vigilance", SimpleKeyword, True, "Attacking doesn't cause this creature to tap.")
+    WARD = ("Ward", KeywordWithCost, False, "Whenever this permanent becomes the target of a spell or ability an opponent controls, counter it unless that player pays %s.")
+    WARP = ("Warp", KeywordWithCost, False, "You may cast this card from your hand for its warp cost. Exile this creature at the beginning of the next end step, then you may cast it from exile on a later turn.")
+    WEB_SLINGING = ("Web-slinging", KeywordWithCost, False, "You may cast this spell for %s if you also return a tapped creature you control to its owner????????s hand.")
+    WITHER = ("Wither", SimpleKeyword, True, "This deals damage to creatures in the form of -1/-1 counters.")
+
+    # mayflash additional cast
+    MAYFLASHCOST = ("MayFlashCost", KeywordWithCost, False, "You may cast CARDNAME as though it had flash if you pay %s more to cast it.")
+    MAYFLASHSAC = ("MayFlashSac", SimpleKeyword, False, "You may cast CARDNAME as though it had flash. If you cast it any time a sorcery couldn't have been cast, the controller of the permanent it becomes sacrifices it at the beginning of the next cleanup step.")
+
+    def __init__(self, displayName0, type0, isMultipleRedundant0, reminderText0):
+        self.type = type0
+        self.isMultipleRedundant = isMultipleRedundant0
+        self.reminderText = reminderText0
+        self.displayName = displayName0
+
+    @staticmethod
+    def getKeywordDetails(k):
+        keyword = Keyword.UNDEFINED
+        details = k
+        # try to get real part
+        if ":" in k:
+            x = k.split(":", 1)
+            keyword = Keyword.smartValueOf(x[0])
+            details = x[1]
+            # Flavor keyword titles should be last in the card script K: line
+            if ":Flavor " in details:
+                details = details[:details.index(":Flavor ")]
+            # Simply remove flavor here so it doesn't goof up parsing details
+        elif " " in k:
+            # First strike
+            keyword = Keyword.smartValueOf(k)
+            details = ""
+
+            # other keywords that contains other stuff like Enchant
+            if keyword == Keyword.UNDEFINED:
+                x = k.split(" ", 1)
+
+                k2 = Keyword.smartValueOf(x[0])
+                # Keywords that needs to be undefined
+                if k2 != Keyword.UNDEFINED:
+                    keyword = k2
+                    details = x[1]
+        else:
+            # Simple Keyword
+            keyword = Keyword.smartValueOf(k)
+            details = ""
+        return (keyword, details)
+
+    @staticmethod
+    def getInstance(k):
+        p = Keyword.getKeywordDetails(k)
+
+        try:
+            inst = p[0].type()
+        except Exception:
+            inst = SimpleKeyword()
+        inst.initialize(k, p[0], p[1])
+        return inst
+
+    def __str__(self):
+        return self.displayName
+
+    @staticmethod
+    def getAllKeywords():
+        values = list(Keyword)
+        keywords = list(values[1:])  # skip UNDEFINED
+        return keywords
+
+    @staticmethod
+    def get(k):
+        if k is None or len(k) == 0:
+            return Keyword.UNDEFINED
+
+        return Keyword.getKeywordDetails(k)[0]
+
+    @staticmethod
+    def getKeywordSet(card):
+        name = card.getName()
+        keywordSet = Keyword.cardKeywordSetLookup.get(name)
+        if keywordSet is None:
+            cardSplitType = card.getRules().getSplitType()
+            keywordSet = set()
+            if cardSplitType != CardSplitType.None and cardSplitType != CardSplitType.Split:
+                if card.getRules().getOtherPart() is not None:
+                    if card.getRules().getOtherPart().getKeywords() is not None:
+                        for key in card.getRules().getOtherPart().getKeywords():
+                            keyword = Keyword.get(key)
+                            if Keyword.UNDEFINED != keyword:
+                                keywordSet.add(keyword)
+            if card.getRules().getMainPart().getKeywords() is not None:
+                for key in card.getRules().getMainPart().getKeywords():
+                    keyword = Keyword.get(key)
+                    if Keyword.UNDEFINED != keyword:
+                        keywordSet.add(keyword)
+            Keyword.cardKeywordSetLookup[name] = keywordSet
+        return keywordSet
+
+    @staticmethod
+    def smartValueOf(value):
+        for v in Keyword.values():
+            if v.displayName.lower() == value.lower():
+                return v
+
+        return Keyword.UNDEFINED
+
+    @staticmethod
+    def setValueOf(value):
+        result = set()
+        for s in value.split(" & "):
+            k = Keyword.smartValueOf(s)
+            if Keyword.UNDEFINED != k:
+                result.add(k)
+        return result
+
+    @staticmethod
+    def values():
+        return list(Keyword)
+
+    def getReminderText(self):
+        return self.reminderText
+
+    def isMultipleRedundant(self):
+        return self.isMultipleRedundant
+
+
+Keyword.cardKeywordSetLookup = {}
 ```

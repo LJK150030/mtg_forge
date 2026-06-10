@@ -127,3 +127,37 @@ public final class BondAi extends SpellAbilityAi {
     }
 }
 ```
+
+## Python
+`forge/ai/ability/BondAi.py`
+
+```python
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.ai.ComputerUtilCard import ComputerUtilCard
+from forge.ai.SpellAbilityAi import SpellAbilityAi
+from forge.game.card.Card import Card
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+
+
+class BondAi(SpellAbilityAi):
+    def canPlay(self, aiPlayer: Player, sa: SpellAbility) -> AiAbilityDecision:
+        return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+    def chooseSingleCard(self, ai: Player, sa: SpellAbility, options, isOptional: bool, targetedPlayer: Player, params: dict[str, object]) -> Card:
+        host = sa.getHostCard()
+        candidates = options
+        if host is not None and host.hasSVar("AIPreference"):
+            prefs = host.getSVar("AIPreference").split("$")
+            if prefs is not None and len(prefs) == 2 and prefs[0] == "SoulBond":
+                restriction = prefs[1]
+                partner = params.get("Partner")
+                if isinstance(partner, Card) and not partner.isValid(restriction, ai, host, sa):
+                    return None
+                candidates = [c for c in options if c.isValid(restriction, ai, host, sa)]
+        return ComputerUtilCard.getBestCreatureAI(candidates)
+
+    def doTriggerNoCost(self, aiPlayer: Player, sa: SpellAbility, mandatory: bool) -> AiAbilityDecision:
+        return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+```

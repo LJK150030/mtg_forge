@@ -42,6 +42,12 @@ classDiagram
 - [[forge.game.player.Player|Player]]
 - [[forge.game.spellability.SpellAbility|SpellAbility]]
 
+## Design Description
+
+Untap-all triggers in Forge's event system: it fires when a batch untap event occurs and lets a card's ability respond to the set of cards that became untapped.
+
+TriggerUntapAll is a concrete trigger that extends Trigger to fire when groups of cards are untapped en masse. It overrides performTest to filter the incoming Player-to-CardCollection map (from the AbilityKey.Map run parameter) against the trigger's ValidPlayer and ValidCards constraints, firing only when at least one card survives the filter. setTriggeringObjects then republishes the filtered results onto the SpellAbility as triggering objectsâ€”the player set, the flattened collection of untapped Cards, and their Amountâ€”so downstream effects can reference them, while getImportantStackObjects surfaces a localized count on the stack. The private filteredMap centralizes the validity logic shared by testing and population, and its reliance on matchesValidParam and hasParam reflects Forge's data-driven, parameter-keyed trigger design.
+
 ## Source
 `forge-game/src/main/java/forge/game/trigger/TriggerUntapAll.java`
 
@@ -112,4 +118,59 @@ public class TriggerUntapAll extends Trigger {
     }
 
 }
+```
+
+## Python
+`forge/game/trigger/TriggerUntapAll.py`
+
+```python
+from forge.game.trigger.Trigger import Trigger
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Localizer import Localizer
+
+
+class TriggerUntapAll(Trigger):
+
+    def __init__(self, params: dict[str, str], host: Card, intrinsic: bool):
+        super().__init__(params, host, intrinsic)
+
+    def performTest(self, runParams: dict[AbilityKey, object]) -> bool:
+        testMap = self.filteredMap(runParams.get(AbilityKey.Map))
+        return len(testMap) != 0
+
+    def setTriggeringObjects(self, sa: SpellAbility, runParams: dict[AbilityKey, object]) -> None:
+        map = self.filteredMap(runParams.get(AbilityKey.Map))
+
+        sa.setTriggeringObject(AbilityKey.Map, map)
+        sa.setTriggeringObject(AbilityKey.Player, set(map.keys()))
+
+        untapped = CardCollection()
+        for player, cards in map.items():
+            untapped.addAll(cards)
+        sa.setTriggeringObject(AbilityKey.Cards, untapped)
+        sa.setTriggeringObject(AbilityKey.Amount, untapped.size())
+
+    def getImportantStackObjects(self, sa: SpellAbility) -> str:
+        sb = []
+        sb.append(Localizer.getInstance().getMessage("lblAmount"))
+        sb.append(": ")
+        sb.append(str(sa.getTriggeringObject(AbilityKey.Amount)))
+        return "".join(sb)
+
+    def filteredMap(self, map: dict[Player, CardCollection]) -> dict[Player, CardCollection]:
+        passMap = {}
+        for player, cards in map.items():
+            if self.matchesValidParam("ValidPlayer", player):
+                passCards = CardCollection()
+                if self.hasParam("ValidCards"):
+                    for c in cards:
+                        if self.matchesValidParam("ValidCards", c):
+                            passCards.add(c)
+                if not passCards.isEmpty():
+                    passMap[player] = passCards
+        return passMap
 ```

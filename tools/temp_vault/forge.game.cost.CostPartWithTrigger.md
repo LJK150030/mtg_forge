@@ -98,3 +98,49 @@ public abstract class CostPartWithTrigger extends CostPartWithList {
     
 }
 ```
+
+## Python
+`forge/game/cost/CostPartWithTrigger.py`
+
+```python
+package com.google.common.collect import nothingΓÇötranslate faithfully.
+
+Note: `payingTrigSA` is referenced but not defined in this class; it's inherited from a superclass. I'll keep it as `self.payingTrigSA`. Also `payTrig` field.from forge.game.cost.CostPartWithList import CostPartWithList
+from forge.game.card.Card import Card
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.trigger.Trigger import Trigger
+from forge.game.trigger.TriggerHandler import TriggerHandler
+from forge.game.trigger.TriggerType import TriggerType
+
+
+class CostPartWithTrigger(CostPartWithList):
+    """
+    Serializables need a version ID.
+    """
+    serialVersionUID = 1
+
+    def __init__(self, amount: str, type: str, description: str):
+        super().__init__(amount, type, description)
+        self.payTrig: Trigger = None
+
+    def handleBeforePayment(self, ai: Player, ability: SpellAbility, targetCards: CardCollectionView) -> None:
+        if self.payingTrigSA is not None:
+            source = self.payingTrigSA.getHostCard()
+
+            mapParams: dict[str, str] = {}
+            mapParams["TriggerDescription"] = self.payingTrigSA.getParam("SpellDescription")
+            mapParams["Mode"] = TriggerType.Immediate.name()
+
+            sa = self.payingTrigSA.copy(source, ability.getActivatingPlayer(), False)
+            sa.changeText()
+
+            self.payTrig = TriggerHandler.parseTrigger(mapParams, source, sa.isIntrinsic(), None)
+            self.payTrig.setSpawningAbility(ability)  # make the StaticAbility the Spawning one?
+
+            self.payTrig.setOverridingAbility(sa)
+
+            # Instead of registering this, add to the delayed triggers as an immediate trigger type? Which means it'll fire as soon as possible
+            ai.getGame().getTriggerHandler().registerDelayedTrigger(self.payTrig)
+```

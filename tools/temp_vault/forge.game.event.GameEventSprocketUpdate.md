@@ -63,3 +63,25 @@ public record GameEventSprocketUpdate(CardView contraption, int oldSprocket, int
     }
 }
 ```
+
+## Python
+`forge/game/event/GameEventSprocketUpdate.py`
+
+```python
+from forge.game.event.GameEvent import GameEvent
+from forge.game.card.Card import Card
+from forge.game.card.CardView import CardView
+from forge.game.event.IGameEventVisitor import IGameEventVisitor
+
+
+class GameEventSprocketUpdate(GameEvent):
+    def __init__(self, contraption, oldSprocket: int, sprocket: int):
+        if isinstance(contraption, Card):
+            contraption = CardView.get(contraption)
+        self.contraption = contraption
+        self.oldSprocket = oldSprocket
+        self.sprocket = sprocket
+
+    def visit(self, visitor: IGameEventVisitor):
+        return visitor.visit(self)
+```

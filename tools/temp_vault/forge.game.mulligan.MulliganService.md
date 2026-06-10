@@ -52,6 +52,12 @@ classDiagram
 - [[forge.game.mulligan.VancouverMulligan|VancouverMulligan]]
 - [[forge.game.player.Player|Player]]
 
+## Design Description
+
+MulliganService orchestrates the opening-hand mulligan phase for a game of Magic, encapsulating the multi-player keep/mulligan loop behind a single `perform()` entry point. Constructed from the starting Player, it derives its Game context and drives three sequential stages: building per-player mulligan handlers, running the interactive keep-or-mulligan rounds, and applying post-mulligan cleanup.
+
+It acts as a coordinator over the AbstractMulligan hierarchy, selecting the concrete rule implementationâ€”Original, Paris, Vancouver, London, or Houstonâ€”via a factory switch keyed on the globally configured MulliganRule, defaulting to Vancouver. Notable design intent includes rotating turn order so the first player mulligans first, granting a free first mulligan in multiplayer or Brawl games, and short-circuiting the loop if a player concedes mid-prompt, keeping rule-specific behavior delegated to the polymorphic AbstractMulligan subtypes.
+
 ## Source
 `forge-game/src/main/java/forge/game/mulligan/MulliganService.java`
 
@@ -162,4 +168,97 @@ public class MulliganService {
         }
     }
 }
+```
+
+## Python
+`forge/game/mulligan/MulliganService.py`
+
+```python
+package: forge.game.mulligan
+
+I'll output the Python port directly.
+
+from forge.MulliganDefs import MulliganDefs
+from forge.MulliganDefs.MulliganRule import MulliganRule
+from forge.StaticData import StaticData
+from forge.game.Game import Game
+from forge.game.GameType import GameType
+from forge.game.mulligan.AbstractMulligan import AbstractMulligan
+from forge.game.mulligan.HoustonMulligan import HoustonMulligan
+from forge.game.mulligan.LondonMulligan import LondonMulligan
+from forge.game.mulligan.OriginalMulligan import OriginalMulligan
+from forge.game.mulligan.ParisMulligan import ParisMulligan
+from forge.game.mulligan.VancouverMulligan import VancouverMulligan
+from forge.game.player.Player import Player
+
+
+class MulliganService:
+    def __init__(self, player: Player):
+        self.firstPlayer = player
+        self.game = self.firstPlayer.getGame()
+        self.mulligans: list[AbstractMulligan] = []
+
+    def perform(self) -> None:
+        self.initializeMulligans()
+        self.runPlayerMulligans()
+        self.runPostMulligans()
+
+    def initializeMulligans(self) -> None:
+        whoCanMulligan = list(self.game.getPlayers())
+        offset = whoCanMulligan.index(self.firstPlayer)
+
+        for i in range(offset):
+            whoCanMulligan.append(whoCanMulligan.pop(0))
+
+        firstMullFree = len(self.game.getPlayers()) > 2 or self.game.getRules().hasAppliedVariant(GameType.Brawl)
+
+        for player in whoCanMulligan:
+            rule = StaticData.instance().getMulliganRule()
+            if rule == MulliganRule.Original:
+                mulligan = OriginalMulligan(player, firstMullFree)
+            elif rule == MulliganRule.Paris:
+                mulligan = ParisMulligan(player, firstMullFree)
+            elif rule == MulliganRule.Vancouver:
+                mulligan = VancouverMulligan(player, firstMullFree)
+            elif rule == MulliganRule.London:
+                mulligan = LondonMulligan(player, firstMullFree)
+            elif rule == MulliganRule.Houston:
+                mulligan = HoustonMulligan(player, firstMullFree)
+            else:
+                mulligan = VancouverMulligan(player, firstMullFree)
+
+            self.mulligans.append(mulligan)
+            mulligan.beforeFirstMulligan()
+
+    def runPlayerMulligans(self) -> None:
+        while True:
+            allKept = True
+            for mulligan in self.mulligans:
+                if mulligan.hasKept():
+                    continue
+
+                p = mulligan.getPlayer()
+
+                keep = not mulligan.canMulligan() or \
+                    p.getController().mulliganKeepHand(
+                        self.firstPlayer,
+                        mulligan.tuckCardsDuringMulligan()
+                    )
+
+                if self.game.isGameOver():
+                    # conceded during mulligan prompt
+                    return
+
+                if keep:
+                    mulligan.keep()
+                    continue
+
+                allKept = False
+                mulligan.mulligan()
+            if allKept:
+                break
+
+    def runPostMulligans(self) -> None:
+        for mulligan in self.mulligans:
+            mulligan.afterMulligan()
 ```

@@ -55,7 +55,7 @@ classDiagram
 
 ## Design Description
 
-ManifestBaseAi is an abstract AI strategy base for spell abilities that manifest cards (placing them face-down as 2/2 creatures). Extending `SpellAbilityAi`, it overrides the engine's standard decision hooks—`doTriggerNoCost`, `confirmAction`, `checkPhaseRestrictions`, `checkApiLogic`, and `chooseSingleCard`—to encode when and how the computer player should manifest. It collaborates with core game types (`Player`, `SpellAbility`, `Card`, `CardCollection`, `Game`, `PhaseHandler`, `ZoneType`) and returns `AiAbilityDecision` verdicts to the engine.
+ManifestBaseAi is an abstract AI strategy base for spell abilities that manifest cards (placing them face-down as 2/2 creatures). Extending `SpellAbilityAi`, it overrides the engine's standard decision hooksâ€”`doTriggerNoCost`, `confirmAction`, `checkPhaseRestrictions`, `checkApiLogic`, and `chooseSingleCard`â€”to encode when and how the computer player should manifest. It collaborates with core game types (`Player`, `SpellAbility`, `Card`, `CardCollection`, `Game`, `PhaseHandler`, `ZoneType`) and returns `AiAbilityDecision` verdicts to the engine.
 
 Its design intent is timing and target discernment: it prefers sorcery-speed plays on the AI's own turn unless a creature would be buffed, holds manifests on the opponent's turn until attackers can be ambushed, avoids self-milling when the library runs low, and validates X-cost availability. The deferred abstract `shouldApply` hook lets concrete subclasses define what makes a candidate card worth manifesting, which `chooseSingleCard` uses to filter options and pick the best one.
 
@@ -208,4 +208,131 @@ public abstract class ManifestBaseAi extends SpellAbilityAi {
         return Iterables.getFirst(options, null);
     }
 }
+```
+
+## Python
+`forge/ai/ability/ManifestBaseAi.py`
+
+```python
+from forge.ai.SpellAbilityAi import SpellAbilityAi
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.ai.ComputerUtil import ComputerUtil
+from forge.ai.ComputerUtilCost import ComputerUtilCost
+from forge.ai.ComputerUtilCard import ComputerUtilCard
+from forge.game.Game import Game
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.card.CardLists import CardLists
+from forge.game.phase.PhaseHandler import PhaseHandler
+from forge.game.phase.PhaseType import PhaseType
+from forge.game.player.Player import Player
+from forge.game.player.PlayerActionConfirmMode import PlayerActionConfirmMode
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.MyRandom import MyRandom
+
+from abc import abstractmethod
+from typing import Iterable, Map  # type: ignore
+
+
+class ManifestBaseAi(SpellAbilityAi):
+    """
+    Created by friarsol on 1/23/15.
+    """
+
+    def doTriggerNoCost(self, ai: Player, sa: SpellAbility, mandatory: bool) -> AiAbilityDecision:
+        # Manifest doesn't have any "Pay X to manifest X triggers"
+
+        return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+    # (non-Javadoc)
+    # @see forge.card.ability.SpellAbilityAi#confirmAction(forge.game.player.Player, forge.card.spellability.SpellAbility, forge.game.player.PlayerActionConfirmMode, java.lang.String)
+    def confirmAction(self, player: Player, sa: SpellAbility, mode: PlayerActionConfirmMode, message: str, params: dict) -> bool:
+        return True
+
+    def checkPhaseRestrictions(self, ai: Player, sa: SpellAbility, ph: PhaseHandler) -> bool:
+        """
+        Checks if the AI will play a SpellAbility based on its phase restrictions
+        """
+        # Only manifest things on your turn if sorcery speed, or would pump one of my creatures
+        if ph.isPlayerTurn(ai):
+            if (ph.getPhase().isBefore(PhaseType.MAIN2)
+                    and not sa.hasParam("ActivationPhases")
+                    and not ComputerUtil.castSpellInMain1(ai, sa)):
+                buff = False
+                for c in ai.getCardsIn(ZoneType.Battlefield):
+                    if "Creature" == c.getSVar("BuffedBy"):
+                        buff = True
+                if not buff:
+                    return False
+            elif not self.isSorcerySpeed(sa, ai):
+                return False
+        else:
+            # try to ambush attackers
+            if ph.getPhase().isBefore(PhaseType.COMBAT_DECLARE_ATTACKERS):
+                return False
+
+        if sa.getSVar("X") == "Count$xPaid":
+            # Handle either Manifest X cards, or Manifest 1 card and give it X P1P1s
+            x = ComputerUtilCost.setMaxXValue(sa, ai, sa.isTrigger())
+            if x <= 0:
+                return False
+
+        return True
+
+    @abstractmethod
+    def shouldApply(self, card: Card, ai: Player, sa: SpellAbility) -> bool:
+        ...
+
+    def checkApiLogic(self, ai: Player, sa: SpellAbility) -> AiAbilityDecision:
+        game = ai.getGame()
+        host = sa.getHostCard()
+
+        if sa.hasParam("Choices") or sa.hasParam("ChoiceZone"):
+            choiceZone = ZoneType.Hand
+            if sa.hasParam("ChoiceZone"):
+                choiceZone = ZoneType.smartValueOf(sa.getParam("ChoiceZone"))
+            choices = CardCollection(game.getCardsIn(choiceZone))
+            if sa.hasParam("Choices"):
+                choices = CardLists.getValidCards(choices, sa.getParam("Choices"), ai, host, sa)
+            if choices.isEmpty():
+                return AiAbilityDecision(0, AiPlayDecision.CantPlaySa)
+        elif "TopOfLibrary" == sa.getParamOrDefault("Defined", "TopOfLibrary"):
+            # Library is empty, no Manifest
+            library = ai.getCardsIn(ZoneType.Library)
+            if library.isEmpty():
+                return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+            # try not to mill himself with Manifest
+            if library.size() < 5 and not ai.isCardInPlay("Laboratory Maniac"):
+                return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+            if not self.shouldApply(library.getFirst(), ai, sa):
+                return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+        # TODO Probably should be a little more discerning on playing during OPPs turn
+        if self.playReusable(ai, sa):
+            return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+        if game.getPhaseHandler().is_(PhaseType.COMBAT_DECLARE_ATTACKERS):
+            # Add blockers?
+            return AiAbilityDecision(100, AiPlayDecision.AddBoardPresence)
+        if sa.isAbility():
+            return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+        if MyRandom.getRandom().nextFloat() < .8:
+            # 80% chance to play a Manifest spell
+            return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+        return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+    def chooseSingleCard(self, ai: Player, sa: SpellAbility, options: Iterable[Card], isOptional: bool, targetedPlayer: Player, params: dict) -> Card:
+        optionsList = list(options)
+        if len(optionsList) > 1 or isOptional:
+            filtered = CardLists.filter(optionsList, lambda input: self.shouldApply(input, ai, sa))
+            if not filtered.isEmpty():
+                return ComputerUtilCard.getBestAI(filtered)
+            if isOptional:
+                return None
+        return optionsList[0] if optionsList else None
 ```

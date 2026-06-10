@@ -94,3 +94,46 @@ public class ControlPlayerEffect extends SpellAbilityEffect {
     }
 }
 ```
+
+## Python
+`forge/game/ability/effects/ControlPlayerEffect.py`
+
+```python
+from typing import List
+
+from forge.game.Game import Game
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Lang import Lang
+from forge.util.TextUtil import TextUtil
+
+
+# TODO: Write javadoc for this type.
+class ControlPlayerEffect(SpellAbilityEffect):
+
+    def getStackDescription(self, sa: SpellAbility) -> str:
+        tgtPlayers: List[Player] = self.getTargetPlayers(sa)
+        return TextUtil.concatWithSpace(str(sa.getActivatingPlayer()), "controls", Lang.joinHomogenous(tgtPlayers), "during their next turn")
+
+    def resolve(self, sa: SpellAbility) -> None:
+        controller: Player = AbilityUtils.getDefinedPlayers(sa.getHostCard(), sa.getParam("Controller"), sa)[0]
+        game: Game = controller.getGame()
+        combat: bool = sa.hasParam("Combat")
+
+        for pTarget in self.getTargetPlayers(sa):
+            # before next untap gain control
+            def gainControl(pTarget=pTarget):
+                # CR 800.4b
+                if not controller.isInGame():
+                    return
+
+                ts = game.getNextTimestamp()
+                pTarget.addController(ts, controller)
+
+                # after following cleanup release control
+                (game.getEndOfCombat() if combat else game.getCleanup()).addUntil(lambda: pTarget.removeController(ts))
+
+            (game.getBeginOfCombat() if combat else game.getCleanup()).addUntil(pTarget, gainControl)
+```

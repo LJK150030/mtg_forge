@@ -88,3 +88,37 @@ public class StaticAbilityApiBased extends AbilityStatic {
     }
 }
 ```
+
+## Python
+`forge/game/ability/StaticAbilityApiBased.py`
+
+```python
+from typing import Map  # noqa
+
+from forge.game.ability.ApiType import ApiType
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.cost.Cost import Cost
+from forge.game.spellability.AbilityStatic import AbilityStatic
+from forge.game.spellability.TargetRestrictions import TargetRestrictions
+
+
+class StaticAbilityApiBased(AbilityStatic):
+
+    def __init__(self, api0: ApiType, sourceCard: Card, abCost: Cost, tgt: TargetRestrictions, params0: dict[str, str]):
+        super().__init__(sourceCard, abCost, tgt)
+        self.mapParams.update(params0)
+        self.api = api0
+        self.effect: SpellAbilityEffect = self.api.getSpellEffect()
+
+        self.effect.buildSpellAbility(self)
+        self.originalMapParams.update(self.mapParams)
+
+    def getStackDescription(self) -> str:
+        return self.effect.getStackDescriptionWithSubs(self.mapParams, self)
+
+    # (non-Javadoc)
+    # @see forge.card.spellability.SpellAbility#resolve()
+    def resolve(self) -> None:
+        self.effect.resolve(self)
+```

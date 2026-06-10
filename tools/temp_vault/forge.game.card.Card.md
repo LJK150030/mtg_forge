@@ -1399,7 +1399,7 @@ classDiagram
 
 ## Design Description
 
-`Card` is the central mutable model of a single Magic: the Gathering game object — whether a card, token, copied spell, or effect — within the `forge.game.card` package. Extending `GameEntity` and implementing `Comparable`, `IHasSVars`, and `ITranslatable`, it aggregates the complete runtime state of a permanent or spell: its named `CardState` faces and current state, zone and controller/owner, counters, damage, attachments, keywords, abilities, and the dozens of game-mechanic flags (tapped, phased out, monstrous, foretold, manifested, and so on). It collaborates broadly across the engine, holding `SpellAbility`, `Trigger`, `ReplacementEffect`, and `StaticAbility` traits and firing `GameEvent`s through its owning `Game`.
+`Card` is the central mutable model of a single Magic: the Gathering game object â€” whether a card, token, copied spell, or effect â€” within the `forge.game.card` package. Extending `GameEntity` and implementing `Comparable`, `IHasSVars`, and `ITranslatable`, it aggregates the complete runtime state of a permanent or spell: its named `CardState` faces and current state, zone and controller/owner, counters, damage, attachments, keywords, abilities, and the dozens of game-mechanic flags (tapped, phased out, monstrous, foretold, manifested, and so on). It collaborates broadly across the engine, holding `SpellAbility`, `Trigger`, `ReplacementEffect`, and `StaticAbility` traits and firing `GameEvent`s through its owning `Game`.
 
 A dominant design intent is the continuous-effects layer system: changes to types, colors, keywords, names, mana cost, and power/toughness are stored in timestamp/static-id keyed `Table`s and `NavigableMap`s, letting the engine apply and unwind layered modifications deterministically. State is mirrored to a `CardView` for the UI via targeted update methods to avoid flickering, and cloned/face-down/merged states are handled through dedicated state-resolution logic, keeping rules computation separate from presentation.
 
@@ -3223,13 +3223,13 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
                 getGame().getTriggerHandler().runTrigger(
                         TriggerType.CounterAddedOnce, AbilityKey.newMap(runParams), false);
                 if (cause != null) {
-                    // 702.100b A creature â€œevolvesâ€ when one or more +1/+1 counters are put on it as a result of its evolve ability resolving.
+                    // 702.100b A creature Ã¢â‚¬Å“evolvesÃ¢â‚¬Â when one or more +1/+1 counters are put on it as a result of its evolve ability resolving.
                     if (cause.isKeyword(Keyword.EVOLVE) && counterType.is(CounterEnumType.P1P1)) {
                         getGame().getTriggerHandler().runTrigger(TriggerType.Evolved, AbilityKey.mapFromCard(this), false);
                     }
 
                     // 702.149c Some creatures with training have abilities that trigger when they train.
-                    // â€œWhen this creature trainsâ€ means â€œWhen a resolving training ability puts a +1/+1 counter on this creature.â€
+                    // Ã¢â‚¬Å“When this creature trainsÃ¢â‚¬Â means Ã¢â‚¬Å“When a resolving training ability puts a +1/+1 counter on this creature.Ã¢â‚¬Â
                     if (cause.isKeyword(Keyword.TRAINING) && counterType.is(CounterEnumType.P1P1)) {
                         getGame().getTriggerHandler().runTrigger(TriggerType.Trains, AbilityKey.mapFromCard(this), false);
                     }
@@ -3922,11 +3922,11 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
                         if (mCost.isOnlyManaCost()) {
                             sbLong.append(" ");
                         } else {
-                            sbLong.append("â€”");
+                            sbLong.append("Ã¢â‚¬â€");
                         }
                         if (keyword.startsWith("Reconfigure") && k.length > 2) {
                             final String[] altCost = new Cost(k[2], true).toString().split(" ");
-                            sbLong.append("â€”").append(altCost[0]).append(" ").append(mCost.toString()).append(" or ").append(altCost[1]);
+                            sbLong.append("Ã¢â‚¬â€").append(altCost[0]).append(" ").append(mCost.toString()).append(" or ").append(altCost[1]);
                         } else {
                             sbLong.append(mCost.toString());
                             if (!mCost.isOnlyManaCost()) {
@@ -3942,7 +3942,7 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
                 } else if (keyword.startsWith("Cumulative upkeep")) {
                     sbLong.append("Cumulative upkeep ");
                     final String[] upkeepCostParams = keyword.split(":");
-                    sbLong.append(upkeepCostParams.length > 2 ? "â€” " + upkeepCostParams[2] : ManaCostParser.parse(upkeepCostParams[1]));
+                    sbLong.append(upkeepCostParams.length > 2 ? "Ã¢â‚¬â€ " + upkeepCostParams[2] : ManaCostParser.parse(upkeepCostParams[1]));
                     sbLong.append("\r\n");
                 } else if (keyword.startsWith("AlternateAdditionalCost")) {
                     final String[] costs = keyword.split(":", 2)[1].split(":");
@@ -3984,7 +3984,7 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
                     }
                     sbLong.append("\r\n");
                 } else if (inst.getKeyword().equals(Keyword.COMPANION)) {
-                    sbLong.append("Companion â€” ");
+                    sbLong.append("Companion Ã¢â‚¬â€ ");
                     sbLong.append(((Companion)inst).getDescription());
                 } else if (keyword.startsWith("MayFlash")) {
                     // Pseudo keywords, only print Reminder
@@ -4094,7 +4094,7 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
                     final boolean complex = k[1].contains("X") || (k[1].contains (" ") && k[1].contains("<"));
                     final String extra = k.length > 2 ? ", " + k[2] + "." : "";
 
-                    sbLong.append(k[0]).append(onlyMana ? " " : "â€”").append(cost.toSimpleString());
+                    sbLong.append(k[0]).append(onlyMana ? " " : "Ã¢â‚¬â€").append(cost.toSimpleString());
                     sbLong.append(onlyMana? "" : ".").append(extra);
                     sbLong.append(!complex ? " (" + (inst.getReminderText()) + ")" : "");
                     sbLong.append("\r\n");
@@ -4212,7 +4212,7 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
         final Cost cost = new Cost(n[1], false);
         final String costStr = cost.toSimpleString();
         final boolean manaOnly = cost.isOnlyManaCost();
-        sbx.append("Kicker").append(manaOnly ? " " + costStr : "â€”" + costStr + ".");
+        sbx.append("Kicker").append(manaOnly ? " " + costStr : "Ã¢â‚¬â€" + costStr + ".");
         if (Lists.newArrayList(n).size() > 2) {
             sbx.append(" and/or ");
             final Cost cost2 = new Cost(n[2], false);
@@ -4426,7 +4426,7 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
             if (sa.isAdventure() && state.getStateName().equals(CardStateName.Original)) {
                 StringBuilder sbSA = new StringBuilder();
                 sbSA.append(Localizer.getInstance().getMessage("lblAdventure"));
-                sbSA.append(" â€” ").append(CardTranslation.getTranslatedName(getState(CardStateName.Secondary)));
+                sbSA.append(" Ã¢â‚¬â€ ").append(CardTranslation.getTranslatedName(getState(CardStateName.Secondary)));
                 sbSA.append(" ").append(sa.getPayCosts().toSimpleString());
                 sbSA.append(": ");
                 sbSA.append(sAbility);
@@ -4434,7 +4434,7 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
             } else if (sa.isOmen() && state.getStateName().equals(CardStateName.Original)) {
                 StringBuilder sbSA = new StringBuilder();
                 sbSA.append(Localizer.getInstance().getMessage("lblOmen"));
-                sbSA.append(" â€” ").append(CardTranslation.getTranslatedName(getState(CardStateName.Secondary)));
+                sbSA.append(" Ã¢â‚¬â€ ").append(CardTranslation.getTranslatedName(getState(CardStateName.Secondary)));
                 sbSA.append(" ").append(sa.getPayCosts().toSimpleString());
                 sbSA.append(": ");
                 sbSA.append(sAbility);
@@ -4447,7 +4447,7 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
                 StringBuilder sbSA = new StringBuilder(sAbility);
                 sbSA.append(linebreak);
                 sbSA.append(Localizer.getInstance().getMessage("lblSpell"));
-                sbSA.append(" â€” ");
+                sbSA.append(" Ã¢â‚¬â€ ");
                 if(!namedFace.getManaCost().isNoCost()) {
                     sbSA.append(namedFace.getManaCost().getSimpleString()).append(": ");
                 }
@@ -4556,7 +4556,7 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
             SpellAbility prepSA = prepState.getFirstSpellAbility();
             if (prepSA != null) {
                 sb.append(Localizer.getInstance().getMessage("lblPrepared"));
-                sb.append(" â€” ").append(CardTranslation.getTranslatedName(prepState));
+                sb.append(" Ã¢â‚¬â€ ").append(CardTranslation.getTranslatedName(prepState));
                 sb.append(" ").append(prepSA.getPayCosts().toSimpleString());
                 sb.append(": ");
                 sb.append(prepSA);
@@ -7664,7 +7664,7 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
             return 0; // 120.8
         }
 
-        // 120.1a Damage can't be dealt to an object thatâ€™s neither a creature nor a planeswalker nor a battle.
+        // 120.1a Damage can't be dealt to an object thatÃ¢â‚¬â„¢s neither a creature nor a planeswalker nor a battle.
         if (!isPlaneswalker() && !isCreature() && !isBattle()) {
             return 0;
         }
@@ -8000,7 +8000,7 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
         }
         if (suspected) {
             if (isSuspected()) {
-                // 701.58d A suspected permanent canâ€™t become suspected again.
+                // 701.58d A suspected permanent canÃ¢â‚¬â„¢t become suspected again.
                 return true;
             }
 
@@ -9532,4 +9532,296 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
         }
     }
 }
+```
+
+## Python
+`forge/game/card/Card.py`
+
+```python
+def getAbilityResolvedThisTurn(self, ability=_UNSET):
+        if ability is _UNSET:
+            return self.numberAbilityResolved
+        return self.numberAbilityResolved.get(ability)
+
+    def addAbilityResolved(self, ability):
+        self.numberAbilityResolved.add(ability)
+
+    def getAbilityResolvedThisTurnActivators(self, ability):
+        return self.numberAbilityResolved.getActivators(ability)
+
+    def resetAbilityResolvedThisTurn(self):
+        self.numberAbilityResolved.clear()
+
+    def getChosenModes(self, ability, type):
+        original = None
+        root = ability.getRootAbility()
+
+        if root.isTrigger():
+            original = root.getTrigger().getOverridingAbility()
+        else:
+            original = ability.getOriginalAbility()
+            if original is None:
+                original = ability
+
+        if type == "ThisTurn":
+            if ability.getGrantorStatic() is not None:
+                return self.chosenModesTurnStatic.get(original, ability.getGrantorStatic())
+            return self.chosenModesTurn.get(original)
+        elif type == "ThisGame":
+            if ability.getGrantorStatic() is not None:
+                return self.chosenModesGameStatic.get(original, ability.getGrantorStatic())
+            return self.chosenModesGame.get(original)
+        elif type == "YourLastCombat":
+            if ability.getGrantorStatic() is not None:
+                return self.chosenModesYourLastCombatStatic.get(original, ability.getGrantorStatic())
+            return self.chosenModesYourLastCombat.get(original)
+        return None
+
+    def addChosenModes(self, ability, mode, yourCombat):
+        original = None
+        root = ability.getRootAbility()
+
+        if root.isTrigger():
+            original = root.getTrigger().getOverridingAbility()
+        else:
+            original = ability.getOriginalAbility()
+            if original is None:
+                original = ability
+
+        if ability.getGrantorStatic() is not None:
+            result = self.chosenModesTurnStatic.get(original, ability.getGrantorStatic())
+            if result is None:
+                result = []
+                self.chosenModesTurnStatic.put(original, ability.getGrantorStatic(), result)
+            result.append(mode)
+            result = self.chosenModesGameStatic.get(original, ability.getGrantorStatic())
+            if result is None:
+                result = []
+                self.chosenModesGameStatic.put(original, ability.getGrantorStatic(), result)
+            result.append(mode)
+            if yourCombat:
+                result = self.chosenModesYourCombatStatic.get(original, ability.getGrantorStatic())
+                if result is None:
+                    result = []
+                    self.chosenModesYourCombatStatic.put(original, ability.getGrantorStatic(), result)
+        else:
+            if original not in self.chosenModesTurn:
+                self.chosenModesTurn[original] = []
+            result = self.chosenModesTurn[original]
+            result.append(mode)
+
+            if original not in self.chosenModesGame:
+                self.chosenModesGame[original] = []
+            result = self.chosenModesGame[original]
+            result.append(mode)
+
+            if yourCombat:
+                if original not in self.chosenModesYourCombat:
+                    self.chosenModesYourCombat[original] = []
+                result = self.chosenModesYourCombat[original]
+                result.append(mode)
+
+    def resetChosenModeTurn(self):
+        updateView = bool(self.chosenModesTurn) or not self.chosenModesTurnStatic.isEmpty()
+        self.chosenModesTurn.clear()
+        self.chosenModesTurnStatic.clear()
+        if updateView:
+            self.updateAbilityTextForView()
+
+    def getPlaneswalkerAbilityActivated(self):
+        return self.planeswalkerAbilityActivated
+
+    def addPlaneswalkerAbilityActivated(self):
+        self.planeswalkerAbilityActivated += 1
+        if self.planeswalkerAbilityActivated == 2 and StaticAbilityNumLoyaltyAct.limitIncrease(self):
+            self.planeswalkerActivationLimitUsed = True
+
+    def planeswalkerActivationLimitUsed(self):
+        return self.planeswalkerActivationLimitUsed
+
+    def resetActivationsPerTurn(self):
+        self.planeswalkerAbilityActivated = 0
+        self.planeswalkerActivationLimitUsed = False
+        self.numberTurnActivations.clear()
+
+    def addCanBlockAdditional(self, n, timestamp):
+        if n <= 0:
+            return
+        self.canBlockAdditional[timestamp] = n
+        self.getView().updateBlockAdditional(self)
+
+    def removeCanBlockAdditional(self, timestamp):
+        result = self.canBlockAdditional.pop(timestamp, None) is not None
+        if result:
+            self.getView().updateBlockAdditional(self)
+        return result
+
+    def canBlockAdditional(self):
+        result = 0
+        for v in self.canBlockAdditional.values():
+            result += v
+        return result
+
+    def addCanBlockAny(self, timestamp):
+        self.canBlockAny.add(timestamp)
+        self.getView().updateBlockAdditional(self)
+
+    def removeCanBlockAny(self, timestamp):
+        result = timestamp in self.canBlockAny
+        self.canBlockAny.discard(timestamp)
+        if result:
+            self.getView().updateBlockAdditional(self)
+        return result
+
+    def canBlockAny(self):
+        return len(self.canBlockAny) > 0
+
+    def removeChangedState(self):
+        updateState = False
+        updateState |= self.removeCloneStates()
+
+        updateState |= self.clearChangedCardTypes()
+        updateState |= self.clearChangedCardKeywords()
+        updateState |= self.clearChangedCardColors()
+        updateState |= self.clearChangedCardTraits()
+
+        updateState |= self.clearNewPT()
+        updateState |= self.clearChangedName()
+
+        return updateState
+
+    def getCombatLKI(self):
+        return self.combatLKI
+
+    def setCombatLKI(self, combatLKI):
+        self.combatLKI = combatLKI
+
+    def isAttacking(self):
+        if self.getCombatLKI() is not None:
+            return self.getCombatLKI().isAttacker
+        return self.getGame().getCombat().isAttacking(self)
+
+    def ignoreLegendRule(self):
+        if not self.getType().isLegendary():
+            return True
+        if self.getName() == "" and not self.hasNonLegendaryCreatureNames():
+            return True
+        return StaticAbilityIgnoreLegendRule.ignoreLegendRule(self)
+
+    def attackVigilance(self):
+        return StaticAbilityCantAttackBlock.attackVigilance(self)
+
+    def isAbilitySick(self):
+        if not self.isSick():
+            return False
+        return not StaticAbilityActivateAbilityAsIfHaste.canActivate(self)
+
+    def isWitherDamage(self):
+        if self.hasKeyword(Keyword.WITHER) or self.hasKeyword(Keyword.INFECT):
+            return True
+        return StaticAbilityWitherDamage.isWitherDamage(self)
+
+    def isInfectDamage(self, target):
+        return self.hasKeyword(Keyword.INFECT) or StaticAbilityInfectDamage.isInfectDamage(target)
+
+    def getUnlockedRooms(self):
+        return self.unlockedRooms
+
+    def setUnlockedRooms(self, set_):
+        self.unlockedRooms = set_
+
+    def getUnlockedRoomNames(self):
+        result = []
+        for stateName in self.unlockedRooms:
+            if self.hasState(stateName):
+                result.append(self.getState(stateName).getName())
+        return result
+
+    def getLockedRooms(self):
+        result = {CardStateName.LeftSplit, CardStateName.RightSplit}
+        result -= set(self.unlockedRooms)
+        return result
+
+    def getLockedRoomNames(self):
+        result = []
+        for stateName in self.getLockedRooms():
+            if self.hasState(stateName):
+                result.append(self.getState(stateName).getName())
+        return result
+
+    def unlockRoom(self, p, stateName):
+        if stateName in self.unlockedRooms or (stateName != CardStateName.LeftSplit and stateName != CardStateName.RightSplit):
+            return False
+        self.unlockedRooms.add(stateName)
+
+        self.updateRooms()
+
+        self.getGame().fireEvent(GameEventDoorChanged(p, self, stateName, True))
+
+        unlockParams = AbilityKey.mapFromPlayer(p)
+        unlockParams.put(AbilityKey.Card, self)
+        unlockParams.put(AbilityKey.CardState, self.getState(stateName))
+        self.getGame().getTriggerHandler().runTrigger(TriggerType.UnlockDoor, unlockParams, True)
+
+        if len(self.unlockedRooms) > 1:
+            fullyUnlockParams = AbilityKey.mapFromPlayer(p)
+            fullyUnlockParams.put(AbilityKey.Card, self)
+            self.getGame().getTriggerHandler().runTrigger(TriggerType.FullyUnlock, fullyUnlockParams, True)
+
+        return True
+
+    def lockRoom(self, p, stateName):
+        if stateName not in self.unlockedRooms or (stateName != CardStateName.LeftSplit and stateName != CardStateName.RightSplit):
+            return False
+        self.unlockedRooms.discard(stateName)
+
+        self.updateRooms()
+
+        self.getGame().fireEvent(GameEventDoorChanged(p, self, stateName, False))
+
+        return True
+
+    def updateRooms(self):
+        if not self.isRoom():
+            return
+        if self.isFaceDown():
+            return
+        if not self.unlockedRooms:
+            self.setState(CardStateName.EmptyRoom, True)
+        elif len(self.unlockedRooms) > 1:
+            self.setState(CardStateName.Original, True)
+        else:
+            for name in self.unlockedRooms:
+                self.setState(name, True)
+        self.getGame().getTriggerHandler().clearActiveTriggers(self, None)
+        self.getGame().getTriggerHandler().registerActiveTrigger(self, False)
+
+    def getEmptyRoomState(self):
+        if CardStateName.EmptyRoom not in self.states:
+            self.states[CardStateName.EmptyRoom] = CardUtil.getEmptyRoomCharacteristic(self)
+        return self.states.get(CardStateName.EmptyRoom)
+
+    def getUnlockAbility(self, state):
+        if state not in self.unlockAbilities:
+            self.unlockAbilities[state] = CardFactoryUtil.abilityUnlockRoom(self.getState(state))
+        return self.unlockAbilities.get(state)
+
+    def copyFrom(self, in_):
+        self.changedCardColors.putAll(in_.changedCardColors)
+        self.changedCardColorsCharacterDefining.putAll(in_.changedCardColorsCharacterDefining)
+
+        self.setChangedCardKeywords(in_.getChangedCardKeywords())
+
+        self.changedCardTypes.putAll(in_.changedCardTypes)
+        self.changedCardTypesCharacterDefining.putAll(in_.changedCardTypesCharacterDefining)
+        self.updateTypeCache()
+
+        self.changedCardNames.putAll(in_.changedCardNames)
+        self.setChangedCardTraits(in_.getChangedCardTraits())
+
+        self.setChangedCardTraitsByText(in_.getChangedCardTraitsByText())
+        self.setChangedCardKeywordsByText(in_.getChangedCardKeywordsByText())
+
+        for k, v in in_.counterTypeKeywordStatic.items():
+            self.counterTypeKeywordStatic[k] = v.copy(self, True)
 ```

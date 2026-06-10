@@ -121,3 +121,62 @@ public class PermanentEffect extends SpellAbilityEffect {
     }
 }
 ```
+
+## Python
+`forge/game/ability/effects/PermanentEffect.py`
+
+```python
+from forge.game.Game import Game
+from forge.game.GameEntity import GameEntity
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.card.CardZoneTable import CardZoneTable
+from forge.game.event.GameEventCombatChanged import GameEventCombatChanged
+from forge.game.spellability.SpellAbility import SpellAbility
+
+
+class PermanentEffect(SpellAbilityEffect):
+
+    """
+    (non-Javadoc)
+
+    @see
+    forge.card.abilityfactory.SpellEffect#resolve(forge.card.spellability.
+    SpellAbility)
+    """
+    def resolve(self, sa: SpellAbility) -> None:
+        host = sa.getHostCard()
+        game = host.getGame()
+        moveParams = AbilityKey.newMap()
+        table = AbilityKey.addCardZoneTableParams(moveParams, sa)
+
+        if (sa.isIntrinsic() or host.wasCast()) and sa.isSneak():
+            host.setTapped(True)
+
+        c = game.getAction().moveToPlay(host, sa, moveParams)
+        sa.setHostCard(c)
+
+        # CR 608.3g
+        if (sa.isIntrinsic() or c.wasCast()) and c.isInPlay():
+            if sa.isDash():
+                self.registerDelayedTrigger(sa, "Hand", [c])
+                # add AI hint
+                c.addChangedSVars({"EndOfTurnLeavePlay": "Dash"}, c.getGame().getNextTimestamp(), 0)
+            if sa.isBlitz():
+                self.registerDelayedTrigger(sa, "Sacrifice", [c])
+                c.addChangedSVars({"EndOfTurnLeavePlay": "Blitz"}, c.getGame().getNextTimestamp(), 0)
+            if sa.isWarp():
+                self.registerDelayedTrigger(sa, "Exile", [c])
+                c.addChangedSVars({"EndOfTurnLeavePlay": "Warp"}, c.getGame().getNextTimestamp(), 0)
+            if sa.isSneak() and c.isCreature():
+                returned = sa.getPaidList("Returned", True).getFirst()
+                defender = game.getCombat().getDefenderByAttacker(returned)
+                game.getCombat().addAttacker(c, defender)
+                game.getCombat().getBandOfAttacker(c).setBlocked(False)
+
+                game.updateCombatForView()
+                game.fireEvent(GameEventCombatChanged())
+
+        table.triggerChangesZoneAll(game, sa)
+```

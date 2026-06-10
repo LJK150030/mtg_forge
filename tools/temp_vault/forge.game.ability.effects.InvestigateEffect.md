@@ -126,3 +126,69 @@ public class InvestigateEffect extends TokenEffectBase {
 
 }
 ```
+
+## Python
+`forge/game/ability/effects/InvestigateEffect.py`
+
+```python
+from forge.game.Game import Game
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.card.Card import Card
+from forge.game.card.CardZoneTable import CardZoneTable
+from forge.game.event.GameEventCombatChanged import GameEventCombatChanged
+from forge.game.event.GameEventTokenCreated import GameEventTokenCreated
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.ability.effects.TokenEffectBase import TokenEffectBase
+from forge.util.Localizer import Localizer
+from forge.util.Lang import Lang
+from org.apache.commons.lang3.mutable.MutableBoolean import MutableBoolean
+
+
+class InvestigateEffect(TokenEffectBase):
+
+    def getStackDescription(self, sa: SpellAbility) -> str:
+        card = sa.getHostCard()
+        amount = AbilityUtils.calculateAmount(card, sa.getParamOrDefault("Num", "1"), sa)
+
+        sb = ["Investigate"]
+        if amount > 1:
+            sb.append(" ")
+            sb.append(Lang.getNumeral(amount))
+            sb.append(" times")
+        sb.append(". (Create a colorless Clue artifact token with \"{2}, Sacrifice this artifact: Draw a card.\")")
+
+        return "".join(sb)
+
+    def resolve(self, sa: SpellAbility) -> None:
+        card = sa.getHostCard()
+        game = card.getGame()
+
+        amount = AbilityUtils.calculateAmount(card, sa.getParamOrDefault("Num", "1"), sa)
+
+        # Investigate in Sequence
+        for i in range(amount):
+            triggerList = CardZoneTable()
+            combatChanged = MutableBoolean(False)
+
+            for p in self.getTargetPlayers(sa):
+                if not p.isInGame():
+                    continue
+                if sa.hasParam("Optional") and not p.getController().confirmAction(sa, None,
+                        Localizer.getInstance().getMessage("lblWouldYouLikeInvestigate"), None):
+                    continue
+
+                self.makeTokenTable(self.makeTokenTableInternal(p, "c_a_clue_draw", 1, sa), False, triggerList, combatChanged, sa)
+
+                p.addInvestigatedThisTurn()
+
+                if sa.hasParam("RememberInvestigatingPlayers"):
+                    card.addRemembered(p)
+
+                game.fireEvent(GameEventTokenCreated())
+
+            triggerList.triggerChangesZoneAll(game, sa)
+            if combatChanged.isTrue():
+                game.updateCombatForView()
+                game.fireEvent(GameEventCombatChanged())
+```

@@ -94,3 +94,46 @@ public class GameLossAi extends SpellAbilityAi {
     }
 }
 ```
+
+## Python
+`forge/ai/ability/GameLossAi.py`
+
+```python
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.ai.SpellAbilityAi import SpellAbilityAi
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+
+
+class GameLossAi(SpellAbilityAi):
+    def canPlay(self, ai: Player, sa: SpellAbility) -> AiAbilityDecision:
+        opp = ai.getStrongestOpponent()
+        if opp.cantLose():
+            return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+        # Only one SA Lose the Game card right now, which is Door to Nothingness
+
+        if sa.usesTargeting() and sa.canTarget(opp):
+            sa.resetTargets()
+            sa.getTargets().add(opp)
+            return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+        return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+    def doTriggerNoCost(self, ai: Player, sa: SpellAbility, mandatory: bool) -> AiAbilityDecision:
+        loser = ai
+
+        # Phage the Untouchable
+        if ai.getGame().getCombat() is not None:
+            loser = ai.getGame().getCombat().getDefenderPlayerByAttacker(sa.getHostCard())
+
+        if not mandatory and (loser == ai or loser.cantLose()):
+            return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+        if sa.usesTargeting() and sa.canTarget(loser):
+            sa.resetTargets()
+            sa.getTargets().add(loser)
+
+        return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+```

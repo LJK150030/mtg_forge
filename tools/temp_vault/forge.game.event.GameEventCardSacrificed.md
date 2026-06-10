@@ -36,7 +36,7 @@ classDiagram
 
 ## Design Description
 
-Records the sacrifice of a single card as an immutable game event. As a Java `record` implementing the `GameEvent` interface, it carries one `CardView` payload identifying the sacrificed card and participates in the event system's visitor pattern: its `visit` method dispatches to the appropriate `IGameEventVisitor` handler, letting observers react to sacrifices without the event itself knowing their concrete types. The overridden `toString` produces a human-readable summary—the card's controller followed by the sacrificed card—useful for logging and game-log display. The record form signals deliberate immutability and value semantics, fitting a fire-and-forget notification that should never be mutated after dispatch.
+Records the sacrifice of a single card as an immutable game event. As a Java `record` implementing the `GameEvent` interface, it carries one `CardView` payload identifying the sacrificed card and participates in the event system's visitor pattern: its `visit` method dispatches to the appropriate `IGameEventVisitor` handler, letting observers react to sacrifices without the event itself knowing their concrete types. The overridden `toString` produces a human-readable summaryâ€”the card's controller followed by the sacrificed cardâ€”useful for logging and game-log display. The record form signals deliberate immutability and value semantics, fitting a fire-and-forget notification that should never be mutated after dispatch.
 
 ## Source
 `forge-game/src/main/java/forge/game/event/GameEventCardSacrificed.java`
@@ -61,4 +61,36 @@ public record GameEventCardSacrificed(CardView card) implements GameEvent {
         return "" + card.getController() + " sacrificed " + card;
     }
 }
+```
+
+## Python
+`forge/game/event/GameEventCardSacrificed.py`
+
+```python
+from forge.game.card.CardView import CardView
+from forge.game.event.GameEvent import GameEvent
+from forge.game.event.IGameEventVisitor import IGameEventVisitor
+
+
+class GameEventCardSacrificed(GameEvent):
+
+    def __init__(self, card: CardView):
+        self.card = card
+
+    def visit(self, visitor: IGameEventVisitor):
+        return visitor.visit(self)
+
+    def __str__(self) -> str:
+        return "" + str(self.card.getController()) + " sacrificed " + str(self.card)
+
+    def __repr__(self) -> str:
+        return self.__str__()
+
+    def __eq__(self, other) -> bool:
+        if not isinstance(other, GameEventCardSacrificed):
+            return False
+        return self.card == other.card
+
+    def __hash__(self) -> int:
+        return hash(self.card)
 ```

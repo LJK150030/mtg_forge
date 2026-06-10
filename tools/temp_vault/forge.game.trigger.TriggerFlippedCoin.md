@@ -37,6 +37,10 @@ classDiagram
 - [[forge.game.card.Card|Card]]
 - [[forge.game.spellability.SpellAbility|SpellAbility]]
 
+## Design Description
+
+TriggerFlippedCoin is a concrete trigger that fires when a player flips a coin, encapsulating the conditions under which a coin-flip event activates an associated ability. Extending the abstract Trigger base class, it overrides the standard trigger lifecycle hooks: performTest gates activation by validating the flipping player against the ValidPlayer parameter and, optionally, matching the flip outcome to a ValidResult ("Win"/loss) condition; setTriggeringObjects exposes the responsible Player to the firing SpellAbility; and getImportantStackObjects produces a localized stack description. It collaborates with AbilityKey to read run-time event parameters (Player, Result) from the supplied runParams map, with Card as its host, and with SpellAbility as the ability being triggered. The design follows the engine's data-driven trigger pattern, keeping all variability in string parameters so coin-flip cards are defined declaratively rather than in code.
+
 ## Source
 `forge-game/src/main/java/forge/game/trigger/TriggerFlippedCoin.java`
 
@@ -124,4 +128,56 @@ public class TriggerFlippedCoin extends Trigger {
         return sb.toString();
     }
 }
+```
+
+## Python
+`forge/game/trigger/TriggerFlippedCoin.py`
+
+```python
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Localizer import Localizer
+
+from forge.game.trigger.Trigger import Trigger
+
+
+class TriggerFlippedCoin(Trigger):
+    """
+    Trigger_Flipped class.
+
+    @author Forge
+    @version $Id: TriggerFlipped.java 17802 2012-10-31 08:05:14Z Max mtg $
+    """
+
+    def __init__(self, params: dict[str, str], host: Card, intrinsic: bool):
+        """
+        Constructor for Trigger_Flipped.
+
+        @param params a HashMap object.
+        @param host a Card object.
+        @param intrinsic the intrinsic
+        """
+        super().__init__(params, host, intrinsic)
+
+    def performTest(self, runParams: dict[AbilityKey, object]) -> bool:
+        if not self.matchesValidParam("ValidPlayer", runParams.get(AbilityKey.Player)):
+            return False
+        if self.hasParam("ValidResult"):
+            result = bool(runParams.get(AbilityKey.Result))
+            valid = "Win" == self.getParam("ValidResult")
+            if result ^ valid:
+                return False
+
+        return True
+
+    def setTriggeringObjects(self, sa: SpellAbility, runParams: dict[AbilityKey, object]) -> None:
+        sa.setTriggeringObjectsFrom(runParams, AbilityKey.Player)
+
+    def getImportantStackObjects(self, sa: SpellAbility) -> str:
+        sb = []
+        sb.append(Localizer.getInstance().getMessage("lblPlayer"))
+        sb.append(": ")
+        sb.append(str(sa.getTriggeringObject(AbilityKey.Player)))
+        return "".join(sb)
 ```

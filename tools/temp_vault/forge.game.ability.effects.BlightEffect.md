@@ -43,7 +43,7 @@ classDiagram
 
 ## Design Description
 
-BlightEffect realizes the resolution logic for a "blight" ability, placing −1/−1 (M1M1) counters on creatures controlled by the targeted players. As a concrete subclass of SpellAbilityEffect, it slots into Forge's data-driven ability framework: it overrides `getStackDescription` to compose a readable stack entry and `resolve` to carry out the game mutation, keeping each effect type a small, self-contained, reusable unit.
+BlightEffect realizes the resolution logic for a "blight" ability, placing âˆ’1/âˆ’1 (M1M1) counters on creatures controlled by the targeted players. As a concrete subclass of SpellAbilityEffect, it slots into Forge's data-driven ability framework: it overrides `getStackDescription` to compose a readable stack entry and `resolve` to carry out the game mutation, keeping each effect type a small, self-contained, reusable unit.
 
 In `resolve`, it derives the counter amount from the ability's "Num" parameter via AbilityUtils, then for each target Player filters their in-play creatures to those that can receive M1M1 counters (CardCollection plus CardPredicates) and asks that player's controller to choose one. Rather than mutating counters immediately, additions are accumulated in a shared GameEntityCounterTable and committed once through `replaceCounterEffect`, so replacement effects resolve atomically against the Game. It collaborates with Card and SpellAbility for the host and parameters, staying loosely coupled to the spell-ability system.
 
@@ -110,4 +110,59 @@ public class BlightEffect extends SpellAbilityEffect {
         table.replaceCounterEffect(game, sa);
     }
 }
+```
+
+## Python
+`forge/game/ability/effects/BlightEffect.py`
+
+```python
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.Game import Game
+from forge.game.GameEntityCounterTable import GameEntityCounterTable
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardPredicates import CardPredicates
+from forge.game.card.CounterEnumType import CounterEnumType
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Lang import Lang
+from forge.util.Localizer import Localizer
+
+
+class BlightEffect(SpellAbilityEffect):
+    def getStackDescription(self, sa: SpellAbility) -> str:
+        card = sa.getHostCard()
+        sb = []
+
+        tgt = self.getTargetPlayers(sa)
+        amount = AbilityUtils.calculateAmount(card, sa.getParamOrDefault("Num", "1"), sa)
+
+        sb.append(Lang.joinHomogenous(tgt))
+        sb.append(" ")
+        sb.append("blights" if len(tgt) > 1 else "blight")
+        sb.append(" ")
+        sb.append(str(amount))
+        sb.append(". ")
+
+        return "".join(sb)
+
+    def resolve(self, sa: SpellAbility) -> None:
+        host = sa.getHostCard()
+        game = host.getGame()
+        table = GameEntityCounterTable()
+
+        amount = AbilityUtils.calculateAmount(host, sa.getParamOrDefault("Num", "1"), sa)
+
+        for p in self.getTargetPlayers(sa):
+            options = p.getCreaturesInPlay().filter(
+                CardPredicates.canReceiveCounters(CounterEnumType.M1M1))
+            tgt = p.getController().chooseSingleEntityForEffect(options, sa,
+                Localizer.getInstance().getMessage("lblChooseaCard"), False, {})
+            if tgt is None:
+                continue
+
+            tgt.addCounter(CounterEnumType.M1M1, amount, p, table)
+
+        table.replaceCounterEffect(game, sa)
 ```

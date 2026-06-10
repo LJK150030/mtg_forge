@@ -54,3 +54,21 @@ public record GameEventSubgameEnd(Game maingame, String message) implements Game
     }
 }
 ```
+
+## Python
+`forge/game/event/GameEventSubgameEnd.py`
+
+```python
+from forge.game.Game import Game
+from forge.game.event.GameEvent import GameEvent
+from forge.game.event.IGameEventVisitor import IGameEventVisitor
+
+
+class GameEventSubgameEnd(GameEvent):
+    def __init__(self, maingame: Game, message: str):
+        self.maingame = maingame
+        self.message = message
+
+    def visit(self, visitor: IGameEventVisitor):
+        return visitor.visit(self)
+```

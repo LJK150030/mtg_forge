@@ -39,6 +39,12 @@ classDiagram
 - [[forge.game.card.Card|Card]]
 - [[forge.game.spellability.SpellAbility|SpellAbility]]
 
+## Design Description
+
+The Forge MTG engine triggers an ability when a player rolls the planar die during a planechase game. TriggerPlanarDice extends Trigger, the abstract base for all event-driven trigger conditions, and specializes it for planar-dice rolls.
+
+Its performTest method gates firing on a ValidPlayer constraint and, optionally, on a specific roll outcome by comparing the trigger's configured Result parameterâ€”parsed via PlanarDice.smartValueOfâ€”against the actual rolled value supplied through AbilityKey.Result. setTriggeringObjects exposes the rolling Player to the resolving SpellAbility, and getImportantStackObjects builds a localized, human-readable label identifying that roller. The design follows Forge's parameter-driven trigger pattern, where declarative card-script parameters configure shared trigger machinery rather than bespoke per-card logic, keeping the class a thin, focused adapter between game events and AbilityKey-keyed run parameters.
+
 ## Source
 `forge-game/src/main/java/forge/game/trigger/TriggerPlanarDice.java`
 
@@ -106,4 +112,46 @@ public class TriggerPlanarDice extends Trigger {
         return sb.toString();
     }
 }
+```
+
+## Python
+`forge/game/trigger/TriggerPlanarDice.py`
+
+```python
+package forge.game.trigger
+
+from forge.game.PlanarDice import PlanarDice
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Localizer import Localizer
+from forge.game.trigger.Trigger import Trigger
+
+
+# TODO: Write javadoc for this type.
+class TriggerPlanarDice(Trigger):
+
+    def __init__(self, params: dict[str, str], host: Card, intrinsic: bool):
+        super().__init__(params, host, intrinsic)
+
+    def performTest(self, runParams: dict[AbilityKey, object]) -> bool:
+        if not self.matchesValidParam("ValidPlayer", runParams.get(AbilityKey.Player)):
+            return False
+
+        if self.hasParam("Result"):
+            cond = PlanarDice.smartValueOf(self.getParam("Result"))
+            if cond != runParams.get(AbilityKey.Result):
+                return False
+
+        return True
+
+    def setTriggeringObjects(self, sa: SpellAbility, runParams: dict[AbilityKey, object]) -> None:
+        sa.setTriggeringObjectsFrom(runParams, AbilityKey.Player)
+
+    def getImportantStackObjects(self, sa: SpellAbility) -> str:
+        sb = []
+        sb.append(Localizer.getInstance().getMessage("lblRoller"))
+        sb.append(": ")
+        sb.append(str(sa.getTriggeringObject(AbilityKey.Player)))
+        return "".join(sb)
 ```

@@ -41,6 +41,12 @@ classDiagram
 - [[forge.game.player.Player|Player]]
 - [[forge.game.spellability.SpellAbility|SpellAbility]]
 
+## Design Description
+
+TriggerDrawn is a concrete trigger that fires when a card is drawn, extending the abstract `Trigger` base class within Forge's event-driven trigger framework. It overrides `performTest` to decide whether a draw event satisfies the trigger's configured conditionsâ€”validating the drawing player and card, matching an optional drawn-count, distinguishing the first card of the draw step, suppressing firing during the Mulligan stage, and honoring reveal constraintsâ€”by inspecting the `runParams` map keyed by `AbilityKey`.
+
+It collaborates with `Game` and its phase handler to query game state, `Player` and `Card` as the event's subjects, and `SpellAbility` when binding triggering objects via `setTriggeringObjects` and reporting them through `getImportantStackObjects`. The design follows the template-method pattern of its supertype, keeping draw-specific matching logic isolated behind the parameter-driven, declarative interface shared by all triggers, with user-facing text localized through `Localizer`.
+
 ## Source
 `forge-game/src/main/java/forge/game/trigger/TriggerDrawn.java`
 
@@ -167,4 +173,79 @@ public class TriggerDrawn extends Trigger {
         return sb.toString();
     }
 }
+```
+
+## Python
+`forge/game/trigger/TriggerDrawn.py`
+
+```python
+from forge.game.trigger.Trigger import Trigger
+from forge.game.Game import Game
+from forge.game.GameStage import GameStage
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.phase.PhaseType import PhaseType
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Localizer import Localizer
+import typing
+
+
+class TriggerDrawn(Trigger):
+    """
+    Trigger_Drawn class.
+
+    @author Forge
+    @version $Id$
+    """
+
+    def __init__(self, params: typing.Mapping[str, str], host: Card, intrinsic: bool):
+        super().__init__(params, host, intrinsic)
+
+    def performTest(self, runParams: typing.Mapping[AbilityKey, object]) -> bool:
+        game = self.getHostCard().getGame()
+        number = runParams.get(AbilityKey.Number)
+
+        if not self.matchesValidParam("ValidCard", runParams.get(AbilityKey.Card)):
+            return False
+        if not self.matchesValidParam("ValidPlayer", runParams.get(AbilityKey.Player)):
+            return False
+
+        if self.hasParam("Number"):
+            if number != int(self.getParam("Number")):
+                return False
+
+        if self.hasParam("FirstCardInDrawStep"):
+            p = runParams.get(AbilityKey.Player)
+            if self.getParam("FirstCardInDrawStep") == "True":
+                if not game.getPhaseHandler().is_(PhaseType.DRAW, p) or p.numDrawnThisDrawStep() > 1:
+                    return False
+            else:
+                if p.numDrawnThisDrawStep() == 1 and game.getPhaseHandler().is_(PhaseType.DRAW, p):
+                    return False
+
+        # trigger should not happen while Mulligan
+        if game.getAge() == GameStage.Mulligan:
+            return False
+
+        if AbilityKey.CanReveal in runParams:
+            # while drawing this is only set if false
+            canReveal = runParams.get(AbilityKey.CanReveal)
+            if self.hasParam("ForReveal"):
+                if not canReveal:
+                    return False
+            elif canReveal:
+                return False
+
+        return True
+
+    def setTriggeringObjects(self, sa: SpellAbility, runParams: typing.Mapping[AbilityKey, object]) -> None:
+        sa.setTriggeringObjectsFrom(runParams, AbilityKey.Card, AbilityKey.Player)
+
+    def getImportantStackObjects(self, sa: SpellAbility) -> str:
+        sb = []
+        sb.append(Localizer.getInstance().getMessage("lblPlayer"))
+        sb.append(": ")
+        sb.append(str(sa.getTriggeringObject(AbilityKey.Player)))
+        return "".join(sb)
 ```

@@ -41,6 +41,12 @@ classDiagram
 **Extends:**
 - [[forge.util.IHasName|IHasName]]
 
+## Design Description
+
+The IStorage interface defines a generic, name-keyed persistence and retrieval contract for collections of items (decks, quests, and similar user data) within the forge-core module. Parameterized over an item type `T`, it exposes lookup operations (`get`, `find`, `contains`, `getItemNames`), mutation operations (`add`, `delete`), and metadata such as `size` and `getFullPath`. By extending `Iterable<T>` and offering a `stream()` method, it integrates with standard Java iteration and functional pipelines, while extending `IHasName` gives each store its own identity.
+
+A distinctive design intent is its recursive, filesystem-like structure: `getFolders()` returns an `IStorage<IStorage<T>>`, and `tryGetFolder`/`getFolderOrCreate` resolve nested stores by path, letting items be organized into hierarchical folders. This abstraction decouples callers from the concrete storage backend, enabling interchangeable in-memory or file-based implementations.
+
 ## Source
 `forge-core/src/main/java/forge/util/storage/IStorage.java`
 
@@ -85,4 +91,67 @@ public interface IStorage<T> extends Iterable<T>, IHasName {
     IStorage<T> getFolderOrCreate(String path);
     Stream<T> stream();
 }
+```
+
+## Python
+`forge/util/storage/IStorage.py`
+
+```python
+from abc import abstractmethod
+from typing import Collection, Generic, Iterable, Iterator, TypeVar
+from collections.abc import Callable
+
+from forge.util.IHasName import IHasName
+
+T = TypeVar("T")
+
+
+class IStorage(Iterable[T], IHasName, Generic[T]):
+    @abstractmethod
+    def getFullPath(self) -> str:
+        ...
+
+    @abstractmethod
+    def get(self, name: str) -> T:
+        ...
+
+    @abstractmethod
+    def find(self, condition: Callable[[T], bool]) -> T:
+        ...
+
+    @abstractmethod
+    def getItemNames(self) -> Collection[str]:
+        ...
+
+    @abstractmethod
+    def contains(self, name: str) -> bool:
+        ...
+
+    @abstractmethod
+    def size(self) -> int:
+        ...
+
+    @abstractmethod
+    def add(self, name, item=None) -> None:
+        ...
+
+    @abstractmethod
+    def delete(self, deckName: str) -> None:
+        ...
+
+    @abstractmethod
+    def getFolders(self) -> "IStorage[IStorage[T]]":
+        ...
+
+    @abstractmethod
+    def tryGetFolder(self, path: str) -> "IStorage[T]":
+        ...
+
+    @abstractmethod
+    def getFolderOrCreate(self, path: str) -> "IStorage[T]":
+        ...
+
+    @abstractmethod
+    def stream(self) -> Iterator[T]:
+        ...
 ```

@@ -117,6 +117,12 @@ classDiagram
 - [[forge.game.zone.Zone|Zone]]
 - [[forge.game.zone.ZoneType|ZoneType]]
 
+## Design Description
+
+AbilityManaPart models the mana-producing facet of a `SpellAbility`, encapsulating everything about what mana an ability yields and the conditions and side effects attached to it. Parsed from script parameters at construction, it records the produced mana string, restrictions on what that mana may pay for, and optional riders such as added keywords, counters, persistent/combat flags, "can't be countered" effects, and triggers that fire when the mana is spent. Its central `produceMana` method resolves replacement effects, mints `Mana` tokens into the player's `ManaPool`, and runs `ManaAdded`/`TapsForMana` triggers.
+
+As a `Serializable` value object owned by `SpellAbility`, it collaborates broadly with the game engineâ€”`Card`, `Player`, `Game`, `ColorSet`, `ManaCostShard`, and the replacement/trigger handlersâ€”while resolving dynamic mana types (Combo, Any, Chosen, ColorIdentity, Special). Design intent favors immutability: descriptive fields are `final`, copy constructors clone state onto a new source, and transient fields like `lastManaProduced` and `sourceCard` stay out of serialization, keeping mana definitions stable while runtime state stays ephemeral.
+
 ## Source
 `forge-game/src/main/java/forge/game/spellability/AbilityManaPart.java`
 
@@ -537,7 +543,7 @@ public class AbilityManaPart implements java.io.Serializable {
                 return true;
             }
 
-            // "can't" zone restriction – shouldn't be mixed with other restrictions
+            // "can't" zone restriction Ã¢â‚¬â€œ shouldn't be mixed with other restrictions
             if (restriction.startsWith("CantCastSpellFrom")) {
                 if (!sa.isSpell()) {
                     return true;
@@ -901,4 +907,516 @@ public class AbilityManaPart implements java.io.Serializable {
     }
 
 }
+```
+
+## Python
+`forge/game/spellability/AbilityManaPart.py`
+
+```python
+from forge.card.ColorSet import ColorSet
+from forge.card.GamePieceType import GamePieceType
+from forge.card.MagicColor import MagicColor
+from forge.card.mana.ManaAtom import ManaAtom
+from forge.card.mana.ManaCostShard import ManaCostShard
+from forge.game.Game import Game
+from forge.game.GameActionUtil import GameActionUtil
+from forge.game.IHasSVars import IHasSVars
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.ability.ApiType import ApiType
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.ability.effects.ManaEffect import ManaEffect
+from forge.game.card.Card import Card
+from forge.game.card.CardUtil import CardUtil
+from forge.game.cost.Cost import Cost
+from forge.game.mana.Mana import Mana
+from forge.game.mana.ManaPool import ManaPool
+from forge.game.player.Player import Player
+from forge.game.replacement.ReplacementEffect import ReplacementEffect
+from forge.game.replacement.ReplacementHandler import ReplacementHandler
+from forge.game.replacement.ReplacementLayer import ReplacementLayer
+from forge.game.replacement.ReplacementResult import ReplacementResult
+from forge.game.replacement.ReplacementType import ReplacementType
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.trigger.Trigger import Trigger
+from forge.game.trigger.TriggerHandler import TriggerHandler
+from forge.game.trigger.TriggerType import TriggerType
+from forge.game.zone.Zone import Zone
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.TextUtil import TextUtil
+
+_UNSET = object()
+
+
+class AbilityManaPart:
+    """
+    Abstract AbilityMana class.
+
+    @author Forge
+    """
+    serialVersionUID = -6816356991224950520
+
+    def __init__(self, *args):
+        # transient / field initializers
+        self.lastExpressChoice = ""
+        self.extraManaRestrictions = ""
+        self.lastManaProduced = []
+        self.sourceCard = None
+        self.sVarHolder = None
+
+        if len(args) == 2 and isinstance(args[1], AbilityManaPart):
+            newSource, oldMana = args
+            self.sourceCard = newSource
+            self.origProduced = oldMana.origProduced
+            self.manaRestrictions = oldMana.manaRestrictions
+            self.cannotCounterSpell = oldMana.cannotCounterSpell
+            self.addsKeywords = oldMana.addsKeywords
+            self.addsKeywordsType = oldMana.addsKeywordsType
+            self.addsKeywordsUntil = oldMana.addsKeywordsUntil
+            self.addsCounters = oldMana.addsCounters
+            self.triggersWhenSpent = oldMana.triggersWhenSpent
+            self.persistentMana = oldMana.persistentMana
+            self.combatMana = oldMana.combatMana
+            # Do we need to copy over last mana produced somehow? Its kinda gross
+        elif len(args) == 2 and isinstance(args[0], SpellAbility):
+            # Dev Mode Constructor for AbilityMana.
+            sourceSA, params = args
+            self._initFromCard(sourceSA.getHostCard(), params)
+            self.sVarHolder = sourceSA
+        else:
+            sourceCard, params = args
+            self._initFromCard(sourceCard, params)
+
+    def _initFromCard(self, sourceCard, params):
+        self.sourceCard = sourceCard
+        self.sVarHolder = sourceCard
+
+        self.origProduced = params.get("Produced", "1")
+        self.manaRestrictions = params.get("RestrictValid", "")
+        self.cannotCounterSpell = params.get("AddsNoCounter")
+        self.addsKeywords = params.get("AddsKeywords")
+        self.addsKeywordsType = params.get("AddsKeywordsValid")
+        self.addsKeywordsUntil = params.get("AddsKeywordsUntil")
+        self.addsCounters = params.get("AddsCounters")
+        self.triggersWhenSpent = params.get("TriggersWhenSpent")
+        self.persistentMana = "PersistentMana" in params
+        self.combatMana = "CombatMana" in params
+
+    def produceMana(self, *args):
+        if len(args) == 1:
+            sa = args[0]
+            self.produceMana(self.getOrigProduced(), self.getSourceCard().getController(), sa)
+            return None
+
+        produced, player, sa = args
+        source = self.getSourceCard()
+        manaPool = player.getManaPool()
+        game = player.getGame()
+        afterReplace = produced
+
+        root = None if sa is None else sa.getRootAbility()
+
+        if root is not None:
+            repParams = AbilityKey.mapFromAffected(source)
+            repParams.put(AbilityKey.Mana, afterReplace)
+            repParams.put(AbilityKey.Player, player)
+            repParams.put(AbilityKey.AbilityMana, root)
+            repParams.put(AbilityKey.Activator, root.getActivatingPlayer())
+
+            result = game.getReplacementHandler().run(ReplacementType.ProduceMana, repParams)
+            if result == ReplacementResult.NotReplaced:
+                pass
+            elif result == ReplacementResult.Updated:
+                afterReplace = repParams.get(AbilityKey.Mana)
+            else:
+                return ""
+
+        # clear lastProduced
+        self.lastManaProduced.clear()
+
+        # loop over mana produced string
+        for c in afterReplace.split(" "):
+            if c.isdigit():
+                for i in range(int(c), 0, -1):
+                    self.lastManaProduced.append(Mana(ManaAtom.COLORLESS, source, self, player))
+            else:
+                attemptedMana = MagicColor.fromName(c)
+                if attemptedMana == 0:
+                    attemptedMana = ManaAtom.COLORLESS
+
+                self.lastManaProduced.append(Mana(attemptedMana, source, self, player))
+
+        manaPool.add(self.lastManaProduced)
+
+        runParams = AbilityKey.mapFromCard(source)
+        runParams.put(AbilityKey.Player, player)
+        runParams.put(AbilityKey.Produced, afterReplace)
+        runParams.put(AbilityKey.AbilityMana, root)
+        runParams.put(AbilityKey.Activator, None if root is None else root.getActivatingPlayer())
+
+        game.getTriggerHandler().runTrigger(TriggerType.ManaAdded, runParams, False)
+
+        return afterReplace
+
+    def tapsForMana(self, root, mana):
+        if not root.isManaAbility() or root.getPayCosts() is None or not root.getPayCosts().hasTapCost():
+            return
+
+        if self.getSourceCard().isLand():
+            root.getActivatingPlayer().setTappedLandForManaThisTurn(True)
+
+        runParams = AbilityKey.mapFromCard(self.getSourceCard())
+        runParams.put(AbilityKey.Produced, mana)
+        runParams.put(AbilityKey.AbilityMana, root)
+        runParams.put(AbilityKey.Activator, root.getActivatingPlayer())
+
+        self.getSourceCard().getGame().getTriggerHandler().runTrigger(TriggerType.TapsForMana, runParams, False)
+
+    def cannotCounterPaidWith(self, saBeingPaid):
+        if self.cannotCounterSpell is None:
+            return False
+        if "True".lower() == self.cannotCounterSpell.lower():
+            return True
+
+        source = saBeingPaid.getHostCard()
+        if source is None:
+            return False
+        return source.isValid(self.cannotCounterSpell, self.sourceCard.getController(), self.sourceCard, None)
+
+    def isCannotCounterPaidWith(self):
+        return self.cannotCounterSpell is not None
+
+    def addNoCounterEffect(self, saBeingPaid):
+        game = self.sourceCard.getGame()
+        eff = Card(game.nextCardId(), game)
+        eff.setGameTimestamp(game.getNextTimestamp())
+        eff.setName(str(self.sourceCard) + "'s Effect")
+        eff.setOwner(self.sourceCard.getController())
+
+        eff.setImageKey(self.sourceCard.getImageKey())
+        eff.setColor(ColorSet.C)
+        eff.setGamePieceType(GamePieceType.EFFECT)
+
+        cantcounterstr = "Event$ Counter | ValidSA$ Spell.IsRemembered | Description$ That spell can't be countered."
+        re = ReplacementHandler.parseReplacement(cantcounterstr, eff, True)
+        re.setLayer(ReplacementLayer.CantHappen)
+        eff.addReplacementEffect(re)
+
+        eff.addRemembered(saBeingPaid.getHostCard())
+
+        SpellAbilityEffect.addForgetOnMovedTrigger(eff, "Stack")
+
+        game.getAction().moveToCommand(eff, None)
+
+    def addKeywords(self, saBeingPaid):
+        return self.addsKeywords is not None
+
+    def getAddsKeywordsType(self):
+        return self.addsKeywordsType
+
+    def getAddsKeywordsUntil(self):
+        return self.addsKeywordsUntil
+
+    def getKeywords(self):
+        return self.addsKeywords
+
+    def addsCounters(self, saBeingPaid):
+        return self.addsCounters is not None
+
+    def createETBCounters(self, c, controller):
+        parse = self.addsCounters.split("_")
+        # Convert random SVars if there are other cards with this effect
+        if c.isValid(parse[0], c.getController(), c, None):
+            GameActionUtil.createETBCountersEffect(self.sourceCard, c, controller, parse[1], parse[2])
+
+    def getTriggersWhenSpent(self):
+        return self.triggersWhenSpent is not None
+
+    def addTriggersWhenSpent(self, saBeingPaid):
+        trig = TriggerHandler.parseTrigger(self.sVarHolder.getSVar(self.triggersWhenSpent), self.sourceCard, False, self.sVarHolder)
+        trig.addRemembered(saBeingPaid)
+        if self.getSourceSA() is not None:
+            trig.setSpawningAbility(self.getSourceSA())
+        saBeingPaid.getHostCard().getGame().getTriggerHandler().registerThisTurnDelayedTrigger(trig)
+
+    def getSourceSA(self):
+        return self.sVarHolder if isinstance(self.sVarHolder, SpellAbility) else None
+
+    def getManaRestrictions(self):
+        return self.manaRestrictions
+
+    def setExtraManaRestriction(self, str):
+        self.extraManaRestrictions = str
+
+    def getExtraManaRestriction(self):
+        return self.extraManaRestrictions
+
+    def meetsManaRestrictions(self, sa, restrictions=_UNSET):
+        if restrictions is _UNSET:
+            return self.meetsManaRestrictions(sa, self.manaRestrictions) and self.meetsManaRestrictions(sa, self.extraManaRestrictions)
+
+        # No restrictions
+        if restrictions == "":
+            return True
+
+        # Loop over restrictions
+        for restriction in restrictions.split(","):
+            if restriction == "nonSpell":
+                return not sa.isSpell()
+
+            if restriction == "CumulativeUpkeep":
+                if sa.isCumulativeUpkeep():
+                    return True
+                continue
+
+            if restriction.startswith("CostContains"):
+                game = sa.getHostCard().getGame()
+                payment = sa.getPayCosts()
+                if game.getStack().isResolving() and sa.hasParam("UnlessCost"):
+                    payment = AbilityUtils.calculateUnlessCost(sa, sa.getParam("UnlessCost"), False)
+                if payment.hasNoManaCost():
+                    continue
+                # TODO Thassa's Intervention with "twice {X}" is tricky
+                # TODO Volcano Hellion can't be handled without refactor to just have it passed down directly
+                if restriction.endswith("X") and payment.getCostMana().getAmountOfX() > 0:
+                    return True
+                if restriction.endswith("C") and payment.getCostMana().getMana().getShardCount(ManaCostShard.COLORLESS) > 0:
+                    return True
+                continue
+
+            # handled in meetsManaShardRestrictions
+            if restriction == "CantPayGenericCosts":
+                return True
+
+            # "can't" zone restriction -- shouldn't be mixed with other restrictions
+            if restriction.startswith("CantCastSpellFrom"):
+                if not sa.isSpell():
+                    return True
+                badZone = ZoneType.smartValueOf(restriction[17:])
+                host = sa.getHostCard()
+                castFrom = host.getCastFrom()
+                # ComputerUtilMana looks at this to see if AI can cast things, so need a fallback zone
+                zone = host.getZone().getZoneType() if castFrom is None else castFrom.getZoneType()
+                if not badZone.equals(zone):
+                    return True
+
+            if restriction == "CantCastNonArtifactSpells":
+                return not sa.isSpell() or sa.getHostCard().isArtifact()
+
+            # TODO refactor to differ between ForCost and ForEffect
+            # the payment is for a resolving SA, currently no other restrictions would allow that
+            if self.getSourceCard().getGame().getStack().getInstanceMatchingSpellAbilityID(sa.getRootAbility()) is not None:
+                return False
+
+            if sa.isValid(restriction, self.getSourceCard().getController(), self.getSourceCard(), None):
+                return True
+
+        return False
+
+    def meetsManaShardRestrictions(self, shard, color):
+        if self.manaRestrictions == "":
+            return True
+        for restriction in self.manaRestrictions.split(","):
+            if restriction == "CantPayGenericCosts":
+                if shard.isGeneric():
+                    if shard.isOr2Generic() and shard.isColor(color):
+                        continue
+                    else:
+                        return False
+                else:
+                    continue
+        return True
+
+    def meetsSpellAndShardRestrictions(self, sa, shard, color):
+        return self.meetsManaRestrictions(sa) and self.meetsManaShardRestrictions(shard, color)
+
+    def mana(self, sa):
+        if self.isComboMana():
+            return self.getComboColors(sa)
+        produced = self.getOrigProduced()
+        if "Chosen" in produced:
+            produced = produced.replace("Chosen", self.getChosenColor(sa))
+        if self.isSpecialMana():
+            ManaEffect.handleSpecialMana(sa.getActivatingPlayer(), self, sa, False)
+            produced = self.getExpressChoice()
+        return produced
+
+    def setExpressChoice(self, s):
+        if isinstance(s, ColorSet):
+            cs = s
+            sb = ""
+            if cs.hasBlack():
+                sb += "B "
+            if cs.hasBlue():
+                sb += "U "
+            if cs.hasWhite():
+                sb += "W "
+            if cs.hasRed():
+                sb += "R "
+            if cs.hasGreen():
+                sb += "G "
+            self.lastExpressChoice = sb.strip()
+        else:
+            self.lastExpressChoice = s
+
+    def getExpressChoice(self):
+        return self.lastExpressChoice
+
+    def clearExpressChoice(self):
+        self.lastExpressChoice = ""
+
+    def getLastManaProduced(self):
+        return self.lastManaProduced
+
+    def isSnow(self):
+        return self.getSourceCard().isSnow()
+
+    def isAnyMana(self):
+        return "Any" in self.getOrigProduced()
+
+    def isComboMana(self):
+        return self.getOrigProduced().startswith("Combo")
+
+    def isSpecialMana(self):
+        return "Special" in self.getOrigProduced()
+
+    def canProduce(self, s, sa):
+        # TODO: need to handle replacement effects like 106.7 before deciding no mana is produced
+        # if sa.amountOfManaGenerated(False) == 0:
+        #     return False
+
+        # Any mana never means Colorless?
+        if self.isAnyMana() and s != "C":
+            return True
+
+        return s in self.mana(sa)
+
+    def equals(self, o):
+        # Mana abilities with same Descriptions are "equal"
+        if not isinstance(o, AbilityManaPart):
+            return False
+
+        abm = o
+
+        return self.sourceCard.equals(abm.sourceCard) and self.origProduced == abm.getOrigProduced()
+
+    def __eq__(self, o):
+        return self.equals(o)
+
+    def hashCode(self):
+        return (41 * (41 + self.getSourceCard().hashCode()))
+
+    def __hash__(self):
+        return self.hashCode()
+
+    def getOrigProduced(self):
+        return self.origProduced
+
+    def getComboColors(self, sa):
+        origProduced = self.getOrigProduced()
+        if not origProduced.startswith("Combo"):
+            return ""
+        if "Any" in origProduced:
+            return "W U B R G"
+        # replace Chosen for Combo colors
+        if "Chosen" in origProduced:
+            origProduced = origProduced.replace("Chosen", self.getChosenColor(sa))
+        # replace Chosen for Spire colors
+        if "ColorID" in origProduced:
+            str = " ".join(c.getShortName() for c in sa.getHostCard().getMarkedColors())
+            origProduced = origProduced.replace("ColorID", str)
+        if "NotedColors" in origProduced:
+            # Should only be used for Paliano, the High City
+            if sa.getActivatingPlayer() is None:
+                return ""
+
+            colors = sa.getActivatingPlayer().getDraftNotes().get("Paliano, the High City")
+            if colors is None:
+                return ""
+            # Colors here is an comma separated color list, potentially with duplicates
+            # We need to remove duplicates and convert to single letters
+            sb = ""
+            for color in colors.split(","):
+                shortColor = MagicColor.toShortString(color)
+                if shortColor not in sb:
+                    sb += shortColor + " "
+            origProduced = origProduced.replace("NotedColors", sb.strip())
+
+        if "ColorIdentity" not in origProduced:
+            return TextUtil.fastReplace(origProduced, "Combo ", "")
+        # ColorIdentity
+        sb = ""
+        if self.getSourceCard().getController() is not None:
+            commanders = self.getSourceCard().getController().getCommanders()
+            if commanders.isEmpty():
+                return ""
+            identity = self.getSourceCard().getController().getCommanderColorID()
+            if identity.hasWhite():
+                sb += "W "
+            if identity.hasBlue():
+                sb += "U "
+            if identity.hasBlack():
+                sb += "B "
+            if identity.hasRed():
+                sb += "R "
+            if identity.hasGreen():
+                sb += "G "
+        # TODO: Add support for {C}.
+        return "" if len(sb) == 0 else sb[0:len(sb) - 1]
+
+    def getChosenColor(self, sa):
+        if sa is None:
+            return ""
+        card = sa.getHostCard()
+        if card is not None:
+            values = ""
+            for c in card.getChosenColors():
+                values += MagicColor.toShortString(c) + " "
+            return values.strip()
+        return ""
+
+    def getSourceCard(self):
+        return self.sourceCard
+
+    def setSourceCard(self, host):
+        self.sourceCard = host
+
+    def isPersistentMana(self):
+        return self.persistentMana
+
+    def isCombatMana(self):
+        return self.combatMana
+
+    def abilityProducesManaColor(self, am, neededColor):
+        if 0 != (neededColor & ManaAtom.GENERIC):
+            return True
+
+        if self.isAnyMana():
+            return True
+
+        # check for produce mana replacement effects - they mess this up, so just use the mana ability
+        source = am.getHostCard()
+        activator = am.getActivatingPlayer()
+        repParams = AbilityKey.mapFromAffected(source)
+        repParams.put(AbilityKey.Mana, self.getOrigProduced())
+        repParams.put(AbilityKey.Activator, activator)
+        repParams.put(AbilityKey.AbilityMana, am.getRootAbility())
+
+        if not source.getGame().getReplacementHandler().getReplacementList(ReplacementType.ProduceMana, repParams, ReplacementLayer.Other).isEmpty():
+            return True
+
+        if am.getApi() == ApiType.ManaReflected:
+            reflectableColors = CardUtil.getReflectableManaColors(am)
+            for color in reflectableColors:
+                if 0 != (neededColor & ManaAtom.fromName(color)):
+                    return True
+        else:
+            # treat special mana if it always can be paid
+            if self.isSpecialMana():
+                return True
+            colorsProduced = self.mana(am)
+            for color in colorsProduced.split(" "):
+                if 0 != (neededColor & ManaAtom.fromName(color)):
+                    return True
+        return False
 ```

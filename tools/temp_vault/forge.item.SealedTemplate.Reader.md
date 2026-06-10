@@ -32,8 +32,14 @@ classDiagram
 **Uses:**
 - [[forge.item.SealedTemplate|SealedTemplate]]
 
+## Design Description
+
+The Reader is a nested static helper that loads SealedTemplate definitions from a text file, serving as the persistence/parsing layer for sealed-deck product templates. Extending StorageReaderFile<SealedTemplate>, it keys each entry by the template's name and overrides read to convert a single colon-delimited line into a SealedTemplate, delegating the booster-slot portion to parseSlots. That helper splits the data into "count name" pairs using parenthesis-aware tokenization, restoring escaped commas (";" back to ",") so slot descriptors containing commas survive the comma-separated format.
+
+By subclassing the generic file-storage reader, Reader inherits iteration and lookup machinery and need only specify how a line maps to a domain object, keeping the format-specific parsing isolated. The public, static parseSlots is exposed independently of the file-reading lifecycle, allowing slot strings to be parsed directly elsewhere.
+
 ## Source
-`forge-core/src/main/java/forge/item/SealedTemplate.java` — declaration excerpt
+`forge-core/src/main/java/forge/item/SealedTemplate.java` Ã¢â‚¬â€ declaration excerpt
 
 ```java
     public final static class Reader extends StorageReaderFile<SealedTemplate> {
@@ -58,4 +64,33 @@ classDiagram
             return new SealedTemplate(headAndData[0], parseSlots(headAndData[1]));
         }
     }
+```
+
+## Python
+`forge/item/SealedTemplate/Reader.py`
+
+```python
+from forge.util.storage.StorageReaderFile import StorageReaderFile
+from forge.item.SealedTemplate import SealedTemplate
+from forge.util.TextUtil import TextUtil
+from org.apache.commons.lang3.tuple.Pair import Pair
+from org.apache.commons.lang3.tuple.ImmutablePair import ImmutablePair
+
+
+class Reader(StorageReaderFile):
+    def __init__(self, file):
+        super().__init__(file, SealedTemplate.getName)
+
+    @staticmethod
+    def parseSlots(data: str) -> list[Pair]:
+        dataz = TextUtil.splitWithParenthesis(data, ',')
+        slots: list[Pair] = []
+        for slotDesc in dataz:
+            kv = TextUtil.splitWithParenthesis(slotDesc, ' ', 2)
+            slots.append(ImmutablePair.of(kv[1].replace(";", ","), int(kv[0])))
+        return slots
+
+    def read(self, line: str, i: int) -> SealedTemplate:
+        headAndData = TextUtil.split(line, ':', 2)
+        return SealedTemplate(headAndData[0], Reader.parseSlots(headAndData[1]))
 ```

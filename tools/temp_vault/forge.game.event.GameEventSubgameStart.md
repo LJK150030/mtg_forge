@@ -37,7 +37,7 @@ classDiagram
 
 `GameEventSubgameStart` is an immutable record that signals the beginning of a subgame (such as the games-within-a-game created by cards like Shahrazad) within the Forge engine's event system. It carries the `Game` instance representing the subgame and an accompanying `message` string describing the transition.
 
-As an implementation of the `GameEvent` interface, it participates in the visitor pattern: its `visit` method dispatches to the appropriate overload on a generic `IGameEventVisitor<T>`, allowing observers to react to the event in a type-safe manner without the event needing to know their concrete behavior. Modeling the event as a record reflects clear design intent—the event is a lightweight, value-based notification whose equality, accessors, and construction are derived automatically, keeping it a pure carrier of immutable state decoupled from any handling logic.
+As an implementation of the `GameEvent` interface, it participates in the visitor pattern: its `visit` method dispatches to the appropriate overload on a generic `IGameEventVisitor<T>`, allowing observers to react to the event in a type-safe manner without the event needing to know their concrete behavior. Modeling the event as a record reflects clear design intentâ€”the event is a lightweight, value-based notification whose equality, accessors, and construction are derived automatically, keeping it a pure carrier of immutable state decoupled from any handling logic.
 
 ## Source
 `forge-game/src/main/java/forge/game/event/GameEventSubgameStart.java`
@@ -54,4 +54,35 @@ public record GameEventSubgameStart(Game subgame, String message) implements Gam
         return visitor.visit(this);
     }
 }
+```
+
+## Python
+`forge/game/event/GameEventSubgameStart.py`
+
+```python
+from forge.game.event.GameEvent import GameEvent
+from forge.game.Game import Game
+from forge.game.event.IGameEventVisitor import IGameEventVisitor
+
+
+class GameEventSubgameStart(GameEvent):
+    def __init__(self, subgame: Game, message: str):
+        self.subgame = subgame
+        self.message = message
+
+    def visit(self, visitor: IGameEventVisitor):
+        return visitor.visit(self)
+
+    def __eq__(self, other):
+        if self is other:
+            return True
+        if not isinstance(other, GameEventSubgameStart):
+            return False
+        return self.subgame == other.subgame and self.message == other.message
+
+    def __hash__(self):
+        return hash((self.subgame, self.message))
+
+    def __repr__(self):
+        return f"GameEventSubgameStart[subgame={self.subgame}, message={self.message}]"
 ```

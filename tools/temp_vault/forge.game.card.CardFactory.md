@@ -877,3 +877,667 @@ public class CardFactory {
 
 }
 ```
+
+## Python
+`forge/game/card/CardFactory.py`
+
+```python
+from com.google.common.collect.Lists import Lists
+
+from forge.ImageKeys import ImageKeys
+from forge.StaticData import StaticData
+from forge.card.CardRules import CardRules
+from forge.card.CardSplitType import CardSplitType
+from forge.card.CardStateName import CardStateName
+from forge.card.CardType import CardType
+from forge.card.ColorSet import ColorSet
+from forge.card.ICardFace import ICardFace
+from forge.card.mana.ManaCost import ManaCost
+from forge.game.CardTraitBase import CardTraitBase
+from forge.game.Game import Game
+from forge.game.ability.AbilityFactory import AbilityFactory
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.ability.ApiType import ApiType
+from forge.game.cost.Cost import Cost
+from forge.game.keyword.Keyword import Keyword
+from forge.game.keyword.KeywordInterface import KeywordInterface
+from forge.game.player.Player import Player
+from forge.game.replacement.ReplacementEffect import ReplacementEffect
+from forge.game.replacement.ReplacementHandler import ReplacementHandler
+from forge.game.spellability.AbilitySub import AbilitySub
+from forge.game.spellability.Spell import Spell
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.spellability.SpellAbilityCondition import SpellAbilityCondition
+from forge.game.spellability.SpellAbilityRestriction import SpellAbilityRestriction
+from forge.game.staticability.StaticAbility import StaticAbility
+from forge.game.trigger.Trigger import Trigger
+from forge.game.trigger.TriggerHandler import TriggerHandler
+from forge.game.trigger.WrappedAbility import WrappedAbility
+from forge.item.IPaperCard import IPaperCard
+from forge.util.CardTranslation import CardTranslation
+from forge.util.TextUtil import TextUtil
+
+
+class CardFactory:
+    """
+    AbstractCardFactory class.
+
+    TODO The map field contains Card instances that have not gone through
+    getCard2, and thus lack abilities. However, when a new Card is requested via
+    getCard, it is this map's values that serve as the templates for the values
+    it returns. This class has another field, allCards, which is another copy of
+    the card database. These cards have abilities attached to them, and are owned
+    by the human player by default. It would be better memory-wise if we had
+    only one or the other. We may experiment in the future with using
+    allCard-type values for the map instead of the less complete ones that exist
+    there today.
+    """
+
+    @staticmethod
+    def copySpellHost(sourceSA, targetSA, controller):
+        """
+        copySpellHost.
+        Helper function for copySpellAbilityAndPossiblyHost.
+        creates a copy of the card hosting the ability we want to copy.
+        Updates various attributes of the card that the copy needs,
+        which wouldn't ordinarily get set during a simple Card.copy() call.
+        """
+        source = sourceSA.getHostCard()
+        original = targetSA.getHostCard()
+        game = source.getGame()
+        id = game.nextCardId()
+
+        # need to create a physical card first, i need the original card faces
+        copy = CardFactory.getCard(original.getPaperCard(), controller, id, game)
+
+        copy.setStates(CardFactory.getCloneStates(original, copy, sourceSA))
+        # force update the now set State
+        if original.isTransformable():
+            copy.setState(CardStateName.Backside if original.isTransformed() else CardStateName.Original, True, True)
+            # 707.8a If an effect creates a token that is a copy of a transforming permanent or a transforming double-faced card not on the battlefield,
+            # the resulting token is a transforming token that has both a front face and a back face.
+            # The characteristics of each face are determined by the copiable values of the same face of the permanent it is a copy of, as modified by any other copy effects that apply to that permanent.
+            # If the token is a copy of a transforming permanent with its back face up, the token enters the battlefield with its back face up.
+            # This rule does not apply to tokens that are created with their own set of characteristics and enter the battlefield as a copy of a transforming permanent due to a replacement effect.
+            copy.setBackSide(original.isBackSide())
+        else:
+            copy.setState(copy.getCurrentStateName(), True, True)
+
+        copy.setGamePieceType(GamePieceType.COPIED_SPELL)
+        copy.setCopiedPermanent(original)
+
+        copy.setXManaCostPaidByColor(original.getXManaCostPaidByColor())
+        copy.setPromisedGift(original.getPromisedGift())
+
+        if targetSA.isBestow():
+            copy.animateBestow()
+
+        if sourceSA.hasParam("RememberNewCard"):
+            source.addRemembered(copy)
+
+        return copy
+
+    @staticmethod
+    def copySpellAbilityAndPossiblyHost(sourceSA, targetSA, controller):
+        """
+        copySpellAbilityAndPossiblyHost.
+        creates a copy of the Spell/ability `sa`, and puts it on the stack.
+        if sa is a spell, that spell's host is also copied.
+        """
+        # it is only necessary to copy the host card if the SpellAbility is a spell, not an ability
+        c = CardFactory.copySpellHost(sourceSA, targetSA, controller) \
+            if targetSA.isSpell() and not sourceSA.hasParam("UseOriginalHost") else targetSA.getHostCard()
+
+        if targetSA.isTrigger() and targetSA.isWrapper():
+            copySA = CardFactory.getCopiedTriggeredAbility(targetSA, c, controller)
+        else:
+            copySA = targetSA.copy(c, controller, False)
+            # need to copy keyword
+            if targetSA.getKeyword() is not None:
+                kw = targetSA.getKeyword().copy(c, False)
+                copySA.setKeyword(kw)
+                # need to add the keyword to so static doesn't make new keyword
+                c.addKeywordForStaticAbility(kw)
+
+        copySA.setCopied(True)
+        # 707.10b
+        if targetSA.isAbility():
+            copySA.setOriginalAbility(targetSA)
+
+        if isinstance(copySA, Spell):
+            spell = copySA
+            # Copied spell is not cast face down
+            spell.setCastFaceDown(False)
+            c.setCastSA(copySA)
+
+        # mana is not copied
+        copySA.clearManaPaid()
+        # remove all costs
+        if not copySA.isTrigger():
+            copySA.setPayCosts(Cost("", targetSA.isAbility()))
+
+        return copySA
+
+    @staticmethod
+    def getCard(cp, owner, *args):
+        if len(args) == 1:
+            game = args[0]
+            return CardFactory.getCard(cp, owner, -1 if owner is None else owner.getGame().nextCardId(), game)
+        cardId, game = args
+        c = CardFactory.readCard(cp, cardId, game)
+        c.setOwner(owner)
+        CardFactory.buildAbilities(c)
+
+        c.setSetCode(cp.getEdition())
+        c.setRarity(cp.getRarity())
+
+        # Would like to move this away from in-game entities
+        originalPicture = cp.getImageKey(False)
+        c.setImageKey(originalPicture)
+
+        if cp.isToken():
+            c.setGamePieceType(GamePieceType.TOKEN)
+        else:
+            c.setGamePieceType(c.getRules().getType().getGamePieceType())
+
+        if c.hasAlternateState():
+            if c.isFlipCard():
+                c.setState(CardStateName.Flipped, False)
+                # set the imagekey altstate to false since the rotated image is handled by graphics renderer
+                # setting this to true will download the original image with different name.
+                c.setImageKey(cp.getImageKey(False))
+            elif c.isDoubleFaced():
+                c.setState(cp.getRules().getSplitType().getChangedStateName(), False)
+                c.setImageKey(cp.getImageKey(True))
+            elif c.isSplitCard():
+                c.setState(CardStateName.LeftSplit, False)
+                c.setImageKey(originalPicture)
+                c.setSetCode(cp.getEdition())
+                c.setRarity(cp.getRarity())
+                c.setState(CardStateName.RightSplit, False)
+                c.setImageKey(originalPicture)
+            elif c.hasState(CardStateName.Secondary):
+                c.setState(CardStateName.Secondary, False)
+                c.setImageKey(originalPicture)
+            elif c.hasState(CardStateName.PreparedSpell):
+                c.setState(CardStateName.PreparedSpell, False)
+                c.setImageKey(originalPicture)
+            elif c.canSpecialize():
+                c.setState(CardStateName.SpecializeW, False)
+                c.setImageKey(cp.getImageKey(False) + ImageKeys.SPECFACE_W)
+                c.setSetCode(cp.getEdition())
+                c.setRarity(cp.getRarity())
+                c.setState(CardStateName.SpecializeU, False)
+                c.setImageKey(cp.getImageKey(False) + ImageKeys.SPECFACE_U)
+                c.setSetCode(cp.getEdition())
+                c.setRarity(cp.getRarity())
+                c.setState(CardStateName.SpecializeB, False)
+                c.setImageKey(cp.getImageKey(False) + ImageKeys.SPECFACE_B)
+                c.setSetCode(cp.getEdition())
+                c.setRarity(cp.getRarity())
+                c.setState(CardStateName.SpecializeR, False)
+                c.setImageKey(cp.getImageKey(False) + ImageKeys.SPECFACE_R)
+                c.setSetCode(cp.getEdition())
+                c.setRarity(cp.getRarity())
+                c.setState(CardStateName.SpecializeG, False)
+                c.setImageKey(cp.getImageKey(False) + ImageKeys.SPECFACE_G)
+                c.setSetCode(cp.getEdition())
+                c.setRarity(cp.getRarity())
+
+            c.setSetCode(cp.getEdition())
+            c.setRarity(cp.getRarity())
+            c.setState(CardStateName.Original, False)
+
+        return c
+
+    @staticmethod
+    def buildAbilities(card):
+        for state in card.getStates():
+            if card.isDoubleFaced() and state == CardStateName.FaceDown:
+                continue  # Ignore FaceDown for DFC since they have none.
+            card.setState(state, False)
+
+            # ******************************************************************
+            # ************** Link to different CardFactories *******************
+            if state != CardStateName.Original:
+                CardFactoryUtil.setupKeywordedAbilities(card)
+
+        card.setState(CardStateName.Original, False)
+        # need to update keyword cache for original spell
+        if card.isSplitCard():
+            card.updateKeywordsCache()
+
+        CardFactory.buildBattleAbilities(card)
+        CardFactoryUtil.setupKeywordedAbilities(card)  # Should happen AFTER setting left/right split abilities to set Fuse ability to both sides
+        card.updateStateForView()
+
+    @staticmethod
+    def buildBattleAbilities(card):
+        if not card.isBattle():
+            return
+        # # The following commands should be pulled out into the codebase
+        # K:etbCounter:DEFENSE:3
+
+        if card.getType().hasSubtype("Siege"):
+            CardFactoryUtil.setupSiegeAbilities(card)
+        elif card.getType().getBattleTypes().isEmpty():
+            # Probably a custom card? Check if it already has an RE for designating a protector.
+            if any(re.hasParam("BattleProtector") for re in card.getReplacementEffects()):
+                return
+            # Battles with no battle type enter protected by their controller.
+            abProtector = "DB$ ChoosePlayer | Choices$ You | Protect$ True | DontNotify$ True"
+            reText = "Event$ Moved | ValidCard$ Card.Self | Destination$ Battlefield | ReplacementResult$ Updated" \
+                + " | BattleProtector$ True | Description$ (As this Battle enters, its controller becomes its protector.)"
+            re = ReplacementHandler.parseReplacement(reText, card, True)
+            re.setOverridingAbility(AbilityFactory.getAbility(abProtector, card))
+            card.addReplacementEffect(re)
+
+    @staticmethod
+    def readCard(paperCard, cardId, game):
+        card = Card(cardId, paperCard, game)
+        rules = paperCard.getRules()
+        card.updateRulesView()
+
+        # 1. The states we may have:
+        st = rules.getSplitType()
+        if st == CardSplitType.Split:
+            card.addAlternateState(CardStateName.LeftSplit, False)
+            card.setState(CardStateName.LeftSplit, False)
+
+        CardFactory.readCardFace(card, rules.getMainPart())
+
+        if st == CardSplitType.Specialize:
+            for e in rules.getSpecializeParts().entrySet():
+                card.addAlternateState(e.getKey(), False)
+                card.setState(e.getKey(), False)
+                if e.getValue() is not None:
+                    CardFactory.readCardFace(card, e.getValue())
+        elif st != CardSplitType.None_:
+            card.addAlternateState(st.getChangedStateName(), False)
+            card.setState(st.getChangedStateName(), False)
+            if rules.getOtherPart() is not None:
+                CardFactory.readCardFace(card, rules.getOtherPart())
+            elif not rules.getMeldWith().isEmpty():
+                CardFactory.readCardFace(card, StaticData.instance().getCommonCards().getRulesOrElseUnsupported(rules.getMeldWith()).getOtherPart())
+
+        if card.isInAlternateState():
+            card.setState(CardStateName.Original, False)
+
+        if st == CardSplitType.Split:
+            card.setName(rules.getName())
+
+            # Combined mana cost
+            card.setManaCost(rules.getManaCost())
+
+            # Combined card color
+            card.setColor(rules.getColor())
+            card.setType(CardType(rules.getType()))
+
+            # Combined text based on Oracle text -  might not be necessary
+            combinedText = "(%s) %s\r\n\r\n(%s) %s" % (rules.getMainPart().getName(), rules.getMainPart().getOracleText(), rules.getOtherPart().getName(), rules.getOtherPart().getOracleText())
+            card.getState(CardStateName.Original).setOracleText(combinedText)
+        return card
+
+    @staticmethod
+    def readCardFace(c, face):
+        variantName = None
+        # If it's a functional variant card, switch to that first.
+        if face.hasFunctionalVariants():
+            variantName = c.getPaperCard().getFunctionalVariant()
+            if not IPaperCard.NO_FUNCTIONAL_VARIANT == variantName:
+                variant = face.getFunctionalVariant(variantName)
+                if variant is not None:
+                    face = variant
+                    c.getCurrentState().setFunctionalVariantName(variantName)
+                else:
+                    import sys
+                    sys.stderr.write("Tried to apply unknown or unsupported variant - Card: \"%s\"; Variant: %s\n" % (face.getName(), variantName))
+
+        # Set name for Sentry reports to be identifiable
+        c.setName(face.getName())
+
+        c.getCurrentState().setFlavorName(face.getFlavorName())
+
+        if face.getDraftActions() is not None:
+            for action in face.getDraftActions():
+                c.addDraftAction(action)
+
+        c.setManaCost(face.getManaCost())
+        c.setText(face.getNonAbilityText())
+
+        c.getCurrentState().setOracleText(face.getOracleText())
+
+        # Super and 'middle' types should use enums.
+        c.setType(CardType(face.getType()))
+
+        c.setColor(face.getColor())
+
+        if face.getIntPower() != Integer.MAX_VALUE:
+            c.setBasePower(face.getIntPower())
+            c.setBasePowerString(face.getPower())
+        if face.getIntToughness() != Integer.MAX_VALUE:
+            c.setBaseToughness(face.getIntToughness())
+            c.setBaseToughnessString(face.getToughness())
+
+        c.getCurrentState().setBaseLoyalty(face.getInitialLoyalty())
+        c.getCurrentState().setBaseDefense(face.getDefense())
+
+        c.setAttractionLights(face.getAttractionLights())
+
+        # Negative card Id's are for view purposes only
+        if c.getId() >= 0:
+            # Build English oracle and translated oracle mapping
+            CardTranslation.buildOracleMapping(face.getName(), face.getOracleText(), variantName)
+
+            for v in face.getVariables():
+                c.setSVar(v.getKey(), v.getValue())
+            for r in face.getReplacements():
+                c.addReplacementEffect(ReplacementHandler.parseReplacement(r, c, True, c.getCurrentState()))
+            for s in face.getStaticAbilities():
+                c.addStaticAbility(s)
+            for t in face.getTriggers():
+                c.addTrigger(TriggerHandler.parseTrigger(t, c, True, c.getCurrentState()))
+
+            CardFactoryUtil.addAbilityFactoryAbilities(c, face.getAbilities())
+
+            # keywords not before variables and spells
+            c.addIntrinsicKeywords(face.getKeywords(), False)
+
+    @staticmethod
+    def copySpellAbility(from_, to, host, p, lki, keepTextChanges):
+        if from_.usesTargeting():
+            to.setTargetRestrictions(from_.getTargetRestrictions())
+        to.setDescription(from_.getOriginalDescription())
+        to.setStackDescription(from_.getOriginalStackDescription())
+
+        if from_.getSubAbility() is not None:
+            to.setSubAbility(from_.getSubAbility().copy(host, p, lki, keepTextChanges))
+        for e in from_.getAdditionalAbilities().entrySet():
+            to.setAdditionalAbility(e.getKey(), e.getValue().copy(host, p, lki, keepTextChanges))
+        for e in from_.getAdditionalAbilityLists().entrySet():
+            to.setAdditionalAbilityList(e.getKey(), [input.copy(host, p, lki, keepTextChanges) for input in e.getValue()])
+        if from_.getRestrictions() is not None:
+            to.setRestrictions(from_.getRestrictions().copy())
+        if from_.getConditions() is not None:
+            to.setConditions(from_.getConditions().copy())
+
+        # do this after other abilities are copied
+        if p is not None:
+            to.setActivatingPlayer(p)
+
+    @staticmethod
+    def getCopiedTriggeredAbility(sa, newHost, controller):
+        """
+        Copy triggered ability
+
+        return a wrapped ability
+        """
+        if not sa.isTrigger():
+            return None
+
+        return WrappedAbility(sa.getTrigger(), sa.getWrappedAbility().copy(newHost, controller, False), sa.getDecider())
+
+    @staticmethod
+    def getCloneStates(in_, out, cause):
+        host = cause.getHostCard()
+        origSVars = host.getSVars()
+        types = Lists.newArrayList()
+        keywords = Lists.newArrayList()
+        KWifNew = False
+        removeKeywords = Lists.newArrayList()
+        creatureTypes = None
+        result = CardCloneStates(in_, cause)
+
+        newName = cause.getParam("NewName")
+        manaCost = None
+        colors = None
+
+        if cause.hasParam("AddTypes"):
+            types.addAll(cause.getParam("AddTypes").split(" & "))
+
+        if cause.hasParam("SetCreatureTypes"):
+            creatureTypes = list(cause.getParam("SetCreatureTypes").split(" "))
+
+        if cause.hasParam("AddKeywords"):
+            kwString = cause.getParam("AddKeywords")
+            if kwString.startswith("IfNew "):
+                KWifNew = True
+                kwString = kwString[6:]
+            keywords.addAll(kwString.split(" & "))
+
+        if cause.hasParam("RemoveKeywords"):
+            removeKeywords.addAll(cause.getParam("RemoveKeywords").split(" & "))
+
+        if cause.hasParam("AddColors"):
+            colors = ColorSet.fromNames(cause.getParam("AddColors").split(","))
+
+        if cause.hasParam("SetColor"):
+            colors = ColorSet.fromNames(cause.getParam("SetColor").split(","))
+
+        if cause.hasParam("SetManaCost"):
+            manaCost = ManaCost(cause.getParam("SetManaCost"))
+            if cause.hasParam("SetColorByManaCost"):
+                colors = ColorSet.fromManaCost(manaCost)
+
+        # TODO handle Volrath's Shapeshifter
+
+        if in_.isFaceDown():
+            # if something is cloning a facedown card, it only clones the
+            # facedown state into original
+            result.add(in_.getFaceDownState().copy(out, CardStateName.Original, cause))
+        elif in_.isFlipCard():
+            # if something is cloning a flip card, copy both original and
+            # flipped state
+            result.add(in_.getState(CardStateName.Original).copy(out, cause))
+            result.add(in_.getState(CardStateName.Flipped).copy(out, cause))
+        elif in_.hasState(CardStateName.Secondary):
+            result.add(in_.getState(CardStateName.Original).copy(out, cause))
+            result.add(in_.getState(CardStateName.Secondary).copy(out, cause))
+        elif in_.hasState(CardStateName.PreparedSpell):
+            result.add(in_.getState(CardStateName.Original).copy(out, cause))
+            result.add(in_.getState(CardStateName.PreparedSpell).copy(out, cause))
+        elif in_.isTransformable() and isinstance(cause, SpellAbility) and (
+                ApiType.CopyPermanent == cause.getApi() or
+                ApiType.CopySpellAbility == cause.getApi() or
+                ApiType.ReplaceToken == cause.getApi()):
+            # CopyPermanent can copy token
+            result.add(in_.getState(CardStateName.Original).copy(out, cause))
+            result.add(in_.getState(CardStateName.Backside).copy(out, cause))
+        elif in_.isSplitCard():
+            # for split cards, copy all three states
+
+            result.add(in_.getState(CardStateName.Original).copy(out, cause))
+            result.add(in_.getState(CardStateName.LeftSplit).copy(out, cause))
+            result.add(in_.getState(CardStateName.RightSplit).copy(out, cause))
+            if in_.isPermanent():
+                result.add(in_.getState(CardStateName.EmptyRoom).copy(out, cause))
+        else:
+            # in all other cases just copy the current state to original
+            result.add(in_.getState(in_.getCurrentStateName()).copy(out, CardStateName.Original, cause))
+
+        # update all states, both for flip cards
+        for e in result.entrySet():
+            originalState = out.getState(e.getKey())
+            state = e.getValue()
+
+            # has Embalm Condition for extra changes of Vizier of Many Faces
+            if cause.hasParam("Embalm") and not out.isEmbalmed():
+                continue
+
+            # update the names for the states
+            if cause.hasParam("KeepName"):
+                state.setName(originalState.getName())
+            elif newName is not None:
+                # convert NICKNAME descriptions?
+                state.setName(newName)
+
+            if cause.hasParam("AddColors"):
+                state.addColor(colors)
+
+            if cause.hasParam("SetColor") or cause.hasParam("SetColorByManaCost"):
+                state.setColor(colors)
+
+            if cause.hasParam("NonLegendary"):
+                state.removeType(CardType.Supertype.Legendary)
+
+            if cause.hasParam("RemoveCardTypes"):
+                state.removeCardTypes(cause.hasParam("RemoveSubTypes"))
+
+            state.addType(types)
+
+            if creatureTypes is not None:
+                state.setCreatureTypes(creatureTypes)
+
+            finalizedKWs = keywords
+            if KWifNew:
+                finalizedKWs = [k for k in keywords if not state.hasIntrinsicKeyword(Keyword.getInstance(k).getKeyword())]
+            state.addIntrinsicKeywords(finalizedKWs)
+            for kw in removeKeywords:
+                state.removeIntrinsicKeyword(kw)
+
+            # CR 208.3 A noncreature object not on the battlefield has power or toughness only if it has a power and toughness printed on it.
+            # currently only LKI can be trusted?
+            if (cause.hasParam("SetPower") or cause.hasParam("SetToughness")) and \
+               (state.getType().isCreature() or (originalState is not None and in_.getOriginalState(originalState.getStateName()).getBasePowerString() is not None)):
+                if cause.hasParam("SetPower"):
+                    state.setBasePower(AbilityUtils.calculateAmount(host, cause.getParam("SetPower"), cause))
+                if cause.hasParam("SetToughness"):
+                    state.setBaseToughness(AbilityUtils.calculateAmount(host, cause.getParam("SetToughness"), cause))
+
+            if state.getType().isPlaneswalker() and cause.hasParam("SetLoyalty"):
+                state.setBaseLoyalty(str(AbilityUtils.calculateAmount(host, cause.getParam("SetLoyalty"), cause)))
+
+            if cause.hasParam("RemoveCost"):
+                state.setManaCost(ManaCost.NO_COST)
+
+            if cause.hasParam("SetManaCost"):
+                state.setManaCost(manaCost)
+
+            # SVars to add to clone
+            if cause.hasParam("AddSVars"):
+                str_ = cause.getParam("AddSVars")
+                for s in str_.split(","):
+                    if s in origSVars:
+                        actualsVar = origSVars.get(s)
+                        state.setSVar(s, actualsVar)
+
+            # triggers to add to clone
+            if cause.hasParam("AddTriggers"):
+                for s in cause.getParam("AddTriggers").split(","):
+                    if s in origSVars:
+                        actualTrigger = origSVars.get(s)
+                        parsedTrigger = TriggerHandler.parseTrigger(actualTrigger, out, True, state)
+                        state.addTrigger(parsedTrigger)
+
+            # abilities to add to clone
+            if cause.hasParam("AddAbilities") or cause.hasParam("GainTextAbilities"):
+                str_ = cause.getParamOrDefault("GainTextAbilities", cause.getParam("AddAbilities"))
+                for s in str_.split(","):
+                    if s in origSVars:
+                        actualAbility = origSVars.get(s)
+                        grantedAbility = AbilityFactory.getAbility(actualAbility, out)
+                        grantedAbility.setIntrinsic(True)
+                        state.addSpellAbility(grantedAbility)
+
+            # static abilities to add to clone
+            if cause.hasParam("AddStaticAbilities"):
+                str_ = cause.getParam("AddStaticAbilities")
+                for s in str_.split(","):
+                    if s in origSVars:
+                        actualStatic = origSVars.get(s)
+                        state.addStaticAbility(StaticAbility.create(actualStatic, out, cause.getCardState(), True))
+
+            if cause.hasParam("GainThisAbility") and isinstance(cause, SpellAbility):
+                root = cause.getRootAbility()
+
+                # Aurora Shifter
+                if root.isTrigger() and root.getTrigger().getSpawningAbility() is not None:
+                    root = root.getTrigger().getSpawningAbility()
+
+                if root.isTrigger():
+                    state.addTrigger(root.getTrigger().copy(out, False))
+                elif root.isReplacementAbility():
+                    state.addReplacementEffect(root.getReplacementEffect().copy(out, False))
+                else:
+                    state.addSpellAbility(root.copy(out, False))
+
+            # Special Rules for Embalm and Eternalize
+            if cause.isEmbalm() and cause.isIntrinsic():
+                name = "embalm_" + TextUtil.fastReplace(
+                    TextUtil.fastReplace(host.getName(), ",", ""),
+                    " ", "_").lower()
+                state.setImageKey(StaticData.instance().getOtherImageKey(name, host.getSetCode()))
+
+            if cause.isEternalize() and cause.isIntrinsic():
+                name = "eternalize_" + TextUtil.fastReplace(
+                    TextUtil.fastReplace(host.getName(), ",", ""),
+                    " ", "_").lower()
+                state.setImageKey(StaticData.instance().getOtherImageKey(name, host.getSetCode()))
+
+            if cause.isKeyword(Keyword.OFFSPRING) and cause.isIntrinsic():
+                name = "offspring_" + TextUtil.fastReplace(
+                    TextUtil.fastReplace(host.getName(), ",", ""),
+                    " ", "_").lower()
+                state.setImageKey(StaticData.instance().getOtherImageKey(name, host.getSetCode()))
+
+            if cause.isKeyword(Keyword.SQUAD) and cause.isIntrinsic():
+                name = "squad_" + TextUtil.fastReplace(
+                    TextUtil.fastReplace(host.getName(), ",", ""),
+                    " ", "_").lower()
+                state.setImageKey(StaticData.instance().getOtherImageKey(name, host.getSetCode()))
+
+            if cause.hasParam("GainTextOf") and originalState is not None:
+                state.setSetCode(originalState.getSetCode())
+                state.setRarity(originalState.getRarity())
+                state.setImageKey(originalState.getImageKey())
+
+            # remove some characteristic static abilities
+            for sta in state.getStaticAbilities():
+                if not sta.isCharacteristicDefining():
+                    continue
+
+                if cause.hasParam("SetPower") and sta.hasParam("SetPower"):
+                    state.removeStaticAbility(sta)
+
+                if cause.hasParam("SetToughness") and sta.hasParam("SetToughness"):
+                    state.removeStaticAbility(sta)
+
+                # currently only Changeling and similar should be affected by that
+                # other cards using AddType$ ChosenType should not
+                if cause.hasParam("SetCreatureTypes") and sta.hasParam("AddAllCreatureTypes"):
+                    state.removeStaticAbility(sta)
+                if (cause.hasParam("SetColor") or cause.hasParam("SetColorByManaCost")) and sta.hasParam("SetColor"):
+                    state.removeStaticAbility(sta)
+
+            # remove some keywords
+            if cause.hasParam("SetCreatureTypes"):
+                state.removeIntrinsicKeyword(Keyword.CHANGELING)
+            if cause.hasParam("SetColor") or cause.hasParam("SetColorByManaCost"):
+                state.removeIntrinsicKeyword(Keyword.DEVOID)
+        return result
+
+    @staticmethod
+    def getMutatedCloneStates(card, sa):
+        top = card.getTopMergedCard()
+        state = top.getCurrentStateName()
+        if top.isCloned():
+            ret = top.getState(state).copy(card, sa)
+        else:
+            ret = top.getOriginalState(state).copy(card, sa)
+
+        first = True
+        for c in card.getMergedCards():
+            if first:
+                first = False
+                continue
+            ret.addAbilitiesFrom(c.getCurrentState(), False)
+
+        result = CardCloneStates(top, sa)
+        result.put(state, ret)
+
+        # For face down, flipped, transformed, melded or MDFC card, also copy the original state to avoid crash
+        if state != CardStateName.Original:
+            result.add(top.getState(CardStateName.Original).copy(card, sa))
+
+        return result
+```

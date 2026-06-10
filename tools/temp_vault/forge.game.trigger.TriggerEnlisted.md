@@ -37,6 +37,10 @@ classDiagram
 - [[forge.game.card.Card|Card]]
 - [[forge.game.spellability.SpellAbility|SpellAbility]]
 
+## Design Description
+
+TriggerEnlisted is a concrete trigger that fires in response to a creature being enlisted, a tap-an-untapped-creature mechanic. As a subclass of Trigger, it specializes the engine's trigger framework by implementing the template-method hooks its parent defines: performTest validates the event against the trigger's ValidCard and ValidEnlisted constraints, setTriggeringObjects exposes the relevant Card and Enlisted objects to the resolving ability, and getImportantStackObjects produces a localized stack description. It collaborates with AbilityKey to key into the runtime parameter map, operates on the SpellAbility being processed, and is owned by a host Card passed through to the superclass constructor. The design follows Forge's convention of one lightweight, stateless Trigger subclass per game event, delegating all shared bookkeeping to Trigger and keeping event-specific logic minimal and declarative.
+
 ## Source
 `forge-game/src/main/java/forge/game/trigger/TriggerEnlisted.java`
 
@@ -88,4 +92,44 @@ public class TriggerEnlisted extends Trigger {
         return sb.toString();
     }
 }
+```
+
+## Python
+`forge/game/trigger/TriggerEnlisted.py`
+
+```python
+from forge.game.trigger.Trigger import Trigger
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Localizer import Localizer
+
+
+class TriggerEnlisted(Trigger):
+    """
+    Constructor for Trigger.
+
+    @param params    a {@link HashMap} object.
+    @param host      a {@link Card} object.
+    @param intrinsic
+    """
+    def __init__(self, params: dict[str, str], host: Card, intrinsic: bool):
+        super().__init__(params, host, intrinsic)
+
+    def performTest(self, runParams: dict[AbilityKey, object]) -> bool:
+        if not self.matchesValidParam("ValidCard", runParams.get(AbilityKey.Card)):
+            return False
+        if not self.matchesValidParam("ValidEnlisted", runParams.get(AbilityKey.Enlisted)):
+            return False
+        return True
+
+    def setTriggeringObjects(self, sa: SpellAbility, runParams: dict[AbilityKey, object]) -> None:
+        sa.setTriggeringObjectsFrom(runParams, AbilityKey.Card, AbilityKey.Enlisted)
+
+    def getImportantStackObjects(self, sa: SpellAbility) -> str:
+        sb = []
+        sb.append(Localizer.getInstance().getMessage("lblEnlisted"))
+        sb.append(": ")
+        sb.append(str(sa.getTriggeringObject(AbilityKey.Card)))
+        return "".join(sb)
 ```

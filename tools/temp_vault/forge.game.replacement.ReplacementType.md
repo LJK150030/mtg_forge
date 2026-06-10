@@ -150,6 +150,12 @@ classDiagram
 - [[forge.game.replacement.ReplaceUntap|ReplaceUntap]]
 - [[forge.game.replacement.ReplacementEffect|ReplacementEffect]]
 
+## Design Description
+
+The ReplacementType enum catalogs every kind of game event that Magic's "replacement effect" rules can interceptâ€”counter placement, damage, draws, life changes, zone moves, untaps, and dozens moreâ€”binding each constant to the concrete ReplacementEffect subclass that implements that interception. It serves as a type-safe registry and factory hub for the forge.game.replacement package.
+
+Each constant stores the Class object of its corresponding Replace* handler. The createReplacement method uses reflection to locate a constructor accepting a parameter map, host Card, and intrinsic flag, instantiates the effect, and tags it with its originating mode. The smartValueOf helper resolves enum constants from case-insensitive strings, supporting Forge's text-driven card-scripting layer. This centralizes the mapping between event names and behavior classes, letting card scripts request replacement effects by name while decoupling callers from the individual implementation types.
+
 ## Source
 `forge-game/src/main/java/forge/game/replacement/ReplacementType.java`
 
@@ -249,4 +255,128 @@ public enum ReplacementType {
         throw new RuntimeException("No constructor found that would take Map as 1st parameter in class " + clasz.getName());
     }
 }
+```
+
+## Python
+`forge/game/replacement/ReplacementType.py`
+
+```python
+from forge.game.card.Card import Card
+from forge.game.replacement.ReplaceAddCounter import ReplaceAddCounter
+from forge.game.replacement.ReplaceAssembleContraption import ReplaceAssembleContraption
+from forge.game.replacement.ReplaceAssignDealDamage import ReplaceAssignDealDamage
+from forge.game.replacement.ReplaceAttached import ReplaceAttached
+from forge.game.replacement.ReplaceBeginPhase import ReplaceBeginPhase
+from forge.game.replacement.ReplaceBeginTurn import ReplaceBeginTurn
+from forge.game.replacement.ReplaceCascade import ReplaceCascade
+from forge.game.replacement.ReplaceCopySpell import ReplaceCopySpell
+from forge.game.replacement.ReplaceCounter import ReplaceCounter
+from forge.game.replacement.ReplaceDamage import ReplaceDamage
+from forge.game.replacement.ReplaceDealtDamage import ReplaceDealtDamage
+from forge.game.replacement.ReplaceDeclareBlocker import ReplaceDeclareBlocker
+from forge.game.replacement.ReplaceDestroy import ReplaceDestroy
+from forge.game.replacement.ReplaceDraw import ReplaceDraw
+from forge.game.replacement.ReplaceDrawCards import ReplaceDrawCards
+from forge.game.replacement.ReplaceExplore import ReplaceExplore
+from forge.game.replacement.ReplaceGainLife import ReplaceGainLife
+from forge.game.replacement.ReplaceGameLoss import ReplaceGameLoss
+from forge.game.replacement.ReplaceGameWin import ReplaceGameWin
+from forge.game.replacement.ReplaceLearn import ReplaceLearn
+from forge.game.replacement.ReplaceLifeReduced import ReplaceLifeReduced
+from forge.game.replacement.ReplaceLoseMana import ReplaceLoseMana
+from forge.game.replacement.ReplaceMill import ReplaceMill
+from forge.game.replacement.ReplaceMoved import ReplaceMoved
+from forge.game.replacement.ReplacePayLife import ReplacePayLife
+from forge.game.replacement.ReplacePlanarDiceResult import ReplacePlanarDiceResult
+from forge.game.replacement.ReplacePlaneswalk import ReplacePlaneswalk
+from forge.game.replacement.ReplaceProduceMana import ReplaceProduceMana
+from forge.game.replacement.ReplaceProliferate import ReplaceProliferate
+from forge.game.replacement.ReplaceRemoveCounter import ReplaceRemoveCounter
+from forge.game.replacement.ReplaceRollDice import ReplaceRollDice
+from forge.game.replacement.ReplaceRollPlanarDice import ReplaceRollPlanarDice
+from forge.game.replacement.ReplaceScry import ReplaceScry
+from forge.game.replacement.ReplaceSetInMotion import ReplaceSetInMotion
+from forge.game.replacement.ReplaceTap import ReplaceTap
+from forge.game.replacement.ReplaceToken import ReplaceToken
+from forge.game.replacement.ReplaceTransform import ReplaceTransform
+from forge.game.replacement.ReplaceTurnFaceUp import ReplaceTurnFaceUp
+from forge.game.replacement.ReplaceUntap import ReplaceUntap
+from forge.game.replacement.ReplacementEffect import ReplacementEffect
+
+from enum import Enum
+import inspect
+
+
+# TODO: Write javadoc for this type.
+class ReplacementType(Enum):
+    AddCounter = ReplaceAddCounter
+    AssembleContraption = ReplaceAssembleContraption
+    AssignDealDamage = ReplaceAssignDealDamage
+    Attached = ReplaceAttached
+    BeginPhase = ReplaceBeginPhase
+    BeginTurn = ReplaceBeginTurn
+    Cascade = ReplaceCascade
+    Counter = ReplaceCounter
+    CopySpell = ReplaceCopySpell
+    CreateToken = ReplaceToken
+    DamageDone = ReplaceDamage
+    DealtDamage = ReplaceDealtDamage
+    DeclareBlocker = ReplaceDeclareBlocker
+    Destroy = ReplaceDestroy
+    Draw = ReplaceDraw
+    DrawCards = ReplaceDrawCards
+    Explore = ReplaceExplore
+    GainLife = ReplaceGainLife
+    GameLoss = ReplaceGameLoss
+    GameWin = ReplaceGameWin
+    Learn = ReplaceLearn
+    LifeReduced = ReplaceLifeReduced
+    LoseMana = ReplaceLoseMana
+    Mill = ReplaceMill
+    Moved = ReplaceMoved
+    PayLife = ReplacePayLife
+    PlanarDiceResult = ReplacePlanarDiceResult
+    Planeswalk = ReplacePlaneswalk
+    ProduceMana = ReplaceProduceMana
+    Proliferate = ReplaceProliferate
+    RemoveCounter = ReplaceRemoveCounter
+    RollDice = ReplaceRollDice
+    RollPlanarDice = ReplaceRollPlanarDice
+    Scry = ReplaceScry
+    SetInMotion = ReplaceSetInMotion
+    Tap = ReplaceTap
+    Transform = ReplaceTransform
+    TurnFaceUp = ReplaceTurnFaceUp
+    Untap = ReplaceUntap
+
+    def __init__(self, cls):
+        self.clasz = cls
+
+    @staticmethod
+    def smartValueOf(value: str) -> "ReplacementType":
+        valToCompate = value.strip()
+        for v in ReplacementType:
+            if v.name.lower() == valToCompate.lower():
+                return v
+        raise RuntimeError("Element " + value + " not found in ReplacementType enum")
+
+    # TODO: Write javadoc for this method.
+    # @param mapParams
+    # @param host
+    # @param intrinsic
+    # @return
+    def createReplacement(self, mapParams: dict[str, str], host: Card, intrinsic: bool) -> ReplacementEffect:
+        cc = [self.clasz.__init__]
+        for c in cc:
+            pp = list(inspect.signature(c).parameters.values())[1:]
+            if pp and (pp[0].annotation is dict or pp[0].annotation is inspect.Parameter.empty):
+                try:
+                    res = self.clasz(mapParams, host, intrinsic)
+                    res.setMode(self)
+                    return res
+                except (TypeError, ValueError) as e:
+                    # TODO Auto-generated catch block ignores the exception, but sends it to System.err and probably forge.log.
+                    import traceback
+                    traceback.print_exc()
+        raise RuntimeError("No constructor found that would take Map as 1st parameter in class " + self.clasz.__name__)
 ```

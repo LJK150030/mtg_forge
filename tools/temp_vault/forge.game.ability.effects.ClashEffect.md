@@ -51,7 +51,7 @@ classDiagram
 
 ## Design Description
 
-ClashEffect is a concrete `SpellAbilityEffect` subclass that implements Magic's "clash" mechanic within Forge's ability-factory framework, overriding `getStackDescription` to render the stack text and `resolve` to drive the interaction. On resolution it pits the host card's controller against an opponent—either `Defined` or chosen interactively—then branches to the `WinSubAbility` or `OtherwiseSubAbility` according to the outcome.
+ClashEffect is a concrete `SpellAbilityEffect` subclass that implements Magic's "clash" mechanic within Forge's ability-factory framework, overriding `getStackDescription` to render the stack text and `resolve` to drive the interaction. On resolution it pits the host card's controller against an opponentâ€”either `Defined` or chosen interactivelyâ€”then branches to the `WinSubAbility` or `OtherwiseSubAbility` according to the outcome.
 
 The core comparison lives in the private static helper `clashWithOpponent`, where each player reveals their library's top card and the higher converted mana cost wins (ties yield no winner). A second helper, `clashMoveToTopOrBottom`, defers the top-or-bottom placement decision to each `Player`'s controller and routes the card through `GameAction`, logging the result via `GameEventAddLog`. Finally it fires `Clashed` triggers for both players through the game's `TriggerHandler`, integrating the effect with Forge's event and triggered-ability subsystems.
 
@@ -210,4 +210,141 @@ public class ClashEffect extends SpellAbilityEffect {
         p.getGame().fireEvent(new GameEventAddLog(GameLogEntryType.STACK_RESOLVE, clashOutcome));
     }
 }
+```
+
+## Python
+`forge/game/ability/effects/ClashEffect.py`
+
+```python
+from typing import Optional
+
+from forge.game.GameAction import GameAction
+from forge.game.GameLogEntryType import GameLogEntryType
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.event.GameEventAddLog import GameEventAddLog
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.trigger.TriggerType import TriggerType
+from forge.game.zone.PlayerZone import PlayerZone
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.Localizer import Localizer
+
+
+class ClashEffect(SpellAbilityEffect):
+
+    # (non-Javadoc)
+    # @see forge.card.abilityfactory.SpellEffect#getStackDescription(java.util.Map, forge.card.spellability.SpellAbility)
+    def getStackDescription(self, sa: SpellAbility) -> str:
+        return sa.getHostCard().getDisplayName() + " - Clash with an opponent."
+
+    # (non-Javadoc)
+    # @see forge.card.abilityfactory.SpellEffect#resolve(java.util.Map, forge.card.spellability.SpellAbility)
+    def resolve(self, sa: SpellAbility) -> None:
+        source = sa.getHostCard()
+        player = source.getController()
+        if sa.hasParam("Defined"):
+            opponent = AbilityUtils.getDefinedPlayers(source, sa.getParam("Defined"), sa).getFirst()
+        else:
+            opponent = sa.getActivatingPlayer().getController().chooseSingleEntityForEffect(
+                player.getOpponents(), sa,
+                Localizer.getInstance().getMessage("lblChooseOpponent"), None)
+        winner = ClashEffect.clashWithOpponent(sa, opponent)
+
+        if player == winner:
+            sub = sa.getAdditionalAbility("WinSubAbility")
+            if sub is not None:
+                AbilityUtils.resolve(sub)
+        else:
+            sub = sa.getAdditionalAbility("OtherwiseSubAbility")
+            if sub is not None:
+                AbilityUtils.resolve(sub)
+
+        runParams = AbilityKey.mapFromPlayer(player)
+        runParams[AbilityKey.Won] = "True" if player == winner else "False"
+        source.getGame().getTriggerHandler().runTrigger(TriggerType.Clashed, runParams, False)
+        runParams2 = AbilityKey.mapFromPlayer(opponent)
+        runParams2[AbilityKey.Won] = "True" if opponent == winner else "False"
+        source.getGame().getTriggerHandler().runTrigger(TriggerType.Clashed, runParams2, False)
+
+    # clashWithOpponent.
+    #
+    # @return a boolean.
+    @staticmethod
+    def clashWithOpponent(sa: SpellAbility, opponent: Player) -> Optional[Player]:
+        #
+        # Each clashing player reveals the top card of his or her library, then
+        # puts that card on the top or bottom. A player wins if his or her card
+        # had a higher mana cost.
+        #
+        # Clash you win or win you don't. There is no tie.
+        #
+        source = sa.getHostCard()
+        player = source.getController()
+        lib = ZoneType.Library
+
+        if sa.hasParam("RememberClasher"):
+            source.addRemembered(opponent)
+
+        pLib = player.getZone(lib)
+        oLib = opponent.getZone(lib)
+
+        if pLib.isEmpty() and oLib.isEmpty():
+            return None
+
+        reveal = []
+        pCard = None
+        oCard = None
+        toReveal = CardCollection()
+        pCMC = -1
+        oCMC = -1
+
+        if not pLib.isEmpty():
+            pCard = pLib.get(0)
+            pCMC = pCard.getCMC()
+            toReveal.add(pCard)
+
+            reveal.append(str(player) + " " + Localizer.getInstance().getMessage("lblReveals") + ": " + pCard.getDisplayName() + ". " + Localizer.getInstance().getMessage("lblCMC") + "= " + str(pCMC))
+            reveal.append("\n")
+        if not oLib.isEmpty():
+            oCard = oLib.get(0)
+            oCMC = oCard.getCMC()
+            toReveal.add(oCard)
+
+            reveal.append(str(opponent) + " " + Localizer.getInstance().getMessage("lblReveals") + ": " + oCard.getDisplayName() + ". " + Localizer.getInstance().getMessage("lblCMC") + "= " + str(oCMC))
+            reveal.append("\n")
+
+        winner = None
+
+        # no winner, still show the revealed cards rather than do nothing
+        if pCMC == oCMC:
+            reveal.append(Localizer.getInstance().getMessage("lblNoWinner"))
+        else:
+            winner = player if pCMC > oCMC else opponent
+            reveal.append(str(winner) + " " + Localizer.getInstance().getMessage("lblWinsClash") + ".")
+
+        player.getGame().getAction().revealTo(toReveal, player.getGame().getPlayers(), "".join(reveal), False)
+
+        ClashEffect.clashMoveToTopOrBottom(player, pCard, sa)
+        ClashEffect.clashMoveToTopOrBottom(opponent, oCard, sa)
+
+        return winner
+
+    @staticmethod
+    def clashMoveToTopOrBottom(p: Player, c: Card, sa: SpellAbility) -> None:
+        if c is None:
+            return
+        action = p.getGame().getAction()
+        putOnTop = p.getController().willPutCardOnTop(c)
+        location = "top" if putOnTop else "bottom"
+        clashOutcome = p.getName() + " clashed and put " + c.getDisplayName() + " to the " + location + " of library."
+
+        if putOnTop:
+            action.moveToLibrary(c, sa)
+        else:
+            action.moveToBottomOfLibrary(c, sa)
+        p.getGame().fireEvent(GameEventAddLog(GameLogEntryType.STACK_RESOLVE, clashOutcome))
 ```

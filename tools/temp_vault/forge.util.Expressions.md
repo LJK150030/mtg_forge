@@ -23,6 +23,10 @@ classDiagram
     }
 ```
 
+## Design Description
+
+Expressions is an abstract utility class in `forge.util` that centralizes the evaluation of Forge's two-letter comparison operators (LT, LE, EQ, GE, GT, NE, plus the special M2 modulo-2 parity check). Its two static methods divide responsibility cleanly: `compare` resolves a left-hand and right-hand integer against an operator code to a boolean result, while `operatorName` maps the same codes to human-readable phrasing for display. Being abstract with only static members, it is intended purely as a namespace rather than something to instantiate or subtype. It collaborates with no domain types directly, instead serving as a low-level helper that ability and trigger logic throughout the engine call to interpret the string comparison tokens embedded in card scripts. The duplicated operator-dispatch chains and the author's own "should this function be somewhere else?" comments hint at an unsettled home for this incidental shared utility.
+
 ## Source
 `forge-game/src/main/java/forge/util/Expressions.java`
 
@@ -115,4 +119,62 @@ public abstract class Expressions {
     }
 
 }
+```
+
+## Python
+`forge/util/Expressions.py`
+
+```python
+package = None  # forge.util
+
+
+class Expressions:
+    """
+    AllZoneUtil contains static functions used to get CardLists of various cards
+    in various zones.
+
+    @author dennis.r.friedrichsen (slapshot5 on slightlymagic.net)
+    @version $Id: AllZoneUtil.java 17567 2012-10-18 14:10:15Z Max mtg $
+    """
+
+    @staticmethod
+    def compare(leftSide: int, comp: str, rightSide: int) -> bool:
+        # should this function be somewhere else?
+        # leftSide COMPARED to rightSide:
+        if "LT" in comp:
+            return leftSide < rightSide
+        elif "LE" in comp:
+            return leftSide <= rightSide
+        elif "EQ" in comp:
+            return leftSide == rightSide
+        elif "GE" in comp:
+            return leftSide >= rightSide
+        elif "GT" in comp:
+            return leftSide > rightSide
+        elif "NE" in comp:
+            return leftSide != rightSide
+        elif "M2" in comp:
+            return (leftSide % 2) == (rightSide % 2)  # they are equal modulo 2
+
+        return False
+
+    @staticmethod
+    def operatorName(comp: str) -> str:
+        # should this function be somewhere else?
+        # leftSide COMPARED to rightSide:
+        if "LT" in comp:
+            return " less than "
+        elif "LE" in comp:
+            return " less or equal to "
+        elif "EQ" in comp:
+            return " equal to "
+        elif "GT" in comp:
+            return " greater than "
+        elif "GE" in comp:
+            return " greater or equal to "
+        elif "NE" in comp:
+            return " not equal to "
+        elif "M2" in comp:
+            return " is modulo 2 equal to"  # should not show this to players
+        return " ? "
 ```

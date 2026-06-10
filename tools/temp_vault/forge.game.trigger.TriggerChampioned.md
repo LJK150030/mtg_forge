@@ -37,6 +37,10 @@ classDiagram
 - [[forge.game.card.Card|Card]]
 - [[forge.game.spellability.SpellAbility|SpellAbility]]
 
+## Design Description
+
+TriggerChampioned is a concrete trigger that fires when a creature is championed (the keyword mechanic where a creature exiles another creature as it enters). Extending the abstract Trigger base class, it specializes the inherited event-handling contract by overriding `performTest` to gate firing on the `ValidCard` (the championed creature) and `ValidSource` (the championing card) parameters, and `setTriggeringObjects` to expose those objects to the resolving SpellAbility via AbilityKey-keyed run parameters. It collaborates with Card (its host), SpellAbility (the triggered ability it populates), and AbilityKey (the typed keys, notably `Championed` and `Card`, used to read and bind triggering objects). The override of `getImportantStackObjects` builds a localized, human-readable stack description, reflecting the engine's intent to keep trigger subclasses thin, data-driven matchers while delegating shared lifecycle logic to the superclass.
+
 ## Source
 `forge-game/src/main/java/forge/game/trigger/TriggerChampioned.java`
 
@@ -122,4 +126,39 @@ public class TriggerChampioned extends Trigger {
         return sb.toString();
     }
 }
+```
+
+## Python
+`forge/game/trigger/TriggerChampioned.py`
+
+```python
+from forge.game.trigger.Trigger import Trigger
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Localizer import Localizer
+
+
+class TriggerChampioned(Trigger):
+    def __init__(self, params: dict[str, str], host: Card, intrinsic: bool):
+        super().__init__(params, host, intrinsic)
+
+    def performTest(self, runParams: dict[AbilityKey, object]) -> bool:
+        if not self.matchesValidParam("ValidCard", runParams.get(AbilityKey.Championed)):
+            return False
+
+        if not self.matchesValidParam("ValidSource", runParams.get(AbilityKey.Card)):
+            return False
+
+        return True
+
+    def setTriggeringObjects(self, sa: SpellAbility, runParams: dict[AbilityKey, object]) -> None:
+        sa.setTriggeringObjectsFrom(runParams, AbilityKey.Championed, AbilityKey.Card)
+
+    def getImportantStackObjects(self, sa: SpellAbility) -> str:
+        sb = []
+        sb.append(Localizer.getInstance().getMessage("lblChampioned"))
+        sb.append(": ")
+        sb.append(str(sa.getTriggeringObject(AbilityKey.Championed)))
+        return "".join(sb)
 ```

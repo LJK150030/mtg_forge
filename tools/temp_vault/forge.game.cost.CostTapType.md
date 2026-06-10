@@ -60,7 +60,7 @@ classDiagram
 
 CostTapType represents a tap-based payment within Forge's cost system, modeling abilities and spells that require tapping one or more qualifying permanents (e.g., "Tap two untapped creatures you control"). As a concrete subclass of CostPartWithList, it tracks the specific cards tapped so the cost can be paid, refunded, and hashed for game state comparison.
 
-Its core responsibility is validating and executing the tap: getMaxAmountX and canPay filter the payer's battlefield via CardLists into a list of valid, tappable targets — honoring the canTapSource flag and special clauses like sharesCreatureTypeWith and withTotalPowerGE — while doPayment and doListPayment perform the actual tapping and fire the TapAll trigger. Overriding canPayListAtOnce signals batch payment of multiple cards. It collaborates with Player, SpellAbility, and Card for game context, reports itself reusable and renewable, and supports double-dispatch traversal through accept(ICostVisitor).
+Its core responsibility is validating and executing the tap: getMaxAmountX and canPay filter the payer's battlefield via CardLists into a list of valid, tappable targets â€” honoring the canTapSource flag and special clauses like sharesCreatureTypeWith and withTotalPowerGE â€” while doPayment and doListPayment perform the actual tapping and fire the TapAll trigger. Overriding canPayListAtOnce signals batch payment of multiple cards. It collaborates with Player, SpellAbility, and Card for game context, reports itself reusable and renewable, and supports double-dispatch traversal through accept(ICostVisitor).
 
 ## Source
 `forge-game/src/main/java/forge/game/cost/CostTapType.java`
@@ -301,4 +301,160 @@ public class CostTapType extends CostPartWithList {
     }
 
 }
+```
+
+## Python
+`forge/game/cost/CostTapType.py`
+
+```python
+from forge.card.CardType import CardType
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CardPredicates import CardPredicates
+from forge.game.cost.CostPartWithList import CostPartWithList
+from forge.game.cost.ICostVisitor import ICostVisitor
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.trigger.TriggerType import TriggerType
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.Lang import Lang
+from forge.util.TextUtil import TextUtil
+
+
+class CostTapType(CostPartWithList):
+    """The Class CostTapType."""
+
+    serialVersionUID = 1
+
+    def __init__(self, amount: str, type: str, description: str, costHasTapSource: bool):
+        super().__init__(amount, type, description)
+        self.canTapSource = not costHasTapSource
+
+    def getMaxAmountX(self, ability: SpellAbility, payer: Player, effect: bool):
+        source = ability.getHostCard()
+
+        # extend if cards use X with different conditions
+
+        typeList = CardLists.getValidCards(payer.getCardsIn(ZoneType.Battlefield), self.getType().split(";"), payer, source, ability)
+
+        if not self.canTapSource:
+            typeList.remove(source)
+        typeList = CardLists.filter(typeList, CardPredicates.CAN_CREW if ability.isCrew() else CardPredicates.CAN_TAP)
+
+        return typeList.size()
+
+    def isReusable(self) -> bool:
+        return True
+
+    def isRenewable(self) -> bool:
+        return True
+
+    def toString(self) -> str:
+        sb = []
+
+        desc = self.getDescriptiveType()
+        type = self.getType()
+        amt = self.getAmount()
+
+        if "+withTotalPowerGE" in type:
+            num = type.split("\\+withTotalPowerGE")[1]
+            sb.append("Tap any number of untapped creatures you control other than CARDNAME with total power ")
+            sb.append(num)
+            sb.append("or greater")
+            return "".join(sb)
+
+        sb.append("Tap ")
+        if "Other" in type:
+            rep = ".Other" if ".Other" in type else "+Other"
+            descTrim = desc.replace(rep, "")
+            if CardType.CoreType.isValidEnum(descTrim):
+                descTrim = descTrim.lower()
+            sb.append("another untapped " + descTrim if amt == "1" else
+                      Lang.nounWithNumeral(amt, "other untapped " + descTrim))
+            if "you control" not in descTrim:
+                sb.append(" you control")
+        elif amt == "X":
+            sb.append("any number of untapped ")
+            sb.append(desc)
+            sb.append("s you control")
+        else:
+            sb.append(Lang.nounWithNumeralExceptOne(amt, "untapped " + desc))
+            sb.append(" you control")
+        if "sharesCreatureTypeWith" in type:
+            sb.append(" that share a creature type")
+        return "".join(sb)
+
+    def refund(self, source: Card) -> None:
+        for c in self.cardList:
+            c.setTapped(False)
+        self.cardList.clear()
+
+    def canPay(self, ability: SpellAbility, payer: Player, effect: bool) -> bool:
+        source = ability.getHostCard()
+
+        type = self.getType()
+        sameType = False
+
+        if type == "OriginalHost":
+            return ability.getOriginalHost().canTap()
+
+        if ".sharesCreatureTypeWith" in type:
+            sameType = True
+            type = TextUtil.fastReplace(type, ".sharesCreatureTypeWith", "")
+        totalPower = False
+        totalP = ""
+        if "+withTotalPowerGE" in type:
+            totalPower = True
+            totalP = type.split("withTotalPowerGE")[1]
+            type = TextUtil.fastReplace(type, TextUtil.concatNoSpace("+withTotalPowerGE", totalP), "")
+
+        typeList = CardLists.getValidCards(payer.getCardsIn(ZoneType.Battlefield), type.split(";"), payer, source, ability)
+
+        if not self.canTapSource:
+            typeList.remove(source)
+        typeList = CardLists.filter(typeList, CardPredicates.CAN_CREW if ability.isCrew() else CardPredicates.CAN_TAP)
+
+        if sameType:
+            for card in typeList:
+                if CardLists.count(typeList, CardPredicates.sharesCreatureTypeWith(card)) > 1:
+                    return True
+            return False
+
+        if totalPower:
+            i = int(totalP)
+            return CardLists.getTotalPower(typeList, ability) >= i
+
+        amount = self.getAbilityAmount(ability)
+        return typeList.size() >= amount
+
+    def doPayment(self, payer: Player, ability: SpellAbility, targetCard: Card, effect: bool) -> Card:
+        targetCard.tap(True, ability, payer)
+        return targetCard
+
+    def canPayListAtOnce(self) -> bool:
+        return True
+
+    def doListPayment(self, payer: Player, ability: SpellAbility, targetCards: CardCollectionView, effect: bool) -> CardCollectionView:
+        tapped = CardCollection()
+        for c in targetCards:
+            if c.tap(True, ability, payer):
+                tapped.add(c)
+
+        runParams = AbilityKey.newMap()
+        runParams[AbilityKey.Cards] = tapped
+        payer.getGame().getTriggerHandler().runTrigger(TriggerType.TapAll, runParams, False)
+        return targetCards
+
+    def getHashForLKIList(self) -> str:
+        return "Tapped"
+
+    def getHashForCardList(self) -> str:
+        return "TappedCards"
+
+    # Inputs
+    def accept(self, visitor: ICostVisitor):
+        return visitor.visit(self)
 ```

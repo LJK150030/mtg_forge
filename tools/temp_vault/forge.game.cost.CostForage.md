@@ -57,7 +57,7 @@ classDiagram
 
 ## Design Description
 
-Forage is a sacrifice/exile cost part modeling Magic's "Forage" mechanic, letting a player pay either by exiling three cards from their graveyard or sacrificing a single Food artifact. Extending `CostPartWithList`, it overrides `canPay` to verify one of those two options is available, and implements payment as a batch operation (`canPayListAtOnce` returns true) via `doListPayment`, which branches on the target count—exiling three graveyard cards or sacrificing one Food—and then fires the `Forage` trigger. It collaborates with `Game` for the exile/sacrifice actions, `AbilityKey` for zone-change parameters, and the card collection types for targets. It supplies stable hash keys ("Foraged"/"ForagedCards") for tracking paid cards and accepts an `ICostVisitor`, participating in the visitor-based cost-processing framework.
+Forage is a sacrifice/exile cost part modeling Magic's "Forage" mechanic, letting a player pay either by exiling three cards from their graveyard or sacrificing a single Food artifact. Extending `CostPartWithList`, it overrides `canPay` to verify one of those two options is available, and implements payment as a batch operation (`canPayListAtOnce` returns true) via `doListPayment`, which branches on the target countâ€”exiling three graveyard cards or sacrificing one Foodâ€”and then fires the `Forage` trigger. It collaborates with `Game` for the exile/sacrifice actions, `AbilityKey` for zone-change parameters, and the card collection types for targets. It supplies stable hash keys ("Foraged"/"ForagedCards") for tracking paid cards and accepts an `ICostVisitor`, participating in the visitor-based cost-processing framework.
 
 ## Source
 `forge-game/src/main/java/forge/game/cost/CostForage.java`
@@ -150,4 +150,86 @@ public class CostForage extends CostPartWithList {
         return visitor.visit(this);
     }
 }
+```
+
+## Python
+`forge/game/cost/CostForage.py`
+
+```python
+from forge.game.Game import Game
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CardPredicates import CardPredicates
+from forge.game.cost.CostPartWithList import CostPartWithList
+from forge.game.cost.ICostVisitor import ICostVisitor
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.trigger.TriggerType import TriggerType
+from forge.game.zone.ZoneType import ZoneType
+
+
+class CostForage(CostPartWithList):
+
+    serialVersionUID = 1
+
+    def canPay(self, ability: SpellAbility, payer: Player, effect: bool) -> bool:
+        graveyard = CardLists.filter(payer.getCardsIn(ZoneType.Graveyard), CardPredicates.canExiledBy(ability, effect))
+        if graveyard.size() >= 3:
+            return True
+
+        food = CardLists.filter(payer.getCardsIn(ZoneType.Battlefield), CardPredicates.isType("Food"), CardPredicates.canBeSacrificedBy(ability, effect))
+        if not food.isEmpty():
+            return True
+
+        return False
+
+    def toString(self) -> str:
+        return "Forage"
+
+    def doPayment(self, payer: Player, ability: SpellAbility, targetCard: Card, effect: bool) -> Card:
+        return None
+
+    def canPayListAtOnce(self) -> bool:
+        return True
+
+    def doListPayment(self, payer: Player, ability: SpellAbility, targetCards: CardCollectionView, effect: bool) -> CardCollectionView:
+        game = payer.getGame()
+        if targetCards.size() == 3:
+            moveParams = AbilityKey.newMap()
+            AbilityKey.addCardZoneTableParams(moveParams, self.table)
+            result = CardCollection()
+            for targetCard in targetCards:
+                newCard = game.getAction().exile(targetCard, None, moveParams)
+                result.add(newCard)
+                SpellAbilityEffect.handleExiledWith(newCard, ability)
+            self.triggerForage(payer)
+            return result
+        elif targetCards.size() == 1:
+            moveParams = AbilityKey.newMap()
+            AbilityKey.addCardZoneTableParams(moveParams, self.table)
+            result = game.getAction().sacrifice(targetCards, ability, effect, moveParams)
+            self.triggerForage(payer)
+            return result
+        else:
+            return None
+
+    def triggerForage(self, payer: Player) -> None:
+        runParams = AbilityKey.mapFromPlayer(payer)
+        payer.getGame().getTriggerHandler().runTrigger(TriggerType.Forage, runParams, False)
+
+    HashLKIListKey = "Foraged"
+    HashCardListKey = "ForagedCards"
+
+    def getHashForLKIList(self) -> str:
+        return CostForage.HashLKIListKey
+
+    def getHashForCardList(self) -> str:
+        return CostForage.HashCardListKey
+
+    def accept(self, visitor: ICostVisitor):
+        return visitor.visit(self)
 ```

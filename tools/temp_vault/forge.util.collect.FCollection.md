@@ -90,6 +90,12 @@ classDiagram
 - [[forge.util.collect.FCollection.EmptyFCollection|EmptyFCollection]]
 - [[forge.util.collect.FCollectionReader|FCollectionReader]]
 
+## Design Description
+
+FCollection is a generic collection that combines the uniqueness guarantee of a Set with the insertion-order preservation and positional access of a List, backed by parallel `HashSet` and `ArrayList` fields kept in sync on every mutation. It implements `List<T>`, the read-oriented `FCollectionView<T>`, `Cloneable`, and `Serializable`, serving as Forge's standard ordered, duplicate-free container. The set backs membership and size queries while the list backs ordering and indexed operations, and the transient set is rebuilt from the list on deserialization.
+
+Convenience constructors accept single elements, arrays, iterables, or an `FCollectionReader`, and null elements are silently rejected. Equality and hashing delegate to the backing list. A shared immutable `EMPTY` singleton, implemented by the nested `EmptyFCollection` subclass, overrides every mutator and accessor with optimized no-op or empty-result behavior to avoid allocating throwaway empty instances.
+
 ## Source
 `forge-core/src/main/java/forge/util/collect/FCollection.java`
 
@@ -798,4 +804,437 @@ public class FCollection<T> implements List<T>, /*Set<T>,*/ FCollectionView<T>, 
         }
     }
 }
+```
+
+## Python
+`forge/util/collect/FCollection.py`
+
+```python
+from functools import cmp_to_key
+import sys
+
+from forge.util.collect.FCollectionView import FCollectionView
+from forge.util.collect.FCollectionReader import FCollectionReader
+
+
+_MISSING = object()
+
+
+class FCollection(FCollectionView):
+    """
+    Collection with unique elements (Set) that maintains the order in
+    which the elements are added to it (List).
+
+    This object is serializable if all elements it contains are.
+    """
+    serialVersionUID = -1664555336364294106
+
+    EMPTY = None  # assigned after EmptyFCollection is defined
+
+    @staticmethod
+    def getEmpty():
+        return FCollection.EMPTY
+
+    def __init__(self, arg=_MISSING):
+        # The Set representation of this collection.
+        self.set = set()
+        # The List representation of this collection.
+        self.list = []
+
+        if arg is _MISSING:
+            # Create an empty FCollection.
+            return
+        if isinstance(arg, FCollectionReader):
+            # Create an FCollection from an FCollectionReader.
+            arg.readAll(self)
+        elif isinstance(arg, (list, tuple)):
+            # Create an FCollection from an array.
+            self.addAll(list(arg))
+        elif hasattr(arg, "__iter__") and not isinstance(arg, str):
+            # Create an FCollection from an Iterable.
+            self.addAll(arg)
+        else:
+            # Create an FCollection containing a single element.
+            self.add(arg)
+
+    def readObject(self, in_):
+        # Rebuild the transient set from the list after deserialization.
+        in_.defaultReadObject()
+        self.set = set(self.list)
+
+    @staticmethod
+    def hasElements(iterable):
+        """
+        Check whether an Iterable contains any iterable, silently
+        returning False when None is passed as an argument.
+        """
+        if iterable is None:
+            return False
+        for _ in iterable:
+            return True
+        return False
+
+    @staticmethod
+    def hasElement(collection, element):
+        """
+        Check whether a Collection contains a particular element, silently
+        returning False when None is passed as the first argument.
+        """
+        return collection is not None and element in collection
+
+    def __eq__(self, obj):
+        return isinstance(obj, FCollection) and self.hashCode() == obj.hashCode()
+
+    def hashCode(self):
+        # This implementation uses the hash code of the backing list.
+        return hash(tuple(self.list))
+
+    def __hash__(self):
+        return self.hashCode()
+
+    def __str__(self):
+        return str(self.list)
+
+    def clone(self):
+        # Create a new FCollection containing the same objects as this
+        # instance, in the same order. Objects are shallowly copied.
+        return FCollection(self.list)
+
+    def getFirst(self):
+        if not self.list:
+            return None
+        return self.list[0]
+        # return list.getFirst();
+
+    def getLast(self):
+        if not self.list:
+            return None
+        return self.list[len(self.list) - 1]
+        # return list.getLast();
+
+    def size(self):
+        return len(self.set)
+
+    def isEmpty(self):
+        return len(self.set) == 0
+
+    def asSet(self):
+        return self.set
+
+    def contains(self, o):
+        if o is None:
+            return False
+        return o in self.set
+
+    def __iter__(self):
+        return iter(self.list)
+
+    def iterator(self):
+        return iter(self.list)
+
+    def toArray(self, a=None):
+        if a is None:
+            return list(self.list)
+        return list(self.list)
+
+    def add(self, *args):
+        if len(args) == 2:
+            # add(int index, T element)
+            index, element = args
+            self.insert(index, element)
+            return
+        # add(T e)
+        e = args[0]
+        if e is None:
+            return False
+        if e not in self.set:
+            self.set.add(e)
+            self.list.append(e)
+            return True
+        return False
+
+    def remove(self, o):
+        if isinstance(o, int):
+            # remove(int index)
+            removedItem = self.list.pop(o)
+            if removedItem is not None:
+                self.set.discard(removedItem)
+            return removedItem
+        # remove(Object o)
+        if o is None:
+            return False
+        if o in self.set:
+            self.set.discard(o)
+            self.list.remove(o)
+            return True
+        return False
+
+    def removeIf(self, filter):
+        to_remove = [x for x in self.list if filter(x)]
+        if to_remove:
+            for x in to_remove:
+                self.list.remove(x)
+            for x in to_remove:
+                self.set.discard(x)
+            return True
+        return False
+
+    def containsAll(self, c):
+        return all(x in self.set for x in c)
+
+    def addAll(self, *args):
+        if len(args) == 2:
+            # addAll(int index, Collection<? extends T> c)
+            index, c = args
+            if c is None:
+                return False
+            if isinstance(c, list):
+                lst = c
+            else:
+                lst = list(c)
+            changed = False
+            for i in range(len(lst) - 1, -1, -1):  # must add in reverse order so they show up in the right place
+                changed |= self.insert(index, lst[i])
+            return changed
+
+        # addAll(Collection) / addAll(Iterable) / addAll(T[])
+        i = args[0]
+        changed = False
+        if i is None:
+            return False
+        for e in i:
+            changed |= self.add(e)
+        return changed
+
+    def removeAll(self, c):
+        # removeAll(Collection) / removeAll(Iterable)
+        changed = False
+        if c is None:
+            return False
+        for o in c:
+            changed |= self.remove(o)
+        return changed
+
+    def retainAll(self, c):
+        new = [x for x in self.set if x in c]
+        if len(new) != len(self.set):
+            self.set = set(new)
+            self.list[:] = [x for x in self.list if x in c]
+            return True
+        return False
+
+    def clear(self):
+        if not self.set:
+            return
+        self.set.clear()
+        self.list.clear()
+
+    def get(self, x):
+        if isinstance(x, int):
+            # get(int index)
+            return self.list[x]
+        # get(T obj)
+        if x is None:
+            return None
+        for elem in self:
+            if elem == x:
+                return elem
+        return x
+
+    def set(self, index, element):
+        # WARNING: this method doesn't update the set and should only be used
+        # in a situation where the set of elements in this collection is invariant.
+        old = self.list[index]
+        self.list[index] = element
+        return old
+
+    def replace(self, index, element):
+        # Replace the element at the specified position, updating both the
+        # internal list and set, keeping set membership in sync with the list.
+        old = self.list[index]
+        self.list[index] = element
+        if old is not element:
+            self.set.discard(old)
+            self.set.add(element)
+        return old
+
+    def insert(self, index, element):
+        # Helper method to insert an element at a particular index.
+        if element not in self.set:
+            self.set.add(element)
+            self.list.insert(index, element)
+            return True
+        # re-position in list if needed
+        oldIndex = self.list.index(element)
+        if index == oldIndex:
+            return False
+        if index > oldIndex:
+            index -= 1  # account for being removed
+        self.list.pop(oldIndex)
+        self.list.insert(index, element)
+        return True
+
+    def indexOf(self, o):
+        try:
+            return self.list.index(o)
+        except ValueError:
+            return -1
+
+    def lastIndexOf(self, o):
+        for i in range(len(self.list) - 1, -1, -1):
+            if self.list[i] == o:
+                return i
+        return -1
+
+    def listIterator(self, index=None):
+        if index is None:
+            return iter(self.list)
+        return iter(self.list[index:])
+
+    def subList(self, fromIndex, toIndex):
+        # Note: this breaks the contract of List.subList by returning a static
+        # collection, rather than a view, of the sublist.
+        return list(self.list[fromIndex:toIndex])
+
+    def sort(self, comparator=None):
+        if comparator is None:
+            # Ordering.usingToString()
+            self.sort(_using_to_string)
+            return
+        try:
+            self.list.sort(key=cmp_to_key(comparator))
+        except Exception as e:
+            sys.stderr.write("FCollection failed to sort: \n" + str(comparator) + "\n" + str(e) + "\n")
+
+    def threadSafeIterable(self):
+        # create a new list for iterating to make it thread safe and avoid
+        # concurrent modification exceptions
+        return list(self.list)
+
+    def stream(self):
+        return iter(self.list)
+
+    def anyMatch(self, test):
+        return any(test(x) for x in self.set)
+
+    def allMatch(self, test):
+        return all(test(x) for x in self.set)
+
+
+def _using_to_string(a, b):
+    sa, sb = str(a), str(b)
+    return (sa > sb) - (sa < sb)
+
+
+class EmptyFCollection(FCollection):
+    """
+    An unmodifiable, empty FCollection. Overrides all methods with default
+    implementations suitable for an empty collection, to improve performance.
+    """
+    serialVersionUID = 8667965158891635997
+
+    def __init__(self):
+        super().__init__()
+
+    def add(self, *args):
+        if len(args) == 2:
+            # add(int index, T element)
+            return
+        return False
+
+    def addAll(self, *args):
+        return False
+
+    def clear(self):
+        return
+
+    def contains(self, o):
+        return False
+
+    def containsAll(self, c):
+        for _ in c:
+            return False
+        return True
+
+    def get(self, x):
+        if isinstance(x, int):
+            raise IndexError("Any index is out of bounds for an empty collection")
+        if x is None:
+            return None
+        return x
+
+    def getFirst(self):
+        raise Exception("Collection is empty")
+
+    def getLast(self):
+        raise Exception("Collection is empty")
+
+    def indexOf(self, o):
+        return -1
+
+    def isEmpty(self):
+        return True
+
+    def __iter__(self):
+        return iter([])
+
+    def iterator(self):
+        return iter([])
+
+    def lastIndexOf(self, o):
+        return -1
+
+    def listIterator(self, index=None):
+        return iter([])
+
+    def remove(self, o):
+        if isinstance(o, int):
+            raise IndexError("Any index is out of bounds for an empty collection")
+        return False
+
+    def removeAll(self, c):
+        return False
+
+    def retainAll(self, c):
+        return False
+
+    def set(self, index, element):
+        raise IndexError("Any index is out of bounds for an empty collection")
+
+    def size(self):
+        return 0
+
+    def sort(self, comparator=None):
+        return
+
+    def subList(self, fromIndex, toIndex):
+        if fromIndex == 0 and toIndex == 0:
+            return self
+        raise IndexError("Any index is out of bounds for an empty collection")
+
+    def threadSafeIterable(self):
+        return self
+
+    def toArray(self, a=None):
+        if a is None:
+            return []
+        if len(a) > 0:
+            a[0] = None
+        return a
+
+    def stream(self):
+        return iter([])
+
+    def anyMatch(self, test):
+        return False
+
+    def allMatch(self, test):
+        return True
+
+    def __str__(self):
+        return "[]"
+
+
+FCollection.EmptyFCollection = EmptyFCollection
+FCollection.EMPTY = EmptyFCollection()
 ```

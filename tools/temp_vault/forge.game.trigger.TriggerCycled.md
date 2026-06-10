@@ -37,6 +37,10 @@ classDiagram
 - [[forge.game.card.Card|Card]]
 - [[forge.game.spellability.SpellAbility|SpellAbility]]
 
+## Design Description
+
+TriggerCycled is a concrete trigger that fires when a card is cycled, encapsulating the conditions and triggering-object setup specific to the "cycled" game event. Extending the abstract `Trigger` base class, it overrides three template hooks: `performTest` gates the trigger against `ValidCard`, `ValidPlayer`, and an optional `FirstTime` constraint by inspecting the run parameters; `setTriggeringObjects` populates the firing `SpellAbility` with the cycled `Card` and its cause; and `getImportantStackObjects` produces a localized, human-readable summary for the stack. It collaborates with `AbilityKey` as the typed lookup into the parameter map, `Card` as the host and cycled object, and `SpellAbility` as the resolving ability. The design reflects Forge's broader trigger framework: a thin, declarative subclass driven by string parameters and shared base-class validation helpers, with localization handled through `Localizer` to keep displayed text translatable.
+
 ## Source
 `forge-game/src/main/java/forge/game/trigger/TriggerCycled.java`
 
@@ -127,4 +131,44 @@ public class TriggerCycled extends Trigger {
     }
 
 }
+```
+
+## Python
+`forge/game/trigger/TriggerCycled.py`
+
+```python
+from typing import Map  # placeholder
+from forge.game.trigger.Trigger import Trigger
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Localizer import Localizer
+
+
+class TriggerCycled(Trigger):
+
+    def __init__(self, params: dict[str, str], host: Card, intrinsic: bool):
+        super().__init__(params, host, intrinsic)
+
+    def setTriggeringObjects(self, sa: SpellAbility, runParams: dict[AbilityKey, object]) -> None:
+        sa.setTriggeringObjectsFrom(runParams, AbilityKey.Card, AbilityKey.Cause)
+
+    def getImportantStackObjects(self, sa: SpellAbility) -> str:
+        sb = []
+        sb.append(Localizer.getInstance().getMessage("lblCycled"))
+        sb.append(": ")
+        sb.append(str(sa.getTriggeringObject(AbilityKey.Card)))
+        return "".join(sb)
+
+    def performTest(self, runParams: dict[AbilityKey, object]) -> bool:
+        if not self.matchesValidParam("ValidCard", runParams.get(AbilityKey.Card)):
+            return False
+        if not self.matchesValidParam("ValidPlayer", runParams.get(AbilityKey.Player)):
+            return False
+
+        if self.hasParam("FirstTime"):
+            if not runParams.get(AbilityKey.FirstTime):
+                return False
+
+        return True
 ```

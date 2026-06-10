@@ -95,3 +95,52 @@ public class ScryEffect extends SpellAbilityEffect {
     }
 }
 ```
+
+## Python
+`forge/game/ability/effects/ScryEffect.py`
+
+```python
+package forge.game.ability.effects
+
+from typing import List
+
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Lang import Lang
+from forge.util.Localizer import Localizer
+
+
+class ScryEffect(SpellAbilityEffect):
+    def getStackDescription(self, sa: SpellAbility) -> str:
+        sb = []
+
+        players: List[Player] = self.getTargetPlayers(sa)
+        sb.append(Lang.joinHomogenous(players))
+        sb.append(" ")
+
+        num = 1
+        if sa.hasParam("ScryNum"):
+            num = AbilityUtils.calculateAmount(sa.getHostCard(), sa.getParam("ScryNum"), sa)
+
+        sb.append("scries " if len(players) == 1 else "scry ")
+        sb.append(str(num))
+        sb.append(".")
+        return "".join(sb)
+
+    def resolve(self, sa: SpellAbility) -> None:
+        num = 1
+        if sa.hasParam("ScryNum"):
+            num = AbilityUtils.calculateAmount(sa.getHostCard(), sa.getParam("ScryNum"), sa)
+
+        isOptional = sa.hasParam("Optional")
+        players: List[Player] = []
+
+        for p in self.getTargetPlayers(sa):
+            if not p.isInGame():
+                continue
+            if not isOptional or p.getController().confirmAction(sa, None, Localizer.getInstance().getMessage("lblDoYouWanttoScry"), None):
+                players.append(p)
+        sa.getActivatingPlayer().getGame().getAction().scry(players, num, sa)
+```

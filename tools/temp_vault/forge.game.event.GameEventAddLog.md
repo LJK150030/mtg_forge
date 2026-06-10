@@ -71,3 +71,28 @@ public record GameEventAddLog(GameLogEntryType type, String message, CardView so
     }
 }
 ```
+
+## Python
+`forge/game/event/GameEventAddLog.py`
+
+```python
+from forge.game.GameLogEntryType import GameLogEntryType
+from forge.game.card.Card import Card
+from forge.game.card.CardView import CardView
+from forge.game.event.GameEvent import GameEvent
+from forge.game.event.IGameEventVisitor import IGameEventVisitor
+
+
+class GameEventAddLog(GameEvent):
+
+    def __init__(self, type: GameLogEntryType, message: str, sourceCard=None):
+        self.type = type
+        self.message = message
+        if isinstance(sourceCard, Card):
+            self.sourceCard = CardView.get(sourceCard) if sourceCard is not None else None
+        else:
+            self.sourceCard = sourceCard
+
+    def visit(self, visitor: IGameEventVisitor):
+        return visitor.visit(self)
+```

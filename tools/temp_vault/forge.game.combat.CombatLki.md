@@ -71,3 +71,23 @@ public class CombatLki {
 
 }
 ```
+
+## Python
+`forge/game/combat/CombatLki.py`
+
+```python
+from forge.game.combat.AttackingBand import AttackingBand
+from forge.util.collect.FCollection import FCollection
+from forge.util.collect.FCollectionView import FCollectionView
+
+
+# TODO: Write javadoc for this type.
+class CombatLki:
+
+    def __init__(self, isAttacker: bool, relatedBands: FCollectionView[AttackingBand]):
+        self.isAttacker = isAttacker
+        self.relatedBands = FCollection(relatedBands)
+
+    def getFirstBand(self) -> AttackingBand:
+        return None if self.relatedBands.isEmpty() else self.relatedBands.get(0)
+```

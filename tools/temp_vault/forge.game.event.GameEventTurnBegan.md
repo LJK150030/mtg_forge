@@ -65,3 +65,26 @@ public record GameEventTurnBegan(PlayerView turnOwner, int turnNumber) implement
     }
 }
 ```
+
+## Python
+`forge/game/event/GameEventTurnBegan.py`
+
+```python
+from forge.game.event.GameEvent import GameEvent
+from forge.game.event.IGameEventVisitor import IGameEventVisitor
+from forge.game.player.PlayerView import PlayerView
+from forge.util.TextUtil import TextUtil
+
+
+class GameEventTurnBegan(GameEvent):
+
+    def __init__(self, turnOwner: PlayerView, turnNumber: int):
+        self.turnOwner = turnOwner
+        self.turnNumber = turnNumber
+
+    def visit(self, visitor: IGameEventVisitor):
+        return visitor.visit(self)
+
+    def toString(self) -> str:
+        return TextUtil.concatWithSpace("Turn", str(self.turnNumber), TextUtil.enclosedParen(self.turnOwner.toString()))
+```

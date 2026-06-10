@@ -62,9 +62,9 @@ classDiagram
 
 ## Design Description
 
-`DeckFileHeader` is an immutable value object that parses and holds the metadata of a Forge deck file's header. Built from a `FileSection` of key/value pairs, its constructor reads well-known keys—name, comment, deck type, tags, draft notes, key cards, and AI hints—into `final` fields exposed only through getters, so a header is fully populated at construction and never mutated afterward.
+`DeckFileHeader` is an immutable value object that parses and holds the metadata of a Forge deck file's header. Built from a `FileSection` of key/value pairs, its constructor reads well-known keysâ€”name, comment, deck type, tags, draft notes, key cards, and AI hintsâ€”into `final` fields exposed only through getters, so a header is fully populated at construction and never mutated afterward.
 
-It depends on `FileSection` as its sole input source and on `DeckFormat`, calling `DeckFormat.smartValueOf` to resolve the deck type while defaulting to `Constructed`. The class centralizes the file format's parsing rules: it splits and trims multi-valued fields (comma-separated tags into a sorted `TreeSet`, semicolon-separated key cards, and pipe/colon-delimited draft notes) while filtering blanks, and infers AI intent from legacy `Player`/`PlayerType` markers—letting the rest of the deck I/O layer work with typed accessors instead of raw strings.
+It depends on `FileSection` as its sole input source and on `DeckFormat`, calling `DeckFormat.smartValueOf` to resolve the deck type while defaulting to `Constructed`. The class centralizes the file format's parsing rules: it splits and trims multi-valued fields (comma-separated tags into a sorted `TreeSet`, semicolon-separated key cards, and pipe/colon-delimited draft notes) while filtering blanks, and infers AI intent from legacy `Player`/`PlayerType` markersâ€”letting the rest of the deck I/O layer work with typed accessors instead of raw strings.
 
 ## Source
 `forge-core/src/main/java/forge/deck/io/DeckFileHeader.java`
@@ -220,4 +220,104 @@ public class DeckFileHeader {
         return keyCards;
     }
 }
+```
+
+## Python
+`forge/deck/io/DeckFileHeader.py`
+
+```python
+from forge.deck.DeckFormat import DeckFormat
+from forge.util.FileSection import FileSection
+
+
+class DeckFileHeader:
+    """
+    TODO: Write javadoc for this type.
+    """
+
+    # The Constant NAME.
+    NAME = "Name"
+
+    # The Constant DECK_TYPE.
+    DECK_TYPE = "Deck Type"
+    TAGS = "Tags"
+
+    TAGS_SEPARATOR = ","
+    DRAFT_NOTES = "DraftNotes"
+    KEY_CARDS = "KeyCards"
+
+    # The Constant COMMENT.
+    COMMENT = "Comment"
+    PLAYER = "Player"
+    CSTM_POOL = "Custom Pool"
+    PLAYER_TYPE = "PlayerType"
+    AI_HINTS = "AiHints"
+
+    def isIntendedForAi(self) -> bool:
+        return self.intendedForAi
+
+    def getAiHints(self) -> str:
+        return self.aiHints
+
+    def __init__(self, kvPairs: FileSection):
+        self.name = kvPairs.get(DeckFileHeader.NAME)
+        self.comment = kvPairs.get(DeckFileHeader.COMMENT)
+        self.deckType = DeckFormat.smartValueOf(kvPairs.get(DeckFileHeader.DECK_TYPE), DeckFormat.Constructed)
+        self.customPool = kvPairs.getBoolean(DeckFileHeader.CSTM_POOL)
+        self.intendedForAi = "computer".lower() == (kvPairs.get(DeckFileHeader.PLAYER) or "").lower() or "ai".lower() == (kvPairs.get(DeckFileHeader.PLAYER_TYPE) or "").lower()
+        self.aiHints = kvPairs.get(DeckFileHeader.AI_HINTS)
+
+        self.tags = set()
+
+        rawTags = kvPairs.get(DeckFileHeader.TAGS)
+        if rawTags is not None and rawTags.strip():
+            for t in rawTags.split(DeckFileHeader.TAGS_SEPARATOR):
+                if t is not None and t.strip():
+                    self.tags.add(t.strip())
+
+        self.draftNotes = {}
+        self.extractDraftNotes(kvPairs.get(DeckFileHeader.DRAFT_NOTES))
+
+        self.keyCards = []
+        rawKeyCards = kvPairs.get(DeckFileHeader.KEY_CARDS)
+        if rawKeyCards is not None and rawKeyCards.strip():
+            for k in rawKeyCards.split(";"):
+                if k is not None and k.strip():
+                    self.keyCards.append(k.strip())
+
+    def extractDraftNotes(self, rawNotes: str) -> None:
+        if rawNotes is None or not rawNotes.strip():
+            return
+
+        for t in rawNotes.split("|"):
+            if t is None or not t.strip():
+                continue
+
+            notes = t.strip().split(":", 1)
+
+            if not notes[0].strip() or not notes[1].strip():
+                continue
+
+            self.draftNotes[notes[0].strip()] = notes[1].strip()
+
+    def isCustomPool(self) -> bool:
+        return self.customPool
+
+    def getName(self) -> str:
+        return self.name
+
+    def getComment(self) -> str:
+        return self.comment
+
+    def getDeckType(self) -> DeckFormat:
+        return self.deckType
+
+    def getTags(self) -> set[str]:
+        return self.tags
+
+    def getDraftNotes(self) -> dict[str, str]:
+        return self.draftNotes
+
+    def getKeyCards(self) -> list[str]:
+        return self.keyCards
 ```

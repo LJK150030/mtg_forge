@@ -158,3 +158,99 @@ public class GoadAi extends SpellAbilityAi {
     }
 }
 ```
+
+## Python
+`forge/ai/ability/GoadAi.py`
+
+```python
+from forge.ai.SpellAbilityAi import SpellAbilityAi
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.ai.ComputerUtilCard import ComputerUtilCard
+from forge.ai.ComputerUtilCombat import ComputerUtilCombat
+from forge.game.Game import Game
+from forge.game.card.Card import Card
+from forge.game.card.CardLists import CardLists
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+
+
+class GoadAi(SpellAbilityAi):
+
+    def checkApiLogic(self, ai: Player, sa: SpellAbility) -> AiAbilityDecision:
+        source = sa.getHostCard()
+        game = source.getGame()
+
+        if sa.usesTargeting():
+            goadable = CardLists.getTargetableCards(game.getCardsIn(ZoneType.Battlefield), sa)
+
+            if not goadable:
+                return AiAbilityDecision(0, AiPlayDecision.TargetingFailed)
+
+            if len(game.getPlayers()) > 2:
+                # use this part only in multiplayer
+                def _multiFilter(c):
+                    # filter only creatures which can attack
+                    if ComputerUtilCard.isUselessCreature(ai, c):
+                        return False
+                    # useless
+                    if c.isGoadedBy(ai):
+                        return False
+                    # select creatures which can attack an Opponent other than ai
+                    for o in ai.getOpponents():
+                        if ComputerUtilCombat.canAttackNextTurn(c, o):
+                            return True
+                    return False
+
+                goadable = CardLists.filter(goadable, _multiFilter)
+            else:
+                # single Player, goaded creature would attack ai
+                def _duelFilter(c):
+                    # filter only creatures which can attack
+                    if ComputerUtilCard.isUselessCreature(ai, c):
+                        return False
+                    # useless
+                    if c.isGoadedBy(ai):
+                        return False
+                    # select only creatures AI can block
+                    return ComputerUtilCard.canBeBlockedProfitably(ai, c, False)
+
+                goadable = CardLists.filter(goadable, _duelFilter)
+
+            if goadable:
+                sa.getTargets().add(ComputerUtilCard.getBestCreatureAI(goadable))
+                return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+            # AI does not find a good creature to goad.
+            # because if it would goad a creature it would attack AI.
+            # AI might not have enough information to block it
+            return AiAbilityDecision(0, AiPlayDecision.TargetingFailed)
+
+        return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+    def doTriggerNoCost(self, ai: Player, sa: SpellAbility, mandatory: bool) -> AiAbilityDecision:
+        decision = self.checkApiLogic(ai, sa)
+        if decision.willingToPlay():
+            return decision
+        if not mandatory:
+            return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+        if sa.usesTargeting():
+            if sa.getTargetRestrictions().canTgtPlayer():
+                for opp in ai.getOpponents():
+                    if sa.canTarget(opp):
+                        sa.getTargets().add(opp)
+                        return AiAbilityDecision(50, AiPlayDecision.MandatoryPlay)
+                if sa.canTarget(ai):
+                    sa.getTargets().add(ai)
+                    return AiAbilityDecision(50, AiPlayDecision.MandatoryPlay)
+            else:
+                list = CardLists.getTargetableCards(ai.getGame().getCardsIn(ZoneType.Battlefield), sa)
+
+                if not list:
+                    return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+                sa.getTargets().add(ComputerUtilCard.getWorstCreatureAI(list))
+                return AiAbilityDecision(30, AiPlayDecision.MandatoryPlay)
+        return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+```

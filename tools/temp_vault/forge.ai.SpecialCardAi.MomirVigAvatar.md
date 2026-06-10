@@ -41,10 +41,10 @@ classDiagram
 
 MomirVigAvatar is a static nested AI strategy helper within `SpecialCardAi` that encapsulates the computer player's decision logic for the Momir Vig, Simic Visionary Avatar ability, which spends X mana to create a random creature token. Its sole responsibility is the `consider` method, which evaluates a candidate `SpellAbility` for a given `Player` and returns an `AiAbilityDecision` pairing a confidence score with a play verdict.
 
-Acting as a self-contained policy object rather than implementing a shared interface, it collaborates with the host `Card` and game state to gate activation by phase and game variant—deferring in the MoJhoSto variant to occasionally favor Jhoira, and reaching the concrete `AiController` via a `PlayerControllerAi` cast to read tunable AI properties. It computes the maximum affordable X, declines tokens smaller than two, caps the value at eleven, and commits the payment. The design intent is to externalize per-card heuristics into focused, testable units keyed by tunable thresholds.
+Acting as a self-contained policy object rather than implementing a shared interface, it collaborates with the host `Card` and game state to gate activation by phase and game variantâ€”deferring in the MoJhoSto variant to occasionally favor Jhoira, and reaching the concrete `AiController` via a `PlayerControllerAi` cast to read tunable AI properties. It computes the maximum affordable X, declines tokens smaller than two, caps the value at eleven, and commits the payment. The design intent is to externalize per-card heuristics into focused, testable units keyed by tunable thresholds.
 
 ## Source
-`forge-ai/src/main/java/forge/ai/SpecialCardAi.java` â€” declaration excerpt
+`forge-ai/src/main/java/forge/ai/SpecialCardAi.java` Ã¢â‚¬â€ declaration excerpt
 
 ```java
     // Momir Vig, Simic Visionary Avatar
@@ -85,4 +85,58 @@ Acting as a self-contained policy object rather than implementing a shared inter
             return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
         }
     }
+```
+
+## Python
+`forge/ai/SpecialCardAi/MomirVigAvatar.py`
+
+```python
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiController import AiController
+from forge.ai.PlayerControllerAi import PlayerControllerAi
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.ai.AiProps import AiProps
+from forge.ai.ComputerUtilCost import ComputerUtilCost
+from forge.game.card.Card import Card
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CardPredicates import CardPredicates
+from forge.game.GameType import GameType
+from forge.game.phase.PhaseType import PhaseType
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.MyRandom import MyRandom
+
+
+# Momir Vig, Simic Visionary Avatar
+class MomirVigAvatar:
+    @staticmethod
+    def consider(ai: Player, sa: SpellAbility) -> AiAbilityDecision:
+        source = sa.getHostCard()
+
+        if source.getGame().getPhaseHandler().getPhase().isBefore(PhaseType.MAIN1):
+            return AiAbilityDecision(0, AiPlayDecision.AnotherTime)
+
+        # In MoJhoSto, prefer Jhoira sorcery ability from time to time
+        if (source.getGame().getRules().hasAppliedVariant(GameType.MoJhoSto)
+                and len(CardLists.filter(ai.getLandsInPlay(), CardPredicates.UNTAPPED)) >= 3):
+            aic = ai.getController().getAi()
+            chanceToPrefJhoira = aic.getIntProperty(AiProps.MOJHOSTO_CHANCE_TO_PREFER_JHOIRA_OVER_MOMIR)
+            numLandsForJhoira = aic.getIntProperty(AiProps.MOJHOSTO_NUM_LANDS_TO_ACTIVATE_JHOIRA)
+
+            if len(ai.getLandsInPlay()) >= numLandsForJhoira and MyRandom.percentTrue(chanceToPrefJhoira):
+                return AiAbilityDecision(0, AiPlayDecision.AnotherTime)
+
+        # Set PayX here to maximum value.
+        tokenSize = ComputerUtilCost.setMaxXValue(sa, ai, False)
+
+        # Some basic strategy for Momir
+        if tokenSize < 2:
+            return AiAbilityDecision(0, AiPlayDecision.AnotherTime)
+
+        if tokenSize > 11:
+            tokenSize = 11
+
+        sa.setXManaCostPaid(tokenSize)
+
+        return AiAbilityDecision(100, AiPlayDecision.WillPlay)
 ```

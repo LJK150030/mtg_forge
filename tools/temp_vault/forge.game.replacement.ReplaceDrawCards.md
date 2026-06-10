@@ -36,6 +36,10 @@ classDiagram
 - [[forge.game.card.Card|Card]]
 - [[forge.game.spellability.SpellAbility|SpellAbility]]
 
+## Design Description
+
+ReplaceDrawCards is a concrete replacement effect that intercepts card-draw events, allowing a card's scripted "Number" and "ValidPlayer" parameters to modify or substitute the normal drawing of cards. As a subclass of ReplacementEffect, it supplies the two hooks the replacement framework requires: canReplace, which gates the effect by validating the affected player and optionally comparing the draw count against a scripted operator/operand expression (via Expressions.compare), and setReplacingObjects, which records the affected Player and Number onto the triggering SpellAbility so downstream resolution can reference them. It collaborates with AbilityKey as the typed lookup keys into the runtime parameter map, Card as the effect's host, and SpellAbility as the carrier of replacement context. The design favors data-driven configuration, reading thresholds and comparators from the card script's parameter map rather than hardcoding behavior, which keeps the class reusable across any draw-replacement card.
+
 ## Source
 `forge-game/src/main/java/forge/game/replacement/ReplaceDrawCards.java`
 
@@ -112,4 +116,44 @@ public class ReplaceDrawCards extends ReplacementEffect {
         sa.setReplacingObject(AbilityKey.Number, runParams.get(AbilityKey.Number));
     }
 }
+```
+
+## Python
+`forge/game/replacement/ReplaceDrawCards.py`
+
+```python
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Expressions import Expressions
+from forge.game.replacement.ReplacementEffect import ReplacementEffect
+
+
+# TODO: Write javadoc for this type.
+class ReplaceDrawCards(ReplacementEffect):
+
+    def __init__(self, params: dict[str, str], host: Card, intrinsic: bool):
+        """Instantiates a new replace draw.
+
+        :param params: the params
+        :param host: the host
+        """
+        super().__init__(params, host, intrinsic)
+
+    def canReplace(self, runParams: dict[AbilityKey, object]) -> bool:
+        if not self.matchesValidParam("ValidPlayer", runParams.get(AbilityKey.Affected)):
+            return False
+        if self.hasParam("Number"):
+            n = runParams.get(AbilityKey.Number)
+            comparator = self.getParam("Number")
+            operator = comparator[0:2]
+            operandValue = int(comparator[2:])
+            if not Expressions.compare(n, operator, operandValue):
+                return False
+
+        return True
+
+    def setReplacingObjects(self, runParams: dict[AbilityKey, object], sa: SpellAbility) -> None:
+        sa.setReplacingObject(AbilityKey.Player, runParams.get(AbilityKey.Affected))
+        sa.setReplacingObject(AbilityKey.Number, runParams.get(AbilityKey.Number))
 ```

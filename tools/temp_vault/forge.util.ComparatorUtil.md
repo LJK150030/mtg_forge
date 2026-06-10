@@ -23,6 +23,12 @@ classDiagram
     }
 ```
 
+## Design Description
+
+ComparatorUtil is a final, non-instantiable utility class in `forge.util` (forge-core) that provides a single static helper, `verifyTransitivity`, for validating that a supplied `Comparator<T>` behaves correctly over a given collection of elements. It checks the two core invariants of a well-formed comparator: antisymmetry (compare(a,b) equals the negation of compare(b,a)) and transitivity of the greater-than relation across element triples, returning a descriptive message string identifying the first violation, or an empty string when the comparator is sound.
+
+Rather than acting as a domain entity, it is a stateless diagnostic tool that collaborates only with the standard `Comparator` and `Collection` types it receives as parameters. The private constructor enforces the static-only design, and the originally exception-throwing logic has been softened to return error text and print to stderrâ€”signalling its intended use as a non-fatal development and testing aid for verifying comparator implementations elsewhere in the engine.
+
 ## Source
 `forge-core/src/main/java/forge/util/ComparatorUtil.java`
 
@@ -106,4 +112,74 @@ public final class ComparatorUtil
     {
     }
 }
+```
+
+## Python
+`forge/util/ComparatorUtil.py`
+
+```python
+package = None
+
+from typing import Callable, Iterable, TypeVar
+import sys
+
+T = TypeVar("T")
+
+
+class ComparatorUtil:
+    """
+    @author Gili Tzabari
+    """
+
+    @staticmethod
+    def verifyTransitivity(comparator: Callable[[T, T], int], elements: Iterable[T]) -> str:
+        """
+        Verify that a comparator is transitive.
+
+        :param comparator: the comparator to test
+        :param elements:   the elements to test against
+        :return: a descriptive message identifying the first violation, or an empty string
+        """
+        exception = ""
+        for first in elements:
+            for second in elements:
+                result1 = comparator(first, second)
+                result2 = comparator(second, first)
+                if result1 != -result2:
+                    # Uncomment the following line to step through the failed case
+                    # comparator(first, second)
+                    # raise AssertionError("compare(" + first + ", " + second + ") == " + result1 +
+                    #     " but swapping the parameters returns " + result2)
+                    exception = ("compare(" + str(first) + ", " + str(second) + ") == " + str(result1) +
+                                 " but swapping the parameters returns " + str(result2))
+                    print(exception, file=sys.stderr)
+                    return exception
+        for first in elements:
+            for second in elements:
+                firstGreaterThanSecond = comparator(first, second)
+                if firstGreaterThanSecond <= 0:
+                    continue
+                for third in elements:
+                    secondGreaterThanThird = comparator(second, third)
+                    if secondGreaterThanThird <= 0:
+                        continue
+                    firstGreaterThanThird = comparator(first, third)
+                    if firstGreaterThanThird <= 0:
+                        # Uncomment the following line to step through the failed case
+                        # comparator(first, third)
+                        # raise AssertionError("compare(" + first + ", " + second + ") > 0, " +
+                        #     "compare(" + second + ", " + third + ") > 0, but compare(" + first + ", " + third + ") == " +
+                        #     firstGreaterThanThird)
+                        exception = ("compare(" + str(first) + ", " + str(second) + ") > 0, " +
+                                     "compare(" + str(second) + ", " + str(third) + ") > 0, but compare(" +
+                                     str(first) + ", " + str(third) + ") == " + str(firstGreaterThanThird))
+                        print(exception, file=sys.stderr)
+                        return exception
+        return exception
+
+    def __init__(self):
+        """
+        Prevent construction.
+        """
+        pass
 ```

@@ -37,6 +37,12 @@ classDiagram
 - [[forge.game.card.Card|Card]]
 - [[forge.game.spellability.SpellAbility|SpellAbility]]
 
+## Design Description
+
+TriggerTaps is a concrete trigger that fires when a permanent becomes tapped, encapsulating the matching and event-binding logic for "whenever ~ is tapped" style abilities in Forge's rules engine. As a subclass of Trigger, it overrides the framework's template methods: performTest evaluates the runtime parameters against the trigger's authored conditions (ValidCard, ValidCause, ValidPlayer, and optional Attacker/FirstTime restrictions), setTriggeringObjects exposes the tapped Card to the resolving SpellAbility, and getImportantStackObjects produces a localized stack description.
+
+The design follows the Template Method pattern: Trigger owns the lifecycle and shared param-matching helpers (matchesValidParam, hasParam, getParam), while this class supplies only the tap-specific behavior. It collaborates with AbilityKey to look up typed values from the run-parameter map, Card as the triggering object, and SpellAbility as the effect being set upâ€”keeping each trigger type small, declarative, and data-driven from the card-script parameters passed to the constructor.
+
 ## Source
 `forge-game/src/main/java/forge/game/trigger/TriggerTaps.java`
 
@@ -135,4 +141,49 @@ public class TriggerTaps extends Trigger {
     }
 
 }
+```
+
+## Python
+`forge/game/trigger/TriggerTaps.py`
+
+```python
+from forge.game.trigger.Trigger import Trigger
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Localizer import Localizer
+
+
+class TriggerTaps(Trigger):
+
+    def __init__(self, params: dict[str, str], host: Card, intrinsic: bool):
+        super().__init__(params, host, intrinsic)
+
+    def performTest(self, runParams: dict[AbilityKey, object]) -> bool:
+        if not self.matchesValidParam("ValidCard", runParams.get(AbilityKey.Card)):
+            return False
+
+        if not self.matchesValidParam("ValidCause", runParams.get(AbilityKey.Cause)):
+            return False
+        if not self.matchesValidParam("ValidPlayer", runParams.get(AbilityKey.Player)):
+            return False
+        if self.hasParam("Attacker"):
+            if (self.getParam("Attacker").lower() == "true") != runParams.get(AbilityKey.Attacker):
+                return False
+
+        if self.hasParam("FirstTime"):
+            if not runParams.get(AbilityKey.FirstTime):
+                return False
+
+        return True
+
+    def setTriggeringObjects(self, sa: SpellAbility, runParams: dict[AbilityKey, object]) -> None:
+        sa.setTriggeringObjectsFrom(runParams, AbilityKey.Card)
+
+    def getImportantStackObjects(self, sa: SpellAbility) -> str:
+        sb = []
+        sb.append(Localizer.getInstance().getMessage("lblTapped"))
+        sb.append(": ")
+        sb.append(str(sa.getTriggeringObject(AbilityKey.Card)))
+        return "".join(sb)
 ```

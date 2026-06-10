@@ -57,7 +57,7 @@ classDiagram
 
 The description has already been written and is present in the note's "## Design Description" section. Here it is:
 
-SetStateAi is the AI decision module for the SetState ability, governing how the computer player decides whether to transform, flip, or turn a card face up/down. Extending `SpellAbilityAi`, it overrides the framework's decision hooks — `checkApiLogic`, `chkDrawback`, `checkPhaseRestrictions`, and `confirmAction` — returning `AiAbilityDecision` verdicts and selecting valid targets from `CardCollection`s. Its core intent lives in private heuristics that build throwaway LKI copies of a card's alternate `CardState` and run them through `compareCards`, weighing creature value, combat survivability, attackability, and blocking to judge whether the alternate state is genuinely better. Notable safeguards include `isSafeToTransformIntoLegendary`, which respects the legend rule (using `CounterType` KI counters and usefulness checks to decide replacement), and special handling for hidden-agenda commander cards, reflecting a conservative, value-driven design that avoids self-destructive state changes.
+SetStateAi is the AI decision module for the SetState ability, governing how the computer player decides whether to transform, flip, or turn a card face up/down. Extending `SpellAbilityAi`, it overrides the framework's decision hooks â€” `checkApiLogic`, `chkDrawback`, `checkPhaseRestrictions`, and `confirmAction` â€” returning `AiAbilityDecision` verdicts and selecting valid targets from `CardCollection`s. Its core intent lives in private heuristics that build throwaway LKI copies of a card's alternate `CardState` and run them through `compareCards`, weighing creature value, combat survivability, attackability, and blocking to judge whether the alternate state is genuinely better. Notable safeguards include `isSafeToTransformIntoLegendary`, which respects the legend rule (using `CounterType` KI counters and usefulness checks to decide replacement), and special handling for hidden-agenda commander cards, reflecting a conservative, value-driven design that avoids self-destructive state changes.
 
 ## Source
 `forge-ai/src/main/java/forge/ai/ability/SetStateAi.java`
@@ -318,4 +318,224 @@ public class SetStateAi extends SpellAbilityAi {
         return isSafeToTransformIntoLegendary(player, sa.getHostCard());
     }
 }
+```
+
+## Python
+`forge/ai/ability/SetStateAi.py`
+
+```python
+from forge.ai.SpellAbilityAi import SpellAbilityAi
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.ai.ComputerUtilCost import ComputerUtilCost
+from forge.ai.ComputerUtilCard import ComputerUtilCard
+from forge.card.CardStateName import CardStateName
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.card.Card import Card
+from forge.game.card.CardCopyService import CardCopyService
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CardPredicates import CardPredicates
+from forge.game.card.CardUtil import CardUtil
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardState import CardState
+from forge.game.card.CounterType import CounterType
+from forge.game.keyword.Keyword import Keyword
+from forge.game.phase.PhaseHandler import PhaseHandler
+from forge.game.phase.PhaseType import PhaseType
+from forge.game.player.Player import Player
+from forge.game.player.PlayerActionConfirmMode import PlayerActionConfirmMode
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+
+import sys
+from typing import List, Map
+
+
+class SetStateAi(SpellAbilityAi):
+    def checkApiLogic(self, aiPlayer: Player, sa: SpellAbility) -> AiAbilityDecision:
+        source = sa.getHostCard()
+        mode = sa.getParam("Mode")
+
+        # turning face is most likely okay
+        # TODO only do this at beneficial moment (e.g. surprise during combat or morph trigger), might want to reserve mana to protect them from easy removal
+        if "TurnFaceUp" == mode or "TurnFaceDown" == mode:
+            return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+        # Prevent transform into legendary creature if copy already exists
+        if not self.isSafeToTransformIntoLegendary(aiPlayer, source):
+            return AiAbilityDecision(0, AiPlayDecision.WouldDestroyLegend)
+
+        if sa.getSVar("X") == "Count$xPaid":
+            ComputerUtilCost.setMaxXValue(sa, aiPlayer, sa.isTrigger())
+
+        if "Transform" == mode or "Flip" == mode:
+            return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+        return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+    def chkDrawback(self, aiPlayer: Player, sa: SpellAbility) -> AiAbilityDecision:
+        # Gross generalization, but this always considers alternate states more powerful
+        return AiAbilityDecision(0, AiPlayDecision.CantPlayAi) if sa.getHostCard().isInAlternateState() else AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+    def checkPhaseRestrictions(self, ai: Player, sa: SpellAbility, ph: PhaseHandler) -> bool:
+        mode = sa.getParam("Mode")
+        source = sa.getHostCard()
+        logic = sa.getParamOrDefault("AILogic", "")
+
+        if "Transform" == mode:
+            if not sa.usesTargeting():
+                # no Transform with Defined which is not Self
+                if not source.canTransform(sa):
+                    return False
+                return self.shouldTransformCard(source, ai, ph) or "Always" == logic
+            else:
+                sa.resetTargets()
+
+                # select only the ones that can transform
+                list = CardLists.filter(CardUtil.getValidCardsToTarget(sa), CardPredicates.CREATURES, lambda c: c.canTransform(sa))
+
+                if list.isEmpty():
+                    return False
+
+                for c in list:
+                    if self.shouldTransformCard(c, ai, ph) or "Always" == logic:
+                        sa.getTargets().add(c)
+                        if sa.isMaxTargetChosen():
+                            break
+
+                return sa.isMinTargetChosen()
+        elif "TurnFaceUp" == mode or "TurnFaceDown" == mode:
+            if sa.usesTargeting():
+                sa.resetTargets()
+
+                list = CardUtil.getValidCardsToTarget(sa)
+
+                if list.isEmpty():
+                    return False
+
+                for c in list:
+                    if self.shouldTurnFace(c, ai, ph, mode) or "Always" == logic:
+                        sa.getTargets().add(c)
+                        if not sa.canAddMoreTarget():
+                            break
+
+                return sa.isTargetNumberValid()
+            else:
+                list = AbilityUtils.getDefinedCards(sa.getHostCard(), sa.getParam("Defined"), sa)
+                if list.isEmpty():
+                    return False
+                return self.shouldTurnFace(list.get(0), ai, ph, mode) or "Always" == logic
+        return True
+
+    def shouldTransformCard(self, card: Card, ai: Player, ph: PhaseHandler) -> bool:
+        if not card.hasAlternateState():
+            print("Warning: SetState without ALTERNATE on " + card.getName() + ".", file=sys.stderr)
+            return False
+
+        # need a copy for evaluation
+        transformed = CardCopyService.getLKICopy(card)
+        transformed.getCurrentState().copyFrom(card.getAlternateState(), True)
+        transformed.updateStateForView()
+
+        # TODO: compareCards assumes that a creature will transform into a creature. Need to improve this
+        # for other things potentially transforming.
+        return self.compareCards(card, transformed, ai, ph)
+
+    def shouldTurnFace(self, card: Card, ai: Player, ph: PhaseHandler, mode: str) -> bool:
+        if card.isFaceDown():
+            if "TurnFaceDown" == mode:
+                return False
+            # hidden agenda
+            if card.getState(CardStateName.Original).hasKeyword(Keyword.HIDDEN_AGENDA) \
+                    and card.isInZone(ZoneType.Command):
+                chosenName = card.getNamedCard()
+                for cast in ai.getGame().getStack().getSpellsCastThisTurn():
+                    if cast.getController() == ai and cast.getName() == chosenName:
+                        return True
+                return False
+
+            # non-permanent facedown can't be turned face up
+            if not card.getRules().getType().isPermanent() or not card.canBeTurnedFaceUp():
+                return False
+        else:
+            if "TurnFaceUp" == mode:
+                return False
+            # doublefaced or meld cards can't be turned face down
+            if card.isTransformable() or card.isMeldable():
+                return False
+
+        # need a copy for evaluation
+        transformed = CardCopyService.getLKICopy(card)
+        if not card.isFaceDown():
+            transformed.turnFaceDown(True)
+        else:
+            transformed.forceTurnFaceUp()
+        transformed.updateStateForView()
+        return self.compareCards(card, transformed, ai, ph)
+
+    def compareCards(self, original: Card, copy: Card, ai: Player, ph: PhaseHandler) -> bool:
+        valueCard = ComputerUtilCard.evaluateCreature(original)
+        valueTransformed = ComputerUtilCard.evaluateCreature(copy)
+
+        # card controlled by opponent, try to kill it or weak it
+        if original.getController().isOpponentOf(ai):
+            return copy.getNetToughness() < 1 or valueCard > valueTransformed
+
+        # it would not survive being transformed
+        if copy.getNetToughness() < 1:
+            return False
+
+        # check which state would be better for attacking
+        if ph.isPlayerTurn(ai) and ph.getPhase().isBefore(PhaseType.COMBAT_DECLARE_ATTACKERS):
+            transformAttack = False
+
+            # if an opponent can't block it, no need to transform (back)
+            for opp in ai.getOpponents():
+                attackCard = not ComputerUtilCard.canBeBlockedProfitably(opp, original, True)
+                attackTransformed = not ComputerUtilCard.canBeBlockedProfitably(opp, copy, True)
+
+                # both forms can attack, try to use the one with better value
+                if attackCard and attackTransformed:
+                    return valueCard <= valueTransformed
+                elif attackTransformed:  # only transformed can attack
+                    transformAttack = True
+
+            # can only attack in transformed form
+            if transformAttack:
+                return True
+        elif ph.isPlayerTurn(ai) and ph.getPhase() == PhaseType.COMBAT_DECLARE_BLOCKERS:
+            if ph.inCombat() and ph.getCombat().isUnblocked(original):
+                # if source is unblocked, check for the power
+                return original.getNetPower() <= copy.getNetPower()
+        # no clear way, alternate state is better,
+        # but for more cleaner way use Evaluate for check
+        return valueCard <= valueTransformed
+
+    def isSafeToTransformIntoLegendary(self, aiPlayer: Player, source: Card) -> bool:
+        # Prevent transform into legendary creature if copy already exists
+        # Check first if Legend Rule does still apply
+        if not source.ignoreLegendRule():
+            if not source.hasAlternateState():
+                print("Warning: SetState without ALTERNATE on " + source.getName() + ".", file=sys.stderr)
+                return False
+
+            # check if the other side is legendary and if such Card already is in Play
+            other = source.getAlternateState()
+
+            if other is not None and other.getType().isLegendary() and aiPlayer.isCardInPlay(other.getName()):
+                if not other.getType().isCreature():
+                    return False
+
+                othercard = aiPlayer.getCardsIn(ZoneType.Battlefield, other.getName()).getFirst()
+                ki = CounterType.getType("KI")
+
+                # for legendary KI counter creatures
+                if othercard.getCounters(ki) >= source.getCounters(ki):
+                    # if the other legendary is useless try to replace it
+                    return ComputerUtilCard.isUselessCreature(aiPlayer, othercard)
+
+        return True
+
+    def confirmAction(self, player: Player, sa: SpellAbility, mode: PlayerActionConfirmMode, message: str, params: Map[str, object]) -> bool:
+        # TODO: improve the AI for when it may want to transform something that's optional to transform
+        return self.isSafeToTransformIntoLegendary(player, sa.getHostCard())
 ```

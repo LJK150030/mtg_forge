@@ -75,3 +75,40 @@ public record GameEventTurnPhase(PlayerView playerTurn, PhaseType phase, String 
     }
 }
 ```
+
+## Python
+`forge/game/event/GameEventTurnPhase.py`
+
+```python
+package = forge.game.event, module forge/game/event/GameEventTurnPhase.py
+
+Let me write the port.
+
+Dependencies: GameEvent, IGameEventVisitor, PhaseType, Player, PlayerView, Lang, TextUtil.
+
+Lang and TextUtil are forge.util.Lang, forge.util.TextUtil from Java imports.from forge.game.event.GameEvent import GameEvent
+from forge.game.event.IGameEventVisitor import IGameEventVisitor
+from forge.game.phase.PhaseType import PhaseType
+from forge.game.player.Player import Player
+from forge.game.player.PlayerView import PlayerView
+from forge.util.Lang import Lang
+from forge.util.TextUtil import TextUtil
+
+
+class GameEventTurnPhase(GameEvent):
+
+    def __init__(self, playerTurn, phase: PhaseType, phaseDesc: str):
+        if isinstance(playerTurn, Player):
+            self.playerTurn = PlayerView.get(playerTurn)
+        else:
+            self.playerTurn = playerTurn
+        self.phase = phase
+        self.phaseDesc = phaseDesc
+
+    def visit(self, visitor: IGameEventVisitor):
+        return visitor.visit(self)
+
+    def __str__(self) -> str:
+        playerName = Lang.getInstance().getPossesive(self.playerTurn.getName())
+        return TextUtil.concatWithSpace(playerName, "turn,", self.phaseDesc + self.phase.nameForUi, "phase")
+```

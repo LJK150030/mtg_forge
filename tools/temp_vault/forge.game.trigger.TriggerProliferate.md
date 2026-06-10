@@ -37,6 +37,12 @@ classDiagram
 - [[forge.game.card.Card|Card]]
 - [[forge.game.spellability.SpellAbility|SpellAbility]]
 
+## Design Description
+
+TriggerProliferate is a concrete trigger that fires when a proliferate event occurs, identifying the player who performs the proliferation. Extending the abstract `Trigger` base class, it overrides the standard trigger lifecycle hooks: `performTest` gates activation by filtering on the optional `ValidPlayer` parameter, `setTriggeringObjects` exposes the proliferating player to the resulting ability, and `getImportantStackObjects` produces a localized, human-readable summary for the stack display.
+
+Its responsibilities are deliberately narrowâ€”it carries no proliferation logic itself, instead collaborating with `AbilityKey` to key into the runtime parameter map, `Card` as its host, and `SpellAbility` to relay triggering data downstream. By keying everything on `AbilityKey.Player` and delegating construction and matching to its supertype, the class fits the engine's data-driven, parameter-map trigger pattern, keeping each trigger type a thin, focused specialization.
+
 ## Source
 `forge-game/src/main/java/forge/game/trigger/TriggerProliferate.java`
 
@@ -77,4 +83,36 @@ public class TriggerProliferate extends Trigger {
     }
 
 }
+```
+
+## Python
+`forge/game/trigger/TriggerProliferate.py`
+
+```python
+from forge.game.trigger.Trigger import Trigger
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Localizer import Localizer
+
+
+class TriggerProliferate(Trigger):
+
+    def __init__(self, params: dict[str, str], host: Card, intrinsic: bool):
+        super().__init__(params, host, intrinsic)
+
+    def performTest(self, runParams: dict[AbilityKey, object]) -> bool:
+        if not self.matchesValidParam("ValidPlayer", runParams.get(AbilityKey.Player)):
+            return False
+        return True
+
+    def setTriggeringObjects(self, sa: SpellAbility, runParams: dict[AbilityKey, object]) -> None:
+        sa.setTriggeringObjectsFrom(runParams, AbilityKey.Player)
+
+    def getImportantStackObjects(self, sa: SpellAbility) -> str:
+        sb = []
+        sb.append(Localizer.getInstance().getMessage("lblPlayer"))
+        sb.append(": ")
+        sb.append(str(sa.getTriggeringObject(AbilityKey.Player)))
+        return "".join(sb)
 ```

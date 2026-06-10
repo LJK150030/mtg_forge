@@ -156,3 +156,57 @@ public class CostPayShards extends CostPart {
 
 }
 ```
+
+## Python
+`forge/game/cost/CostPayShards.py`
+
+```python
+from forge.game.cost.CostPart import CostPart
+from forge.game.card.Card import Card
+from forge.game.cost.ICostVisitor import ICostVisitor
+from forge.game.cost.PaymentDecision import PaymentDecision
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+
+
+class CostPayShards(CostPart):
+    """
+    Serializables need a version ID.
+    """
+    serialVersionUID = 1
+
+    def __init__(self, amount: str):
+        """
+        Instantiates a new cost pay shards.
+
+        :param amount: the amount
+        """
+        self.paidAmount = 0
+        self.setAmount(amount)
+
+    def paymentOrder(self) -> int:
+        return 7
+
+    def getMaxAmountX(self, ability: SpellAbility, payer: Player, effect: bool):
+        return payer.getNumManaShards()
+
+    def toString(self) -> str:
+        sb = []
+        sb.append("Pay ")
+        sb.append("{M}" * int(self.getAmount()))
+        return "".join(sb)
+
+    def refund(self, source: Card) -> None:
+        # Really should be activating player
+        source.getController().loseShards(self.paidAmount * -1)
+
+    def canPay(self, ability: SpellAbility, payer: Player, effect: bool) -> bool:
+        return payer.getNumManaShards() >= self.getAbilityAmount(ability)
+
+    def payAsDecided(self, ai: Player, decision: PaymentDecision, ability: SpellAbility, effect: bool) -> bool:
+        self.paidAmount = decision.c
+        return ai.payShards(self.paidAmount, None)
+
+    def accept(self, visitor: ICostVisitor):
+        return visitor.visit(self)
+```

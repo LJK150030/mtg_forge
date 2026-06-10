@@ -40,7 +40,7 @@ UnorderedEntities is a private, immutable record nested within `GameSnapshot`, c
 As a record, it leans on compiler-generated accessors, equality, and construction, keeping the type a lightweight value carrier. Its restricted visibility signals it is an internal implementation detail of the snapshot mechanism, collaborating with the core `Card`, `Player`, and `ZoneType` domain types purely to stage entity placement rather than to expose any behavior of its own.
 
 ## Source
-`forge-game/src/main/java/forge/game/GameSnapshot.java` â€” declaration excerpt
+`forge-game/src/main/java/forge/game/GameSnapshot.java` Ã¢â‚¬â€ declaration excerpt
 
 ```java
     private record UnorderedEntities(
@@ -51,4 +51,25 @@ As a record, it leans on compiler-generated accessors, equality, and constructio
             return Integer.compare(this.zonePosition, o.zonePosition);
         }
     }
+```
+
+## Python
+`forge/game/GameSnapshot/UnorderedEntities.py`
+
+```python
+from forge.game.card.Card import Card
+from forge.game.player.Player import Player
+from forge.game.zone.ZoneType import ZoneType
+
+
+class UnorderedEntities:
+    def __init__(self, toPlayer: Player, fromCard: Card, newCard: Card, fromType: ZoneType, zonePosition: int):
+        self.toPlayer = toPlayer
+        self.fromCard = fromCard
+        self.newCard = newCard
+        self.fromType = fromType
+        self.zonePosition = zonePosition
+
+    def compareTo(self, o: "UnorderedEntities") -> int:
+        return (self.zonePosition > o.zonePosition) - (self.zonePosition < o.zonePosition)
 ```

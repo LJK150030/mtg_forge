@@ -32,7 +32,7 @@ classDiagram
 
 ## Design Description
 
-RemoveType is a small enumeration in the `forge.card` package of the forge-core module that names the categories of type information a Magic: The Gathering card can carry on its type line. Its seven constants—SuperTypes, CardTypes, SubTypes, and the finer-grained LandTypes, CreatureTypes, ArtifactTypes, and EnchantmentTypes—identify which slice of a card's types an effect is permitted to strip away.
+RemoveType is a small enumeration in the `forge.card` package of the forge-core module that names the categories of type information a Magic: The Gathering card can carry on its type line. Its seven constantsâ€”SuperTypes, CardTypes, SubTypes, and the finer-grained LandTypes, CreatureTypes, ArtifactTypes, and EnchantmentTypesâ€”identify which slice of a card's types an effect is permitted to strip away.
 
 Carrying no fields or behavior, the enum acts as a type-safe selector consumed by the engine's card-type-manipulation logic, letting "remove type" effects declare exactly which type category to clear instead of relying on ad hoc string or boolean flags. Its flat, dependency-free design keeps it lightweight and broadly reusable across the card model wherever type removal must be expressed declaratively.
 
@@ -52,4 +52,21 @@ public enum RemoveType {
     EnchantmentTypes,
     ;
 }
+```
+
+## Python
+`forge/card/RemoveType.py`
+
+```python
+from enum import Enum, auto
+
+
+class RemoveType(Enum):
+    SuperTypes = auto()
+    CardTypes = auto()
+    SubTypes = auto()
+    LandTypes = auto()
+    CreatureTypes = auto()
+    ArtifactTypes = auto()
+    EnchantmentTypes = auto()
 ```

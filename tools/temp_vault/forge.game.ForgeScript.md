@@ -496,3 +496,383 @@ public class ForgeScript {
     }
 }
 ```
+
+## Python
+`forge/game/ForgeScript.py`
+
+```python
+from forge.card.CardTypeView import CardTypeView
+from forge.card.ColorSet import ColorSet
+from forge.card.MagicColor import MagicColor
+from forge.card.mana.ManaAtom import ManaAtom
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.ability.ApiType import ApiType
+from forge.game.card.Card import Card
+from forge.game.card.CardState import CardState
+from forge.game.card.CounterEnumType import CounterEnumType
+from forge.game.cost.Cost import Cost
+from forge.game.keyword.Keyword import Keyword
+from forge.game.mana.Mana import Mana
+from forge.game.mana.ManaCostBeingPaid import ManaCostBeingPaid
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.spellability.TargetChoices import TargetChoices
+from forge.game.staticability.StaticAbility import StaticAbility
+from forge.game.staticability.StaticAbilityCastWithFlash import StaticAbilityCastWithFlash
+from forge.game.staticability.StaticAbilityColorlessDamageSource import StaticAbilityColorlessDamageSource
+from forge.game.trigger.Trigger import Trigger
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.Expressions import Expressions
+from forge.game.CardTraitBase import CardTraitBase
+from forge.game.Game import Game
+from forge.game.GameObject import GameObject
+
+
+class ForgeScript:
+
+    @staticmethod
+    def cardStateHasProperty(cardState, property, sourceController, source, spellAbility):
+        withSource = property.endswith("Source")
+        if withSource and StaticAbilityColorlessDamageSource.colorlessDamageSource(cardState):
+            colors = ColorSet.C
+        else:
+            colors = cardState.getCard().getColor(cardState)
+
+        type = cardState.getTypeWithChanges()
+        if "White" in property or "Blue" in property or "Black" in property \
+                or "Red" in property or "Green" in property:
+            mustHave = not property.startswith("non")
+            colorName = property[(0 if mustHave else 3):(len(property) - (6 if withSource else 0))]
+
+            desiredColor = MagicColor.fromName(colorName)
+            hasColor = colors.hasAnyColor(desiredColor)
+            return mustHave == hasColor
+        elif "Colorless" in property:
+            non = property.startswith("non")
+            return non != colors.isColorless()
+        elif property.startswith("MultiColor"):
+            # ... Card is multicolored
+            return colors.isMulticolor()
+        elif property.startswith("EnemyColor"):
+            if colors.countColors() != 2:
+                return False
+            # i want only enemy colors
+            for pair in MagicColor.COLORPAIR[5:10]:
+                if colors.hasExactlyColor(pair):
+                    return True
+            return False
+        elif property.startswith("AllColors"):
+            return colors.isAllColors()
+        elif property.startswith("MonoColor"):
+            return colors.isMonoColor()
+        elif property.startswith("ChosenColor"):
+            return source.hasChosenColor() and colors.hasAnyColor(MagicColor.fromName(source.getChosenColor()))
+        elif property.startswith("AnyChosenColor"):
+            return source.hasChosenColor() \
+                and colors.hasAnyColor(ColorSet.fromNames(source.getChosenColors()).getColor())
+        elif property == "AssociatedWithChosenColor":
+            color = source.getChosenColor()
+            if color == "white":
+                return type.hasSubtype("Plains")
+            elif color == "blue":
+                return type.hasSubtype("Island")
+            elif color == "black":
+                return type.hasSubtype("Swamp")
+            elif color == "red":
+                return type.hasSubtype("Mountain")
+            elif color == "green":
+                return type.hasSubtype("Forest")
+            else:
+                return False
+        elif property == "Outlaw":
+            return type.isOutlaw()
+        elif property == "Party":
+            return type.isParty()
+        elif property.startswith("non"):
+            # ... Other Card types
+            return not type.hasStringType(property[3:])
+        elif property == "CostsPhyrexianMana":
+            return cardState.getManaCost().hasPhyrexian()
+        elif property.startswith("HasSVar"):
+            svar = property[8:]
+            return cardState.hasSVar(svar)
+        elif property == "ChosenType":
+            chosenType = source.getChosenType()
+            if chosenType.startswith("Non"):
+                rest = chosenType[3:]
+                capitalized = (rest[:1].upper() + rest[1:]) if rest else rest
+                return not type.hasStringType(capitalized)
+            return type.hasStringType(chosenType)
+        elif property == "IsNotChosenType":
+            return not type.hasStringType(source.getChosenType())
+        elif property == "ChosenType2":
+            return type.hasStringType(source.getChosenType2())
+        elif property == "NotedType":
+            found = False
+            for s in source.getNotedTypes():
+                if type.hasStringType(s):
+                    found = True
+                    break
+            return found
+        elif property.startswith("hasAbility"):
+            valid = property[11:]
+            for sa in cardState.getSpellAbilities():
+                if sa.isValid(valid, sourceController, source, spellAbility):
+                    return True
+            return False
+        elif property == "hasManaAbility":
+            if not cardState.getManaAbilities().isEmpty():
+                return True
+            for trig in cardState.getTriggers():
+                sa = trig.getOverridingAbility()
+                if sa is not None:
+                    if not sa.isTrigger():
+                        sa.setTrigger(trig)
+                    if sa.isManaAbility():
+                        return True
+            return False
+        elif property == "hasNonManaActivatedAbility":
+            for sa in cardState.getNonManaAbilities():
+                if sa.isActivatedAbility():
+                    return True
+            return False
+        elif property.startswith("cmc"):
+            rhs = property[5:]
+            y = cardState.getManaCost().getCMC()
+            x = AbilityUtils.calculateAmount(source, rhs, spellAbility)
+
+            return Expressions.compare(y, property, x)
+        else:
+            return type.hasStringType(property)
+
+    @staticmethod
+    def spellAbilityHasProperty(sa, property, sourceController, source, spellAbility):
+        if property == "ManaAbility":
+            return sa.isManaAbility()
+        elif property == "withoutXCost":
+            return not sa.costHasManaX()
+        elif property.startswith("XCost"):
+            comparator = property[5:7]
+            y = AbilityUtils.calculateAmount(sa.getHostCard(), property[7:], sa)
+            return Expressions.compare(0 if sa.getXManaCostPaid() is None else sa.getXManaCostPaid(), comparator, y)
+        elif property == "hasTapCost":
+            cost = sa.getPayCosts()
+            return cost is not None and cost.hasTapCost()
+        elif property == "Bargain":
+            return sa.isBargained()
+        elif property == "Backup":
+            return sa.isBackup()
+        elif property == "Bestow":
+            return sa.isBestow()
+        elif property == "Blitz":
+            return sa.isBlitz()
+        elif property == "Buyback":
+            return sa.isBuyback()
+        elif property == "Craft":
+            return sa.isCraft()
+        elif property == "Crew":
+            return sa.isCrew()
+        elif property == "Saddle":
+            return sa.isKeyword(Keyword.SADDLE)
+        elif property == "Station":
+            return sa.isKeyword(Keyword.STATION)
+        elif property == "Cycling":
+            return sa.isCycling()
+        elif property == "Dash":
+            return sa.isDash()
+        elif property == "Disturb":
+            return sa.isDisturb()
+        elif property == "Embalm":
+            return sa.isEmbalm()
+        elif property == "Eternalize":
+            return sa.isEternalize()
+        elif property == "Flashback":
+            return sa.isFlashback()
+        elif property == "Harmonize":
+            return sa.isHarmonize()
+        elif property == "Jumpstart":
+            return sa.isJumpstart()
+        elif property == "Kicked":
+            return sa.isKicked()
+        elif property == "Loyalty":
+            return sa.isPwAbility()
+        elif property == "Aftermath":
+            return sa.isAftermath()
+        elif property == "MorphUp":
+            return sa.isMorphUp()
+        elif property == "ManifestUp":
+            return sa.isManifestUp()
+        elif property == "Unlock":
+            return sa.isUnlock()
+        elif property == "isTurnFaceUp":
+            return sa.isTurnFaceUp()
+        elif property == "isCastFaceDown":
+            return sa.isCastFaceDown()
+        elif property == "Unearth":
+            return sa.isKeyword(Keyword.UNEARTH)
+        elif property == "Modular":
+            return sa.isKeyword(Keyword.MODULAR)
+        elif property == "Equip":
+            return sa.isEquip()
+        elif property == "Boast":
+            return sa.isBoast()
+        elif property == "Exhaust":
+            return sa.isExhaust()
+        elif property == "Mayhem":
+            return sa.isMayhem()
+        elif property == "Mutate":
+            return sa.isMutate()
+        elif property == "Ninjutsu":
+            return sa.isNinjutsu()
+        elif property == "Sneak":
+            return sa.isSneak()
+        elif property == "Foretelling":
+            return sa.isForetelling()
+        elif property == "Foretold":
+            return sa.isForetold()
+        elif property == "Plotting":
+            return sa.isPlotting()
+        elif property == "Outlast":
+            return sa.isOutlast()
+        elif property == "Modal":
+            return sa.getApi() == ApiType.Charm
+        elif property == "ClassLevelUp":
+            return sa.getApi() == ApiType.ClassLevelUp
+        elif property == "Daybound":
+            return sa.isKeyword(Keyword.DAYBOUND)
+        elif property == "Nightbound":
+            return sa.isKeyword(Keyword.NIGHTBOUND)
+        elif property == "Warp":
+            return sa.isWarp()
+        elif property == "Ward":
+            return sa.isKeyword(Keyword.WARD)
+        elif property == "CumulativeUpkeep":
+            return sa.isCumulativeUpkeep()
+        elif property == "SameKeyword":
+            if sa.getKeyword() is None or spellAbility is None:
+                return False
+            return sa.getKeyword() == spellAbility.getKeyword()
+        elif property == "ChapterNotLore":
+            if not sa.isChapter():
+                return False
+            if sa.getChapter() == sa.getHostCard().getCounters(CounterEnumType.LORE):
+                return False
+        elif property == "LastChapter":
+            return sa.isLastChapter()
+        elif property == "paidPhyrexianMana":
+            return sa.getSpendPhyrexianMana() > 0
+        elif property.startswith("ManaSpent"):
+            k = property.split(" ", 1)
+            comparator = k[1][0:2]
+            y = AbilityUtils.calculateAmount(source, k[1][2:], spellAbility)
+            return Expressions.compare(sa.getTotalManaSpent(), comparator, y)
+        elif property.startswith("ManaFrom"):
+            fromWhat = property[8:]
+            parts = None
+            if "_" in fromWhat:
+                parts = fromWhat.split("_")
+                fromWhat = parts[0]
+            toFind = AbilityUtils.calculateAmount(source, parts[1], spellAbility) if parts is not None else 1
+            found = 0
+            for m in sa.getPayingMana():
+                manaSource = m.getSourceCard()
+                if manaSource is not None:
+                    if manaSource.isValid(fromWhat, sourceController, source, spellAbility):
+                        found += 1
+                        if found == toFind:
+                            break
+            return found == toFind
+        elif property == "MayPlaySource":
+            m = sa.getMayPlay()
+            if m is None:
+                return False
+            return source == m.getHostCard()
+        elif property.startswith("singleTarget"):
+            # this doesn't allow a second target, even if same object
+            num = 0
+            for tc in sa.getAllTargetChoices():
+                num += tc.size()
+                if num > 1:
+                    return False
+            if num != 1:
+                return False
+        elif property.startswith("numTargets"):
+            targets = set()
+            for tc in sa.getAllTargetChoices():
+                targets.update(tc)
+            k = property.split(" ", 1)
+            comparator = k[1][0:2]
+            y = AbilityUtils.calculateAmount(sa.getHostCard(), k[1][2:], sa)
+            return Expressions.compare(len(targets), comparator, y)
+        elif property.startswith("IsTargeting"):
+            k = property.split(" ", 1)
+            unescaped = k[1].replace("~", "+")
+            found = False
+            for o in AbilityUtils.getDefinedObjects(source, unescaped, spellAbility):
+                if sa.getRootAbility().isTargeting(o):
+                    found = True
+                    break
+            return found
+        elif property == "YouCtrl":
+            return sa.getActivatingPlayer() == sourceController
+        elif property == "OppCtrl":
+            return sa.getActivatingPlayer().isOpponentOf(sourceController)
+        elif property.startswith("cmc"):
+            y = 0
+            # spell was on the stack
+            if sa.getHostCard().isInZone(ZoneType.Stack):
+                y = sa.getHostCard().getCMC()
+            else:
+                y = sa.getPayCosts().getTotalMana().getCMC()
+            x = AbilityUtils.calculateAmount(source, property[5:], spellAbility)
+            if not Expressions.compare(y, property, x):
+                return False
+        elif property == "ManaAbilityCantPaidFor":
+            paidFor = sourceController.getPaidForSA()
+            if paidFor is None:
+                return False
+            manaCost = paidFor.getManaCostBeingPaid()
+            # The following code is taken from InputPayMana.java, to determine if this mana ability can pay for SA currently being paid
+            colorCanUse = 0
+            for color in ManaAtom.MANATYPES:
+                if manaCost.isAnyPartPayableWith(color, sourceController.getManaPool()):
+                    colorCanUse |= color
+            if manaCost.isAnyPartPayableWith(ManaAtom.GENERIC, sourceController.getManaPool()):
+                colorCanUse |= ManaAtom.GENERIC
+            if sa.isManaAbilityFor(paidFor, colorCanUse):
+                return False
+        elif property == "NamedSpell":
+            found = False
+            for name in source.getNamedCards():
+                if sa.cardState.getName() == name:
+                    found = True
+                    break
+            return found
+        elif property == "otherAbility":
+            if sa == spellAbility:
+                return False
+            if isinstance(spellAbility, SpellAbility):
+                sourceSpell = spellAbility
+                if sa.getRootAbility() == sourceSpell.getRootAbility():
+                    return False
+        elif property == "CouldCastTiming":
+            host = sa.getHostCard()
+            game = host.getGame()
+            if game.getStack().isSplitSecondOnStack():
+                return False
+            # Adapted from SpellAbility.canCastTiming, to determine if the SA could be cast at the current timing (assuming the controller had priority).
+
+            if sourceController.canCastSorcery() or sa.getRestrictions().isInstantSpeed():
+                return True
+            if sa.isSpell():
+                return host.isInstant() or host.hasKeyword(Keyword.FLASH) or StaticAbilityCastWithFlash.anyWithFlash(sa, host, sourceController)
+            if sa.isActivatedAbility():
+                return not sa.isPwAbility() and not sa.getRestrictions().isSorcerySpeed()
+            return True
+        elif property.startswith("NamedAbility"):
+            return sa.getName() == property[12:]
+        elif sa.getHostCard() is not None:
+            return sa.getHostCard().hasProperty(property, sourceController, source, spellAbility)
+
+        return True
+```

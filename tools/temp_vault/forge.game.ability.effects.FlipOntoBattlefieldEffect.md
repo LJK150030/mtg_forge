@@ -187,3 +187,125 @@ public class FlipOntoBattlefieldEffect extends SpellAbilityEffect {
     }
 }
 ```
+
+## Python
+`forge/game/ability/effects/FlipOntoBattlefieldEffect.py`
+
+```python
+from forge.game.Game import Game
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.card.CardLists import CardLists
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.Aggregates import Aggregates
+from forge.util.Localizer import Localizer
+from forge.util.MyRandom import MyRandom
+
+
+class FlipOntoBattlefieldEffect(SpellAbilityEffect):
+    def resolve(self, sa: SpellAbility) -> None:
+        # Basic parameters defining the chances
+        chanceToFlip = 0.85
+        maxFlipTimes = 2
+        chanceToHit = 0.70
+        chanceToHitTwoCards = 0.20
+
+        host = sa.getHostCard()
+        p = sa.getActivatingPlayer()
+        game = host.getGame()
+        flippedOnce = False
+
+        # TODO: allow to make a bounding box of sorts somehow, ideally - upgrade to a full system allowing to actually target by location
+        tgtBox = p.getController().chooseCardsForEffect(game.getCardsIn(ZoneType.Battlefield), sa, Localizer.getInstance().getMessage("lblChooseDesiredLocation"), 1, 1, sa.hasParam("AllowRandom"), None)
+
+        tgtLoc = tgtBox.getFirst()
+
+        lhsNeighbor = self.getNeighboringCard(tgtLoc, -1)
+        rhsNeighbor = self.getNeighboringCard(tgtLoc, 1)
+
+        randChoices = CardCollection()
+        randChoices.add(tgtLoc)
+        if lhsNeighbor is not None:
+            randChoices.add(lhsNeighbor)
+        elif rhsNeighbor is not None:
+            randChoices.add(rhsNeighbor)
+
+        # TODO: would be fun to add a small chance (e.g. 3-5%) to land unpredictably on some random target?
+
+        flippedOnce = MyRandom.getRandom().nextFloat() <= chanceToFlip  # 20% chance that the card won't flip even once
+        if not flippedOnce:
+            sa.setSVar("TimesFlipped", "0")
+            game.getAction().notifyOfValue(sa, host, Localizer.getInstance().getMessage("lblDidNotFlipOver"), None)
+            return
+        else:
+            flippedTimes = MyRandom.getRandom().nextInt(maxFlipTimes) + 1
+            sa.setSVar("TimesFlipped", str(flippedTimes))  # Currently the exact # of times is unused
+            game.getAction().notifyOfValue(sa, host, Localizer.getInstance().getMessage("lblFlippedOver", flippedTimes), None)
+
+        # Choose what was hit
+        hit = CardCollection()
+        outcome = MyRandom.getRandom().nextFloat()
+        if outcome <= chanceToHitTwoCards:
+            hit.addAll(Aggregates.random(randChoices, 2 if randChoices.size() > 1 else 1))
+            if hit.size() == 2:
+                game.getAction().notifyOfValue(sa, host, Localizer.getInstance().getMessage("lblLandedOnTwoCards", hit.getFirst(), hit.getLast()), None)
+            else:
+                game.getAction().notifyOfValue(sa, host, Localizer.getInstance().getMessage("lblLandedOnOneCard", hit.getFirst()), None)
+        elif outcome <= chanceToHit:
+            hit.add(Aggregates.random(randChoices))
+            game.getAction().notifyOfValue(sa, host, Localizer.getInstance().getMessage("lblLandedOnOneCard", hit.getFirst()), None)
+        else:
+            game.getAction().notifyOfValue(sa, host, Localizer.getInstance().getMessage("lblDidNotLandOnCards"), None)
+
+        # Remember whatever was hit
+        host.addRemembered(hit)
+
+    def getStackDescription(self, sa: SpellAbility) -> str:
+        sb = []
+        host = sa.getHostCard()
+
+        sb.append("Flip ")
+        sb.append(host.toString())
+        sb.append(" onto the battlefield from a height of at least one foot.")
+
+        return "".join(sb)
+
+    def getNeighboringCard(self, c: Card, direction: int) -> Card:
+        # Currently gets the nearest (in zone order) card to the left or to the right of the designated one by type,
+        # as well as the current card attachments that are visually located next to the requested card or are assumed to be near it.
+        controller = c.getController()
+        attachments = []
+
+        def _filter(card):
+            if card.isAttachedToEntity(c):
+                attachments.append(card)
+                return True
+            elif c.isCreature():
+                return card.isCreature()
+            elif c.isPlaneswalker() or c.isArtifact() or (c.isEnchantment() and not c.isAura()):
+                return card.isPlaneswalker() or card.isArtifact() or (c.isEnchantment() and not c.isAura())
+            elif c.isLand():
+                return card.isLand()
+            elif c.isAttachedToEntity():
+                return card.isAttachedToEntity(c.getEntityAttachedTo()) or c.equals(card.getAttachedTo())
+            return card.sharesCardTypeWith(c)
+
+        cardsOTB = CardLists.filter(controller.getCardsIn(ZoneType.Battlefield), _filter)
+
+        # Chance to hit an attachment
+        hitAttachment = 0.50
+        if attachments and direction < 0 and MyRandom.getRandom().nextFloat() <= hitAttachment:
+            return Aggregates.random(attachments)
+
+        loc = cardsOTB.indexOf(c)
+        if direction < 0 and loc > 0:
+            return cardsOTB.get(loc - 1)
+        elif loc < cardsOTB.size() - 1:
+            return cardsOTB.get(loc + 1)
+
+        return c
+```

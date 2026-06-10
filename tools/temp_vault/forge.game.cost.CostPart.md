@@ -73,9 +73,9 @@ classDiagram
 
 ## Design Description
 
-CostPart is the abstract base class for the individual components of a `Cost` in Forge's payment system, modeling a single payable element with an associated amount, target type, and human-readable description. It centralizes common state and text handling—exposing the amount and type, resolving numeric or descriptive forms, and applying text-change effects via `AbilityUtils`—while delegating the actual payment contract to subclasses through abstract methods (`canPay`, `payAsDecided`, `toString`, and `accept`).
+CostPart is the abstract base class for the individual components of a `Cost` in Forge's payment system, modeling a single payable element with an associated amount, target type, and human-readable description. It centralizes common state and text handlingâ€”exposing the amount and type, resolving numeric or descriptive forms, and applying text-change effects via `AbilityUtils`â€”while delegating the actual payment contract to subclasses through abstract methods (`canPay`, `payAsDecided`, `toString`, and `accept`).
 
-It implements `Comparable` to order itself among other cost parts by `paymentOrder()`, and `Cloneable`/`Serializable` to support copying and persistence. The `accept(ICostVisitor)` method shows a visitor-pattern design that lets operations traverse heterogeneous cost parts without type-checking. It collaborates with `SpellAbility` and `Player` to evaluate and resolve payment, `PaymentDecision` to carry chosen targets, `Card` for refunds, and `CardTraitBase` for text substitution—keeping defaults (non-reusable, non-renewable, non-undoable) overridable by concrete cost types.
+It implements `Comparable` to order itself among other cost parts by `paymentOrder()`, and `Cloneable`/`Serializable` to support copying and persistence. The `accept(ICostVisitor)` method shows a visitor-pattern design that lets operations traverse heterogeneous cost parts without type-checking. It collaborates with `SpellAbility` and `Player` to evaluate and resolve payment, `PaymentDecision` to carry chosen targets, `Card` for refunds, and `CardTraitBase` for text substitutionâ€”keeping defaults (non-reusable, non-renewable, non-undoable) overridable by concrete cost types.
 
 ## Source
 `forge-game/src/main/java/forge/game/cost/CostPart.java`
@@ -307,4 +307,134 @@ public abstract class CostPart implements Comparable<CostPart>, Cloneable, Seria
         return this.paymentOrder() - o.paymentOrder();
     }
 }
+```
+
+## Python
+`forge/game/cost/CostPart.py`
+
+```python
+from forge.card.CardType import CardType
+from forge.game.CardTraitBase import CardTraitBase
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.card.Card import Card
+from forge.game.cost.ICostVisitor import ICostVisitor
+from forge.game.cost.PaymentDecision import PaymentDecision
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+
+from abc import ABC, abstractmethod
+from typing import Optional, TypeVar
+
+T = TypeVar("T")
+
+
+class CostPart(ABC):
+    """The Class CostPart."""
+
+    # Serializables need a version ID.
+    serialVersionUID = 1
+
+    def __init__(self, amount: str = "1", type: str = "Card", description: Optional[str] = None):
+        """Instantiates a new cost part."""
+        self.originalAmount: Optional[str] = None
+        self.amount: Optional[str] = None
+        self.payingTrigSA: Optional[SpellAbility] = None
+
+        self.setAmount(amount)
+        self.originalType = type
+        self.type = self.originalType
+        self.originalTypeDescription = description
+        self.typeDescription = self.originalTypeDescription
+
+    def getAmount(self) -> str:
+        """Gets the amount."""
+        return self.amount
+
+    def getMaxAmountX(self, ability: SpellAbility, payer: Player, effect: bool) -> Optional[int]:
+        return None
+
+    def getType(self) -> str:
+        """Gets the type."""
+        return self.type
+
+    def payCostFromSource(self) -> bool:
+        """Gets the this."""
+        return self.getType() == "CARDNAME" or self.getType() == "NICKNAME"
+
+    def getTypeDescription(self) -> str:
+        """Gets the type description."""
+        return self.typeDescription
+
+    def getDescriptiveType(self) -> str:
+        typeDesc = self.getTypeDescription()
+        if typeDesc is None:
+            typeS = self.getType()
+            typeDesc = typeS.lower() if (CardType.CoreType.isValidEnum(typeS) or typeS == "Card") else typeS
+        return typeDesc
+
+    def isReusable(self) -> bool:
+        """Checks if is reusable."""
+        return False
+
+    def isRenewable(self) -> bool:
+        """Checks if is renewable."""
+        return False
+
+    def isUndoable(self) -> bool:
+        """Checks if is undoable."""
+        return False
+
+    def convertAmount(self) -> Optional[int]:
+        """Convert amount."""
+        return int(self.amount) if (self.amount is not None and len(self.amount) > 0 and self.amount.isdigit()) else None
+
+    def getAbilityAmount(self, ability: SpellAbility) -> int:
+        return AbilityUtils.calculateAmount(ability.getHostCard(), self.getAmount(), ability)
+
+    def setTrigger(self, sa: SpellAbility) -> None:
+        self.payingTrigSA = sa
+
+    @abstractmethod
+    def canPay(self, ability: SpellAbility, payer: Player, effect: bool) -> bool:
+        """Can pay."""
+
+    @abstractmethod
+    def accept(self, visitor: ICostVisitor) -> T:
+        ...
+
+    @abstractmethod
+    def __str__(self) -> str:
+        ...
+
+    def refund(self, source: Card) -> None:
+        """Refund. Overridden in classes which know how to refund."""
+
+    def setAmount(self, amountIn: str) -> None:
+        """Sets the amount."""
+        self.originalAmount = amountIn
+        self.amount = self.originalAmount
+
+    def applyTextChangeEffects(self, trait: CardTraitBase) -> None:
+        self.amount = AbilityUtils.applyAbilityTextChangeEffects(self.originalAmount, trait)
+        self.type = AbilityUtils.applyAbilityTextChangeEffects(self.originalType, trait)
+        self.typeDescription = AbilityUtils.applyDescriptionTextChangeEffects(self.originalTypeDescription, trait)
+
+    @abstractmethod
+    def payAsDecided(self, payer: Player, pd: PaymentDecision, sa: SpellAbility, effect: bool) -> bool:
+        ...
+
+    def paymentOrder(self) -> int:
+        return 5
+
+    def copy(self) -> "CostPart":
+        clone = None
+        try:
+            clone = self.__clone__()
+        except CloneNotSupportedException as e:
+            import sys
+            print(e, file=sys.stderr)
+        return clone
+
+    def compareTo(self, o: "CostPart") -> int:
+        return self.paymentOrder() - o.paymentOrder()
 ```

@@ -449,3 +449,249 @@ public class CostPayment extends ManaConversionMatrix {
     }
 }
 ```
+
+## Python
+`forge/game/cost/CostPayment.py`
+
+```python
+from forge.card.MagicColor import MagicColor
+from forge.card.mana.ManaCostShard import ManaCostShard
+from forge.game.Game import Game
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardZoneTable import CardZoneTable
+from forge.game.cost.Cost import Cost
+from forge.game.cost.CostAdjustment import CostAdjustment
+from forge.game.cost.CostDecisionMakerBase import CostDecisionMakerBase
+from forge.game.cost.CostPart import CostPart
+from forge.game.cost.CostPartWithList import CostPartWithList
+from forge.game.cost.PaymentDecision import PaymentDecision
+from forge.game.mana.ManaConversionMatrix import ManaConversionMatrix
+from forge.game.mana.Mana import Mana
+from forge.game.mana.ManaCostBeingPaid import ManaCostBeingPaid
+from forge.game.mana.ManaPool import ManaPool
+from forge.game.mana.ManaRefundService import ManaRefundService
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+
+
+class CostPayment(ManaConversionMatrix):
+    def __init__(self, cost: Cost, abil: SpellAbility):
+        self.cost = cost
+        self.adjustedCost = cost
+        self.ability = abil
+        self.paidCostParts: list[CostPart] = []
+        self.restoreColorReplacements()
+
+    def getCost(self) -> Cost:
+        return self.cost
+
+    def getAbility(self) -> SpellAbility:
+        return self.ability
+
+    @staticmethod
+    def canPayAdditionalCosts(cost: Cost, ability: SpellAbility, effect: bool, payer: Player = None) -> bool:
+        if payer is None:
+            payer = ability.getActivatingPlayer()
+        if cost is None:
+            return True
+
+        cost = CostAdjustment.adjust(cost, ability, effect)
+        return cost.canPay(ability, payer, effect)
+
+    def isFullyPaid(self) -> bool:
+        return all(part in self.paidCostParts for part in self.adjustedCost.getCostParts())
+
+    def refundPayment(self) -> None:
+        sourceCard = self.ability.getHostCard()
+        for part in self.paidCostParts:
+            part.refund(sourceCard)
+            # Clear lists to prevent accumulation across multiple cancelled activations
+            if isinstance(part, CostPartWithList):
+                part.resetLists()
+
+        ManaRefundService(self.ability).refundManaPaid()
+
+    def payCost(self, decisionMaker: CostDecisionMakerBase) -> bool:
+        self.adjustedCost = CostAdjustment.adjust(self.cost, self.ability, decisionMaker.isEffect())
+        costParts = self.adjustedCost.getCostPartsWithZeroMana()
+
+        if len(self.adjustedCost.getCostParts()) > 1:
+            # if mana part is shown here it wouldn't include reductions, but that's just a minor inconvenience
+            costParts = decisionMaker.getPlayer().getController().orderCosts(costParts)
+
+        game = decisionMaker.getPlayer().getGame()
+
+        for part in costParts:
+            # Wrap the cost and push onto the cost stack
+            game.costPaymentStack.push(part, self)
+
+            pd = part.accept(decisionMaker)
+
+            # Right before we start paying as decided, we need to transfer the CostPayments matrix over?
+            if pd is not None:
+                pd.matrix = self
+
+            if pd is None or not part.payAsDecided(decisionMaker.getPlayer(), pd, self.ability, decisionMaker.isEffect()):
+                game.costPaymentStack.pop()  # cost is resolved
+                return False
+            self.paidCostParts.append(part)
+            game.costPaymentStack.pop()  # cost is resolved
+
+        # clear lists used for undo
+        for part in self.paidCostParts:
+            if isinstance(part, CostPartWithList):
+                part.resetLists()
+
+        return True
+
+    def payComputerCosts(self, decisionMaker: CostDecisionMakerBase) -> bool:
+        # Just in case it wasn't set, but honestly it shouldn't have gotten
+        # here without being set
+        if self.ability.getActivatingPlayer() is None:
+            self.ability.setActivatingPlayer(decisionMaker.getPlayer())
+
+        decisions: dict[CostPart, PaymentDecision] = {}
+        # for Trinisphere make sure to include Zero
+        parts = CostAdjustment.adjust(self.cost, self.ability, decisionMaker.isEffect()).getCostPartsWithZeroMana()
+
+        # Set all of the decisions before attempting to pay anything
+
+        game = decisionMaker.getPlayer().getGame()
+
+        for part in parts:
+            decision = part.accept(decisionMaker)
+            if decision is None:
+                return False
+
+            # wrap the payment and push onto the cost stack
+            game.costPaymentStack.push(part, self)
+            if decisionMaker.paysRightAfterDecision() and not part.payAsDecided(decisionMaker.getPlayer(), decision, self.ability, decisionMaker.isEffect()):
+                game.costPaymentStack.pop()  # cost is resolved
+                return False
+
+            game.costPaymentStack.pop()  # cost is either paid or deferred
+            decisions[part] = decision
+
+        for part in parts:
+            # wrap the payment and push onto the cost stack
+            game.costPaymentStack.push(part, self)
+
+            if not part.payAsDecided(decisionMaker.getPlayer(), decisions.get(part), self.ability, decisionMaker.isEffect()):
+                game.costPaymentStack.pop()  # cost is resolved
+                return False
+            # abilities care what was used to pay for them
+            if isinstance(part, CostPartWithList):
+                part.resetLists()
+
+            game.costPaymentStack.pop()  # cost is resolved
+        return True
+
+    @staticmethod
+    def getMana(player: Player, shard: ManaCostShard, saBeingPaidFor: SpellAbility,
+                colorsPaid: int, xManaCostPaidByColor: dict[str, int]) -> Mana:
+        weightedOptions = CostPayment.selectManaToPayFor(player.getManaPool(), shard,
+            saBeingPaidFor, colorsPaid, xManaCostPaidByColor)
+
+        # Exclude border case
+        if not weightedOptions:
+            return None  # There is no matching mana in the pool
+
+        # select equal weight possibilities
+        manaChoices: list[Mana] = []
+        bestWeight = float('-inf')
+        for option in weightedOptions:
+            thisWeight = option[1]
+            thisMana = option[0]
+
+            if thisWeight > bestWeight:
+                manaChoices.clear()
+                bestWeight = thisWeight
+
+            if thisWeight == bestWeight:
+                # add only distinct Mana-s
+                haveDuplicate = False
+                for m in manaChoices:
+                    if m == thisMana:
+                        haveDuplicate = True
+                        break
+                if not haveDuplicate:
+                    manaChoices.append(thisMana)
+
+        # got an only one best option?
+        if len(manaChoices) == 1:
+            return manaChoices[0]
+
+        # Let them choose then
+        return player.getController().chooseManaFromPool(manaChoices)
+
+    @staticmethod
+    def selectManaToPayFor(manapool: ManaPool, shard: ManaCostShard,
+            saBeingPaidFor: SpellAbility, colorsPaid: int, xManaCostPaidByColor: dict[str, int]):
+        weightedOptions = []
+        for thisMana in list(manapool):
+            if shard == ManaCostShard.COLORED_X and not ManaCostBeingPaid.canColoredXShardBePaidByColor(MagicColor.toShortString(thisMana.getColor()), xManaCostPaidByColor):
+                continue
+
+            if not manapool.canPayForShardWithColor(shard, thisMana.getColor()):
+                continue
+
+            if shard.isSnow() and not thisMana.isSnow():
+                continue
+
+            if thisMana.getManaAbility() is not None and not thisMana.getManaAbility().meetsSpellAndShardRestrictions(saBeingPaidFor, shard, thisMana.getColor()):
+                continue
+
+            if not saBeingPaidFor.allowsPayingWithShard(thisMana.getSourceCard(), thisMana.getColor()):
+                continue
+
+            weight = 0
+            if colorsPaid == -1:
+                # prefer colorless mana to spend
+                weight += 5 if thisMana.isColorless() else 0
+            else:
+                # get more colors for converge
+                weight += 5 if (thisMana.getColor() | colorsPaid) != colorsPaid else 0
+
+            # prefer restricted mana to spend
+            if thisMana.isRestricted():
+                weight += 2
+
+            # Spend non-snow mana first
+            if not thisMana.isSnow():
+                weight += 1
+
+            weightedOptions.append((thisMana, weight))
+        return weightedOptions
+
+    @staticmethod
+    def handleOfferings(sa: SpellAbility, test: bool, costIsPaid: bool) -> bool:
+        game = sa.getHostCard().getGame()
+        table = CardZoneTable(game.getLastStateBattlefield(), game.getLastStateGraveyard())
+        params = AbilityKey.newMap()
+        AbilityKey.addCardZoneTableParams(params, table)
+
+        if sa.isOffering():
+            if sa.getSacrificedAsOffering() is None:
+                return False
+            offering = sa.getSacrificedAsOffering()
+            offering.setUsedToPay(False)
+            if test:
+                sa.resetSacrificedAsOffering()
+            elif costIsPaid:
+                game.getAction().sacrifice(CardCollection(offering), sa, False, params)
+        if sa.isEmerge():
+            if sa.getSacrificedAsEmerge() is None:
+                return False
+            emerge = sa.getSacrificedAsEmerge()
+            emerge.setUsedToPay(False)
+            if test:
+                sa.resetSacrificedAsEmerge()
+            elif costIsPaid:
+                game.getAction().sacrifice(CardCollection(emerge), sa, False, params)
+                sa.setSacrificedAsEmerge(game.getChangeZoneLKIInfo(emerge))
+        if not table.isEmpty():
+            table.triggerChangesZoneAll(sa.getHostCard().getGame(), sa)
+        return True
+```

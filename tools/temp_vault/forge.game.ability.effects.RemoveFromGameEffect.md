@@ -59,3 +59,21 @@ public class RemoveFromGameEffect extends SpellAbilityEffect {
     }
 }
 ```
+
+## Python
+`forge/game/ability/effects/RemoveFromGameEffect.py`
+
+```python
+package forge.game.ability.effects;
+
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.spellability.SpellAbility import SpellAbility
+
+
+class RemoveFromGameEffect(SpellAbilityEffect):
+
+    def resolve(self, sa: SpellAbility) -> None:
+        for tgtC in self.getTargetCards(sa):
+            tgtC.getGame().getAction().ceaseToExist(tgtC, True)
+```

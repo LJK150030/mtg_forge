@@ -62,3 +62,24 @@ public class ChangeSpeedEffect extends SpellAbilityEffect {
     }
 }
 ```
+
+## Python
+`forge/game/ability/effects/ChangeSpeedEffect.py`
+
+```python
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+
+
+class ChangeSpeedEffect(SpellAbilityEffect):
+    def resolve(self, sa: SpellAbility) -> None:
+        mode = sa.getParamOrDefault("Mode", "Increase")
+
+        for p in self.getTargetPlayers(sa):
+            if p.isInGame():
+                if mode == "Increase":
+                    p.increaseSpeed()
+                elif mode == "Decrease":
+                    p.decreaseSpeed()
+```

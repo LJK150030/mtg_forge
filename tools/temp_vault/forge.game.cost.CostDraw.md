@@ -53,7 +53,7 @@ classDiagram
 
 ## Design Description
 
-CostDraw models a "draw cards" payment component within Forge's cost system, extending the abstract CostPart to plug into the engine's composable cost framework. Constructed from an amount and a player-selector expression, it identifies eligible players via getPotentialPlayers — filtering the game's players by the selector's validity rules and each player's ability to draw the required number of cards — and reports payability through canPay. When the cost is paid, payAsDecided directs the players named in the PaymentDecision to draw, threading last-known battlefield and graveyard state through an AbilityKey move-parameter map so triggered effects resolve correctly.
+CostDraw models a "draw cards" payment component within Forge's cost system, extending the abstract CostPart to plug into the engine's composable cost framework. Constructed from an amount and a player-selector expression, it identifies eligible players via getPotentialPlayers â€” filtering the game's players by the selector's validity rules and each player's ability to draw the required number of cards â€” and reports payability through canPay. When the cost is paid, payAsDecided directs the players named in the PaymentDecision to draw, threading last-known battlefield and graveyard state through an AbilityKey move-parameter map so triggered effects resolve correctly.
 
 It collaborates with SpellAbility and its host Card to resolve the dynamic amount, and participates in the visitor pattern via accept(ICostVisitor). Its paymentOrder of 20 deliberately defers payment, reflecting design intent that information-revealing costs like drawing resolve last.
 
@@ -169,4 +169,67 @@ public class CostDraw extends CostPart {
         return visitor.visit(this);
     }
 }
+```
+
+## Python
+`forge/game/cost/CostDraw.py`
+
+```python
+from forge.game.Game import Game
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.player.Player import Player
+from forge.game.player.PlayerCollection import PlayerCollection
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.cost.CostPart import CostPart
+from forge.game.cost.Cost import Cost
+from forge.game.cost.ICostVisitor import ICostVisitor
+from forge.game.cost.PaymentDecision import PaymentDecision
+
+
+class CostDraw(CostPart):
+    """The Class CostDraw."""
+
+    serialVersionUID = 1
+
+    def __init__(self, amount: str, playerSelector: str):
+        super().__init__(amount, playerSelector, None)
+
+    def paymentOrder(self) -> int:
+        # In a world where costs are fully undoable, revealing unknown information should be done last.
+        return 20
+
+    def toString(self) -> str:
+        sb = []
+        i = self.convertAmount()
+        sb.append("Draw ")
+        sb.append(Cost.convertAmountTypeToWords(i, self.getAmount(), "Card"))
+        return "".join(sb)
+
+    def getPotentialPlayers(self, payer: Player, ability: SpellAbility) -> PlayerCollection:
+        res = PlayerCollection()
+        type = self.getType()
+        source = ability.getHostCard()
+
+        c = self.getAbilityAmount(ability)
+
+        for p in payer.getGame().getPlayers():
+            if p.isValid(type, payer, source, ability) and p.canDrawAmount(c):
+                res.add(p)
+        return res
+
+    def canPay(self, ability: SpellAbility, payer: Player, effect: bool) -> bool:
+        return not self.getPotentialPlayers(payer, ability).isEmpty()
+
+    def payAsDecided(self, ai: Player, decision: PaymentDecision, ability: SpellAbility, effect: bool) -> bool:
+        game = ai.getGame()
+        moveParams = AbilityKey.newMap()
+        moveParams[AbilityKey.LastStateBattlefield] = game.getLastStateBattlefield()
+        moveParams[AbilityKey.LastStateGraveyard] = game.getLastStateGraveyard()
+        for p in decision.players:
+            p.drawCards(decision.c, ability, moveParams)
+        return True
+
+    def accept(self, visitor: ICostVisitor):
+        return visitor.visit(self)
 ```

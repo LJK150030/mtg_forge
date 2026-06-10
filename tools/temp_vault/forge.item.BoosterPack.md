@@ -44,6 +44,12 @@ classDiagram
 - [[forge.card.CardEdition|CardEdition]]
 - [[forge.item.SealedTemplate|SealedTemplate]]
 
+## Design Description
+
+BoosterPack models a Magic: the Gathering booster as a concrete, immutable item, extending SealedProduct to inherit its name-and-contents identity while specializing it for randomized pack art and color-themed generation. It collaborates with SealedTemplate to define the booster's slot contents and with CardEdition to derive packs from a set, and exposes two static factoriesâ€”fromSet for edition-driven boosters and fromColor for a fixed single-color templateâ€”rather than relying on public construction alone.
+
+Notable design intent: the constructor precomputes an artIndex (randomly chosen from the edition's available pictures, or fixed for special/placeholder "?" sets) and caches a derived hash, keeping equals/hashCode cheap and consistent. Description and image-key logic branch on these special sets to produce human-readable contents and stable image lookups, and clone reconstructs from the retained name and contents.
+
 ## Source
 `forge-core/src/main/java/forge/item/BoosterPack.java`
 
@@ -169,4 +175,95 @@ public class BoosterPack extends SealedProduct {
         return ImageKeys.BOOSTER_PREFIX + edition + suffix;
     }
 }
+```
+
+## Python
+`forge/item/BoosterPack.py`
+
+```python
+from forge.item.SealedProduct import SealedProduct
+from forge.card.CardEdition import CardEdition
+from forge.item.SealedTemplate import SealedTemplate
+from forge.ImageKeys import ImageKeys
+from forge.StaticData import StaticData
+from forge.item.generation.BoosterSlots import BoosterSlots
+from forge.util.MyRandom import MyRandom
+from com.google.common.collect.ImmutableList import ImmutableList
+from org.apache.commons.lang3.tuple.Pair import Pair
+
+
+class BoosterPack(SealedProduct):
+    def __init__(self, name0: str, boosterData: SealedTemplate):
+        super().__init__(name0, boosterData)
+
+        if boosterData.getEdition() in self.specialSets or boosterData.getEdition() == "?":
+            self.artIndex = 1
+        else:
+            maxIdx = StaticData.instance().getEditions().get(boosterData.getEdition()).getCntBoosterPictures()
+            self.artIndex = MyRandom.getRandom().nextInt(maxIdx) + 1
+
+        self.hash = super().hashCode() ^ self.artIndex
+
+    @staticmethod
+    def fromSet(edition: CardEdition) -> "BoosterPack":
+        boosterKind = edition.getRandomBoosterKind()
+        if boosterKind is None:
+            return None
+
+        d = edition.getBoosterTemplate(boosterKind)
+        sb = []
+        sb.append(edition.getName())
+        sb.append(" ")
+        sb.append(boosterKind)
+        return BoosterPack("".join(sb), d)
+
+    @staticmethod
+    def fromColor(color: str) -> "BoosterPack":
+        return BoosterPack(color, SealedTemplate("?", ImmutableList.of(
+            Pair.of(BoosterSlots.COMMON + ":color(\"" + color + "\"):!" + BoosterSlots.LAND, 11),
+            Pair.of(BoosterSlots.UNCOMMON + ":color(\"" + color + "\"):!" + BoosterSlots.LAND, 3),
+            Pair.of(BoosterSlots.RARE_MYTHIC + ":color(\"" + color + "\"):!" + BoosterSlots.LAND, 1),
+            Pair.of(BoosterSlots.LAND + ":color(\"" + color + "\")", 1))
+        ))
+
+    def getArtIndex(self) -> int:
+        return self.artIndex
+
+    def getItemType(self) -> str:
+        return "Booster Pack"
+
+    def getDescription(self) -> str:
+        if self.getEdition() in self.specialSets or self.getEdition() == "?":
+            color = self.getName()[0:self.getName().index(self.getItemType()) - 1].lower()
+            return "11 " + color + " commons, 3 " + color + " uncommons, 1 " + color + " rare, and 1 " + color + " land."
+        return super().getDescription()
+
+    def clone(self) -> object:
+        return BoosterPack(self.name, self.contents)
+
+    def getBoosterData(self) -> SealedTemplate:
+        return self.contents
+
+    def equals(self, o: object) -> bool:
+        if self is o:
+            return True
+        if o is None or self.__class__ != o.__class__:
+            return False
+        if not super().equals(o):
+            return False
+
+        other = o
+
+        return self.artIndex == other.artIndex
+
+    def hashCode(self) -> int:
+        return self.hash
+
+    def getImageKey(self, altState: bool) -> str:
+        edition = self.getEdition()
+        if edition in SealedProduct.specialSets or edition == "?":
+            return "b:" + self.getName()[0:self.getName().index(self.getItemType()) - 1]
+        cntPics = StaticData.instance().getEditions().get(edition).getCntBoosterPictures()
+        suffix = "" if (1 >= cntPics) else ("_" + str(self.artIndex))
+        return ImageKeys.BOOSTER_PREFIX + edition + suffix
 ```

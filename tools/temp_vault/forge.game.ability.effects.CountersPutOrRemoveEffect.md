@@ -48,7 +48,7 @@ classDiagram
 
 CountersPutOrRemoveEffect resolves Magic abilities that put a counter on or remove a counter from one or more targets, unifying both directions of counter manipulation in a single effect. As a concrete subclass of SpellAbilityEffect, it overrides `getStackDescription` to produce readable stack text and `resolve` to apply the outcome, driven by SpellAbility parameters (CounterType, CounterNum, DefinedPlayer, Optional, EachExistingCounter, RemoveConditionSVar).
 
-During resolution it validates each target against the live Game state to skip last-known-information cards, batches modifications through a GameEntityCounterTable so replacement effects apply together, and defers choices—counter-type selection and the add-versus-remove decision—to the controlling Player's PlayerController. Notable design intent includes capability gating via `canReceiveCounters`/`canRemoveCounters` that auto-selects the only legal direction, optional SVar-based conditional removal, and remembering removed cards on request.
+During resolution it validates each target against the live Game state to skip last-known-information cards, batches modifications through a GameEntityCounterTable so replacement effects apply together, and defers choicesâ€”counter-type selection and the add-versus-remove decisionâ€”to the controlling Player's PlayerController. Notable design intent includes capability gating via `canReceiveCounters`/`canRemoveCounters` that auto-selects the only legal direction, optional SVar-based conditional removal, and remembering removed cards on request.
 
 ## Source
 `forge-game/src/main/java/forge/game/ability/effects/CountersPutOrRemoveEffect.java`
@@ -205,4 +205,130 @@ public class CountersPutOrRemoveEffect extends SpellAbilityEffect {
         }
     }
 }
+```
+
+## Python
+`forge/game/ability/effects/CountersPutOrRemoveEffect.py`
+
+```python
+from forge.game.Game import Game
+from forge.game.GameEntityCounterTable import GameEntityCounterTable
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.card.CounterType import CounterType
+from forge.game.player.Player import Player
+from forge.game.player.PlayerController import PlayerController
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Expressions import Expressions
+from forge.util.Lang import Lang
+from forge.util.Localizer import Localizer
+
+
+class CountersPutOrRemoveEffect(SpellAbilityEffect):
+    def getStackDescription(self, sa: SpellAbility) -> str:
+        if sa.hasParam("AddConditionSVar"):
+            return "Add StackDescription for AddOrRemoveCounter line with condition!"
+        sb = []
+        pl = (AbilityUtils.getDefinedPlayers(sa.getHostCard(), sa.getParam("DefinedPlayer"), sa).getFirst()
+              if sa.hasParam("DefinedPlayer")
+              else sa.getActivatingPlayer())
+        sb.append(pl.getName())
+
+        if sa.hasParam("CounterType"):
+            ctype = CounterType.getType(sa.getParam("CounterType"))
+            sb.append(" puts a ")
+            sb.append(ctype.getName())
+            sb.append(" counter on or removes a ")
+            sb.append(ctype.getName())
+            sb.append(" counter from ")
+        else:
+            sb.append(" removes a counter from or puts another of those counters on ")
+
+        sb.append(Lang.joinHomogenous(self.getDefinedCardsOrTargeted(sa)))
+        sb.append(".")
+
+        return "".join(sb)
+
+    def resolve(self, sa: SpellAbility) -> None:
+        source = sa.getHostCard()
+        game = source.getGame()
+        counterAmount = AbilityUtils.calculateAmount(source, sa.getParamOrDefault("CounterNum", "1"), sa)
+
+        if counterAmount <= 0:
+            return
+
+        ctype = None
+        if sa.hasParam("CounterType"):
+            ctype = CounterType.getType(sa.getParam("CounterType"))
+
+        pl = AbilityUtils.getDefinedPlayers(source, sa.getParam("DefinedPlayer"), sa).getFirst()
+        eachExisting = sa.hasParam("EachExistingCounter")
+
+        table = GameEntityCounterTable()
+
+        for tgtCard in self.getDefinedCardsOrTargeted(sa):
+            gameCard = game.getCardState(tgtCard, None)
+            # gameCard is LKI in that case, the card is not in game anymore
+            # or the timestamp did change
+            # this should check Self too
+            if gameCard is None or not tgtCard.equalsWithGameTimestamp(gameCard):
+                continue
+            if sa.hasParam("Optional") and not pl.getController().confirmAction(sa, None,
+                    Localizer.getInstance().getMessage("lblWouldYouLikePutRemoveCounters", ctype.getName(),
+                            gameCard.getTranslatedName()), None):
+                continue
+            if gameCard.hasCounters():
+                if eachExisting:
+                    for listType in list(gameCard.getCounters().keySet()):
+                        self.addOrRemoveCounter(sa, gameCard, listType, counterAmount, table, pl)
+                else:
+                    self.addOrRemoveCounter(sa, gameCard, ctype, counterAmount, table, pl)
+            elif not eachExisting and ctype is not None:
+                gameCard.addCounter(ctype, counterAmount, pl, table)
+        table.replaceCounterEffect(game, sa)
+
+    def addOrRemoveCounter(self, sa: SpellAbility, tgtCard: Card, ctype: CounterType,
+            counterAmount: int, table: GameEntityCounterTable, pl: Player) -> None:
+        pc = pl.getController()
+
+        params: dict[str, object] = {}
+        params["Target"] = tgtCard
+
+        clist = list(tgtCard.getCounters().keySet())
+        if ctype is not None:
+            clist = [ctype]
+
+        prompt = Localizer.getInstance().getMessage("lblSelectCounterTypeToAddOrRemove")
+        chosenType = pc.chooseCounterType(cList if False else clist, sa, prompt, params)
+
+        if sa.hasParam("RemoveConditionSVar"):
+            host = sa.getHostCard()
+            value = AbilityUtils.calculateAmount(host, sa.getParam("RemoveConditionSVar"), sa)
+            compare = sa.getParamOrDefault("RemoveConditionSVarCompare", "GE1")
+            operator = compare[0:2]
+            operand = compare[2:]
+            operandValue = AbilityUtils.calculateAmount(host, operand, sa)
+
+            putCounter = not Expressions.compare(value, operator, operandValue)
+        else:
+            canReceive = tgtCard.canReceiveCounters(ctype)
+            canRemove = tgtCard.canRemoveCounters(ctype)
+            if not canReceive and not canRemove:
+                return
+            if canReceive and not canRemove:
+                putCounter = True
+            elif not canReceive and canRemove:
+                putCounter = False
+            else:
+                params["CounterType"] = chosenType
+                prompt = Localizer.getInstance().getMessage("lblWhatToDoWithTargetCounter", chosenType.getName(), tgtCard.getTranslatedName()) + " "
+                putCounter = pc.chooseBinary(sa, prompt, PlayerController.BinaryChoiceType.AddOrRemove, params)
+
+        if putCounter:
+            tgtCard.addCounter(chosenType, counterAmount, pl, table)
+        else:
+            tgtCard.subtractCounter(chosenType, counterAmount, pl)
+            if sa.hasParam("RememberRemovedCards"):
+                sa.getHostCard().addRemembered(tgtCard)
 ```

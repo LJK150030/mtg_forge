@@ -73,3 +73,37 @@ public record GameEventCardDamaged(CardView card, CardView source, int amount, D
     }
 }
 ```
+
+## Python
+`forge/game/event/GameEventCardDamaged.py`
+
+```python
+from enum import Enum
+
+from forge.game.card.CardView import CardView
+from forge.game.event.GameEvent import GameEvent
+from forge.game.event.IGameEventVisitor import IGameEventVisitor
+
+
+class GameEventCardDamaged(GameEvent):
+
+    class DamageType(Enum):
+        Normal = 1
+        M1M1Counters = 2
+        Deathtouch = 3
+        LoyaltyLoss = 4
+
+    def __init__(self, card: CardView, source: CardView, amount: int, type: "GameEventCardDamaged.DamageType"):
+        self.card = card
+        self.source = source
+        self.amount = amount
+        self.type = type
+
+    def visit(self, visitor: IGameEventVisitor):
+        return visitor.visit(self)
+
+    # (non-Javadoc)
+    # @see java.lang.Object#toString()
+    def __str__(self) -> str:
+        return "" + str(self.source) + " dealt " + str(self.amount) + " " + str(self.type) + " damage to " + str(self.card)
+```

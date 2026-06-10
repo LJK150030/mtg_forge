@@ -39,7 +39,7 @@ classDiagram
 
 DayTimeEffect is a one-shot spell-ability effect that controls the game's day/night cycle. As a concrete subclass of `SpellAbilityEffect`, it overrides `getStackDescription` to render a human-readable outcome for the stack and `resolve` to apply the change. On resolution it locates the host `Card` from the `SpellAbility`, retrieves the owning `Game`, and reads the ability's `Value` parameter to call `Game.setDayTime` with day, night, or a toggle.
 
-The class is deliberately stateless, deriving all behavior from ability parameters rather than holding any data of its own. The `Switch` branch—used by the Celestus—flips the current state, defaulting an unset value to day via `Objects.requireNonNullElse` so the toggle behaves predictably before any day/night state exists.
+The class is deliberately stateless, deriving all behavior from ability parameters rather than holding any data of its own. The `Switch` branchâ€”used by the Celestusâ€”flips the current state, defaulting an unset value to day via `Objects.requireNonNullElse` so the toggle behaves predictably before any day/night state exists.
 
 ## Source
 `forge-game/src/main/java/forge/game/ability/effects/DayTimeEffect.java`
@@ -60,7 +60,7 @@ public class DayTimeEffect extends SpellAbilityEffect {
     protected String getStackDescription(SpellAbility sa) {
         final StringBuilder sb = new StringBuilder();
         if ("Switch".equals(sa.getParam("Value"))) {
-            sb.append("if itÃ¢â‚¬â„¢s night, it becomes day. Otherwise, it becomes night.");
+            sb.append("if itÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢s night, it becomes day. Otherwise, it becomes night.");
         } else {
             sb.append("It becomes ").append(sa.getParam("Value").toLowerCase()).append(".");
         }
@@ -82,4 +82,40 @@ public class DayTimeEffect extends SpellAbilityEffect {
         }
     }
 }
+```
+
+## Python
+`forge/game/ability/effects/DayTimeEffect.py`
+
+```python
+from forge.game.Game import Game
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.spellability.SpellAbility import SpellAbility
+
+
+class DayTimeEffect(SpellAbilityEffect):
+
+    def getStackDescription(self, sa: SpellAbility) -> str:
+        sb = []
+        if "Switch" == sa.getParam("Value"):
+            sb.append("if itΓÇÖs night, it becomes day. Otherwise, it becomes night.")
+        else:
+            sb.append("It becomes ")
+            sb.append(sa.getParam("Value").lower())
+            sb.append(".")
+        return "".join(sb)
+
+    def resolve(self, sa: SpellAbility) -> None:
+        host = sa.getHostCard()
+        game = host.getGame()
+        newValue = sa.getParam("Value")
+        if newValue == "Day":
+            game.setDayTime(False)
+        elif newValue == "Night":
+            game.setDayTime(True)
+        elif newValue == "Switch":
+            # logic for the Celestus
+            current = game.getDayTime()
+            game.setDayTime(not (current if current is not None else False))
 ```

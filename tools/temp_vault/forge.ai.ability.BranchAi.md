@@ -50,7 +50,7 @@ classDiagram
 
 BranchAi is a concrete AI strategy handler for "Branch" spell abilities, extending the abstract `SpellAbilityAi` base to decide whether and how the computer player should play abilities that fork into different effects. Its `canPlay` method dispatches on the spell's `AILogic` parameter: it delegates the `GrislySigil` and `BranchCounter` cases to specialized helpers (`SpecialCardAi`, `SpecialAiLogic`), and for `TgtAttacker` it inspects the active `Combat`, preferring attackers assaulting a battle and otherwise picking the strongest creature via `ComputerUtilCard`. Each branch returns an `AiAbilityDecision` pairing a confidence score with an `AiPlayDecision`.
 
-The design uses a string-keyed dispatch that defaults to willing play, with a TODO marking it as deliberately extensible for future branch logic. `doTriggerNoCost` reuses `canPlay` while forcing mandatory triggers through, and `confirmAction` unconditionally confirms—reflecting that branch choices are resolved during the play decision rather than at prompt time.
+The design uses a string-keyed dispatch that defaults to willing play, with a TODO marking it as deliberately extensible for future branch logic. `doTriggerNoCost` reuses `canPlay` while forcing mandatory triggers through, and `confirmAction` unconditionally confirmsâ€”reflecting that branch choices are resolved during the play decision rather than at prompt time.
 
 ## Source
 `forge-ai/src/main/java/forge/ai/ability/BranchAi.java`
@@ -128,4 +128,70 @@ public class BranchAi extends SpellAbilityAi {
         return true;
     }
 }
+```
+
+## Python
+`forge/ai/ability/BranchAi.py`
+
+```python
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.ai.ComputerUtilCard import ComputerUtilCard
+from forge.ai.SpecialAiLogic import SpecialAiLogic
+from forge.ai.SpecialCardAi import SpecialCardAi
+from forge.ai.SpellAbilityAi import SpellAbilityAi
+from forge.game.GameEntity import GameEntity
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardLists import CardLists
+from forge.game.combat.Combat import Combat
+from forge.game.player.Player import Player
+from forge.game.player.PlayerActionConfirmMode import PlayerActionConfirmMode
+from forge.game.spellability.SpellAbility import SpellAbility
+
+from typing import Map
+
+
+class BranchAi(SpellAbilityAi):
+    # (non-Javadoc)
+    # @see forge.card.abilityfactory.SpellAiLogic#canPlayAI(forge.game.player.Player, java.util.Map, forge.card.spellability.SpellAbility)
+    def canPlay(self, aiPlayer: Player, sa: SpellAbility) -> AiAbilityDecision:
+        aiLogic = sa.getParamOrDefault("AILogic", "")
+        if "GrislySigil" == aiLogic:
+            result = SpecialCardAi.GrislySigil.consider(aiPlayer, sa)
+            return AiAbilityDecision(100 if result else 0, AiPlayDecision.WillPlay if result else AiPlayDecision.CantPlayAi)
+        elif "BranchCounter" == aiLogic:
+            result = SpecialAiLogic.doBranchCounterspellLogic(aiPlayer, sa)
+            return AiAbilityDecision(100 if result else 0, AiPlayDecision.WillPlay if result else AiPlayDecision.CantPlayAi)
+        elif "TgtAttacker" == aiLogic:
+            combat = aiPlayer.getGame().getCombat()
+            if combat is None or combat.getAttackingPlayer() != aiPlayer:
+                return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+            attackers = combat.getAttackers()
+
+            def _isAttackingBattle(card):
+                def_ = combat.getDefenderByAttacker(combat.getBandOfAttacker(card))
+                return isinstance(def_, Card) and def_.isBattle()
+
+            attackingBattle = CardLists.filter(attackers, _isAttackingBattle)
+
+            if not attackingBattle.isEmpty():
+                sa.getTargets().add(ComputerUtilCard.getBestCreatureAI(attackingBattle))
+            else:
+                sa.getTargets().add(ComputerUtilCard.getBestCreatureAI(attackers))
+
+            return AiAbilityDecision(100 if sa.isTargetNumberValid() else 0, AiPlayDecision.WillPlay if sa.isTargetNumberValid() else AiPlayDecision.CantPlayAi)
+
+        # TODO: expand for other cases where the AI is needed to make a decision on a branch
+        return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+    def doTriggerNoCost(self, aiPlayer: Player, sa: SpellAbility, mandatory: bool) -> AiAbilityDecision:
+        decision = self.canPlay(aiPlayer, sa)
+        if decision.willingToPlay() or mandatory:
+            return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+        return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+    def confirmAction(self, player: Player, sa: SpellAbility, mode: PlayerActionConfirmMode, message: str, params: "Map[str, object]") -> bool:
+        return True
 ```

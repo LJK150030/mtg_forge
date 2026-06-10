@@ -39,10 +39,10 @@ classDiagram
 
 `LeafColor` is a private, immutable predicate that tests a single card's color characteristics against a configured criterion. It pairs a `ColorOperator` enum constant with a packed `byte` color mask, and its `test` method dispatches on that operator to evaluate the candidate `CardRules`. As a nested helper within `CardRulesPredicates`, it implements Guava's `Predicate<CardRules>`, making it composable with other filtering predicates used to query the card database.
 
-Its design intent is to consolidate many distinct color queries—color count comparisons, subset/superset membership, exact equality, and castability—into one parameterized leaf rather than a proliferation of separate predicate classes. It delegates the actual logic to `ColorSet` (via `CardRules.getColor()`) and to `CardRules.canCastWithAvailable`, keeping the predicate a thin dispatcher. Null subjects fail safely, and the `final` fields make instances cheap, shareable, and side-effect free.
+Its design intent is to consolidate many distinct color queriesâ€”color count comparisons, subset/superset membership, exact equality, and castabilityâ€”into one parameterized leaf rather than a proliferation of separate predicate classes. It delegates the actual logic to `ColorSet` (via `CardRules.getColor()`) and to `CardRules.canCastWithAvailable`, keeping the predicate a thin dispatcher. Null subjects fail safely, and the `final` fields make instances cheap, shareable, and side-effect free.
 
 ## Source
-`forge-core/src/main/java/forge/card/CardRulesPredicates.java` â€” declaration excerpt
+`forge-core/src/main/java/forge/card/CardRulesPredicates.java` Ã¢â‚¬â€ declaration excerpt
 
 ```java
     private static class LeafColor implements Predicate<CardRules> {
@@ -96,4 +96,58 @@ Its design intent is to consolidate many distinct color queries—color count co
             }
         }
     }
+```
+
+## Python
+`forge/card/CardRulesPredicates/LeafColor.py`
+
+```python
+from enum import Enum
+
+from com.google.common.base.Predicate import Predicate
+
+from forge.card.CardRules import CardRules
+from forge.card.ColorSet import ColorSet
+
+
+class LeafColor(Predicate):
+    class ColorOperator(Enum):
+        CountColors = "CountColors"
+        CountColorsGreaterOrEqual = "CountColorsGreaterOrEqual"
+        CountColorsGreater = "CountColorsGreater"
+        CountColorsSmallerOrEqual = "CountColorsSmallerOrEqual"
+        CountColorsSmaller = "CountColorsSmaller"
+        HasAnyOf = "HasAnyOf"
+        HasAllOf = "HasAllOf"
+        Equals = "Equals"
+        CanCast = "CanCast"
+
+    def __init__(self, operator: "LeafColor.ColorOperator", thatColor: int):
+        self.op = operator
+        self.color = thatColor
+
+    def test(self, subject: CardRules) -> bool:
+        if subject is None:
+            return False
+        cardColor: ColorSet = subject.getColor()
+        if self.op == LeafColor.ColorOperator.CountColors:
+            return cardColor.countColors() == self.color
+        elif self.op == LeafColor.ColorOperator.CountColorsGreaterOrEqual:
+            return cardColor.countColors() >= self.color
+        elif self.op == LeafColor.ColorOperator.CountColorsGreater:
+            return cardColor.countColors() > self.color
+        elif self.op == LeafColor.ColorOperator.CountColorsSmallerOrEqual:
+            return cardColor.countColors() <= self.color
+        elif self.op == LeafColor.ColorOperator.CountColorsSmaller:
+            return cardColor.countColors() < self.color
+        elif self.op == LeafColor.ColorOperator.Equals:
+            return cardColor.isEqual(self.color)
+        elif self.op == LeafColor.ColorOperator.HasAllOf:
+            return cardColor.hasAllColors(self.color)
+        elif self.op == LeafColor.ColorOperator.HasAnyOf:
+            return cardColor.hasAnyColor(self.color)
+        elif self.op == LeafColor.ColorOperator.CanCast:
+            return subject.canCastWithAvailable(self.color)
+        else:
+            return False
 ```

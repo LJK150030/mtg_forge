@@ -56,6 +56,12 @@ classDiagram
 - [[forge.game.zone.Zone|Zone]]
 - [[forge.game.zone.ZoneType|ZoneType]]
 
+## Design Description
+
+TriggerReplacementBase is an abstract base for card traits whose behavior is gated by zone and can be backed by an effect, sitting between `CardTraitBase` and concrete trigger and replacement-effect subclasses. Extending `CardTraitBase` and implementing `IIdentifiable` and `Cloneable`, it adds the shared machinery these traits need: a set of valid host zones, a `zonesCheck` that confirms the host card is in an active zone and not phased out, and an optional `overridingAbility` that supplies alternate effect behavior.
+
+Its central design intent is to keep this overriding `SpellAbility` synchronized with its owner: `setHostCard`, `setKeyword`, and `setCardState` propagate to it, and `setOverridingAbility` inherits the trait's intrinsic flag. Text-changing operations (`changeText`, `changeTextIntrinsic`) delegate through the abstract `ensureAbility` hook, letting subclasses define how their effect ability is resolved while reusing common collaboration with `Card`, `CardState`, `KeywordInterface`, `Zone`, and `ZoneType`.
+
 ## Source
 `forge-game/src/main/java/forge/game/TriggerReplacementBase.java`
 
@@ -180,4 +186,83 @@ public abstract class TriggerReplacementBase extends CardTraitBase implements II
         }
     }
 }
+```
+
+## Python
+`forge/game/TriggerReplacementBase.py`
+
+```python
+from typing import Map, Set
+from forge.game.CardTraitBase import CardTraitBase
+from forge.game.IIdentifiable import IIdentifiable
+from forge.game.card.Card import Card
+from forge.game.card.CardState import CardState
+from forge.game.keyword.KeywordInterface import KeywordInterface
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.Zone import Zone
+from forge.game.zone.ZoneType import ZoneType
+
+
+# Created by Hellfish on 2014-02-09.
+class TriggerReplacementBase(CardTraitBase, IIdentifiable):
+    def __init__(self):
+        super().__init__()
+        self.validHostZones: set[ZoneType] = None
+        # The overriding ability.
+        self.overridingAbility: SpellAbility = None
+
+    def setHostCard(self, c: Card) -> None:
+        super().setHostCard(c)
+        if self.overridingAbility is not None:
+            self.overridingAbility.setHostCard(c)
+
+    def setKeyword(self, kw: KeywordInterface) -> None:
+        super().setKeyword(kw)
+        if self.overridingAbility is not None:
+            self.overridingAbility.setKeyword(kw)
+
+    def setCardState(self, state: CardState) -> None:
+        super().setCardState(state)
+        if self.overridingAbility is not None:
+            self.overridingAbility.setCardState(state)
+
+    def getActiveZone(self) -> Set[ZoneType]:
+        return self.validHostZones
+
+    def setActiveZone(self, zones: Set[ZoneType]) -> None:
+        self.validHostZones = zones
+
+    def zonesCheck(self, hostCardZone: Zone) -> bool:
+        return (not self.hostCard.isPhasedOut()
+                and (self.validHostZones is None or len(self.validHostZones) == 0
+                     or (hostCardZone is not None
+                         and hostCardZone.getZoneType() in self.validHostZones)))
+
+    def getOverridingAbility(self) -> SpellAbility:
+        return self.overridingAbility
+
+    def setOverridingAbility(self, overridingAbility0: SpellAbility) -> None:
+        self.overridingAbility = overridingAbility0
+        overridingAbility0.setIntrinsic(self.intrinsic)
+
+    def ensureAbility(self) -> SpellAbility:
+        raise NotImplementedError
+
+    def changeText(self) -> None:
+        if not self.isIntrinsic():
+            return
+        super().changeText()
+
+        sa = self.ensureAbility()
+
+        if sa is not None:
+            sa.changeText()
+
+    def changeTextIntrinsic(self, colorMap: Map[str, str], typeMap: Map[str, str]) -> None:
+        super().changeTextIntrinsic(colorMap, typeMap)
+
+        sa = self.ensureAbility()
+
+        if sa is not None:
+            sa.changeTextIntrinsic(colorMap, typeMap)
 ```

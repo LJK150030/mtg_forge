@@ -42,6 +42,12 @@ classDiagram
 - [[forge.game.card.CardZoneTable|CardZoneTable]]
 - [[forge.game.spellability.SpellAbility|SpellAbility]]
 
+## Design Description
+
+TriggerAbilityTriggered is a concrete trigger that fires when a spell or ability is put on the stack or "triggered," letting card scripts respond to such events. Extending the abstract Trigger base class, it implements performTest to gate firing against script parametersâ€”ValidMode, ValidDestination, ValidSpellAbility, ValidSource, ValidCause, and TriggeredOwnAbilityâ€”reading event data from the AbilityKey-keyed runParams map. setTriggeringObjects exposes the originating SpellAbility, its host Card, and the cause to the responding ability, while getImportantStackObjects supplies a localized description for the stack display.
+
+Notably, the static getRunParams normalizes heterogeneous source eventsâ€”ChangesZone, ChangesZoneAll, Attacks, and AttackersDeclared variantsâ€”into a uniform Cause/Destination representation, drawing on CardCollection, CardZoneTable, and CardLists validation so that diverse game events can be matched through one consistent triggering interface.
+
 ## Source
 `forge-game/src/main/java/forge/game/trigger/TriggerAbilityTriggered.java`
 
@@ -182,4 +188,103 @@ public class TriggerAbilityTriggered extends Trigger {
         return newRunParams;
     }
 }
+```
+
+## Python
+`forge/game/trigger/TriggerAbilityTriggered.py`
+
+```python
+from forge.game.trigger.Trigger import Trigger
+from forge.game.trigger.TriggerType import TriggerType
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CardZoneTable import CardZoneTable
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Localizer import Localizer
+
+
+class TriggerAbilityTriggered(Trigger):
+    """
+    TriggerAbilityTriggered class.
+
+    @author Forge
+    @version $Id$
+    """
+
+    def __init__(self, params: dict[str, str], host: Card, intrinsic: bool):
+        super().__init__(params, host, intrinsic)
+
+    def performTest(self, runParams: dict[AbilityKey, object]) -> bool:
+        spellAbility = runParams.get(AbilityKey.SpellAbility)
+        if spellAbility is None:
+            print("TriggerAbilityTriggered performTest encountered spellAbility == null. runParams2 = " + str(runParams))
+            return False
+        source = spellAbility.getHostCard()
+        causes = runParams.get(AbilityKey.Cause)
+
+        if self.hasParam("ValidMode"):
+            validModes = self.getParam("ValidMode").split(",")
+            mode = runParams.get(AbilityKey.Mode)
+            if mode not in validModes:
+                return False
+
+        if self.hasParam("ValidDestination"):
+            validDestinations = self.getParam("ValidDestination").split(",")
+            destinations = runParams.get(AbilityKey.Destination).split(",")
+            if set(validDestinations).isdisjoint(destinations):
+                return False
+
+        if not self.matchesValidParam("ValidSpellAbility", spellAbility):
+            return False
+
+        if not self.matchesValidParam("ValidSource", source):
+            return False
+
+        if not self.matchesValidParam("ValidCause", causes):
+            return False
+
+        if self.hasParam("TriggeredOwnAbility") and source not in causes:
+            return False
+
+        return True
+
+    def setTriggeringObjects(self, sa: SpellAbility, runParams: dict[AbilityKey, object]) -> None:
+        triggeredSA = runParams.get(AbilityKey.SpellAbility)
+        sa.setTriggeringObject(AbilityKey.Source, triggeredSA.getHostCard())
+        sa.setTriggeringObjectsFrom(
+            runParams,
+            AbilityKey.SpellAbility,
+            AbilityKey.Cause)
+
+    def getImportantStackObjects(self, sa: SpellAbility) -> str:
+        sb = []
+        sb.append(Localizer.getInstance().getMessage("lblSpellAbility"))
+        sb.append(": ")
+        sb.append(str(sa.getTriggeringObject(AbilityKey.SpellAbility)))
+        return "".join(sb)
+
+    @staticmethod
+    def getRunParams(regtrig: Trigger, sa: SpellAbility, runParams: dict[AbilityKey, object]) -> dict[AbilityKey, object]:
+        newRunParams = AbilityKey.newMap()
+        newRunParams[AbilityKey.Mode] = regtrig.getMode().toString()
+        if regtrig.getMode() == TriggerType.ChangesZone:
+            newRunParams[AbilityKey.Destination] = runParams.get(AbilityKey.Destination, "")
+            newRunParams[AbilityKey.Cause] = [runParams.get(AbilityKey.Card)]
+        elif regtrig.getMode() == TriggerType.ChangesZoneAll:
+            table = runParams.get(AbilityKey.Cards)
+            newRunParams[AbilityKey.Destination] = ",".join(table.columnKeySet())
+            newRunParams[AbilityKey.Cause] = table.allCards()
+        elif regtrig.getMode() == TriggerType.Attacks:
+            newRunParams[AbilityKey.Cause] = [runParams.get(AbilityKey.Attacker)]
+        elif regtrig.getMode() == TriggerType.AttackersDeclared or regtrig.getMode() == TriggerType.AttackersDeclaredOneTarget:
+            attackers = runParams.get(AbilityKey.Attackers)
+            if regtrig.hasParam("ValidAttackers"):
+                attackers = CardLists.getValidCards(attackers, regtrig.getParam("ValidAttackers"), regtrig.getHostCard().getController(), regtrig.getHostCard(), regtrig)
+            newRunParams[AbilityKey.Cause] = attackers
+
+        newRunParams[AbilityKey.SpellAbility] = sa
+
+        return newRunParams
 ```

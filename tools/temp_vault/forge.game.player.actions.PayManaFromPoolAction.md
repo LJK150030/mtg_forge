@@ -30,6 +30,10 @@ classDiagram
 **Extends:**
 - [[forge.game.player.actions.PlayerAction|PlayerAction]]
 
+## Design Description
+
+Pay-mana-from-pool variant of a player action that records the color of mana a player chooses to spend from their mana pool. It extends `PlayerAction`, invoking the supertype constructor with a null subject and the fixed label "Pay mana" while storing the selected color as a `byte` color code. The class exposes `getSelectedColor()` to retrieve that code and overrides the protected `appendDetails(StringBuilder)` hook to contribute its `mana=` fragment to the action's textual description, following the template-method pattern established by `PlayerAction`. Its narrow responsibilityâ€”carrying a single color value alongside the inherited action metadataâ€”reflects a deliberately lightweight, immutable-by-convention design serving as a typed record of a mana-payment decision within the game's player-action framework.
+
 ## Source
 `forge-game/src/main/java/forge/game/player/actions/PayManaFromPoolAction.java`
 
@@ -53,4 +57,23 @@ public class PayManaFromPoolAction extends PlayerAction{
         sb.append(" mana=").append(colorSelected);
     }
 }
+```
+
+## Python
+`forge/game/player/actions/PayManaFromPoolAction.py`
+
+```python
+from forge.game.player.actions.PlayerAction import PlayerAction
+
+
+class PayManaFromPoolAction(PlayerAction):
+    def __init__(self, colorCode: int):
+        super().__init__(None, "Pay mana")
+        self.colorSelected = colorCode
+
+    def getSelectedColor(self) -> int:
+        return self.colorSelected
+
+    def appendDetails(self, sb) -> None:
+        sb.append(" mana=").append(self.colorSelected)
 ```

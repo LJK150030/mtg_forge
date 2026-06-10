@@ -45,7 +45,7 @@ classDiagram
 
 GlobalAttackRestrictions is an immutable value object that captures the combat-wide limits on how many creatures may attack and how many may be assigned to each individual defender. It exposes the overall cap (`max`) and a per-defender cap map (`defenderMax`) through read-only accessors, and validates a proposed set of attacker-to-defender assignments via `isLegal`, rejecting any declaration that exceeds the global total or any defender's quota (where a quota of zero forbids attacking that defender entirely).
 
-Instances are produced only through the static `getGlobalRestrictions` factory, which queries `StaticAbilityAttackRestrict` against the current `Game` to derive both the global and per-defender limits from active static abilities; the private constructor enforces this controlled creation. It collaborates with the combat domain types—`Player`, `GameEntity` defenders, `Card` attackers, and `FCollectionView`—serving as a stateless rules helper that the attack-declaration logic consults to enforce restriction effects.
+Instances are produced only through the static `getGlobalRestrictions` factory, which queries `StaticAbilityAttackRestrict` against the current `Game` to derive both the global and per-defender limits from active static abilities; the private constructor enforces this controlled creation. It collaborates with the combat domain typesâ€”`Player`, `GameEntity` defenders, `Card` attackers, and `FCollectionView`â€”serving as a stateless rules helper that the attack-declaration logic consults to enforce restriction effects.
 
 ## Source
 `forge-game/src/main/java/forge/game/combat/GlobalAttackRestrictions.java`
@@ -128,4 +128,62 @@ public class GlobalAttackRestrictions {
         return new GlobalAttackRestrictions(max, defenderMax);
     }
 }
+```
+
+## Python
+`forge/game/combat/GlobalAttackRestrictions.py`
+
+```python
+from forge.game.Game import Game
+from forge.game.GameEntity import GameEntity
+from forge.game.card.Card import Card
+from forge.game.player.Player import Player
+from forge.game.staticability.StaticAbilityAttackRestrict import StaticAbilityAttackRestrict
+from forge.util.collect.FCollectionView import FCollectionView
+
+
+class GlobalAttackRestrictions:
+
+    def __init__(self, max: int, defenderMax: dict[GameEntity, int]):
+        self.max = max
+        self.defenderMax = defenderMax
+
+    def getMax(self) -> int:
+        return self.max
+
+    def getDefenderMax(self) -> dict[GameEntity, int]:
+        return self.defenderMax
+
+    def isLegal(self, attackers: dict[Card, GameEntity]) -> bool:
+        if self.max is not None and len(attackers) > self.max:
+            return False
+
+        for defender in set(attackers.values()):
+            max = self.defenderMax.get(defender)
+            if max is None:
+                continue
+            if max == 0:
+                # there's at least one creature attacking this defender
+                return False
+            if sum(1 for attDef in attackers.values() if attDef is defender) > max:
+                return False
+        return True
+
+    @staticmethod
+    def getGlobalRestrictions(attackingPlayer: Player, possibleDefenders: FCollectionView[GameEntity]) -> "GlobalAttackRestrictions":
+        defenderMax: dict[GameEntity, int] = {}
+        game: Game = attackingPlayer.getGame()
+
+        max = StaticAbilityAttackRestrict.globalAttackRestrict(game)
+
+        for defender in possibleDefenders:
+            defMax = StaticAbilityAttackRestrict.attackRestrictNum(defender)
+            if defMax is not None:
+                defenderMax[defender] = defMax
+        if len(defenderMax) == possibleDefenders.size():
+            # maximum on each defender, global maximum is sum of these
+            total = sum(defenderMax.values())
+            max = min(max if max is not None else 2147483647, total)
+
+        return GlobalAttackRestrictions(max, defenderMax)
 ```

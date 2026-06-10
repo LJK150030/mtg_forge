@@ -78,3 +78,50 @@ public class ChooseDirectionEffect extends SpellAbilityEffect {
     }
 }
 ```
+
+## Python
+`forge/game/ability/effects/ChooseDirectionEffect.py`
+
+````python
+package = "forge.game.ability.effects"
+
+Let me produce the Python port.
+
+The Java uses `com.google.common.collect.Lists` (reverse) and `forge.game.Direction`, `forge.game.player.PlayerController.BinaryChoiceType`, `forge.util.Localizer`. These aren't all in the Relationships, but I should still import them faithfully per the FQN rules where applicable. The rules say import for every dependency type from Java imports and Relationships. Let me map:
+
+- forge.game.Direction -> from forge.game.Direction import Direction
+- forge.game.Game -> from forge.game.Game import Game
+- forge.game.ability.SpellAbilityEffect -> from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+- forge.game.card.Card -> from forge.game.card.Card import Card
+- forge.game.player.Player -> from forge.game.player.Player import Player
+- forge.game.player.PlayerController.BinaryChoiceType -> nested type. FQN is forge.game.player.PlayerController.BinaryChoiceType. The module path is type's FQN... BinaryChoiceType is nested in PlayerController. I'll import from forge.game.player.PlayerController import BinaryChoiceType? The rule: module path is the type's FQN and imported symbol is its simple name. So from forge.game.player.PlayerController.BinaryChoiceType import BinaryChoiceType. Hmm but it's a nested enum. Safer: import PlayerController. Actually the rule is mechanical. BinaryChoiceType's FQN... it's a nested class. I'll follow the pattern: `from forge.game.player.PlayerController import BinaryChoiceType`. That's idiomatic Python for a nested type defined in PlayerController module. I'll use that.
+- forge.game.spellability.SpellAbility -> from forge.game.spellability.SpellAbility import SpellAbility
+- forge.util.Localizer -> from forge.util.Localizer import Localizer
+- forge.util.collect.FCollection -> from forge.util.collect.FCollection import FCollection
+- com.google.common.collect.Lists -> not forge. Use Python reversed(list). I'll use list(reversed(left)).
+
+Let me write it.```python
+from forge.game.Direction import Direction
+from forge.game.Game import Game
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.player.Player import Player
+from forge.game.player.PlayerController import BinaryChoiceType
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Localizer import Localizer
+from forge.util.collect.FCollection import FCollection
+
+
+class ChooseDirectionEffect(SpellAbilityEffect):
+    def resolve(self, sa: SpellAbility) -> None:
+        source = sa.getHostCard()
+        game = source.getGame()
+        left = FCollection(game.getPlayers())
+        # TODO: We'd better set up turn order UI here
+        info = Localizer.getInstance().getMessage("lblLeftClockwise") + ": " + str(left) + "\r\n" + Localizer.getInstance().getMessage("lblRightAntiClockwise") + ":" + str(list(reversed(left)))
+        sa.getActivatingPlayer().getController().notifyOfValue(sa, source, info)
+
+        chosen = sa.getActivatingPlayer().getController().chooseBinary(sa,
+                Localizer.getInstance().getMessage("lblChooseDirection"), BinaryChoiceType.LeftOrRight)
+        source.setChosenDirection(Direction.Left if chosen else Direction.Right)
+````

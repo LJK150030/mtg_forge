@@ -85,7 +85,7 @@ classDiagram
 
 SimulationController orchestrates Forge's AI lookahead search, driving the recursive simulation of candidate plays to find the highest-scoring line of action. It maintains parallel stacks of decisions, scores, and GameSimulator instances representing the current exploration path, and remembers the best-scoring decision sequence found so far. As the AI evaluates spell abilities, card choices, modes, and targets, the controller appends linked Plan.Decision nodes; once exploration completes, getBestPlan walks the prevDecision chain backwards and merges target, choice, and mode sub-decisions into their parent ability to assemble a coherent Plan.
 
-Though it implements no interface, the class is the stateful coordinator binding GameSimulator, GameCopier, and GameStateEvaluator.Score together. Two design choices stand out: a bounded recursion depth (MAX_DEPTH) caps search cost, and a CachedEffect memoization layer—reverse-mapping copied game objects back to their originals via GameCopier—lets the AI skip re-simulating previously seen negative-delta host/target/ability combinations.
+Though it implements no interface, the class is the stateful coordinator binding GameSimulator, GameCopier, and GameStateEvaluator.Score together. Two design choices stand out: a bounded recursion depth (MAX_DEPTH) caps search cost, and a CachedEffect memoization layerâ€”reverse-mapping copied game objects back to their originals via GameCopierâ€”lets the AI skip re-simulating previously seen negative-delta host/target/ability combinations.
 
 ## Source
 `forge-ai/src/main/java/forge/ai/simulation/SimulationController.java`
@@ -374,4 +374,238 @@ public class SimulationController {
         System.err.println(recursionDepth + ": [" + score.value + "] " + str + suffix);
     }
 }
+```
+
+## Python
+`forge/ai/simulation/SimulationController.py`
+
+```python
+from forge.ai.simulation.GameStateEvaluator import GameStateEvaluator
+from forge.ai.simulation.GameStateEvaluator.Score import Score
+from forge.ai.simulation.GameCopier import GameCopier
+from forge.ai.simulation.GameSimulator import GameSimulator
+from forge.ai.simulation.MultiTargetSelector import MultiTargetSelector
+from forge.ai.simulation.MultiTargetSelector.Targets import Targets
+from forge.ai.simulation.Plan import Plan
+from forge.ai.simulation.Plan.Decision import Decision
+from forge.ai.simulation.Plan.SpellAbilityRef import SpellAbilityRef
+from forge.ai.simulation.SimulationController.CachedEffect import CachedEffect
+from forge.game.GameObject import GameObject
+from forge.game.card.Card import Card
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+
+
+class SimulationController:
+    DEBUG = False
+    MAX_DEPTH = 3
+
+    class CachedEffect:
+        def __init__(self, hostCard, sa, target, targetScore, scoreDelta):
+            self.hostCard = hostCard
+            self.sa = str(sa)
+            self.target = target
+            self.targetScore = targetScore
+            self.scoreDelta = scoreDelta
+
+    def __init__(self, score):
+        self.bestScore = score
+        self.scoreStack = []
+        self.scoreStack.append(score)
+        self.simulatorStack = []
+        self.currentStack = []
+        self.bestSequence = None
+        self.effectCache = []
+        self.currentHostAndTarget = None
+
+    def getRecursionDepth(self):
+        return len(self.scoreStack) - 1
+
+    def shouldRecurse(self):
+        return self.bestScore.value != float("inf") and self.getRecursionDepth() < SimulationController.MAX_DEPTH
+
+    def getLastDecision(self):
+        if not self.currentStack:
+            return None
+        return self.currentStack[len(self.currentStack) - 1]
+
+    def getCurrentScore(self):
+        return self.scoreStack[len(self.scoreStack) - 1]
+
+    def evaluateSpellAbility(self, saList, saIndex):
+        self.currentStack.append(Plan.Decision(self.getCurrentScore(), self.getLastDecision(), Plan.SpellAbilityRef(saList, saIndex)))
+
+    def evaluateCardChoice(self, choice):
+        self.currentStack.append(Plan.Decision(self.getCurrentScore(), self.getLastDecision(), choice))
+
+    def evaluateChosenModes(self, chosenModes, modesStr):
+        self.currentStack.append(Plan.Decision(self.getCurrentScore(), self.getLastDecision(), chosenModes, modesStr))
+
+    def evaluateTargetChoices(self, sa, targets):
+        self.currentStack.append(Plan.Decision(self.getCurrentScore(), self.getLastDecision(), targets))
+
+    def doneEvaluating(self, score):
+        # if we're here during a deeper level this hasn't been called for the level above yet
+        # in such case we need to check that this decision has really lead to the improvement in score
+        if self.getLastDecision().initialScore.value < score.value and score.value > self.bestScore.value:
+            self.bestScore = score
+            self.bestSequence = self.getLastDecision()
+        self.currentStack.pop(len(self.currentStack) - 1)
+
+    def getBestScore(self):
+        return self.bestScore
+
+    def getBestPlan(self):
+        if self.currentStack:
+            raise RuntimeError("getBestPlan() expects currentStack to be empty!")
+
+        sequence = []
+        current = self.bestSequence
+        while current is not None:
+            sequence.append(current)
+            current = current.prevDecision
+        sequence.reverse()
+        # Merge targets & choices into their parents.
+        writeIndex = 0
+        for i in range(len(sequence)):
+            d = sequence[i]
+            if d.saRef is not None:
+                sequence[writeIndex] = d
+                writeIndex += 1
+            elif d.targets is not None:
+                sequence[writeIndex - 1].targets = d.targets
+            elif d.choices is not None:
+                to = sequence[writeIndex - 1]
+                if to.choices is None:
+                    to.choices = []
+                to.choices.extend(d.choices)
+            elif d.modes is not None:
+                sequence[writeIndex - 1].modes = d.modes
+                sequence[writeIndex - 1].modesStr = d.modesStr
+        del sequence[writeIndex:len(sequence)]
+        return Plan(sequence, self.getBestScore())
+
+    def getLastMergedDecision(self):
+        targets = None
+        choices = []
+        modes = None
+        modesStr = None
+
+        d = self.currentStack[len(self.currentStack) - 1]
+        while d.saRef is None:
+            if d.targets is not None:
+                targets = d.targets
+            elif d.choices is not None:
+                # Since we're iterating backwards, add to the front.
+                choices[0:0] = d.choices
+            elif d.modes is not None:
+                modes = d.modes
+                modesStr = d.modesStr
+            d = d.prevDecision
+
+        merged = Plan.Decision(d.initialScore, d.prevDecision, d.saRef)
+        merged.targets = targets
+        if choices:
+            merged.choices = choices
+        merged.modes = modes
+        merged.modesStr = modesStr
+        merged.xMana = d.xMana
+        return merged
+
+    def push(self, sa, score, simulator):
+        GameSimulator.debugPrint("Recursing DEPTH=" + str(self.getRecursionDepth()))
+        GameSimulator.debugPrint("  With: " + str(sa))
+        self.scoreStack.append(score)
+        self.simulatorStack.append(simulator)
+
+    def pop(self, score, nextSa):
+        self.scoreStack.pop(len(self.scoreStack) - 1)
+        self.simulatorStack.pop(len(self.simulatorStack) - 1)
+        GameSimulator.debugPrint("DEPTH" + str(self.getRecursionDepth()) + " best score " + str(score) + " " + str(nextSa))
+
+    def getOriginalHostCardAndTarget(self, sa):
+        saOrSubSa = sa
+        while saOrSubSa is not None and not saOrSubSa.usesTargeting():
+            saOrSubSa = saOrSubSa.getSubAbility()
+
+        if saOrSubSa is None or saOrSubSa.getTargets() is None or saOrSubSa.getTargets().size() != 1:
+            return None
+        target = saOrSubSa.getTargets().get(0)
+        originalTarget = target
+        if not isinstance(target, Card):
+            return None
+        hostCard = sa.getHostCard()
+        for i in range(len(self.simulatorStack) - 1, -1, -1):
+            if target is None or hostCard is None:
+                # This could happen when evaluating something that couldn't exist
+                # in the original game - for example, targeting a token that came
+                # into being as a result of simulating something earlier. Unfortunately,
+                # we can't cache this case.
+                return None
+            copier = self.simulatorStack[i].getGameCopier()
+            if copier.getCopiedGame() != hostCard.getGame():
+                raise RuntimeError("Expected hostCard and copier game to match!")
+            if copier.getCopiedGame() != target.getGame():
+                raise RuntimeError("Expected target and copier game to match!")
+            target = copier.reverseFind(target)
+            hostCard = copier.reverseFind(hostCard)
+        return [hostCard, target, originalTarget]
+
+    def setHostAndTarget(self, sa, simulator):
+        self.simulatorStack.append(simulator)
+        self.currentHostAndTarget = self.getOriginalHostCardAndTarget(sa)
+        self.simulatorStack.pop(len(self.simulatorStack) - 1)
+
+    def shouldSkipTarget(self, sa, simulator):
+        self.simulatorStack.append(simulator)
+        hostAndTarget = self.getOriginalHostCardAndTarget(sa)
+        self.simulatorStack.pop(len(self.simulatorStack) - 1)
+        if hostAndTarget is not None:
+            saString = str(sa)
+            for effect in self.effectCache:
+                if effect.hostCard == hostAndTarget[0] and effect.target == hostAndTarget[1] and effect.sa == saString:
+                    evaluator = GameStateEvaluator()
+                    player = sa.getActivatingPlayer()
+                    cardScore = evaluator.evalCard(player.getGame(), player, hostAndTarget[2])
+                    if cardScore == effect.targetScore:
+                        currentScore = self.getCurrentScore()
+                        # TODO: summonSick score?
+                        return Score(currentScore.value + effect.scoreDelta, currentScore.summonSickValue)
+        return None
+
+    def possiblyCacheResult(self, score, sa):
+        cached = ""
+
+        # TODO: Why is the check below needed by tests?
+        if self.currentStack:
+            d = self.currentStack[len(self.currentStack) - 1]
+            scoreDelta = score.value - d.initialScore.value
+            # Needed to make sure below is only executed when target decisions are ended.
+            # Also, only cache negative effects - so that in those cases we don't need to
+            # recurse.
+            if scoreDelta <= 0 and d.targets is not None:
+                # FIXME: Support more than one target in this logic.
+                hostAndTarget = self.currentHostAndTarget
+                if self.currentHostAndTarget is not None:
+                    evaluator = GameStateEvaluator()
+                    player = sa.getActivatingPlayer()
+                    cardScore = evaluator.evalCard(player.getGame(), player, hostAndTarget[2])
+                    self.effectCache.append(SimulationController.CachedEffect(hostAndTarget[0], sa, hostAndTarget[1], cardScore, scoreDelta))
+                    cached = " (added to cache)"
+
+        self.currentHostAndTarget = None
+        self.printState(score, sa, cached, True)
+
+    def printState(self, score, origSa, suffix, useStack):
+        if not SimulationController.DEBUG:
+            return
+
+        recursionDepth = self.getRecursionDepth()
+        for i in range(recursionDepth):
+            sys.stderr.write("  ")
+        if useStack and self.currentStack:
+            str_ = self.getLastMergedDecision().toString(True)
+        else:
+            str_ = SpellAbilityPicker.abilityToString(origSa)
+        sys.stderr.write(str(recursionDepth) + ": [" + str(score.value) + "] " + str_ + suffix + "\n")
 ```

@@ -168,3 +168,101 @@ public abstract class ManifestBaseEffect extends SpellAbilityEffect {
     abstract protected Card internalEffect(Card c, Player p, SpellAbility sa, Map<AbilityKey, Object> moveParams);
 }
 ```
+
+## Python
+`forge/game/ability/effects/ManifestBaseEffect.py`
+
+```python
+from typing import Any
+
+from forge.game.Game import Game
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CardPredicates import CardPredicates
+from forge.game.card.CardZoneTable import CardZoneTable
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+
+
+class ManifestBaseEffect(SpellAbilityEffect):
+    def resolve(self, sa: SpellAbility) -> None:
+        source = sa.getHostCard()
+        # Usually a number leaving possibility for X, Sacrifice X land: Manifest X creatures.
+        amount = AbilityUtils.calculateAmount(source, sa.getParam("Amount"), sa) if sa.hasParam("Amount") else 1
+
+        for p in self.getTargetPlayers(sa, "DefinedPlayer"):
+            self.manifestLoop(sa, p, amount)
+
+    def manifestLoop(self, sa: SpellAbility, p: Player, amount: int) -> None:
+        source = sa.getHostCard()
+        activator = sa.getActivatingPlayer()
+        game = source.getGame()
+
+        tgtCards: CardCollection
+        fromLibrary = False
+        if sa.hasParam("Choices") or sa.hasParam("ChoiceZone"):
+            choiceZone = ZoneType.Hand
+            if sa.hasParam("ChoiceZone"):
+                choiceZone = ZoneType.smartValueOf(sa.getParam("ChoiceZone"))
+                fromLibrary = choiceZone == ZoneType.Library
+            choices: CardCollectionView = p.getCardsIn(choiceZone)
+            if sa.hasParam("Choices"):
+                choices = CardLists.getValidCards(choices, sa.getParam("Choices"), activator, source, sa)
+            if choices.isEmpty():
+                return
+
+            title = sa.getParam("ChoiceTitle") if sa.hasParam("ChoiceTitle") else self.getDefaultMessage() + " "
+
+            tgtCards = CardCollection(p.getController().chooseCardsForEffect(choices, sa, title, amount, amount, False, None))
+        elif "TopOfLibrary" == sa.getParamOrDefault("Defined", "TopOfLibrary"):
+            tgtCards = p.getTopXCardsFromLibrary(amount)
+            fromLibrary = True
+        else:
+            tgtCards = self.getTargetCards(sa)
+            if tgtCards.allMatch(CardPredicates.inZone(ZoneType.Library)):
+                fromLibrary = True
+
+        if sa.hasParam("Shuffle"):
+            CardLists.shuffle(tgtCards)
+
+        if fromLibrary:
+            for c in tgtCards:
+                gameCard = game.getCardState(c, None)
+                # gameCard is LKI in that case, the card is not in game anymore
+                # or the timestamp did change
+                # this should check Self too
+                if gameCard is None or not c.equalsWithGameTimestamp(gameCard):
+                    continue
+
+                # CR 701.34d If an effect instructs a player to manifest multiple cards from their library, those cards are manifested one at a time.
+                moveParams: dict[AbilityKey, Any] = AbilityKey.newMap()
+                triggerList = AbilityKey.addCardZoneTableParams(moveParams, sa)
+                self.internalEffect(gameCard, p, sa, moveParams)
+                triggerList.triggerChangesZoneAll(game, sa)
+        else:
+            # manifest from other zones should be done at the same time
+            moveParams: dict[AbilityKey, Any] = AbilityKey.newMap()
+            triggerList = AbilityKey.addCardZoneTableParams(moveParams, sa)
+            for c in tgtCards:
+                gameCard = game.getCardState(c, None)
+                # gameCard is LKI in that case, the card is not in game anymore
+                # or the timestamp did change
+                # this should check Self too
+                if gameCard is None or not c.equalsWithGameTimestamp(gameCard):
+                    continue
+
+                self.internalEffect(gameCard, p, sa, moveParams)
+            triggerList.triggerChangesZoneAll(game, sa)
+
+    def getDefaultMessage(self) -> str:
+        ...
+
+    def internalEffect(self, c: Card, p: Player, sa: SpellAbility, moveParams: dict[AbilityKey, Any]) -> Card:
+        ...
+```

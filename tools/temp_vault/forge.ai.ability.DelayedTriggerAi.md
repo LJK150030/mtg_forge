@@ -52,7 +52,7 @@ classDiagram
 
 ## Design Description
 
-DelayedTriggerAi supplies the AI's decision logic for the DelayedTrigger ability API, extending `SpellAbilityAi` to override `chkDrawback`, `doTriggerNoCost`, and `canPlay`. Its core responsibility is to evaluate whether the AI should schedule a delayed trigger, primarily by resolving the nested "Execute" sub-ability and delegating the real judgment back through `PlayerControllerAi`/`AiController`—either recursively via `chkDrawbackWithSubs` for `AbilitySub` payloads or through `canPlaySa`/`doTrigger`. Decisions are returned as `AiAbilityDecision` values pairing a score with an `AiPlayDecision`.
+DelayedTriggerAi supplies the AI's decision logic for the DelayedTrigger ability API, extending `SpellAbilityAi` to override `chkDrawback`, `doTriggerNoCost`, and `canPlay`. Its core responsibility is to evaluate whether the AI should schedule a delayed trigger, primarily by resolving the nested "Execute" sub-ability and delegating the real judgment back through `PlayerControllerAi`/`AiController`â€”either recursively via `chkDrawbackWithSubs` for `AbilitySub` payloads or through `canPlaySa`/`doTrigger`. Decisions are returned as `AiAbilityDecision` values pairing a score with an `AiPlayDecision`.
 
 The class is notably card-specific: `canPlay` branches on an `AILogic` parameter to handle special cases like `SpellCopy`, `NarsetRebound`, and `SaveCreature`, scanning hand or battlefield via `CardCollection`/`CardLists` and checking affordability with combined `ManaCost`/`Cost` calculations. Guards against infinite recursion (skipping copy-of-copy and re-entrant mana abilities) reveal deliberate intent to keep the AI's lookahead bounded and tractable.
 
@@ -239,4 +239,165 @@ public class DelayedTriggerAi extends SpellAbilityAi {
     }
 
 }
+```
+
+## Python
+`forge/ai/ability/DelayedTriggerAi.py`
+
+```python
+from forge.ai.SpellAbilityAi import SpellAbilityAi
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.ai.AiController import AiController
+from forge.ai.PlayerControllerAi import PlayerControllerAi
+from forge.ai.SpellApiToAi import SpellApiToAi
+from forge.ai.ComputerUtil import ComputerUtil
+from forge.ai.ComputerUtilAbility import ComputerUtilAbility
+from forge.ai.ComputerUtilCard import ComputerUtilCard
+from forge.ai.ComputerUtilMana import ComputerUtilMana
+from forge.card.mana.ManaCost import ManaCost
+from forge.game.ability.ApiType import ApiType
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardLists import CardLists
+from forge.game.cost.Cost import Cost
+from forge.game.keyword.Keyword import Keyword
+from forge.game.player.Player import Player
+from forge.game.spellability.AbilitySub import AbilitySub
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+
+
+class DelayedTriggerAi(SpellAbilityAi):
+
+    def chkDrawback(self, ai: Player, sa: SpellAbility) -> AiAbilityDecision:
+        if "Always" == sa.getParam("AILogic"):
+            return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+        trigsa = sa.getAdditionalAbility("Execute")
+        if trigsa is None:
+            return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+        trigsa.setActivatingPlayer(ai)
+
+        if isinstance(trigsa, AbilitySub):
+            return SpellApiToAi.Converter.get(trigsa).chkDrawbackWithSubs(ai, trigsa)
+        else:
+            decision = ai.getController().getAi().canPlaySa(trigsa)
+            if decision == AiPlayDecision.WillPlay:
+                return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+            else:
+                return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+    def doTriggerNoCost(self, ai: Player, sa: SpellAbility, mandatory: bool) -> AiAbilityDecision:
+        trigsa = sa.getAdditionalAbility("Execute")
+        if trigsa is None:
+            return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+        aic = ai.getController().getAi()
+        trigsa.setActivatingPlayer(ai)
+
+        if not sa.hasParam("OptionalDecider"):
+            if aic.doTrigger(trigsa, True):
+                # If the trigger is mandatory, we can play it
+                return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+            else:
+                return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+        else:
+            if aic.doTrigger(trigsa, sa.getParam("OptionalDecider") != "You"):
+                return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+            else:
+                return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+    def canPlay(self, ai: Player, sa: SpellAbility) -> AiAbilityDecision:
+        # Card-specific logic
+        logic = sa.getParamOrDefault("AILogic", "")
+        if logic == "SpellCopy":
+            # fetch Instant or Sorcery and AI has reason to play this turn
+            # does not try to get itself
+            costSa = sa.getPayCosts().getTotalMana()
+
+            def spellCopyPred(c):
+                if not (c.isInstant() or c.isSorcery()) or c.equals(sa.getHostCard()):
+                    return False
+                for ab in c.getSpellAbilities():
+                    if (ComputerUtilAbility.getAbilitySourceName(sa) == ComputerUtilAbility.getAbilitySourceName(ab)
+                            or ab.hasParam("AINoRecursiveCheck")):
+                        # prevent infinitely recursing mana ritual and other abilities with reentry
+                        continue
+                    elif "SpellCopy" == ab.getParam("AILogic") and ab.getApi() == ApiType.DelayedTrigger:
+                        # don't copy another copy spell, too complex for the AI
+                        continue
+                    if not ab.canPlay():
+                        continue
+                    decision = ai.getController().getAi().canPlaySa(ab)
+                    # see if we can pay both for this spell and for the Effect spell we're considering
+                    if decision == AiPlayDecision.WillPlay or decision == AiPlayDecision.WaitForMain2:
+                        costAb = ab.getPayCosts().getTotalMana()
+                        total = ManaCost.combine(costSa, costAb)
+                        combinedAb = ab.copyWithDefinedCost(Cost(total, False))
+                        # can we pay both costs?
+                        if ComputerUtilMana.canPayManaCost(combinedAb, ai, 0, True):
+                            return True
+                return False
+
+            count = CardLists.count(ai.getCardsIn(ZoneType.Hand), spellCopyPred)
+
+            if count == 0:
+                return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+            return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+        elif logic == "NarsetRebound":
+            # should be done in Main2, but it might broke for other cards
+            # if (phase.getPhase().isBefore(PhaseType.MAIN2)) {
+            #     return false;
+            # }
+
+            # fetch Instant or Sorcery without Rebound and AI has reason to play this turn
+            # only need count, not the list
+            def narsetReboundPred(c):
+                if not (c.isInstant() or c.isSorcery()) or c.hasKeyword(Keyword.REBOUND):
+                    return False
+                for ab in c.getSpellAbilities():
+                    if (ComputerUtilAbility.getAbilitySourceName(sa) == ComputerUtilAbility.getAbilitySourceName(ab)
+                            or ab.hasParam("AINoRecursiveCheck")):
+                        # prevent infinitely recursing mana ritual and other abilities with reentry
+                        continue
+                    if not ab.canPlay():
+                        continue
+                    decision = ai.getController().getAi().canPlaySa(ab)
+                    if decision == AiPlayDecision.WillPlay or decision == AiPlayDecision.WaitForMain2:
+                        if ComputerUtilMana.canPayManaCost(ab, ai, 0, True):
+                            return True
+                return False
+
+            count = CardLists.count(ai.getCardsIn(ZoneType.Hand), narsetReboundPred)
+
+            if count == 0:
+                return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+            return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+        elif logic == "SaveCreature":
+            ownCreatures = ai.getCreaturesInPlay()
+
+            def saveCreaturePred(card):
+                if ComputerUtilCard.isUselessCreature(ai, card):
+                    return False
+                return ComputerUtil.predictCreatureWillDieThisTurn(ai, card, sa)
+
+            ownCreatures = CardLists.filter(ownCreatures, saveCreaturePred)
+
+            if not ownCreatures.isEmpty():
+                sa.getTargets().add(ComputerUtilCard.getBestAI(ownCreatures))
+                return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+            return AiAbilityDecision(0, AiPlayDecision.TargetingFailed)
+
+        # Generic logic
+        trigsa = sa.getAdditionalAbility("Execute")
+        if trigsa is None:
+            return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+        trigsa.setActivatingPlayer(ai)
+
+        decision = ai.getController().getAi().canPlaySa(trigsa)
+        if decision == AiPlayDecision.WillPlay:
+            return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+        else:
+            return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
 ```

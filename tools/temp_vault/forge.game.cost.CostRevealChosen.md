@@ -46,7 +46,7 @@ classDiagram
 
 ## Design Description
 
-`CostRevealChosen` represents a non-mana spell cost requiring the controller to reveal a previously chosen player or named type, satisfying Magic abilities whose effects hinge on that earlier choice. As a concrete subclass of `CostPart`, it plugs into Forge's compositional cost model, declaring a fixed `paymentOrder()` of 20 and branching all behavior on its string `type` ("Player" or "Type"). It collaborates with the host `Card` to test (`canPay`) and act on (`payAsDecided`) the stored choice—calling `revealChosenPlayer`/`revealChosenType` and broadcasting a localized notification through the `Player`'s game action—using the `SpellAbility` only to reach that host card.
+`CostRevealChosen` represents a non-mana spell cost requiring the controller to reveal a previously chosen player or named type, satisfying Magic abilities whose effects hinge on that earlier choice. As a concrete subclass of `CostPart`, it plugs into Forge's compositional cost model, declaring a fixed `paymentOrder()` of 20 and branching all behavior on its string `type` ("Player" or "Type"). It collaborates with the host `Card` to test (`canPay`) and act on (`payAsDecided`) the stored choiceâ€”calling `revealChosenPlayer`/`revealChosenType` and broadcasting a localized notification through the `Player`'s game actionâ€”using the `SpellAbility` only to reach that host card.
 
 Notable design intent includes the visitor pattern via `accept(ICostVisitor)`, which externalizes cost-type dispatch (e.g., AI payment decisions yielding `PaymentDecision`), and a deliberately fail-safe `canPay` returning false for unrecognized types, with `toString` emitting an "Update CostRevealChosen.java" placeholder to flag any unhandled variant.
 
@@ -139,4 +139,61 @@ public class CostRevealChosen extends CostPart {
     }
 
 }
+```
+
+## Python
+`forge/game/cost/CostRevealChosen.py`
+
+```python
+from forge.game.cost.CostPart import CostPart
+from forge.game.card.Card import Card
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.cost.ICostVisitor import ICostVisitor
+from forge.game.cost.PaymentDecision import PaymentDecision
+from forge.util.Localizer import Localizer
+
+
+class CostRevealChosen(CostPart):
+
+    serialVersionUID = 1
+
+    def __init__(self, type: str, desc: str):
+        super().__init__("1", type, desc)
+
+    def paymentOrder(self) -> int:
+        return 20
+
+    def toString(self) -> str:
+        if self.getType() == "Player":
+            return "Reveal the player you chose"
+        elif self.getType() == "Type":
+            return "Reveal the chosen " + self.getDescriptiveType().lower()
+        return "Update CostRevealChosen.java"
+
+    def canPay(self, ability: SpellAbility, activator: Player, effect: bool) -> bool:
+        source = ability.getHostCard()
+
+        if self.getType() == "Player":
+            return source.hasChosenPlayer() and source.getTurnInController() == activator
+        if self.getType() == "Type":
+            return source.hasChosenType() and source.getTurnInController() == activator
+        return False
+
+    def payAsDecided(self, ai: Player, decision: PaymentDecision, ability: SpellAbility, effect: bool) -> bool:
+        host = ability.getHostCard()
+        o = ""
+        if self.getType() == "Player":
+            o = host.getChosenPlayer().toString()
+            host.revealChosenPlayer()
+        elif self.getType() == "Type":
+            o = host.getChosenType()
+            host.revealChosenType()
+        message = Localizer.getInstance().getMessage("lblPlayerReveals", ai, o)
+        ai.getGame().getAction().notifyOfValue(ability, host, message, ai)
+        return True
+
+    # Inputs
+    def accept(self, visitor: ICostVisitor):
+        return visitor.visit(self)
 ```

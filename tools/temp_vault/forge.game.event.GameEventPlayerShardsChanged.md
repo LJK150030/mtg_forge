@@ -71,3 +71,32 @@ public record GameEventPlayerShardsChanged(PlayerView player, int oldShards, int
     }
 }
 ```
+
+## Python
+`forge/game/event/GameEventPlayerShardsChanged.py`
+
+```python
+from forge.game.event.GameEvent import GameEvent
+from forge.game.event.IGameEventVisitor import IGameEventVisitor
+from forge.game.player.Player import Player
+from forge.game.player.PlayerView import PlayerView
+from forge.util.Lang import Lang
+from forge.util.TextUtil import TextUtil
+
+
+class GameEventPlayerShardsChanged(GameEvent):
+
+    def __init__(self, player, oldShards: int, newShards: int):
+        if isinstance(player, Player):
+            self.player = PlayerView.get(player)
+        else:
+            self.player = player
+        self.oldShards = oldShards
+        self.newShards = newShards
+
+    def visit(self, visitor: IGameEventVisitor):
+        return visitor.visit(self)
+
+    def __str__(self) -> str:
+        return TextUtil.concatWithSpace(Lang.getInstance().getPossesive(self.player.getName()), "shards changed:", str(self.oldShards), "->", str(self.newShards))
+```

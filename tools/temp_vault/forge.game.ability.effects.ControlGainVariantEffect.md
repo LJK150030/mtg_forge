@@ -151,3 +151,88 @@ public class ControlGainVariantEffect extends SpellAbilityEffect {
 
 }
 ```
+
+## Python
+`forge/game/ability/effects/ControlGainVariantEffect.py`
+
+```python
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.Game import Game
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.player.Player import Player
+from forge.game.player.PlayerCollection import PlayerCollection
+from forge.game.spellability.SpellAbility import SpellAbility
+
+from forge.game.Direction import Direction
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CardPredicates import CardPredicates
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.Aggregates import Aggregates
+
+
+class ControlGainVariantEffect(SpellAbilityEffect):
+    # (non-Javadoc)
+    # @see forge.card.abilityfactory.SpellEffect#getStackDescription(java.util.Map, forge.card.spellability.SpellAbility)
+    def getStackDescription(self, sa: SpellAbility) -> str:
+        return sa.getDescription()
+
+    def resolve(self, sa: SpellAbility) -> None:
+        # Multiple players gain control of multiple permanents in an effect
+        # GainControl embedded in RepeatEach effects don't work well with timestamps
+        source = sa.getHostCard()
+        game = source.getGame()
+        tStamp = game.getNextTimestamp()
+        controller = sa.getParam("ChangeController")
+        gainControl: dict[Player, CardCollection] = {}  # {newController, CardCollection}
+        players = game.getPlayers()
+
+        aidx = players.indexOf(sa.getActivatingPlayer())
+        if aidx != -1:
+            # Collections.rotate(players, -aidx)
+            n = len(players)
+            if n != 0:
+                shift = (-aidx) % n
+                rotated = players[-shift:] + players[:-shift] if shift != 0 else list(players)
+                players[:] = rotated
+
+        tgtCards = CardLists.getValidCards(game.getCardsIn(ZoneType.Battlefield),
+                sa.getParam("AllValid"), source.getController(), source, sa)
+
+        if "NextPlayerInChosenDirection" == controller and source.getChosenDirection() is not None:  # Aminatou, the Fateshifter
+            for p in players:
+                gainControl[p] = CardLists.filterControlledBy(tgtCards, game.getNextPlayerAfter(p, source.getChosenDirection()))
+        elif "CardOwner" == controller:  # Homeward Path, Trostani Discordant etc.
+            for p in players:
+                gainControl[p] = CardLists.filter(tgtCards, CardPredicates.isOwner(p))
+        elif "Random" == controller:  # Scrambleverse
+            for c in tgtCards:
+                p = Aggregates.random(players)
+                if p in gainControl:
+                    gainControl[p].add(0, c)
+                else:
+                    gainControl[p] = CardCollection(c)
+        elif "ChooseNextPlayerInChosenDirection" == controller and source.getChosenDirection() is not None:  # Order of Succession
+            p = sa.getActivatingPlayer()
+            while True:
+                valid = CardLists.filterControlledBy(tgtCards, game.getNextPlayerAfter(p, source.getChosenDirection()))
+                c = p.getController().chooseSingleEntityForEffect(valid, sa, " ", None)
+                if c is not None:
+                    gainControl[p] = CardCollection(c)
+                p = game.getNextPlayerAfter(p, source.getChosenDirection())
+                if p == sa.getActivatingPlayer():
+                    break
+        elif "ChooseFromPlayerToTheirRight" == controller:  # Inniaz, the Gale Force
+            for p in players:
+                valid = CardLists.filterControlledBy(tgtCards, game.getNextPlayerAfter(p, Direction.Right))
+                c = sa.getActivatingPlayer().getController().chooseSingleEntityForEffect(valid, sa,
+                        "Choose one for the new Controller: " + p.getName(), None)
+                if c is not None:
+                    gainControl[p] = CardCollection(c)
+
+        for newController, cards in gainControl.items():
+            for tgtC in cards:
+                if not tgtC.isInPlay() or not tgtC.canBeControlledBy(newController):
+                    continue
+                tgtC.addTempController(newController, tStamp)
+```

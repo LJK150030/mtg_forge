@@ -65,6 +65,12 @@ classDiagram
 **Uses:**
 - [[forge.item.InventoryItem|InventoryItem]]
 
+## Design Description
+
+ItemPool is a generic, serializable container that maps inventory items of type `T` (bounded to `InventoryItem`) to integer quantities, representing a collection of distinct items each with a count. It implements `Iterable<Entry<T, Integer>>` to expose its entries directly, and collaborates with `InventoryItem` as the type bound for its keys. Beyond basic add/remove/count operations, it offers quantity-aware bulk mutation, predicate-based querying and filtering, flat-list expansion, and name lookups.
+
+Notable design intent includes a `ConcurrentHashMap` backing store for thread-safe access; a runtime-retained `Class<T>` token enabling instanceof-based, type-filtered operations (`addAllOfType`, `countAll(condition, cls)`) that work around generic type erasure; static `createFrom` factories and a stream `Collector` for ergonomic construction; and a `getView` method returning an unmodifiable-backed pool for safe read-only exposure.
+
 ## Source
 `forge-core/src/main/java/forge/util/ItemPool.java`
 
@@ -377,4 +383,203 @@ public class ItemPool<T extends InventoryItem> implements Iterable<Entry<T, Inte
         return filteredPool;
     }
 }
+```
+
+## Python
+`forge/util/ItemPool.py`
+
+```python
+from forge.item.InventoryItem import InventoryItem
+
+import typing
+from collections import OrderedDict
+
+
+class ItemPool(typing.Iterable, typing.Generic[typing.TypeVar('T', bound=InventoryItem)]):
+    serialVersionUID = 6572047177527559797
+
+    def __init__(self, *args):
+        # ItemPool(cls)  or  ItemPool(items0, cls)
+        if len(args) == 1:
+            cls = args[0]
+            self.items = {}
+            self.myClass = cls
+        else:
+            items0, cls = args
+            if items0 is not None:
+                self.items = items0
+            else:
+                self.items = {}
+            self.myClass = cls
+
+    @staticmethod
+    def createFrom(from_, clsHint):
+        result = ItemPool(clsHint)
+        if from_ is not None:
+            # ItemPool is Iterable<Entry<Tin, Integer>>; an Iterable<Tin> yields plain items
+            if isinstance(from_, ItemPool):
+                for e in from_:
+                    srcKey = e[0]
+                    if isinstance(srcKey, clsHint):
+                        result.add(srcKey, e[1])
+            else:
+                for srcKey in from_:
+                    if isinstance(srcKey, clsHint):
+                        result.add(srcKey, 1)
+        return result
+
+    @staticmethod
+    def collector(cls):
+        class _ItemPoolCollector:
+            def supplier(self):
+                return lambda: ItemPool(cls)
+
+            def accumulator(self):
+                def acc(pool, item):
+                    if isinstance(item, cls):
+                        pool.add(item, 1)
+                return acc
+
+            def combiner(self):
+                def comb(first, second):
+                    first.addAll(second)
+                    return first
+                return comb
+
+            def finisher(self):
+                return lambda x: x
+
+            def characteristics(self):
+                return {"IDENTITY_FINISH"}
+
+        return _ItemPoolCollector()
+
+    def __iter__(self):
+        return iter(list(self.items.items()))
+
+    def iterator(self):
+        return iter(list(self.items.items()))
+
+    def contains(self, item):
+        return item in self.items
+
+    def count(self, item):
+        if item is None:
+            return 0
+        boxed = self.items.get(item)
+        return 0 if boxed is None else boxed
+
+    def countAll(self, condition=None, cls=None):
+        if condition is None:
+            count = 0
+            for e in self:
+                count += e[1]
+            return count
+        if cls is None:
+            count = 0
+            for item, v in self.items.items():
+                if condition(item):
+                    count += v
+            return count
+        count = 0
+        for item, v in self.items.items():
+            if isinstance(item, cls) and condition(item):
+                count += v
+        return count
+
+    def countDistinct(self):
+        return len(self.items)
+
+    def isEmpty(self):
+        return len(self.items) == 0
+
+    def toFlatList(self):
+        result = []
+        for e in self:
+            for i in range(e[1]):
+                result.append(e[0])
+        return result
+
+    def toNameLookup(self):
+        result = {}
+        for e in self:
+            result[e[0].getName()] = e[1]
+        return result
+
+    def getMyClass(self):
+        return self.myClass
+
+    def getView(self):
+        return ItemPool(dict(self.items), self.getMyClass())
+
+    def add(self, item, amount=1):
+        if item is None or amount <= 0:
+            return
+        self.items[item] = self.items.get(item, 0) + amount
+
+    def addAllFlat(self, itms):
+        for item in itms:
+            self.add(item)
+
+    def addAll(self, map):
+        for e in map:
+            self.add(e[0], e[1])
+
+    def addAllOfTypeFlat(self, itms):
+        for item in itms:
+            if isinstance(item, self.myClass):
+                self.add(item)
+
+    def addAllOfType(self, map):
+        for e in map:
+            if isinstance(e[0], self.myClass):
+                self.add(e[0], e[1])
+
+    def remove(self, item, amount=1):
+        count = self.count(item)
+        if count == 0 or amount <= 0:
+            return False
+        if count <= amount:
+            del self.items[item]
+        else:
+            self.items[item] = count - amount
+        return True
+
+    def removeAll(self, arg):
+        # removeAll(T item) -> boolean ; removeAll(Iterable<Entry<T,Integer>> map) -> void
+        if isinstance(arg, InventoryItem):
+            return self.items.pop(arg, None) is not None
+        for e in arg:
+            self.remove(e[0], e[1])
+
+    def removeAllFlat(self, flat):
+        for e in flat:
+            self.remove(e)
+
+    def removeIf(self, filter):
+        for k in [k for k in list(self.items.keys()) if filter(k)]:
+            del self.items[k]
+
+    def retainIf(self, filter):
+        for k in [k for k in list(self.items.keys()) if not filter(k)]:
+            del self.items[k]
+
+    def find(self, filter):
+        for k in self.items.keys():
+            if filter(k):
+                return k
+        return None
+
+    def clear(self):
+        self.items.clear()
+
+    def __eq__(self, obj):
+        return isinstance(obj, ItemPool) and self.items == obj.items
+
+    def getFilteredPool(self, predicate):
+        filteredPool = ItemPool(self.myClass)
+        for c in self.items.keys():
+            if predicate(c):
+                filteredPool.add(c, self.items[c])
+        return filteredPool
 ```

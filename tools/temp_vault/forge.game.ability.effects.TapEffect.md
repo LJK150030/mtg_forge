@@ -43,7 +43,7 @@ classDiagram
 
 ## Design Description
 
-TapEffect is a concrete spell-ability effect that taps permanents on the battlefield as the resolution of an ability. Extending SpellAbilityEffect, it overrides `resolve` to perform the tap and `getStackDescription` to render the human-readable stack text. It determines its targets either from the ability's defined/targeted cards or by prompting the activating Player's controller to choose from valid CardChoices, then taps each surviving Card—guarding against phased-out cards and objects no longer in their original game state. It supports flags such as RememberTapped, AlwaysRemember, a distinct Tapper, and ETB (which sets tapped without firing triggers). After tapping, it collects the affected cards into a CardCollection and fires a TapAll trigger via the Game's trigger handler, collaborating with AbilityKey to pass run parameters.
+TapEffect is a concrete spell-ability effect that taps permanents on the battlefield as the resolution of an ability. Extending SpellAbilityEffect, it overrides `resolve` to perform the tap and `getStackDescription` to render the human-readable stack text. It determines its targets either from the ability's defined/targeted cards or by prompting the activating Player's controller to choose from valid CardChoices, then taps each surviving Cardâ€”guarding against phased-out cards and objects no longer in their original game state. It supports flags such as RememberTapped, AlwaysRemember, a distinct Tapper, and ETB (which sets tapped without firing triggers). After tapping, it collects the affected cards into a CardCollection and fires a TapAll trigger via the Game's trigger handler, collaborating with AbilityKey to pass run parameters.
 
 ## Source
 `forge-game/src/main/java/forge/game/ability/effects/TapEffect.java`
@@ -145,4 +145,86 @@ public class TapEffect extends SpellAbilityEffect {
     }
 
 }
+```
+
+## Python
+`forge/game/ability/effects/TapEffect.py`
+
+```python
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.Game import Game
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardLists import CardLists
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.trigger.TriggerType import TriggerType
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.Lang import Lang
+from forge.util.Localizer import Localizer
+
+
+class TapEffect(SpellAbilityEffect):
+
+    # (non-Javadoc)
+    # @see forge.card.abilityfactory.SpellEffect#resolve(java.util.Map, forge.card.spellability.SpellAbility)
+    def resolve(self, sa: SpellAbility) -> None:
+        activator = sa.getActivatingPlayer()
+        card = sa.getHostCard()
+        game = card.getGame()
+        remTapped = sa.hasParam("RememberTapped")
+        alwaysRem = sa.hasParam("AlwaysRemember")
+        if remTapped:
+            card.clearRemembered()
+
+        toTap = None
+
+        if sa.hasParam("CardChoices"):  # choosing outside Defined/Targeted
+            choices = CardLists.getValidCards(card.getGame().getCardsIn(ZoneType.Battlefield), sa.getParam("CardChoices"), activator, card, sa)
+            n = AbilityUtils.calculateAmount(card, sa.getParam("ChoiceAmount"), sa) if sa.hasParam("ChoiceAmount") else 1
+            min = 0 if sa.hasParam("AnyNumber") else n
+            prompt = sa.getParam("ChoicePrompt") if sa.hasParam("ChoicePrompt") else \
+                Localizer.getInstance().getMessage("lblChoosePermanentstoTap")
+            toTap = activator.getController().chooseEntitiesForEffect(choices, min, n, None, sa, prompt, None, None)
+        else:
+            toTap = self.getTargetCards(sa)
+
+        tapper = activator
+        if sa.hasParam("Tapper"):
+            tapper = AbilityUtils.getDefinedPlayers(card, sa.getParam("Tapper"), sa).getFirst()
+
+        tapped = CardCollection()
+        for tgtC in toTap:
+            if tgtC.isPhasedOut():
+                continue
+
+            # check if the object is still in game or if it was moved
+            gameCard = game.getCardState(tgtC, None)
+            # gameCard is LKI in that case, the card is not in game anymore
+            # or the timestamp did change
+            # this should check Self too
+            if gameCard is None or not tgtC.equalsWithGameTimestamp(gameCard):
+                continue
+            if gameCard.isInPlay():
+                if gameCard.isUntapped() and remTapped or alwaysRem:
+                    card.addRemembered(gameCard)
+                if gameCard.tap(True, sa, tapper):
+                    tapped.add(gameCard)
+            if sa.hasParam("ETB"):
+                # do not fire Taps triggers
+                tgtC.setTapped(True)
+        if not tapped.isEmpty():
+            runParams = AbilityKey.newMap()
+            runParams.put(AbilityKey.Cards, tapped)
+            activator.getGame().getTriggerHandler().runTrigger(TriggerType.TapAll, runParams, False)
+
+    def getStackDescription(self, sa: SpellAbility) -> str:
+        sb = []
+
+        sb.append("Tap ")
+        sb.append(Lang.joinHomogenous(self.getTargetCards(sa)))
+        sb.append(".")
+        return "".join(sb)
 ```

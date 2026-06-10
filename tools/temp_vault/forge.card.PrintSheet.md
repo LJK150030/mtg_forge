@@ -220,3 +220,115 @@ public class PrintSheet {
     }
 }
 ```
+
+## Python
+`forge/card/PrintSheet.py`
+
+```python
+from forge.deck.CardPool import CardPool
+from forge.item.PaperCard import PaperCard
+from forge.util.ItemPool import ItemPool
+from forge.util.MyRandom import MyRandom
+from forge.util.storage.IStorage import IStorage
+from forge.util.storage.StorageExtendable import StorageExtendable
+from forge.util.storage.StorageReaderFileSections import StorageReaderFileSections
+from forge.card.CardEdition import CardEdition
+
+import sys
+from typing import Callable, Iterable, List, Map, Dict, Optional
+
+
+# TODO: Write javadoc for this type.
+class PrintSheet:
+
+    @staticmethod
+    def initializePrintSheets(sheetsFile, editions) -> "IStorage[PrintSheet]":
+        sheets = StorageExtendable("Special print runs", PrintSheet.Reader(sheetsFile))
+
+        for edition in editions:
+            for ps in edition.getPrintSheetsBySection():
+                sheets.add(ps.name, ps)
+
+        return sheets
+
+    def __init__(self, name0: str, pool: "ItemPool[PaperCard]" = None):
+        self.name = name0
+        self.cardsWithWeights = pool if pool is not None else ItemPool(PaperCard)
+
+    def add(self, card: PaperCard, weight: int = 1) -> None:
+        self.cardsWithWeights.add(card, weight)
+
+    def addAll(self, cards: Iterable[PaperCard], weight: int = 1) -> None:
+        for card in cards:
+            self.cardsWithWeights.add(card, weight)
+
+    # Cuts cards out of a sheet - they won't be printed again.
+    # Please use mutable sheets for cubes only.
+    def removeAll(self, cards: Iterable[PaperCard]) -> None:
+        for card in cards:
+            self.cardsWithWeights.remove(card)
+
+    def contains(self, pc: PaperCard) -> bool:
+        return self.cardsWithWeights.contains(pc)
+
+    def find(self, filter: Callable[[PaperCard], bool]) -> PaperCard:
+        return self.cardsWithWeights.find(filter)
+
+    def fetchRoulette(self, start: int, roulette: int, toSkip) -> PaperCard:
+        sum = start
+        isSecondRun = start > 0
+        for cc in self.cardsWithWeights:
+            sum += cc.getValue()
+            if sum > roulette:
+                if toSkip is not None and cc.getKey() in toSkip:
+                    continue
+                return cc.getKey()
+
+        if isSecondRun:
+            raise RuntimeError("Print sheet does not have enough unique cards")
+
+        return self.fetchRoulette(sum + 1, roulette, toSkip)  # start over from beginning, in case last cards were to skip
+
+    def getName(self) -> str:
+        return self.name
+
+    def random(self, number: int, wantUnique: bool) -> List[PaperCard]:
+        result = []
+
+        totalWeight = self.cardsWithWeights.countAll()
+        if totalWeight == 0:
+            print("No cards were found on sheet " + self.name, file=sys.stderr)
+            return result
+
+        # If they ask for 40 unique basic lands (to make a fatpack) out of 20 distinct possible, add the whole print run N times.
+        uniqueCards = self.cardsWithWeights.countDistinct()
+        while number >= uniqueCards:
+            for kv in self.cardsWithWeights:
+                result.append(kv.getKey())
+            number -= uniqueCards
+
+        uniques = [] if wantUnique else None
+        for iC in range(number):
+            index = MyRandom.getRandom().nextInt(totalWeight)
+            toAdd = self.fetchRoulette(0, index, uniques if wantUnique else None)
+            result.append(toAdd)
+            if wantUnique:
+                uniques.append(toAdd)
+        return result
+
+    def isEmpty(self) -> bool:
+        return self.cardsWithWeights.isEmpty()
+
+    def toFlatList(self) -> List[PaperCard]:
+        return self.cardsWithWeights.toFlatList()
+
+    def toNameLookup(self) -> Dict[str, int]:
+        return self.cardsWithWeights.toNameLookup()
+
+    class Reader(StorageReaderFileSections["PrintSheet"]):
+        def __init__(self, file):
+            super().__init__(file, PrintSheet.getName)
+
+        def read(self, title: str, body: Iterable[str], idx: int) -> "PrintSheet":
+            return PrintSheet(title, CardPool.fromCardList(body))
+```

@@ -40,7 +40,7 @@ classDiagram
 
 ## Design Description
 
-`RemoveFromMatchEffect` implements the resolution logic for a spell or ability that permanently removes cards from the current match—a mechanic used by cards like Shahrazad or "ante" effects that pull cards out of the game entirely. As a concrete `SpellAbilityEffect` subclass, it overrides only `resolve(SpellAbility)`, deriving its behavior from script parameters rather than hardcoded rules, consistent with Forge's data-driven ability framework.
+`RemoveFromMatchEffect` implements the resolution logic for a spell or ability that permanently removes cards from the current matchâ€”a mechanic used by cards like Shahrazad or "ante" effects that pull cards out of the game entirely. As a concrete `SpellAbilityEffect` subclass, it overrides only `resolve(SpellAbility)`, deriving its behavior from script parameters rather than hardcoded rules, consistent with Forge's data-driven ability framework.
 
 It selects targets two ways: by filtering all in-game cards (optionally including sideboards) through `AbilityUtils` when a `RemoveType` is given, otherwise using the ability's explicit targets, collecting them into a `CardCollection`. Each card is logged via a `GameEventRandomLog`, made to `ceaseToExist`, and its backing `PaperCard` is stripped from the `Match`; the optional `RemoveFromInventory` flag further destroys the physical card. The design cleanly separates game-state removal from match- and inventory-level bookkeeping, reflecting Forge's distinction between in-play `Card` objects and the persistent `PaperCard` deck representation.
 
@@ -89,4 +89,42 @@ public class RemoveFromMatchEffect extends SpellAbilityEffect {
         }
     }
 }
+```
+
+## Python
+`forge/game/ability/effects/RemoveFromMatchEffect.py`
+
+```python
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.event.GameEventRandomLog import GameEventRandomLog
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+from forge.item.PaperCard import PaperCard
+
+
+class RemoveFromMatchEffect(SpellAbilityEffect):
+    def resolve(self, sa: SpellAbility) -> None:
+        host = sa.getHostCard()
+        removeFromInventory = sa.hasParam("RemoveFromInventory")
+
+        if sa.hasParam("RemoveType"):
+            cards = host.getOwner().getGame().getCardsInGame()
+            if sa.hasParam("IncludeSideboard"):
+                sideboard = host.getGame().getCardsIn(ZoneType.Sideboard)
+                cards.addAll(sideboard)
+            toRemove = AbilityUtils.filterListByType(cards, sa.getParam("RemoveType"), sa)
+        else:
+            toRemove = self.getTargetCards(sa)
+        logMessage = sa.getParamOrDefault("LogMessage", "Removed from match")
+        remove = toRemove.toString().replace("[", "").replace("]", "")
+        host.getController().getGame().fireEvent(GameEventRandomLog(logMessage + ": " + remove))
+        for tgtC in toRemove:
+            tgtC.getGame().getAction().ceaseToExist(tgtC, True)
+            rem = tgtC.getPaperCard()
+            host.getGame().getMatch().removeCard(rem)
+            if removeFromInventory:
+                host.getController().destroyPhysicalCard(tgtC)
 ```

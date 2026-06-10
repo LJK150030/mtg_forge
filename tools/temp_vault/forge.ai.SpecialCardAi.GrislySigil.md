@@ -37,10 +37,10 @@ classDiagram
 
 Grisly Sigil is one creature's effect handler within Forge's AI subsystem, where it implements the computer player's decision logic for the card "Grisly Sigil." Packaged as a static nested helper inside `SpecialCardAi`, it exposes a single static `consider` method rather than implementing a shared interface, reflecting the convention that special-case card AI lives in lightweight, stateless utility classes.
 
-The method evaluates whether the AI should activate the ability by collecting valid targets controlled by opponents (via `CardCollection`), then estimating lethal damage against each `Card`—using net toughness for creatures or loyalty for planeswalkers—to find destroyable targets. When viable targets exist, it resets the `SpellAbility`'s targets, selects the best candidate through `ComputerUtilCard.getBestAI`, and returns true. The inline TODOs for Casualty support and damage reduction signal that this is deliberately heuristic, prioritizing a workable kill-oriented play over exhaustive optimization.
+The method evaluates whether the AI should activate the ability by collecting valid targets controlled by opponents (via `CardCollection`), then estimating lethal damage against each `Card`â€”using net toughness for creatures or loyalty for planeswalkersâ€”to find destroyable targets. When viable targets exist, it resets the `SpellAbility`'s targets, selects the best candidate through `ComputerUtilCard.getBestAI`, and returns true. The inline TODOs for Casualty support and damage reduction signal that this is deliberately heuristic, prioritizing a workable kill-oriented play over exhaustive optimization.
 
 ## Source
-`forge-ai/src/main/java/forge/ai/SpecialCardAi.java` â€” declaration excerpt
+`forge-ai/src/main/java/forge/ai/SpecialCardAi.java` Ã¢â‚¬â€ declaration excerpt
 
 ```java
     // Grisly Sigil
@@ -68,4 +68,39 @@ The method evaluates whether the AI should activate the ability by collecting va
             return false;
         }
     }
+```
+
+## Python
+`forge/ai/SpecialCardAi/GrislySigil.py`
+
+```python
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CardUtil import CardUtil
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.ai.ComputerUtilCard import ComputerUtilCard
+
+
+# Grisly Sigil
+class GrislySigil:
+    @staticmethod
+    def consider(ai: Player, sa: SpellAbility) -> bool:
+        # TODO: improve targeting support for Casualty 1
+        potentialTgts = CardLists.filterControlledBy(CardUtil.getValidCardsToTarget(sa), ai.getOpponents())
+
+        for c in potentialTgts:
+            potentialDamage = 3 if c.getAssignedDamage(False, None) > 0 else 1  # TODO: account for damage reduction
+            if c.canBeDestroyed():
+                damageToDeal = c.getNetToughness() if c.isCreature() else c.getCurrentLoyalty()
+                if damageToDeal <= c.getAssignedDamage() + potentialDamage:
+                    potentialTgts.add(c)
+
+        if not potentialTgts.isEmpty():
+            sa.resetTargets()
+            sa.getTargets().add(ComputerUtilCard.getBestAI(potentialTgts))
+            return True
+
+        return False
 ```

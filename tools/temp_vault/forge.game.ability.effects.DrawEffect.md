@@ -153,3 +153,92 @@ public class DrawEffect extends SpellAbilityEffect {
     }
 }
 ```
+
+## Python
+`forge/game/ability/effects/DrawEffect.py`
+
+```python
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.staticability.StaticAbilityCantDraw import StaticAbilityCantDraw
+from forge.util.Lang import Lang
+from forge.util.Localizer import Localizer
+
+
+class DrawEffect(SpellAbilityEffect):
+    def getStackDescription(self, sa: SpellAbility) -> str:
+        sb = []
+
+        if sa.hasParam("IfDesc"):
+            if sa.getParam("IfDesc") == "True" and sa.hasParam("SpellDescription"):
+                ifDesc = sa.getParam("SpellDescription")
+                sb.append(ifDesc[0:ifDesc.find(",") + 1])
+            else:
+                sb.append(sa.getParam("IfDesc"))
+            sb.append(" ")
+
+        tgtPlayers = self.getDefinedPlayersOrTargeted(sa)
+
+        if tgtPlayers:
+            numCards = AbilityUtils.calculateAmount(sa.getHostCard(), sa.getParam("NumCards"), sa) if sa.hasParam("NumCards") else 1
+
+            sb.append(Lang.joinHomogenous(tgtPlayers))
+
+            if len(tgtPlayers) > 1:
+                sb.append(" each")
+            sb.append(Lang.joinVerb(tgtPlayers, " draw"))
+            sb.append(" ")
+            # if NumCards calculation could change between getStackDescription and resolve, use NumCardsDesc to avoid
+            # a "wrong" stack description
+            if sa.hasParam("NumCardsDesc"):
+                sb.append(sa.getParam("NumCardsDesc"))
+            elif numCards == 1:
+                sb.append("a card")
+            else:
+                sb.append(Lang.getNumeral(numCards) + " cards")
+            sb.append(".")
+
+        return "".join(sb)
+
+    def resolve(self, sa: SpellAbility) -> None:
+        source = sa.getHostCard()
+        numCards = AbilityUtils.calculateAmount(sa.getHostCard(), sa.getParam("NumCards"), sa) if sa.hasParam("NumCards") else 1
+        upto = sa.hasParam("Upto")
+        optional = sa.hasParam("OptionalDecider") or upto
+        moveParams = AbilityKey.newMap()
+        moveParams[AbilityKey.LastStateBattlefield] = sa.getLastStateBattlefield()
+        moveParams[AbilityKey.LastStateGraveyard] = sa.getLastStateGraveyard()
+
+        tgts = self.getTargetPlayersWithDuplicates(True, "Defined", sa)
+
+        for p in dict.fromkeys(tgts):
+            if not p.isInGame():
+                continue
+
+            actualNum = numCards * tgts.count(p)
+
+            # it is optional, not upto and player can't choose to draw that many cards
+            if optional and not upto and not p.canDrawAmount(actualNum):
+                continue
+
+            if optional and not p.getController().confirmAction(sa, None, Localizer.getInstance().getMessage("lblDoYouWantDrawCards", Lang.nounWithAmount(actualNum, " card")), None):
+                continue
+
+            if upto:  # if it is upto, player can only choose how many cards they can draw
+                actualNum = StaticAbilityCantDraw.canDrawAmount(p, actualNum)
+            if actualNum <= 0:
+                continue
+            if upto:
+                actualNum = p.getController().chooseNumber(sa, Localizer.getInstance().getMessage("lblHowManyCardDoYouWantDraw"), 0, actualNum)
+
+            drawn = p.drawCards(actualNum, sa, moveParams)
+            if sa.hasParam("Reveal"):
+                p.getGame().getAction().reveal(drawn, p, not sa.getParam("Reveal") == "All")
+            if sa.hasParam("RememberDrawn"):
+                source.addRemembered(drawn)
+```

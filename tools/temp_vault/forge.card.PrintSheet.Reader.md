@@ -33,10 +33,10 @@ classDiagram
 
 ## Design Description
 
-A `PrintSheet.Reader` is a nested loader that reads `PrintSheet` definitions from a sectioned text file, where each section corresponds to one named print sheet. As a subclass of `StorageReaderFileSections<PrintSheet>`, it plugs into Forge's generic file-backed storage framework: the superclass handles file parsing and section splitting, while `Reader` supplies the two specialization points. The constructor passes `PrintSheet::getName` to tell the storage layer how to key each loaded object, and the overridden `read` method converts a single section—a title plus its body lines—into a `PrintSheet`, delegating card parsing to `CardPool.fromCardList`. This keeps the I/O and indexing concerns in the reusable base class while `Reader` contributes only the format-specific knowledge of how a print sheet is named and constructed.
+A `PrintSheet.Reader` is a nested loader that reads `PrintSheet` definitions from a sectioned text file, where each section corresponds to one named print sheet. As a subclass of `StorageReaderFileSections<PrintSheet>`, it plugs into Forge's generic file-backed storage framework: the superclass handles file parsing and section splitting, while `Reader` supplies the two specialization points. The constructor passes `PrintSheet::getName` to tell the storage layer how to key each loaded object, and the overridden `read` method converts a single sectionâ€”a title plus its body linesâ€”into a `PrintSheet`, delegating card parsing to `CardPool.fromCardList`. This keeps the I/O and indexing concerns in the reusable base class while `Reader` contributes only the format-specific knowledge of how a print sheet is named and constructed.
 
 ## Source
-`forge-core/src/main/java/forge/card/PrintSheet.java` â€” declaration excerpt
+`forge-core/src/main/java/forge/card/PrintSheet.java` Ã¢â‚¬â€ declaration excerpt
 
 ```java
     public static class Reader extends StorageReaderFileSections<PrintSheet> {
@@ -50,4 +50,21 @@ A `PrintSheet.Reader` is a nested loader that reads `PrintSheet` definitions fro
         }
 
     }
+```
+
+## Python
+`forge/card/PrintSheet/Reader.py`
+
+```python
+from forge.util.storage.StorageReaderFileSections import StorageReaderFileSections
+from forge.card.PrintSheet import PrintSheet
+from forge.card.CardPool import CardPool
+
+
+class Reader(StorageReaderFileSections):
+    def __init__(self, file):
+        super().__init__(file, PrintSheet.getName)
+
+    def read(self, title: str, body, idx: int) -> PrintSheet:
+        return PrintSheet(title, CardPool.fromCardList(body))
 ```

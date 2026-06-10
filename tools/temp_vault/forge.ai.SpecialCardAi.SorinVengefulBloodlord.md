@@ -42,7 +42,7 @@ SorinVengefulBloodlord is a static nested helper within `SpecialCardAi` that enc
 The design reflects Forge's per-card AI pattern: each tricky card gets a focused, stateless evaluator. Notable intent includes using an LKI copy to simulate static power/toughness modifications before committing, ranking candidates via `ComputerUtilCard.evaluateCreature` to maximize board value, and configuring the ability's targets and X mana cost in place before signalling `WillPlay`.
 
 ## Source
-`forge-ai/src/main/java/forge/ai/SpecialCardAi.java` â€” declaration excerpt
+`forge-ai/src/main/java/forge/ai/SpecialCardAi.java` Ã¢â‚¬â€ declaration excerpt
 
 ```java
     // Sorin, Vengeful Bloodlord
@@ -84,4 +84,60 @@ The design reflects Forge's per-card AI pattern: each tricky card gets a focused
             return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
         }
     }
+```
+
+## Python
+`forge/ai/SpecialCardAi/SorinVengefulBloodlord.py`
+
+```python
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.ai.ComputerUtilCard import ComputerUtilCard
+from forge.game.card.CardCopyService import CardCopyService
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CardPredicates import CardPredicates
+from forge.game.card.CounterEnumType import CounterEnumType
+from forge.game.zone.ZoneType import ZoneType
+
+
+class SorinVengefulBloodlord:
+    @staticmethod
+    def consider(ai: Player, sa: SpellAbility) -> AiAbilityDecision:
+        loyalty = sa.getHostCard().getCounters(CounterEnumType.LOYALTY)
+        creaturesToGet = CardLists.filter(
+            ai.getCardsIn(ZoneType.Graveyard),
+            CardPredicates.CREATURES
+                .and(CardPredicates.lessCMC(loyalty - 1))
+                .and(lambda card: SorinVengefulBloodlord._survivesStatic(ai, card))
+        )
+
+        if creaturesToGet.isEmpty():
+            return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+        CardLists.sortByCmcDesc(creaturesToGet)
+
+        # pick the best creature that will stay on the battlefield
+        best = creaturesToGet.getFirst()
+        for c in creaturesToGet:
+            if best != c and ComputerUtilCard.evaluateCreature(c, True, False) > \
+                    ComputerUtilCard.evaluateCreature(best, True, False):
+                best = c
+
+        if best is not None:
+            sa.resetTargets()
+            sa.getTargets().add(best)
+            sa.setXManaCostPaid(best.getCMC())
+            return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+        return AiAbilityDecision(0, AiPlayDecision.TargetingFailed)
+
+    @staticmethod
+    def _survivesStatic(ai: Player, card: Card) -> bool:
+        copy = CardCopyService.getLKICopy(card)
+        ComputerUtilCard.applyStaticContPT(ai.getGame(), copy, None)
+        return copy.getNetToughness() > 0
 ```

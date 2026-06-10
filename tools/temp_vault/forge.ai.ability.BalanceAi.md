@@ -100,3 +100,53 @@ public class BalanceAi extends SpellAbilityAi {
     }
 }
 ```
+
+## Python
+`forge/ai/ability/BalanceAi.py`
+
+```python
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.ai.SpellAbilityAi import SpellAbilityAi
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CardPredicates import CardPredicates
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.MyRandom import MyRandom
+
+
+class BalanceAi(SpellAbilityAi):
+    def canPlay(self, aiPlayer: Player, sa: SpellAbility) -> AiAbilityDecision:
+        logic = sa.getParam("AILogic")
+        diff = 0
+        opp = aiPlayer.getWeakestOpponent()
+        compPerms = aiPlayer.getCardsIn(ZoneType.Battlefield)
+        for min in aiPlayer.getOpponents():
+            if min.getCardsIn(ZoneType.Battlefield).size() < opp.getCardsIn(ZoneType.Battlefield).size():
+                opp = min
+        humPerms = opp.getCardsIn(ZoneType.Battlefield)
+
+        if "BalanceCreaturesAndLands" == logic:
+            # TODO Copied over from hardcoded Balance. We should be checking value of the lands/creatures for each opponent, not just counting
+            diff += CardLists.filter(humPerms, CardPredicates.LANDS).size() - \
+                    CardLists.filter(compPerms, CardPredicates.LANDS).size()
+            diff += 1.5 * (CardLists.filter(humPerms, CardPredicates.CREATURES).size() -
+                           CardLists.filter(compPerms, CardPredicates.CREATURES).size())
+        elif "BalancePermanents" == logic:
+            # Don't cast if you have to sacrifice permanents
+            diff += humPerms.size() - compPerms.size()
+
+        if diff < 0:
+            # Don't sacrifice permanents even if opponent has a ton of cards in hand
+            return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+        humHand = opp.getCardsIn(ZoneType.Hand)
+        compHand = aiPlayer.getCardsIn(ZoneType.Hand)
+        diff += 0.5 * (humHand.size() - compHand.size())
+
+        # Larger differential == more chance to actually cast this spell
+        willPlay = diff > 2 and MyRandom.getRandom().nextInt(100) < diff * 10
+        return AiAbilityDecision(100 if willPlay else 0, AiPlayDecision.WillPlay if willPlay else AiPlayDecision.StopRunawayActivations)
+```

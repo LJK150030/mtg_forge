@@ -31,7 +31,7 @@ The `CardPlayOption.PayManaCost` enum is a small, nested type within `CardPlayOp
 As a member enum scoped to `CardPlayOption`, it serves purely as a configuration flag for its enclosing class, which uses it to distinguish play options that demand mana payment from those that waive it. The design favors readability and explicitness at call sites: passing `PayManaCost.YES` or `PayManaCost.NO` communicates intent far more clearly than a positional boolean, and the closed enumeration leaves room to extend the set of payment modes if future play rules require it.
 
 ## Source
-`forge-game/src/main/java/forge/game/card/CardPlayOption.java` â€” declaration excerpt
+`forge-game/src/main/java/forge/game/card/CardPlayOption.java` Ã¢â‚¬â€ declaration excerpt
 
 ```java
     public enum PayManaCost {
@@ -40,4 +40,21 @@ As a member enum scoped to `CardPlayOption`, it serves purely as a configuration
         /** Indicates the mana cost may not be paid. */
         NO
     }
+```
+
+## Python
+`forge/game/card/CardPlayOption/PayManaCost.py`
+
+```python
+from forge.game.card.CardPlayOption import CardPlayOption
+from enum import Enum
+
+
+class PayManaCost(Enum):
+    """Indicates whether the mana cost must be paid for a card play option."""
+
+    # Indicates the mana cost must be paid.
+    YES = "YES"
+    # Indicates the mana cost may not be paid.
+    NO = "NO"
 ```

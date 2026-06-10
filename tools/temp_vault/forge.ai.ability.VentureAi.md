@@ -151,3 +151,77 @@ public class VentureAi extends SpellAbilityAi {
     }
 }
 ```
+
+## Python
+`forge/ai/ability/VentureAi.py`
+
+```python
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.ai.AiProfileUtil import AiProfileUtil
+from forge.ai.AiProps import AiProps
+from forge.ai.PlayerControllerAi import PlayerControllerAi
+from forge.ai.SpellAbilityAi import SpellAbilityAi
+from forge.card.ICardFace import ICardFace
+from forge.game.phase.PhaseHandler import PhaseHandler
+from forge.game.phase.PhaseType import PhaseType
+from forge.game.player.Player import Player
+from forge.game.player.PlayerActionConfirmMode import PlayerActionConfirmMode
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Aggregates import Aggregates
+
+from typing import List, Map
+import typing
+
+
+class VentureAi(SpellAbilityAi):
+    def canPlay(self, aiPlayer: Player, sa: SpellAbility) -> AiAbilityDecision:
+        # do it at opponent's EOT if able to prevent spending mana early
+        ph = aiPlayer.getGame().getPhaseHandler()
+        if sa.getPayCosts().hasManaCost() or sa.getPayCosts().hasTapCost():
+            if self.isSorcerySpeed(sa, aiPlayer):
+                if ph.is_(PhaseType.MAIN2, aiPlayer):
+                    return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+                return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+            elif ph.is_(PhaseType.END_OF_TURN) and ph.getNextTurn() == aiPlayer:
+                return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+            return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+        return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+    def doTriggerNoCost(self, aiPlayer: Player, sa: SpellAbility, mandatory: bool) -> AiAbilityDecision:
+        if mandatory:
+            return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+        decision = self.canPlay(aiPlayer, sa)
+        return decision
+
+    def confirmAction(self, player: Player, sa: SpellAbility, mode: PlayerActionConfirmMode, message: str, params: dict[str, object]) -> bool:
+        return True
+
+    # AI that handles choosing the next room in a dungeon
+    def chooseSingleSpellAbility(self, player: Player, sa: SpellAbility, spells: list[SpellAbility], params: dict[str, object]) -> SpellAbility:
+        viableRooms = []
+
+        for room in spells:
+            if player.getController().isAI():
+                room.setActivatingPlayer(player)
+                playDecision = player.getController().getAi().canPlaySa(room)
+                if playDecision == AiPlayDecision.WillPlay:
+                    viableRooms.append(room)
+
+        if viableRooms:
+            return Aggregates.random(viableRooms)
+
+        return Aggregates.random(spells)
+
+    def chooseCardFace(self, ai: Player, sa: SpellAbility, faces: list[ICardFace]) -> ICardFace:
+        if len(faces) == 1:
+            return faces[0]
+
+        # Don't choose Tomb of Annihilation when life in danger unless we can win right away or can't lose for 0 life
+        lifeInDanger = AiProfileUtil.getIntProperty(ai, AiProps.AI_IN_DANGER_THRESHOLD)
+        if ((ai.getLife() <= lifeInDanger and not ai.cantLoseForZeroOrLessLife())
+                and not (ai.getLife() > 1 and ai.getWeakestOpponent().getLife() == 1)):
+            faces[:] = [f for f in faces if "Tomb of Annihilation" != f.getName()]
+
+        return Aggregates.random(faces)
+```

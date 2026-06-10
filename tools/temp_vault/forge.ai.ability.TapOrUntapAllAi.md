@@ -38,7 +38,7 @@ classDiagram
 
 `TapOrUntapAllAi` provides the AI decision logic for the "TapOrUntapAll" spell ability, determining whether a computer-controlled player should cast such an effect. As a concrete subclass of `SpellAbilityAi`, it overrides `canPlay` to return an `AiAbilityDecision`, plugging into Forge's ability-factory framework that dispatches AI evaluation by effect type. The method receives the deciding `Player` and the candidate `SpellAbility` and yields a decision object pairing a score with an `AiPlayDecision` verdict.
 
-In its current state the class is effectively a stub: `canPlay` unconditionally returns `CantPlayAi`, meaning the AI never initiates this ability on its own. The inline comments record the design intent—only Turnabout presently relies on it, with Faces of the Past as a candidate—signalling that genuine evaluation heuristics are deferred future work rather than an intentional permanent refusal.
+In its current state the class is effectively a stub: `canPlay` unconditionally returns `CantPlayAi`, meaning the AI never initiates this ability on its own. The inline comments record the design intentâ€”only Turnabout presently relies on it, with Faces of the Past as a candidateâ€”signalling that genuine evaluation heuristics are deferred future work rather than an intentional permanent refusal.
 
 ## Source
 `forge-ai/src/main/java/forge/ai/ability/TapOrUntapAllAi.java`
@@ -69,4 +69,27 @@ public class TapOrUntapAllAi extends SpellAbilityAi {
     }
 
 }
+```
+
+## Python
+`forge/ai/ability/TapOrUntapAllAi.py`
+
+```python
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.ai.SpellAbilityAi import SpellAbilityAi
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+
+
+# TODO: Write javadoc for this type.
+#
+class TapOrUntapAllAi(SpellAbilityAi):
+
+    # (non-Javadoc)
+    # @see forge.card.abilityfactory.SpellAiLogic#canPlayAI(forge.game.player.Player, forge.card.spellability.SpellAbility)
+    def canPlay(self, aiPlayer: Player, sa: SpellAbility) -> AiAbilityDecision:
+        # Only Turnabout currently uses this, it's hardcoded to always return false
+        # Looks like Faces of the Past could also use this
+        return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
 ```

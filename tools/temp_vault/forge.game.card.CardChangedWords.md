@@ -40,9 +40,9 @@ classDiagram
 
 ## Design Description
 
-`CardChangedWords` records timestamped word-substitution effects applied to a card (Magic's text-changing abilities, e.g. Volrath's Shapeshifter) and resolves them into a flat originalWord→newWord mapping. It extends Guava's `ForwardingMap<String,String>`, so it behaves as a read-only `Map` to consumers while internally storing each change in a `TreeBasedTable` keyed by timestamp and static-effect id, paired with a private `WordHolder` capturing the old/new words or a reset flag.
+`CardChangedWords` records timestamped word-substitution effects applied to a card (Magic's text-changing abilities, e.g. Volrath's Shapeshifter) and resolves them into a flat originalWordâ†’newWord mapping. It extends Guava's `ForwardingMap<String,String>`, so it behaves as a read-only `Map` to consumers while internally storing each change in a `TreeBasedTable` keyed by timestamp and static-effect id, paired with a private `WordHolder` capturing the old/new words or a reset flag.
 
-Its central design intent is lazy, ordered resolution: mutations merely set an `isDirty` flag, and `delegate()` triggers `refreshCache()` only when needed, replaying changes in timestamp order so chained substitutions (a→b then b→c yielding a→c) and clear-pairs compose correctly. The cached result avoids recomputation between edits. Helpers like `addEmpty`, `add`, `remove`, and the package-private `copyFrom` support layered effect bookkeeping and card-state copying.
+Its central design intent is lazy, ordered resolution: mutations merely set an `isDirty` flag, and `delegate()` triggers `refreshCache()` only when needed, replaying changes in timestamp order so chained substitutions (aâ†’b then bâ†’c yielding aâ†’c) and clear-pairs compose correctly. The cached result avoids recomputation between edits. Helpers like `addEmpty`, `add`, `remove`, and the package-private `copyFrom` support layered effect bookkeeping and card-state copying.
 
 ## Source
 `forge-game/src/main/java/forge/game/card/CardChangedWords.java`
@@ -130,7 +130,7 @@ public final class CardChangedWords extends ForwardingMap<String, String> {
         if (isDirty) {
             resultCache.clear();
             for (final WordHolder ccw : this.map.values()) {
-                // is empty pair is for resetting the data, it is done for Volrathâ€™s Shapeshifter
+                // is empty pair is for resetting the data, it is done for VolrathÃ¢â‚¬â„¢s Shapeshifter
                 if (ccw.clear) {
                     resultCache.clear();
                     continue;
@@ -153,4 +153,88 @@ public final class CardChangedWords extends ForwardingMap<String, String> {
         }
     }
 }
+```
+
+## Python
+`forge/game/card/CardChangedWords.py`
+
+```python
+from com.google.common.collect.ForwardingMap import ForwardingMap
+
+
+class CardChangedWords(ForwardingMap):
+
+    class WordHolder:
+        def __init__(self, oldWord=None, newWord=None):
+            if oldWord is None and newWord is None:
+                self.oldWord = None
+                self.newWord = None
+                self.clear = True
+            else:
+                self.oldWord = oldWord
+                self.newWord = newWord
+                self.clear = False
+
+    def __init__(self):
+        # Table<Long, Long, WordHolder>, kept sorted by (timestamp, staticId)
+        self.map: dict[tuple[int, int], "CardChangedWords.WordHolder"] = {}
+        self.isDirty = False
+        self.resultCache: dict[str, str] = {}
+
+    def addEmpty(self, timestamp: int, staticId: int) -> int:
+        stamp = timestamp
+        self.map[(stamp, staticId)] = CardChangedWords.WordHolder()  # Table doesn't allow null value
+        self.isDirty = True
+        return stamp
+
+    def add(self, timestamp: int, staticId: int, originalWord: str, newWord: str) -> int:
+        stamp = timestamp
+        self.map[(stamp, staticId)] = CardChangedWords.WordHolder(originalWord, newWord)
+        self.isDirty = True
+        return stamp
+
+    def remove(self, timestamp: int, staticId: int) -> bool:
+        self.isDirty = True
+        return self.map.pop((timestamp, staticId), None) is not None
+
+    def clear(self) -> None:
+        super().clear()
+        self.map.clear()
+        self.isDirty = True
+
+    def copyFrom(self, other: "CardChangedWords") -> None:
+        self.map.clear()
+        self.map.update(other.map)
+        self.isDirty = True
+
+    def delegate(self) -> dict[str, str]:
+        """
+        Converts this object to a Map.
+
+        :return: a map of strings to strings, where each changed word in this
+        object is mapped to its corresponding replacement word.
+        """
+        self.refreshCache()
+        return self.resultCache
+
+    def refreshCache(self) -> None:
+        if self.isDirty:
+            self.resultCache.clear()
+            for ccw in (self.map[k] for k in sorted(self.map)):
+                # is empty pair is for resetting the data, it is done for Volrath's Shapeshifter
+                if ccw.clear:
+                    self.resultCache.clear()
+                    continue
+
+                # changes because a->b and b->c (resulting in a->c)
+                toBeChanged: dict[str, str] = {}
+                for key, value in self.resultCache.items():
+                    if value == ccw.oldWord:
+                        toBeChanged[key] = ccw.newWord
+                self.resultCache.update(toBeChanged)
+
+                # the actual change (b->c)
+                self.resultCache[ccw.oldWord] = ccw.newWord
+
+            self.isDirty = False
 ```

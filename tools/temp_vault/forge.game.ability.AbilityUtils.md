@@ -1800,7 +1800,7 @@ public class AbilityUtils {
                     }
 
                     // If the chosen creature has X in its mana cost, that X is considered to be 0.
-                    // The value of X in Altered EgoÃ¢â‚¬â„¢s last ability will be whatever value was chosen for X while casting Altered Ego.
+                    // The value of X in Altered EgoÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢s last ability will be whatever value was chosen for X while casting Altered Ego.
                     if (sa.isCopiedTrait() && !sa.getHostCard().equals(c)) {
                         return doXMath(0, expr, c, ctb);
                     }
@@ -1814,7 +1814,7 @@ public class AbilityUtils {
                             return doXMath(root.getXManaCostPaid() == null ? 0 : root.getXManaCostPaid(), expr, c, ctb);
                         }
 
-                        // 107.3k If an objectÃ¢â‚¬â„¢s enters-the-battlefield triggered ability or replacement effect refers to X,
+                        // 107.3k If an objectÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢s enters-the-battlefield triggered ability or replacement effect refers to X,
                         // and the spell that became that object as it resolved had a value of X chosen for any of its costs,
                         // the value of X for that ability is the same as the value of X for that spell, although the value of X for that permanent is 0.
                         if (TriggerType.ChangesZone.equals(t.getMode()) && ZoneType.Battlefield.name().equals(t.getParam("Destination"))) {
@@ -4081,4 +4081,3047 @@ public class AbilityUtils {
         return ctb;
     }
 }
+```
+
+## Python
+`forge/game/ability/AbilityUtils.py`
+
+```python
+I'll output the Python source directly, as instructed.
+
+from __future__ import annotations
+import sys
+import math
+import re
+
+from forge.card.CardStateName import CardStateName
+from forge.card.CardType import CardType
+from forge.card.CardType.CoreType import CoreType
+from forge.card.CardType.Supertype import Supertype
+from forge.card.CardTypeView import CardTypeView
+from forge.card.ColorSet import ColorSet
+from forge.card.MagicColor import MagicColor
+from forge.card.mana.ManaAtom import ManaAtom
+from forge.card.mana.ManaCost import ManaCost
+from forge.card.mana.ManaCostShard import ManaCostShard
+from forge.game.CardTraitBase import CardTraitBase
+from forge.game.Direction import Direction
+from forge.game.Game import Game
+from forge.game.GameActionUtil import GameActionUtil
+from forge.game.GameEntity import GameEntity
+from forge.game.GameObject import GameObject
+from forge.game.TriggerReplacementBase import TriggerReplacementBase
+from forge.game.ability.AbilityFactory import AbilityFactory
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.ability.ApiType import ApiType
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.card.CardFactoryUtil import CardFactoryUtil
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CardPredicates import CardPredicates
+from forge.game.card.CardState import CardState
+from forge.game.card.CardUtil import CardUtil
+from forge.game.card.CounterType import CounterType
+from forge.game.cost.Cost import Cost
+from forge.game.cost.CostAdjustment import CostAdjustment
+from forge.game.cost.IndividualCostPaymentInstance import IndividualCostPaymentInstance
+from forge.game.keyword.Keyword import Keyword
+from forge.game.keyword.KeywordInterface import KeywordInterface
+from forge.game.keyword.KeywordWithCostAndType import KeywordWithCostAndType
+from forge.game.mana.Mana import Mana
+from forge.game.mana.ManaConversionMatrix import ManaConversionMatrix
+from forge.game.mana.ManaCostBeingPaid import ManaCostBeingPaid
+from forge.game.phase.PhaseHandler import PhaseHandler
+from forge.game.phase.PhaseType import PhaseType
+from forge.game.player.Player import Player
+from forge.game.player.PlayerCollection import PlayerCollection
+from forge.game.player.PlayerPredicates import PlayerPredicates
+from forge.game.spellability.AbilityManaPart import AbilityManaPart
+from forge.game.spellability.AbilitySub import AbilitySub
+from forge.game.spellability.OptionalCost import OptionalCost
+from forge.game.spellability.Spell import Spell
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.spellability.SpellAbilityStackInstance import SpellAbilityStackInstance
+from forge.game.spellability.SpellPermanent import SpellPermanent
+from forge.game.spellability.TargetChoices import TargetChoices
+from forge.game.trigger.Trigger import Trigger
+from forge.game.trigger.TriggerType import TriggerType
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.Aggregates import Aggregates
+from forge.util.Expressions import Expressions
+from forge.util.IterableUtil import IterableUtil
+from forge.util.MyRandom import MyRandom
+from forge.util.StreamUtil import StreamUtil
+from forge.util.TextUtil import TextUtil
+from forge.util.collect.FCollection import FCollection
+from forge.util.collect.FCollectionView import FCollectionView
+
+
+class AbilityUtils:
+    cmpList = ["LT", "LE", "EQ", "GE", "GT", "NE"]
+
+    @staticmethod
+    def _isIterable(o):
+        return o is not None and hasattr(o, "__iter__") and not isinstance(o, str)
+
+    # should the three getDefined functions be merged into one? Or better to
+    # have separate?
+    # If we only have one, each function needs to Cast the Object to the
+    # appropriate type when using
+    # But then we only need update one function at a time once the casting is
+    # everywhere.
+    # Probably will move to One function solution sometime in the future
+    @staticmethod
+    def getDefinedCards(hostCard, def_, sa):
+        cards = CardCollection()
+        changedDef = "Self" if def_ is None else AbilityUtils.applyAbilityTextChangeEffects(def_, sa)  # default to Self
+        incR = changedDef.split(".", 1)
+        sa = AbilityUtils.adjustTriggerContext(incR, sa)
+        defined = incR[0]
+        game = hostCard.getGame()
+
+        c = None
+        player = None
+        if isinstance(sa, SpellAbility):
+            player = sa.getActivatingPlayer()
+        if player is None:
+            player = hostCard.getController()
+
+        if defined == "Self":
+            c = hostCard
+        elif defined == "CorrectedSelf":
+            c = game.getCardState(hostCard)
+        elif defined == "OriginalHost":
+            if isinstance(sa, SpellAbility):
+                c = sa.getRootAbility().getOriginalHost()
+            else:
+                c = sa.getOriginalHost()
+        elif defined == "EffectSource":
+            if hostCard.isImmutable():
+                c = AbilityUtils.findEffectRoot(hostCard)
+        elif defined == "Equipped":
+            c = hostCard.getEquipping()
+        elif defined.startswith("AttachedTo "):
+            v = defined.split(" ")[1]
+            for ge in AbilityUtils.getDefinedEntities(hostCard, v, sa):
+                for att in ge.getAttachedCards():
+                    # TODO handle phased out inside attachedCards
+                    if isinstance(ge, Card) and ge.isLKI():
+                        att = game.getCardState(att)
+                    cards.add(att)
+        elif defined.startswith("AttachedBy "):
+            v = defined.split(" ")[1]
+            for attachment in AbilityUtils.getDefinedCards(hostCard, v, sa):
+                attached = attachment.getAttachedTo()
+                if attached is not None:
+                    cards.add(attached)
+        elif defined == "Enchanted":
+            c = hostCard.getEnchantingCard()
+        elif defined == "TopOfGraveyard":
+            grave = player.getCardsIn(ZoneType.Graveyard)
+            if grave.size() > 0:
+                c = grave.getLast()
+            else:
+                # we don't want this to fall through and return the "Self"
+                return cards
+        elif defined.endswith("OfLibrary"):
+            lib = player.getCardsIn(ZoneType.Library)
+            libSize = lib.size()
+            if libSize > 0:  # TopOfLibrary or BottomOfLibrary
+                if defined.startswith("TopThird"):
+                    third = int(math.floor(libSize / 3.0)) if "RoundedDown" in defined else int(math.ceil(libSize / 3.0))
+                    cards = player.getTopXCardsFromLibrary(third)
+                elif defined.startswith("Top_"):
+                    parts = defined.split("_")
+                    cards = player.getTopXCardsFromLibrary(AbilityUtils.calculateAmount(hostCard, parts[1], sa))
+                else:
+                    c = lib.get(0 if defined.startswith("Top") else libSize - 1)
+            else:
+                # we don't want this to fall through and return the "Self"
+                return cards
+        elif (defined == "Targeted" or defined == "TargetedCard") and isinstance(sa, SpellAbility):
+            for tc in sa.getAllTargetChoices():
+                for tgt in tc.getTargetCards():
+                    cards.add(game.getChangeZoneLKIInfo(tgt))
+        elif defined == "TargetedSource" and isinstance(sa, SpellAbility):
+            for tc in sa.getAllTargetChoices():
+                for s in tc.getTargetSpells():
+                    cards.add(s.getHostCard())
+        elif defined == "ThisTargetedCard" and isinstance(sa, SpellAbility):  # do not add parent targeted
+            if sa.getTargets() is not None:
+                for tgt in sa.getTargets().getTargetCards():
+                    cards.add(tgt)
+        elif defined == "ParentTarget" and isinstance(sa, SpellAbility):
+            parent = sa.getParentTargetingCard()
+            if parent is not None:
+                for tgt in parent.getTargets().getTargetCards():
+                    cards.add(tgt)
+        elif defined.startswith("Triggered") and isinstance(sa, SpellAbility):
+            root = sa.getRootAbility()
+            if "LKICopy" in defined:  # Triggered*LKICopy
+                lkiPosition = defined.index("LKICopy")
+                type_ = AbilityKey.fromString(defined[9:lkiPosition])
+                crd = root.getTriggeringObject(type_)
+                if isinstance(crd, Card):
+                    c = crd
+                elif AbilityUtils._isIterable(crd):
+                    cards.addAll(IterableUtil.filter(crd, Card))
+            elif "HostCard" in defined:  # Triggered*HostCard
+                hcPosition = defined.index("HostCard")
+                type_ = AbilityKey.fromString(defined[9:hcPosition])
+                o = root.getTriggeringObject(type_)
+                if isinstance(o, SpellAbility):
+                    c = o.getHostCard()
+            else:
+                type_ = AbilityKey.fromString(defined[9:])
+                crd = root.getTriggeringObject(type_)
+                if isinstance(crd, Card):
+                    c = game.getCardState(crd)
+                elif AbilityUtils._isIterable(crd):
+                    for gameCard in IterableUtil.filter(crd, Card):
+                        if gameCard.isLKI():
+                            gameCard = game.getCardState(gameCard)
+                        cards.add(gameCard)
+        elif defined.startswith("Replaced") and isinstance(sa, SpellAbility):
+            root = sa.getRootAbility()
+            type_ = AbilityKey.fromString(defined[8:])
+            crd = root.getReplacingObject(type_)
+            if isinstance(crd, Card):
+                c = crd
+            elif AbilityUtils._isIterable(crd):
+                cards.addAll(IterableUtil.filter(crd, Card))
+        elif defined == "Remembered" or defined == "RememberedCard":
+            if not hostCard.hasRemembered():
+                newCard = game.getCardState(hostCard)
+                for o in newCard.getRemembered():
+                    if isinstance(o, Card):
+                        cards.add(game.getCardState(o))
+            # game.getCardState(Card c) is not working for LKI
+            for o in hostCard.getRemembered():
+                if isinstance(o, Card):
+                    cards.addAll(AbilityUtils.addRememberedFromCardState(game, o))
+        elif defined == "RememberedLKI":
+            for o in hostCard.getRemembered():
+                if isinstance(o, Card):
+                    cards.add(o)
+        elif defined == "DirectRemembered":
+            if not hostCard.hasRemembered():
+                newCard = game.getCardState(hostCard)
+                for o in newCard.getRemembered():
+                    if isinstance(o, Card):
+                        cards.add(o)
+            for o in hostCard.getRemembered():
+                if isinstance(o, Card):
+                    cards.add(o)
+        elif defined == "DelayTriggerRememberedLKI":
+            for o in sa.getTriggerRemembered():
+                if isinstance(o, Card):
+                    cards.add(o)
+        elif defined == "DelayTriggerRemembered":
+            for o in sa.getTriggerRemembered():
+                if isinstance(o, Card):
+                    cards.addAll(AbilityUtils.addRememberedFromCardState(game, o))
+        elif defined == "RememberedFirst":
+            o = hostCard.getFirstRemembered()
+            if isinstance(o, Card):
+                cards.add(game.getCardState(o))
+        elif defined == "RememberedLast":
+            remembered = list(hostCard.getRemembered())
+            o = remembered[-1] if remembered else None
+            if isinstance(o, Card):
+                cards.add(game.getCardState(o))
+        elif defined == "ImprintedLKI":
+            for imprint in hostCard.getImprintedCards():
+                cards.add(imprint)
+        elif defined == "Imprinted":
+            for imprint in hostCard.getImprintedCards():
+                cards.add(game.getCardState(imprint))
+        elif defined == "ChosenCard":
+            for chosen in hostCard.getChosenCards():
+                cards.add(game.getCardState(chosen))
+        elif defined.startswith("CardUID_"):
+            idString = defined[8:]
+            for cardByID in game.getCardsInGame():
+                if cardByID.getId() == int(idString):
+                    cards.add(game.getCardState(cardByID))
+        elif defined.startswith("Valid"):
+            if defined.startswith("Valid "):
+                candidates = game.getCardsIn(ZoneType.Battlefield)
+                validDefined = changedDef[len("Valid "):]
+            elif defined.startswith("ValidAll "):
+                candidates = game.getCardsInGame()
+                validDefined = changedDef[len("ValidAll "):]
+            else:
+                s = changedDef.split(" ", 1)
+                zone = s[0][len("Valid"):]
+                candidates = game.getCardsIn(ZoneType.smartValueOf(zone))
+                validDefined = s[1]
+            cards.addAll(CardLists.getValidCards(candidates, validDefined, player, hostCard, sa))
+            return cards
+        elif defined.startswith("ExiledWith"):
+            cards.addAll(hostCard.getExiledCards())
+        elif defined == "Convoked":
+            cards.addAll(hostCard.getConvoked())
+        else:
+            lst = AbilityUtils.getPaidCards(sa, incR[0])
+            if lst is not None:
+                cards.addAll(lst)
+
+        if c is not None:
+            cards.add(c)
+
+        if len(incR) > 1 and not cards.isEmpty():
+            valids = incR[1].split(",")
+            # need to add valids onto all of them
+            for i in range(len(valids)):
+                valids[i] = "Card." + valids[i]
+            cards = CardLists.getValidCards(cards, valids, player, hostCard, sa)
+
+        return cards
+
+    @staticmethod
+    def addRememberedFromCardState(game, c):
+        coll = CardCollection()
+        newState = game.getCardState(c)
+        if c.getMeldedWith() is not None:
+            # When remembering a card that flickers, also remember it's meld pair
+            coll.add(game.getCardState(c.getMeldedWith()))
+        coll.add(newState)
+        return coll
+
+    @staticmethod
+    def findEffectRoot(startCard):
+        cc = startCard.getEffectSource()
+        if cc is not None:
+            if cc.isImmutable():
+                return AbilityUtils.findEffectRoot(cc)
+            return cc
+        return None  # If this happens there is a card in the game that is not in any zone
+
+    # Utility functions used by the AFs
+    @staticmethod
+    def calculateAmount(card, amount, ability, maxto=False):
+        # return empty strings and constants
+        if amount is None or amount.strip() == "":
+            return 0
+        if card is None:
+            return 0
+
+        player = None
+        if isinstance(ability, SpellAbility):
+            player = ability.getActivatingPlayer()
+        if player is None:
+            player = card.getController()
+
+        game = card.getGame()
+
+        # Strip and save sign for calculations
+        startsWithPlus = amount[0] == '+'
+        startsWithMinus = amount[0] == '-'
+        if startsWithPlus or startsWithMinus:
+            amount = amount[1:]
+        multiplier = -1 if startsWithMinus else 1
+
+        # return result soon for plain numbers
+        if amount.isdigit():
+            val = int(amount)
+            if maxto:
+                val = max(val, 0)
+            return val * multiplier
+
+        # Try to fetch variable, try ability first, then card.
+        svarval = None
+        if amount.find('$') > 0:  # when there is a dollar sign, it's not a reference, it's a raw value!
+            svarval = amount
+        elif ability is not None:
+            svarval = ability.getSVar(amount)
+        if svarval is None or svarval.strip() == "":
+            if (ability is not None) and isinstance(ability, SpellAbility) and not isinstance(ability, SpellPermanent):
+                sys.stderr.write("SVar '%s' not found in ability, fallback to Card (%s). Ability is (%s)\n" % (amount, card.getName(), ability))
+            svarval = card.getSVar(amount)
+
+        if svarval is None or svarval.strip() == "":
+            # cost hasn't been paid yet
+            if amount.startswith("Cost"):
+                return 0
+            # Nothing to do here if value is missing or blank
+            sys.stderr.write("SVar '%s' not defined in Card (%s)\n" % (amount, card.getName()))
+            return 0
+
+        # Handle numeric constant coming in svar value
+        if svarval.isdigit():
+            val = int(svarval)
+            if maxto:
+                val = max(val, 0)
+            return val * multiplier
+
+        # Parse Object$Property string
+        calcX = svarval.split("$", 1)
+
+        # Incorrect parses mean zero.
+        if len(calcX) == 1 or calcX[1] == "none":
+            return 0
+
+        # modify amount string for text changes
+        calcX[1] = AbilityUtils.applyAbilityTextChangeEffects(calcX[1], ability)
+
+        ability = AbilityUtils.adjustTriggerContext(calcX, ability)
+
+        val = None
+        if calcX[0].startswith("Count"):
+            val = AbilityUtils.xCount(card, calcX[1], ability)
+        elif calcX[0].startswith("Number"):
+            val = AbilityUtils.xCount(card, svarval, ability)
+        elif calcX[0].startswith("SVar"):
+            l = calcX[1].split("/")
+            m = CardFactoryUtil.extractOperators(calcX[1])
+            val = AbilityUtils.doXMath(AbilityUtils.calculateAmount(card, l[0], ability), m, card, ability)
+        elif calcX[0].startswith("PlayerCount"):
+            hType = calcX[0][11:]
+            players = FCollection()
+            if hType == "Players" or hType == "":
+                players.addAll(game.getPlayers())
+                val = AbilityUtils.playerXCount(players, calcX[1], card, ability)
+            elif hType == "YourTeam":
+                players.addAll(player.getYourTeam())
+                val = AbilityUtils.playerXCount(players, calcX[1], card, ability)
+            elif hType == "Opponents":
+                players.addAll(player.getOpponents())
+                val = AbilityUtils.playerXCount(players, calcX[1], card, ability)
+            elif hType == "RegisteredOpponents":
+                players.addAll(game.getRegisteredPlayers().filter(PlayerPredicates.isOpponentOf(player)))
+                val = AbilityUtils.playerXCount(players, calcX[1], card, ability)
+            elif hType == "Other":
+                players.addAll(player.getAllOtherPlayers())
+                val = AbilityUtils.playerXCount(players, calcX[1], card, ability)
+            elif hType.startswith("Remembered"):
+                AbilityUtils.addPlayer(card.getRemembered(), hType, players)
+                val = AbilityUtils.playerXCount(players, calcX[1], card, ability)
+            elif hType == "NonActive":
+                players.addAll(game.getPlayers())
+                players.remove(game.getPhaseHandler().getPlayerTurn())
+                val = AbilityUtils.playerXCount(players, calcX[1], card, ability)
+            elif hType == "HasLost":
+                players.addAll(game.getLostPlayers())
+                val = AbilityUtils.playerXCount(players, calcX[1], card, ability)
+            elif hType.startswith("PropertyYou"):
+                players.add(player)
+                val = AbilityUtils.playerXCount(players, calcX[1], card, ability)
+            elif hType.startswith("Property"):
+                defined = hType.split("Property")[1]
+                for p in game.getPlayersInTurnOrder():
+                    if p.hasProperty(defined, player, ability.getHostCard(), ability):
+                        players.add(p)
+                val = AbilityUtils.playerXCount(players, calcX[1], card, ability)
+            elif hType.startswith("Defined"):
+                defined = hType.split("Defined")[1]
+                val = AbilityUtils.playerXCount(AbilityUtils.getDefinedPlayers(card, defined, ability), calcX[1], card, ability)
+            else:
+                val = 0
+        elif calcX[0] == "OriginalHost":
+            val = AbilityUtils.xCount(ability.getOriginalHost(), calcX[1], ability)
+        elif calcX[0] == "DungeonsCompleted":
+            val = AbilityUtils.handlePaid(player.getCompletedDungeons(), calcX[1], card, ability)
+        elif calcX[0].startswith("ExiledWith"):
+            val = AbilityUtils.handlePaid(card.getExiledCards(), calcX[1], card, ability)
+        elif calcX[0].startswith("Convoked"):
+            val = AbilityUtils.handlePaid(card.getConvoked(), calcX[1], card, ability)
+        elif calcX[0].startswith("Emerged"):
+            val = AbilityUtils.handlePaid(card.getEmerged(), calcX[1], card, ability)
+        elif calcX[0].startswith("Crewed"):
+            val = AbilityUtils.handlePaid(card.getCrewedByThisTurn(), calcX[1], card, ability)
+        elif calcX[0].startswith("ChosenCard"):
+            val = AbilityUtils.handlePaid(card.getChosenCards(), calcX[1], card, ability)
+        elif calcX[0].startswith("Remembered"):
+            # Add whole Remembered list to handlePaid
+            lst = CardCollection()
+            newCard = card
+            if not card.hasRemembered():
+                newCard = game.getCardState(card)
+            if calcX[0].endswith("LKI"):  # last known information
+                for o in newCard.getRemembered():
+                    if isinstance(o, Card):
+                        lst.add(o)
+            else:
+                for o in newCard.getRemembered():
+                    if isinstance(o, Card):
+                        lst.add(game.getCardState(o))
+            val = AbilityUtils.handlePaid(lst, calcX[1], card, ability)
+        elif calcX[0].startswith("Imprinted"):
+            # Add whole Imprinted list to handlePaid
+            lst = CardCollection()
+            newCard = card
+            if card.getImprintedCards().isEmpty():
+                newCard = game.getCardState(card)
+            if calcX[0].endswith("LKI"):  # last known information
+                lst.addAll(newCard.getImprintedCards())
+            else:
+                for c in newCard.getImprintedCards():
+                    lst.add(game.getCardState(c))
+            val = AbilityUtils.handlePaid(lst, calcX[1], card, ability)
+        elif re.fullmatch("Enchanted", calcX[0]) or re.fullmatch("Equipped", calcX[0]):
+            # Add whole Enchanted list to handlePaid
+            lst = CardCollection()
+            if card.isEnchanting():
+                o = card.getEntityAttachedTo()
+                if isinstance(o, Card):
+                    lst.add(game.getCardState(o))
+            val = AbilityUtils.handlePaid(lst, calcX[1], card, ability)
+
+        # All the following only work for SpellAbilities
+        elif isinstance(ability, SpellAbility):
+            sa = ability
+            # Player attribute counting
+            if calcX[0].startswith("TargetedPlayer"):
+                players = []
+                saTargeting = sa.getSATargetingPlayer()
+                if saTargeting is not None:
+                    for p in saTargeting.getTargets().getTargetPlayers():
+                        players.append(p)
+                val = AbilityUtils.playerXCount(players, calcX[1], card, ability)
+            elif calcX[0].startswith("ThisTargetedPlayer"):
+                players = []
+                for p in sa.getTargets().getTargetPlayers():
+                    players.append(p)
+                val = AbilityUtils.playerXCount(players, calcX[1], card, ability)
+            elif calcX[0].startswith("TargetedObjects"):
+                objects = []
+                # Make list of all targeted objects starting with the root SpellAbility
+                loopSA = sa.getRootAbility()
+                while loopSA is not None:
+                    if loopSA.usesTargeting():
+                        objects.extend(list(loopSA.getTargets()))
+                    loopSA = loopSA.getSubAbility()
+                if calcX[0].endswith("Distinct"):
+                    seen = []
+                    for o in objects:
+                        if o not in seen:
+                            seen.append(o)
+                    objects = seen
+                val = AbilityUtils.objectXCount(objects, calcX[1], card, ability)
+            elif calcX[0].startswith("TargetedController"):
+                players = PlayerCollection()
+                lst = AbilityUtils.getDefinedCards(card, "Targeted", sa)
+                sas = AbilityUtils.getDefinedSpellAbilities(card, "Targeted", sa)
+                for c in lst:
+                    players.add(c.getController())
+                for s in sas:
+                    players.add(s.getHostCard().getController())
+                val = AbilityUtils.playerXCount(players, calcX[1], card, ability)
+            elif calcX[0].startswith("TargetedByTarget"):
+                tgtList = CardCollection()
+                saList = AbilityUtils.getDefinedSpellAbilities(card, "Targeted", sa)
+                for s in saList:
+                    tgtList.addAll(AbilityUtils.getDefinedCards(s.getHostCard(), "Targeted", s))
+                val = AbilityUtils.handlePaid(tgtList, calcX[1], card, ability)
+            elif calcX[0].startswith("TriggeredPlayers") or calcX[0] == "TriggeredCardController":
+                key = calcX[0]
+                if calcX[0].startswith("TriggeredPlayers"):
+                    key = "Triggered" + key[16:]
+                val = AbilityUtils.playerXCount(AbilityUtils.getDefinedPlayers(card, key, sa), calcX[1], card, ability)
+            elif (calcX[0].startswith("TriggeredPlayer") or calcX[0].startswith("TriggeredTarget")
+                  or calcX[0].startswith("TriggeredDefendingPlayer") or calcX[0].startswith("TriggeredActivator")):
+                root = sa.getRootAbility()
+                o = root.getTriggeringObject(AbilityKey.fromString(calcX[0][9:]))
+                val = AbilityUtils.playerXProperty(o, calcX[1], card, ability) if isinstance(o, Player) else 0
+            elif calcX[0] == "TriggeredSpellAbility" or calcX[0] == "SpellTargeted":
+                defSAs = AbilityUtils.getDefinedSpellAbilities(card, calcX[0], sa)
+                sat = next(iter(defSAs), None)
+                val = 0 if sat is None else AbilityUtils.xCount(sat.getHostCard(), calcX[1], sat)
+            elif calcX[0].startswith("TriggerCount"):
+                # TriggerCount is similar to a regular Count, but just
+                # pulls Integer Values from Trigger objects
+                root = sa.getRootAbility()
+                l = calcX[1].split("/")
+                m = CardFactoryUtil.extractOperators(calcX[1])
+                to = root.getTriggeringObject(AbilityKey.fromString(l[0]))
+                count = None
+                if AbilityUtils._isIterable(to):
+                    numbers = to
+                    if calcX[0].endswith("Max"):
+                        count = Aggregates.max(numbers)
+                    else:
+                        count = Aggregates.sum(numbers)
+                else:
+                    count = to
+                val = AbilityUtils.doXMath(count if count is not None else 0, m, card, ability)
+            elif calcX[0].startswith("ReplaceCount"):
+                # ReplaceCount is similar to a regular Count, but just
+                # pulls Integer Values from Replacement objects
+                root = sa.getRootAbility()
+                l = calcX[1].split("/")
+                m = CardFactoryUtil.extractOperators(calcX[1])
+                count = root.getReplacingObject(AbilityKey.fromString(l[0]))
+                val = AbilityUtils.doXMath(count if count is not None else 0, m, card, ability)
+            else:  # these ones only for handling lists
+                lst = None
+                if calcX[0].startswith("Targeted"):
+                    lst = sa.findTargetedCards()
+                elif calcX[0].startswith("AllTargeted"):
+                    all_ = CardCollection()
+                    loopSA = sa.getRootAbility()
+                    while loopSA is not None:
+                        if loopSA.usesTargeting():
+                            all_.addAll(loopSA.findTargetedCards())
+                        loopSA = loopSA.getSubAbility()
+                    lst = all_
+                elif calcX[0].startswith("ParentTargeted"):
+                    parent = sa.getParentTargetingCard()
+                    if parent is not None:
+                        lst = parent.findTargetedCards()
+                elif calcX[0].startswith("TriggerRemembered"):
+                    lst = IterableUtil.filter(sa.getTriggerRemembered(), Card)
+                elif calcX[0].startswith("TriggerObjects"):
+                    root = sa.getRootAbility()
+                    lst = IterableUtil.filter(root.getTriggeringObjects().getOrDefault(
+                        AbilityKey.fromString(calcX[0][14:]), CardCollection()), Card)
+                # CardTriggered<AbilityKey> used to bypass AbilityKeys that could also be Player above
+                elif calcX[0].startswith("Triggered") or calcX[0].startswith("CardTriggered"):
+                    root = sa.getRootAbility()
+                    s = 9 if calcX[0].startswith("Triggered") else 13
+                    lst = CardCollection(root.getTriggeringObject(AbilityKey.fromString(calcX[0][s:])))
+                elif calcX[0].startswith("Replaced"):
+                    root = sa.getRootAbility()
+                    lst = CardCollection(root.getReplacingObject(AbilityKey.fromString(calcX[0][8:])))
+                else:
+                    lst = AbilityUtils.getPaidCards(sa, calcX[0])
+                if lst is not None:
+                    # there could be null inside!
+                    lst = IterableUtil.filter(lst, Card)
+                    val = AbilityUtils.handlePaid(lst, calcX[1], card, ability)
+
+        if val is not None:
+            if maxto:
+                val = max(val, 0)
+            return val * multiplier
+        return 0
+
+    @staticmethod
+    def getDefinedObjects(card, def_, sa):
+        objects = FCollection()
+        defined = "Self" if def_ is None else def_
+        objects.addAll(AbilityUtils.getDefinedPlayers(card, defined, sa))
+        objects.addAll(AbilityUtils.getDefinedCards(card, defined, sa))
+        objects.addAll(AbilityUtils.getDefinedSpellAbilities(card, defined, sa))
+        return objects
+
+    @staticmethod
+    def getDefinedEntities(card, def_, sa):
+        # Java overloads getDefinedEntities(Card, String, ...) and (Card, String[], ...)
+        if isinstance(def_, (list, tuple)):
+            objects = []
+            for d in def_:
+                objects.extend(list(AbilityUtils.getDefinedEntities(card, d, sa)))
+            return objects
+        objects = FCollection()
+        defined = "Self" if def_ is None else def_
+        objects.addAll(AbilityUtils.getDefinedPlayers(card, defined, sa))
+        objects.addAll(AbilityUtils.getDefinedCards(card, defined, sa))
+        return objects
+
+    @staticmethod
+    def filterListByType(list_, type_, sa):
+        if type_ is None:
+            return list_
+
+        # Filter List Can send a different Source card in for things like
+        # Mishra and Lobotomy
+        source = sa.getHostCard()
+        if type_.startswith("Triggered"):
+            if "Card" in type_:
+                o = sa.getTriggeringObject(AbilityKey.Card)
+            elif "Object" in type_:
+                o = sa.getTriggeringObject(AbilityKey.Object)
+            elif "Attacker" in type_:
+                o = sa.getTriggeringObject(AbilityKey.Attacker)
+            elif "Blocker" in type_:
+                o = sa.getTriggeringObject(AbilityKey.Blocker)
+            else:
+                o = sa.getTriggeringObject(AbilityKey.Card)
+
+            if not isinstance(o, Card):
+                return CardCollection()
+
+            if (type_ == "Triggered" or type_ == "TriggeredCard" or type_ == "TriggeredObject"
+                    or type_ == "TriggeredAttacker" or type_ == "TriggeredBlocker"):
+                type_ = "Card.Self"
+
+            source = o
+            if "TriggeredCard" in type_:
+                type_ = TextUtil.fastReplace(type_, "TriggeredCard", "Card")
+            elif "TriggeredObject" in type_:
+                type_ = TextUtil.fastReplace(type_, "TriggeredObject", "Card")
+            elif "TriggeredAttacker" in type_:
+                type_ = TextUtil.fastReplace(type_, "TriggeredAttacker", "Card")
+            elif "TriggeredBlocker" in type_:
+                type_ = TextUtil.fastReplace(type_, "TriggeredBlocker", "Card")
+            else:
+                type_ = TextUtil.fastReplace(type_, "Triggered", "Card")
+        elif type_.startswith("Targeted"):
+            source = None
+            tgts = sa.findTargetedCards()
+            if not tgts.isEmpty():
+                source = tgts.get(0)
+            if source is None:
+                return CardCollection()
+            if type_.startswith("TargetedCard"):
+                type_ = TextUtil.fastReplace(type_, "TargetedCard", "Card")
+            else:
+                type_ = TextUtil.fastReplace(type_, "Targeted", "Card")
+        elif type_.startswith("Remembered"):
+            hasRememberedCard = False
+            for object_ in source.getRemembered():
+                if isinstance(object_, Card):
+                    hasRememberedCard = True
+                    source = object_
+                    type_ = TextUtil.fastReplace(type_, "Remembered", "Card")
+                    break
+            if not hasRememberedCard:
+                return CardCollection()
+        elif type_.startswith("Imprinted"):
+            type_ = TextUtil.fastReplace(type_, "Imprinted", "Card")
+        elif type_ == "Card.AttachedBy":
+            source = source.getEnchantingCard()
+            type_ = TextUtil.fastReplace(type_, "Card.AttachedBy", "Card.Self")
+
+        valid = type_
+
+        for t in AbilityUtils.cmpList:
+            index = valid.find(t)
+            if index >= 0:
+                reference = valid[index + 2]  # take whatever goes after EQ
+                if reference.isalpha():
+                    varName = valid[index:].split(",")[0].split(t)[1].split("+")[0]
+                    if sa.getSVar(varName) != "" or source.hasSVar(varName):
+                        valid = TextUtil.fastReplace(valid, TextUtil.concatNoSpace(t, varName),
+                                                     TextUtil.concatNoSpace(t, str(AbilityUtils.calculateAmount(source, varName, sa))))
+        if sa.hasParam("AbilityCount"):  # replace specific string other than "EQ" cases
+            var = sa.getParam("AbilityCount")
+            valid = TextUtil.fastReplace(valid, var, str(AbilityUtils.calculateAmount(source, var, sa)))
+        return CardLists.getValidCards(list_, valid, sa.getActivatingPlayer(), source, sa)
+
+    @staticmethod
+    def getDefinedPlayers(card, def_, sa):
+        players = PlayerCollection()
+        player = sa.getActivatingPlayer() if isinstance(sa, SpellAbility) else card.getController()
+        game = None if card is None else card.getGame()
+        changedDef = "You" if def_ is None else AbilityUtils.applyAbilityTextChangeEffects(def_, sa)  # default to Self
+        incR = changedDef.split(".", 1)
+        sa = AbilityUtils.adjustTriggerContext(incR, sa)
+        defined = incR[0]
+
+        if (defined == "Self" or defined == "TargetedCard" or defined == "ThisTargetedCard"
+                or defined == "Convoked"
+                or defined.startswith("Valid") or AbilityUtils.getPaidCards(sa, incR[0]) is not None or defined == "TargetedSource"
+                or defined.startswith("CardUID_")):
+            # defined syntax indicates cards only, so don't include any players
+            pass
+        elif defined == "TargetedOrController":
+            players.addAll(AbilityUtils.getDefinedPlayers(card, "Targeted", sa))
+            players.addAll(AbilityUtils.getDefinedPlayers(card, "TargetedController", sa))
+        elif (defined == "Targeted" or defined == "TargetedPlayer") and isinstance(sa, SpellAbility):
+            for tc in sa.getAllTargetChoices():
+                players.addAll(tc.getTargetPlayers())
+        elif defined.startswith("PlayerUID_"):
+            id_ = int(defined.split("PlayerUID_")[1])
+            for p in game.getRegisteredPlayers():
+                if p.getId() == id_:
+                    players.add(p)
+        elif defined == "ParentTarget" and isinstance(sa, SpellAbility):
+            parent = sa.getParentTargetingPlayer()
+            if parent is not None:
+                players.addAll(parent.getTargets().getTargetPlayers())
+        elif defined == "ThisTargetedPlayer" and isinstance(sa, SpellAbility):  # do not add parent targeted
+            if sa.getTargets() is not None:
+                for p in sa.getTargets().getTargetPlayers():
+                    players.add(p)
+        elif defined == "TargetedController":
+            for c in AbilityUtils.getDefinedCards(card, "Targeted", sa):
+                players.add(c.getController())
+            for s in AbilityUtils.getDefinedSpellAbilities(card, "Targeted", sa):
+                players.add(s.getActivatingPlayer())
+        elif defined == "TargetedOwner":
+            for c in AbilityUtils.getDefinedCards(card, "Targeted", sa):
+                players.add(c.getOwner())
+            for s in AbilityUtils.getDefinedSpellAbilities(card, "Targeted", sa):
+                players.add(s.getHostCard().getOwner())
+        elif defined == "TargetedAndYou" and isinstance(sa, SpellAbility):
+            saTargeting = sa.getSATargetingPlayer()
+            if saTargeting is not None:
+                players.addAll(saTargeting.getTargets().getTargetPlayers())
+                players.add(sa.getActivatingPlayer())
+        elif defined == "ThisTargetedController":
+            for c in AbilityUtils.getDefinedCards(card, "ThisTargetedCard", sa):
+                players.add(c.getController())
+            for s in AbilityUtils.getDefinedSpellAbilities(card, "ThisTargeted", sa):
+                players.add(s.getActivatingPlayer())
+        elif defined == "ThisTargetedOwner":
+            for c in AbilityUtils.getDefinedCards(card, "ThisTargetedCard", sa):
+                players.add(c.getOwner())
+        elif defined == "ParentTargetedController":
+            for c in AbilityUtils.getDefinedCards(card, "ParentTarget", sa):
+                players.add(c.getController())
+            for s in AbilityUtils.getDefinedSpellAbilities(card, "Targeted", sa):
+                players.add(s.getActivatingPlayer())
+        elif defined.startswith("Remembered"):
+            AbilityUtils.addPlayer(card.getRemembered(), defined, players)
+        elif defined.startswith("Imprinted"):
+            AbilityUtils.addPlayer(card.getImprintedCards(), defined, players)
+        elif defined.startswith("EffectSource"):
+            root = AbilityUtils.findEffectRoot(card)
+            if root is None:
+                root = AbilityUtils.findEffectRoot(sa.getHostCard())
+            if root is not None:
+                AbilityUtils.addPlayer([root], defined, players)
+        elif defined.startswith("OriginalHost"):
+            originalHost = sa.getOriginalHost()
+            if originalHost is not None:
+                AbilityUtils.addPlayer([originalHost], defined, players)
+        elif defined.startswith("DelayTriggerRemembered") and isinstance(sa, SpellAbility):
+            AbilityUtils.addPlayer(sa.getTriggerRemembered(), defined, players)
+        elif defined.startswith("Triggered") and isinstance(sa, SpellAbility):
+            defParsed = defined[0:defined.index("AndYou")] if defined.endswith("AndYou") else defined
+            if defined.endswith("AndYou"):
+                players.add(sa.getActivatingPlayer())
+            root = sa.getRootAbility()
+            o = None
+            if defParsed.endswith("Controller"):
+                orCont = defParsed.endswith("OrController") or defParsed.endswith("OriginalController")
+                triggeringType = defParsed[9:]
+                if triggeringType != "OriginalController":  # certain triggering objects we don't want to trim
+                    triggeringType = triggeringType[0:len(triggeringType) - (12 if orCont else 10)]
+                c = root.getTriggeringObject(AbilityKey.fromString(triggeringType))
+                if orCont and isinstance(c, Player):
+                    o = c
+                elif isinstance(c, Card):
+                    o = c.getController()
+                elif isinstance(c, SpellAbility):
+                    o = c.getActivatingPlayer()
+                elif AbilityUtils._isIterable(c):  # For merged permanent
+                    if orCont:
+                        AbilityUtils.addPlayer(IterableUtil.filter(c, Player), "", players)
+                    AbilityUtils.addPlayer(IterableUtil.filter(c, Card), "Controller", players)
+            elif defParsed.endswith("Opponent"):
+                triggeringType = defParsed[9:]
+                triggeringType = triggeringType[0:len(triggeringType) - 8]
+                c = root.getTriggeringObject(AbilityKey.fromString(triggeringType))
+                if isinstance(c, Card):
+                    o = c.getController().getOpponents()
+                if isinstance(c, SpellAbility):
+                    o = c.getActivatingPlayer().getOpponents()
+                # For merged permanent
+                if isinstance(c, CardCollection):
+                    o = c.get(0).getController().getOpponents()
+            elif defParsed.endswith("Owner"):
+                triggeringType = defParsed[9:]
+                triggeringType = triggeringType[0:len(triggeringType) - 5]
+                c = root.getTriggeringObject(AbilityKey.fromString(triggeringType))
+                if isinstance(c, Card):
+                    o = c.getOwner()
+                # For merged permanent
+                if isinstance(c, CardCollection):
+                    o = c.get(0).getOwner()
+            else:
+                triggeringType = defParsed[9:]
+                o = root.getTriggeringObject(AbilityKey.fromString(triggeringType))
+            if o is not None:
+                if isinstance(o, Player):
+                    players.add(o)
+                if AbilityUtils._isIterable(o):
+                    players.addAll(IterableUtil.filter(o, Player))
+        elif defined.startswith("OppNon"):
+            players.addAll(player.getOpponents())
+            players.removeAll(AbilityUtils.getDefinedPlayers(card, defined[6:], sa))
+        elif defined.startswith("Replaced") and isinstance(sa, SpellAbility):
+            root = sa.getRootAbility()
+            o = None
+            if defined.endswith("Controller"):
+                replacingType = defined[8:]
+                replacingType = replacingType[0:len(replacingType) - 10]
+                c = root.getReplacingObject(AbilityKey.fromString(replacingType))
+                if isinstance(c, Card):
+                    o = c.getController()
+                if isinstance(c, SpellAbility):
+                    o = c.getHostCard().getController()
+            elif defined.endswith("Owner"):
+                replacingType = defined[8:]
+                replacingType = replacingType[0:len(replacingType) - 5]
+                c = root.getReplacingObject(AbilityKey.fromString(replacingType))
+                if isinstance(c, Card):
+                    o = c.getOwner()
+            else:
+                replacingType = defined[8:]
+                o = root.getReplacingObject(AbilityKey.fromString(replacingType))
+            if isinstance(o, Player):
+                players.add(o)
+        elif defined.startswith("Non"):
+            players.addAll(game.getPlayersInTurnOrder())
+            players.removeAll(AbilityUtils.getDefinedPlayers(card, defined[3:], sa))
+        elif defined == "Registered":
+            players.addAll(game.getRegisteredPlayers())
+        elif defined == "EnchantedPlayer":
+            o = sa.getHostCard().getEntityAttachedTo()
+            if isinstance(o, Player):
+                players.add(o)
+        elif defined.startswith("Enchanted"):
+            if card.isAttachedToEntity():
+                AbilityUtils.addPlayer([card.getEntityAttachedTo()], defined, players)
+        elif defined.startswith("Equipped"):
+            if card.isEquipping():
+                AbilityUtils.addPlayer([card.getEquipping()], defined, players)
+        elif defined == "AttackingPlayer":
+            if game.getPhaseHandler().inCombat():
+                players.add(game.getCombat().getAttackingPlayer())
+        elif defined == "DefendingPlayer":
+            players.add(game.getCombat().getDefendingPlayerRelatedTo(card))
+        elif defined == "ChoosingPlayer":
+            players.add(sa.getRootAbility().getChoosingPlayer())
+        elif defined == "ChosenPlayer":
+            p = card.getChosenPlayer()
+            if p is not None:
+                players.add(p)
+        elif defined == "Promised":
+            p = card.getPromisedGift()
+            if p is not None:
+                players.add(p)
+        elif defined.startswith("ChosenCard"):
+            AbilityUtils.addPlayer(card.getChosenCards(), defined, players)
+        elif defined == "SourceController":
+            players.add(sa.getHostCard().getController())
+        elif defined == "CardController":
+            players.add(card.getController())
+        elif defined == "CardOwner":
+            players.add(card.getOwner())
+        elif defined.startswith("PlayerNamed_"):
+            for p in game.getPlayersInTurnOrder():
+                if p.getName() == defined[12:]:
+                    players.add(p)
+        elif defined.startswith("Flipped"):
+            for p in game.getPlayersInTurnOrder():
+                if sa.getHostCard().getFlipResult(p) is not None:
+                    if sa.getHostCard().getFlipResult(p) == defined[7:]:
+                        players.add(p)
+        elif defined == "Caster":
+            if sa.getHostCard().wasCast():
+                players.add(sa.getHostCard().getCastSA().getActivatingPlayer())
+        elif defined == "Exiler":
+            players.add(card.getExiledBy())
+        elif defined == "ActivePlayer":
+            players.add(game.getPhaseHandler().getPlayerTurn())
+        elif defined == "You":
+            players.add(player)
+        elif defined == "Opponent":
+            players.addAll(player.getOpponents())
+        elif defined.startswith("NextPlayerToYour"):
+            dir_ = Direction.Left if defined[16:] == "Left" else Direction.Right
+            players.add(game.getNextPlayerAfter(player, dir_))
+        elif defined.startswith("NextOpponentToYour"):
+            dir_ = Direction.Left if defined[18:] == "Left" else Direction.Right
+            next_ = game.getNextPlayerAfter(player, dir_)
+            while not next_.isOpponentOf(player):
+                next_ = game.getNextPlayerAfter(next_, dir_)
+            players.add(next_)
+        else:
+            # will be filtered below
+            players.addAll(game.getPlayersInTurnOrder())
+
+        if len(incR) > 1 and not players.isEmpty():
+            valids = incR[1].split(",")
+            # need to add valids onto all of them
+            for i in range(len(valids)):
+                valids[i] = "Player." + valids[i]
+            return players.filter(PlayerPredicates.restriction(valids, player, card, sa))
+        return players
+
+    @staticmethod
+    def getDefinedSpellAbilities(card, def_, sa):
+        sas = FCollection()
+        changedDef = "Self" if def_ is None else AbilityUtils.applyAbilityTextChangeEffects(def_, sa)  # default to Self
+        player = sa.getActivatingPlayer() if isinstance(sa, SpellAbility) else card.getController()
+        game = card.getGame()
+        incR = changedDef.split(".", 1)
+        sa = AbilityUtils.adjustTriggerContext(incR, sa)
+        defined = incR[0]
+
+        s = None
+
+        # TODO - this probably needs to be fleshed out a bit, but the basics work
+        if defined == "Self" and isinstance(sa, SpellAbility):
+            s = sa
+        elif defined == "Parent" and isinstance(sa, SpellAbility):
+            s = sa.getRootAbility()
+        elif defined == "Remembered":
+            for o in card.getRemembered():
+                if isinstance(o, Card):
+                    rem = o
+                    sas.addAll(game.getCardState(rem).getSpellAbilities())
+                elif isinstance(o, SpellAbility):
+                    sas.add(o)
+        elif defined == "Imprinted":
+            for imp in card.getImprintedCards():
+                sas.addAll(imp.getSpellAbilities())
+        elif defined == "EffectSource":
+            if card.getEffectSourceAbility() is not None:
+                sas.add(card.getEffectSourceAbility().getRootAbility())
+        elif defined == "SourceFirstSpell":
+            spell = game.getStack().getSpellMatchingHost(card)
+            if spell is not None:
+                sas.add(spell)
+        elif defined.startswith("Triggered") and isinstance(sa, SpellAbility):
+            root = sa.getRootAbility()
+            triggeringType = defined[9:]
+            o = root.getTriggeringObject(AbilityKey.fromString(triggeringType))
+            if isinstance(o, SpellAbility):
+                s = o
+        elif defined.endswith("Targeted") and isinstance(sa, SpellAbility):
+            targets = [sa.getTargets()] if defined.startswith("This") else sa.getAllTargetChoices()
+            for tc in targets:
+                for targetSpell in tc.getTargetSpells():
+                    stackInstance = game.getStack().getInstanceMatchingSpellAbilityID(targetSpell)
+                    if stackInstance is not None:
+                        instanceSA = stackInstance.getSpellAbility()
+                        if instanceSA is not None:
+                            sas.add(instanceSA)
+                    else:
+                        sas.add(targetSpell)
+        elif defined.startswith("ValidStack"):
+            valid = changedDef.split(" ", 1)[1].split(",")
+            for stackInstance in game.getStack():
+                instanceSA = stackInstance.getSpellAbility()
+                if instanceSA is not None and instanceSA.isValid(valid, player, card, sa):
+                    sas.add(instanceSA)
+
+        if s is not None:
+            sas.add(s)
+
+        return sas
+
+    #####################################################################################
+    #
+    # BELOW ARE resolve() METHOD AND ITS DEPENDANTS, CONSIDER MOVING TO DEDICATED CLASS
+    #
+    #####################################################################################
+    @staticmethod
+    def resolve(sa):
+        if sa is None:
+            return
+
+        pl = sa.getActivatingPlayer()
+        game = pl.getGame()
+
+        if sa.isTrigger() and not sa.getTrigger().isStatic() and sa.getParent() is None:
+            # when trigger cost are paid before the effect does resolve, need to clean the trigger
+            game.getTriggerHandler().resetActiveTriggers()
+
+        AbilityUtils.resolvePreAbilities(sa, game)
+
+        # count times ability resolves this turn
+        if not sa.isWrapper() and sa.isAbility():
+            host = sa.getHostCard()
+            if host is not None:
+                host.addAbilityResolved(sa)
+
+        api = sa.getApi()
+        if api is None:
+            sa.resolve()
+            if sa.getSubAbility() is not None:
+                AbilityUtils.resolve(sa.getSubAbility())
+            return
+        AbilityUtils.resolveApiAbility(sa, game)
+
+    @staticmethod
+    def resolvePreAbilities(sa, game):
+        controller = sa.getActivatingPlayer()
+        source = sa.getHostCard()
+
+        if not sa.isSpell() or source.isPermanent():
+            return
+
+        # do blessing there before condition checks
+        if source.hasKeyword(Keyword.ASCEND) and controller.getZone(ZoneType.Battlefield).size() >= 10:
+            controller.setBlessing(True, source.getSetCode())
+
+        if source.hasKeyword(Keyword.GIFT) and sa.isGiftPromised():
+            game.getAction().checkStaticAbilities()
+            # Is AdditionalAbility available from anything here?
+            giftAbility = sa.getAdditionalAbility("GiftAbility")
+            if giftAbility is not None:
+                giftAbility.setActivatingPlayer(controller)
+                AbilityUtils.resolveApiAbility(giftAbility, game)
+
+    @staticmethod
+    def resolveSubAbilities(sa, game):
+        abSub = sa.getSubAbility()
+        if abSub is None or sa.isWrapper():
+            return
+
+        # Needed - Equip an untapped creature with Sword of the Paruns then cast Deadshot on it. Should deal 2 more damage.
+        game.getAction().checkStaticAbilities()  # this will refresh continuous abilities for players and permanents.
+        if sa.isReplacementAbility():
+            # register all LTB trigger from last state battlefield
+            for lki in sa.getRootAbility().getLastStateBattlefield():
+                game.getTriggerHandler().registerActiveLTBTrigger(lki)
+            game.getTriggerHandler().collectTriggerForWaiting()
+        else:
+            game.getTriggerHandler().resetActiveTriggers()
+        AbilityUtils.resolveApiAbility(abSub, game)
+
+    @staticmethod
+    def resolveApiAbility(sa, game):
+        card = sa.getHostCard()
+
+        msg = "AbilityUtils:resolveApiAbility: try to resolve API ability"
+        bread = Breadcrumb(msg)
+        bread.setData("Api", sa.getApi().toString())
+        bread.setData("Card", card.getName())
+        bread.setData("SA", sa.toString())
+        Sentry.addBreadcrumb(bread)
+
+        if not sa.isWrapper() and sa.isKeyword(Keyword.GIFT):
+            game.getTriggerHandler().runTrigger(TriggerType.GiveGift, AbilityKey.mapFromPlayer(sa.getActivatingPlayer()), False)
+
+        # check conditions
+        if sa.metConditions():
+            unlessCost = sa.getParam("UnlessCost")
+            if sa.isWrapper() or unlessCost is None or unlessCost.strip() == "":
+                sa.resolve()
+            else:
+                AbilityUtils.handleUnlessCost(sa, game)
+                return
+        AbilityUtils.resolveSubAbilities(sa, game)
+
+    @staticmethod
+    def handleUnlessCost(sa, game):
+        source = sa.getHostCard()
+
+        # The player who has the chance to cancel the ability
+        pays = sa.getParamOrDefault("UnlessPayer", "TargetedController")
+        allPayers = AbilityUtils.getDefinedPlayers(source, pays, sa)
+        resolveSubs = sa.getParam("UnlessResolveSubs")  # no value means 'Always'
+        execSubsWhenPaid = "WhenPaid" == resolveSubs or resolveSubs is None or resolveSubs.strip() == ""
+        execSubsWhenNotPaid = "WhenNotPaid" == resolveSubs or resolveSubs is None or resolveSubs.strip() == ""
+        isSwitched = sa.hasParam("UnlessSwitched")
+
+        unlessCost = sa.getParam("UnlessCost").strip()
+        cost = AbilityUtils.calculateUnlessCost(sa, unlessCost, True)
+        if cost is None:
+            sa.resolve()
+            AbilityUtils.resolveSubAbilities(sa, game)
+            return
+
+        alreadyPaid = False
+        for payer in allPayers:
+            if not payer.isInGame():
+                # CR 800.4f
+                continue
+            if unlessCost == "LifeTotalHalfUp":
+                halfup = str(max(0, int(math.ceil(payer.getLife() / 2.0))))
+                cost = Cost("PayLife<" + halfup + ">", True)
+            alreadyPaid = payer.getController().payCostToPreventEffect(cost, sa, alreadyPaid, allPayers) or alreadyPaid
+
+        if alreadyPaid == isSwitched:
+            sa.resolve()
+
+        if (alreadyPaid and execSubsWhenPaid) or (not alreadyPaid and execSubsWhenNotPaid):  # switched refers only to main ability!
+            AbilityUtils.resolveSubAbilities(sa, game)
+
+    @staticmethod
+    def calculateUnlessCost(sa, unlessCost, beforePayment):
+        source = sa.getHostCard()
+        if unlessCost == "ChosenNumber":
+            cost = Cost(ManaCost(str(source.getChosenNumber())), True)
+        elif unlessCost.startswith("DefinedCost"):
+            definedCards = AbilityUtils.getDefinedCards(source, unlessCost.split("_")[1], sa)
+            if definedCards.isEmpty():
+                return None
+            card = definedCards.getFirst()
+            newCost = ManaCostBeingPaid(card.getManaCost())
+            # Check if there's a third underscore for cost modifying
+            if len(unlessCost.split("_")) == 3:
+                modifier = unlessCost.split("_")[2]
+                if modifier.startswith("Minus"):
+                    max_ = int(modifier[5:])
+                    if sa.hasParam("UnlessUpTo") and beforePayment:  # Flash
+                        max_ = sa.getActivatingPlayer().getController().chooseNumberForCostReduction(sa, 0, max_)
+                    newCost.decreaseGenericMana(max_)
+                else:
+                    newCost.increaseGenericMana(int(modifier[4:]))
+            cost = Cost(newCost.toManaCost(), True)
+        elif unlessCost.startswith("DefinedSACost"):
+            definedSAs = AbilityUtils.getDefinedSpellAbilities(source, unlessCost.split("_")[1], sa)
+            if definedSAs.isEmpty():
+                return None
+            host = definedSAs.getFirst().getHostCard()
+            if host.getManaCost() is None:
+                cost = Cost(ManaCost.ZERO, True)
+            else:
+                xCount = host.getManaCost().countX()
+                xPaid = host.getXManaCostPaid() * xCount
+                toPay = ManaCostBeingPaid(host.getManaCost())
+                toPay.decreaseShard(ManaCostShard.X, xCount)
+                toPay.increaseGenericMana(xPaid)
+                cost = Cost(toPay.toManaCost(), True)
+        elif (sa.getSVar(unlessCost) is not None and sa.getSVar(unlessCost).strip() != "") and unlessCost != "X":
+            # check for non-X costs (stored in SVars
+            xCost = AbilityUtils.calculateAmount(source, TextUtil.fastReplace(sa.getParam("UnlessCost"), " ", ""), sa)
+            # Check for XColor
+            toPay = ManaCostBeingPaid(ManaCost.ZERO)
+            xColor = ManaAtom.fromName(sa.getParamOrDefault("UnlessColor", "1"))
+            toPay.increaseShard(ManaCostShard.valueOf(xColor), xCost)
+            cost = Cost(toPay.toManaCost(), True)
+        else:
+            cost = Cost(unlessCost, True)
+        cost = CostAdjustment.adjust(cost, sa, True)
+        return cost
+
+    @staticmethod
+    def handleRemembering(sa):
+        host = sa.getHostCard()
+
+        if sa.hasParam("RememberTargets") and sa.usesTargeting():
+            if sa.hasParam("ForgetOtherTargets"):
+                host.clearRemembered()
+            host.addRemembered(sa.getTargets())
+            if sa.hasParam("IncludeAllComponentCards"):
+                for c in sa.getTargets().getTargetCards():
+                    host.addRemembered(c.getAllComponentCards(False))
+
+        if sa.hasParam("RememberCostMana"):
+            host.clearRemembered()
+            activationMana = ManaCostBeingPaid(sa.getPayCosts().getTotalMana())
+            if sa.getXManaCostPaid() is not None:
+                activationMana.setXManaCostPaid(sa.getXManaCostPaid(), None)
+            activationShards = activationMana.getConvertedManaCost()
+            payingMana = sa.getPayingMana()
+            # even if the cost was raised, we only care about mana from activation part
+            # let's just assume the first shards spent are that for easy handling
+            activationPaid = payingMana[0:activationShards]
+            sb = []
+            nMana = 0
+            for m in activationPaid:
+                if nMana > 0:
+                    sb.append(" ")
+                sb.append(m.toString())
+                nMana += 1
+            host.addRemembered("".join(sb))
+
+    # Parse non-mana X variables.
+    @staticmethod
+    def xCount(c, s, ctb):
+        s2 = AbilityUtils.applyAbilityTextChangeEffects(s, ctb)
+        l = s2.split("/")
+        expr = CardFactoryUtil.extractOperators(s2)
+
+        player = None
+        if ctb is not None:
+            if isinstance(ctb, SpellAbility):
+                player = ctb.getActivatingPlayer()
+            if player is None:
+                player = ctb.getHostCard().getController()
+
+        # accept straight numbers
+        if l[0].startswith("Number$"):
+            number = l[0][7:]
+            return AbilityUtils.doXMath(int(number), expr, c, ctb)
+
+        if l[0].startswith("Count$"):
+            l[0] = l[0][6:]
+
+        if l[0].startswith("SVar$"):
+            n = l[0][5:]
+            v = c.getSVar(n) if ctb is None else ctb.getSVar(n)
+            return AbilityUtils.doXMath(AbilityUtils.xCount(c, v, ctb), expr, c, ctb)
+
+        sq = l[0].split(".")
+        paidparts = l[0].split("$", 1)
+        someCards = None
+        game = c.getGame()
+
+        if ctb is not None:
+            # Count$Compare <int comparator value>.<True>.<False>
+            if sq[0].startswith("Compare"):
+                compString = sq[0].split(" ")
+                lhs = AbilityUtils.calculateAmount(c, compString[1], ctb)
+                rhs = AbilityUtils.calculateAmount(c, compString[2][2:], ctb)
+                v = Expressions.compare(lhs, compString[2], rhs)
+                return AbilityUtils.doXMath(AbilityUtils.calculateAmount(c, sq[1 if v else 2], ctb), expr, c, ctb)
+
+            # Count$IsPrime <SVar>.<True>.<False>
+            if sq[0].startswith("IsPrime"):
+                compString = sq[0].split(" ")
+                lhs = AbilityUtils.calculateAmount(c, compString[1], ctb)
+                v = AbilityUtils._isPrime(lhs)
+                return AbilityUtils.doXMath(AbilityUtils.calculateAmount(c, sq[1 if v else 2], ctb), expr, c, ctb)
+
+            sa = None
+            if isinstance(ctb, SpellAbility):
+                sa = ctb
+            elif "xPaid" in sq[0] and isinstance(ctb, TriggerReplacementBase):
+                # try avoid fallback
+                sa = ctb.getOverridingAbility()
+
+            if sa is not None:
+                # special logic for xPaid in SpellAbility
+                if "xPaid" in sq[0]:
+                    root = sa.getRootAbility()
+
+                    # 107.3i If an object gains an ability, the value of X within that ability is the value defined by that ability,
+                    # or 0 if that ability doesn't define a value of X.
+                    if root.getXManaCostPaid() is not None:
+                        return AbilityUtils.doXMath(root.getXManaCostPaid(), expr, c, ctb)
+
+                    # If the chosen creature has X in its mana cost, that X is considered to be 0.
+                    if sa.isCopiedTrait() and not sa.getHostCard().equals(c):
+                        return AbilityUtils.doXMath(0, expr, c, ctb)
+
+                    if root.isTrigger():
+                        t = root.getTrigger()
+
+                        # ImmediateTrigger should check for the Ability which created the trigger
+                        if t.getSpawningAbility() is not None:
+                            root = t.getSpawningAbility().getRootAbility()
+                            return AbilityUtils.doXMath(0 if root.getXManaCostPaid() is None else root.getXManaCostPaid(), expr, c, ctb)
+
+                        # 107.3k enters-the-battlefield triggered ability referring to X
+                        if TriggerType.ChangesZone.equals(t.getMode()) and ZoneType.Battlefield.name() == t.getParam("Destination"):
+                            x = 0 if AbilityUtils.isUnlinkedFromCastSA(ctb, c) else c.getXManaCostPaid()
+                            return AbilityUtils.doXMath(x, expr, c, ctb)
+                        elif TriggerType.SpellCast.equals(t.getMode()):
+                            # Cast Trigger like Hydroid Krasis
+                            castSA = root.getTriggeringObject(AbilityKey.SpellAbility)
+                            if castSA is None or castSA.getXManaCostPaid() is None:
+                                return AbilityUtils.doXMath(0, expr, c, ctb)
+                            return AbilityUtils.doXMath(castSA.getXManaCostPaid(), expr, c, ctb)
+                        elif TriggerType.Cycled.equals(t.getMode()):
+                            cycleSA = sa.getTriggeringObject(AbilityKey.Cause)
+                            if cycleSA is None or cycleSA.getXManaCostPaid() is None:
+                                return AbilityUtils.doXMath(0, expr, c, ctb)
+                            return AbilityUtils.doXMath(cycleSA.getXManaCostPaid(), expr, c, ctb)
+                        elif TriggerType.TurnFaceUp.equals(t.getMode()):
+                            turnupSA = sa.getTriggeringObject(AbilityKey.Cause)
+                            if turnupSA is None or turnupSA.getXManaCostPaid() is None:
+                                return AbilityUtils.doXMath(0, expr, c, ctb)
+                            return AbilityUtils.doXMath(turnupSA.getXManaCostPaid(), expr, c, ctb)
+
+                    if root.isReplacementAbility() and sa.hasParam("ETB"):
+                        x = 0 if AbilityUtils.isUnlinkedFromCastSA(ctb, c) else c.getXManaCostPaid()
+                        return AbilityUtils.doXMath(x, expr, c, ctb)
+
+                    return AbilityUtils.doXMath(0, expr, c, ctb)
+
+                # Count$Kicked.<numHB>.<numNotHB>
+                if sq[0].startswith("Kicked"):
+                    kicked = sa.isKicked() or (not AbilityUtils.isUnlinkedFromCastSA(ctb, c) and c.getKickerMagnitude() > 0)
+                    return AbilityUtils.doXMath(AbilityUtils.calculateAmount(c, sq[1 if kicked else 2], ctb), expr, c, ctb)
+
+                if sq[0].startswith("OptionalGenericCostPaid"):
+                    return AbilityUtils.doXMath(AbilityUtils.calculateAmount(c, sq[1 if sa.isOptionalCostPaid(OptionalCost.Generic) else 2], ctb), expr, c, ctb)
+
+                if sq[0].startswith("Bargain"):
+                    return AbilityUtils.doXMath(AbilityUtils.calculateAmount(c, sq[1 if sa.isBargained() else 2], ctb), expr, c, ctb)
+
+                if sq[0].startswith("Freerunning"):
+                    return AbilityUtils.doXMath(AbilityUtils.calculateAmount(c, sq[1 if sa.isFreerunning() else 2], ctb), expr, c, ctb)
+
+                # Count$Madness.<True>.<False>
+                if sq[0].startswith("Madness"):
+                    return AbilityUtils.doXMath(AbilityUtils.calculateAmount(c, sq[1 if sa.isMadness() else 2], ctb), expr, c, ctb)
+
+                # Count$HasNumChosenColors.<DefinedCards related to spellability>
+                if "HasNumChosenColors" in sq[0]:
+                    sum_ = 0
+                    for card in AbilityUtils.getDefinedCards(c, sq[1], sa):
+                        sum_ += card.getColor().getSharedColors(ColorSet.fromNames(c.getChosenColors())).countColors()
+                    return sum_
+                if sq[0].startswith("TriggerRememberAmount"):
+                    count = 0
+                    for o in sa.getTriggerRemembered():
+                        if isinstance(o, int):
+                            count += o
+                    return count
+                # Count$TriggeredManaCostDevotion.<Color>
+                if sq[0].startswith("TriggeredManaCostDevotion"):
+                    root = sa.getRootAbility()
+                    triggeringObject = root.getTriggeringObject(AbilityKey.Card)
+                    count = 0
+                    colorCode = ManaAtom.fromName(sq[1])
+                    for sh in triggeringObject.getManaCost():
+                        if sh.isColor(colorCode):
+                            count += 1
+                    return count
+                # Count$TriggeredPayingMana.<Color1>.<Color2>
+                if sq[0].startswith("TriggeredPayingMana"):
+                    root = sa.getRootAbility()
+                    mana = root.getTriggeringObject(AbilityKey.PayingMana)
+                    count = 0
+                    mat = re.compile("|".join(sq[1:]))
+                    count = len(mat.findall(mana))
+                    return count
+                # Count$ManaProduced
+                if sq[0].startswith("AmountManaProduced"):
+                    root = sa.getRootAbility()
+                    amount = 0
+                    if root is not None:
+                        for amp in root.getAllManaParts():
+                            amount = amount + amp.getLastManaProduced().size()
+                    return AbilityUtils.doXMath(amount, expr, c, ctb)
+                # Count$NumTimesChoseMode
+                if sq[0].startswith("NumTimesChoseMode"):
+                    amount = 0
+                    tail = sa.getTailAbility()
+                    if tail.hasSVar("CharmOrder"):
+                        amount = tail.getSVarInt("CharmOrder")
+                    return AbilityUtils.doXMath(amount, expr, c, ctb)
+                # Count$ManaColorsPaid
+                if sq[0] == "ManaColorsPaid":
+                    root = sa.getRootAbility()
+                    return AbilityUtils.doXMath(0 if root is None else root.getPayingColors().countColors(), expr, c, ctb)
+
+                # Count$Adamant.<Color>.<True>.<False>
+                if sq[0].startswith("Adamant"):
+                    payingMana = "".join(str(x) for x in sa.getRootAbility().getPayingMana())
+                    num = int(sq[0].split("_")[1]) if len(sq[0]) > 7 else 3
+                    adamant = payingMana.count(MagicColor.toShortString(sq[1])) >= num
+                    return AbilityUtils.doXMath(AbilityUtils.calculateAmount(c, sq[2 if adamant else 3], ctb), expr, c, ctb)
+
+                if sq[0].startswith("LastStateBattlefield"):
+                    k = paidparts[0].split(" ")
+                    # this is only for spells that were cast
+                    if "WithFallback" in sq[0]:
+                        if not sa.getHostCard().wasCast():
+                            return AbilityUtils.doXMath(0, expr, c, ctb)
+                        someCards = sa.getHostCard().getCastSA().getLastStateBattlefield()
+                    else:
+                        someCards = sa.getLastStateBattlefield()
+                    if someCards is None or len(list(someCards)) == 0:
+                        # LastState is Empty
+                        if "WithFallback" in sq[0]:
+                            someCards = game.getCardsIn(ZoneType.Battlefield)
+                        else:
+                            return AbilityUtils.doXMath(0, expr, c, ctb)
+                    someCards = CardLists.getValidCards(someCards, k[1], player, c, sa)
+
+                if sq[0].startswith("LastStateGraveyard"):
+                    k = l[0].split(" ")
+                    # this is only for spells that were cast
+                    if "WithFallback" in sq[0]:
+                        if not sa.getHostCard().wasCast():
+                            return AbilityUtils.doXMath(0, expr, c, ctb)
+                        lst = sa.getHostCard().getCastSA().getLastStateGraveyard()
+                    else:
+                        lst = sa.getLastStateGraveyard()
+                    if sa.getLastStateGraveyard() is None or lst.isEmpty():
+                        # LastState is Empty
+                        if "WithFallback" in sq[0]:
+                            lst = game.getCardsIn(ZoneType.Graveyard)
+                        else:
+                            return AbilityUtils.doXMath(0, expr, c, ctb)
+                    lst = CardLists.getValidCards(lst, k[1], player, c, sa)
+                    return AbilityUtils.doXMath(lst.size(), expr, c, ctb)
+
+                if sq[0] == "ActivatedThisGame":
+                    return AbilityUtils.doXMath(sa.getActivationsThisGame(), expr, c, ctb)
+
+                if sq[0] == "ResolvedThisTurn":
+                    return AbilityUtils.doXMath(sa.getResolvedThisTurn(), expr, c, ctb)
+
+                if sq[0].startswith("TotalManaSpent "):
+                    if sa.getRootAbility().getPayingMana() is None:
+                        return AbilityUtils.doXMath(0, expr, c, ctb)
+                    k = sq[0].split(" ")
+                    v = 0
+                    for m in sa.getRootAbility().getPayingMana():
+                        sc = m.getSourceCard()
+                        if sc is not None and sc.isValid(k[1].split(","), player, c, ctb):
+                            v += 1
+                    return AbilityUtils.doXMath(v, expr, c, ctb)
+
+                # Count$FromNamedAbility[abilityName].<True>.<False>
+                if sq[0].startswith("FromNamedAbility"):
+                    abilityNamed = sq[0][16:]
+                    trigSA = sa.getHostCard().getCastSA()
+                    fromNamedAbility = trigSA is not None and trigSA.getName() == abilityNamed
+                    return AbilityUtils.doXMath(AbilityUtils.calculateAmount(c, sq[1 if fromNamedAbility else 2], ctb), expr, c, ctb)
+            else:
+                # fallback if ctb isn't a spellability
+                if sq[0].startswith("LastStateBattlefield"):
+                    k = l[0].split(" ")
+                    lst = game.getLastStateBattlefield()
+                    lst = CardLists.getValidCards(lst, k[1], player, c, ctb)
+                    return AbilityUtils.doXMath(lst.size(), expr, c, ctb)
+
+                if sq[0].startswith("LastStateGraveyard"):
+                    k = l[0].split(" ")
+                    lst = game.getLastStateGraveyard()
+                    lst = CardLists.getValidCards(lst, k[1], player, c, ctb)
+                    return AbilityUtils.doXMath(lst.size(), expr, c, ctb)
+
+                if sq[0].startswith("xPaid"):
+                    return AbilityUtils.doXMath(c.getXManaCostPaid(), expr, c, ctb)
+            # end SpellAbility
+
+            if sq[0] == "CastTotalManaSpent":
+                return AbilityUtils.doXMath(c.getCastSA().getTotalManaSpent() if c.getCastSA() is not None else 0, expr, c, ctb)
+            if sq[0].startswith("CastTotalManaSpent "):
+                k = sq[0].split(" ")
+                if c.getCastSA() is None:
+                    return AbilityUtils.doXMath(0, expr, c, ctb)
+                v = 0
+                for m in c.getCastSA().getPayingMana():
+                    sc = m.getSourceCard()
+                    if sc is not None and sc.isValid(k[1].split(","), player, c, ctb):
+                        v += 1
+                return AbilityUtils.doXMath(v, expr, c, ctb)
+
+            if sq[0] == "hasOptionalKeywordAmount":
+                return AbilityUtils.doXMath(1 if (c.getCastSA() is not None and c.getCastSA().hasOptionalKeywordAmount(ctb.getKeyword())) else 0, expr, c, ctb)
+            if sq[0] == "OptionalKeywordAmount":
+                return AbilityUtils.doXMath(c.getCastSA().getOptionalKeywordAmount(ctb.getKeyword()) if c.getCastSA() is not None else 0, expr, c, ctb)
+
+            # Count$DevotionDual.<color name>.<color name>
+            # Count$Devotion.<color name>
+            if "Devotion" in sq[0]:
+                colorOccurrences = 0
+                colorName = sq[1]
+                if "Chosen" in colorName:
+                    colorName = MagicColor.toShortString(c.getChosenColor())
+                colorCode = ManaAtom.fromName(colorName)
+                if sq[0] == "DevotionDual":
+                    colorCode |= ManaAtom.fromName(sq[2])
+                for c0 in player.getCardsIn(ZoneType.Battlefield):
+                    for sh in c0.getManaCost():
+                        if sh.isColor(colorCode):
+                            colorOccurrences += 1
+                colorOccurrences += player.getDevotionMod()
+                return AbilityUtils.doXMath(colorOccurrences, expr, c, ctb)
+        # end ctb != null
+
+        # Count$SearchedLibrary.<DefinedPlayer>
+        if "SearchedLibrary" in sq[0]:
+            sum_ = 0
+            for p in AbilityUtils.getDefinedPlayers(c, sq[1], ctb):
+                sum_ += p.getLibrarySearched()
+            return AbilityUtils.doXMath(sum_, expr, c, ctb)
+
+        # count valid cards in any specified zone/s
+        if sq[0].startswith("Valid"):
+            lparts = paidparts[0].split(" ", 1)
+
+            cardsInZones = None
+            if "All" in lparts[0]:
+                cardsInZones = game.getCardsInGame()
+            elif lparts[0].endswith("Self"):
+                cardsInZones = CardCollection(c)
+            else:
+                zones = ZoneType.listValueOf(lparts[0][5:] if len(lparts[0]) > 5 else "Battlefield")
+                usedLastState = False
+                if isinstance(ctb, SpellAbility) and len(zones) == 1:
+                    sa = ctb
+                    if sa.isReplacementAbility():
+                        if zones[0].equals(ZoneType.Battlefield):
+                            cardsInZones = sa.getRootAbility().getLastStateBattlefield()
+                            usedLastState = True
+                        elif zones[0].equals(ZoneType.Graveyard):
+                            cardsInZones = sa.getRootAbility().getLastStateGraveyard()
+                            usedLastState = True
+                if not usedLastState:
+                    cardsInZones = game.getCardsIn(zones)
+
+            someCards = CardLists.getValidCards(cardsInZones, lparts[1], player, c, ctb)
+
+        if sq[0].startswith("RememberedSize"):
+            return AbilityUtils.doXMath(c.getRememberedCount(), expr, c, ctb)
+        if sq[0].startswith("ChosenSize"):
+            return AbilityUtils.doXMath(c.getChosenCards().size(), expr, c, ctb)
+        if sq[0].startswith("ImprintedSize"):
+            return AbilityUtils.doXMath(c.getImprintedCards().size(), expr, c, ctb)
+
+        if sq[0].startswith("RememberedNumber"):
+            num = 0
+            for o in c.getRemembered():
+                if isinstance(o, int):
+                    num += o
+            return AbilityUtils.doXMath(num, expr, c, ctb)
+
+        if sq[0].startswith("RememberedWithSharedCardType"):
+            maxNum = 1
+            for o in c.getRemembered():
+                if isinstance(o, Card):
+                    num = 1
+                    firstCard = o
+                    for p in c.getRemembered():
+                        if isinstance(p, Card):
+                            secondCard = p
+                            if not firstCard.equals(secondCard) and firstCard.sharesCardTypeWith(secondCard):
+                                num += 1
+                    if num > maxNum:
+                        maxNum = num
+            return AbilityUtils.doXMath(maxNum, expr, c, ctb)
+
+        # might get called from editor
+        if game is not None:
+            # CR 608.2h
+            # we'll want to avoid grabbing LKI for params that can handle internal information
+            c = game.getChangeZoneLKIInfo(c)
+
+        ####################
+        # card info
+
+        # Count$CardMulticolor.<numMC>.<numNotMC>
+        if "CardMulticolor" in sq[0]:
+            isMulti = c.getColor().isMulticolor()
+            return AbilityUtils.doXMath(int(sq[1 if isMulti else 2]), expr, c, ctb)
+
+        if sq[0] == "ColorsColorIdentity":
+            return AbilityUtils.doXMath(c.getController().getCommanderColorID().countColors(), expr, c, ctb)
+
+        # Count$Foretold.<True>.<False>
+        if sq[0].startswith("Foretold"):
+            return AbilityUtils.doXMath(AbilityUtils.calculateAmount(c, sq[1 if c.isForetold() else 2], ctb), expr, c, ctb)
+
+        if sq[0].startswith("Kicked"):  # fallback for not spellAbility
+            return AbilityUtils.doXMath(AbilityUtils.calculateAmount(c, sq[1 if (not AbilityUtils.isUnlinkedFromCastSA(ctb, c) and c.getKickerMagnitude() > 0) else 2], ctb), expr, c, ctb)
+        if sq[0].startswith("PromisedGift"):
+            return AbilityUtils.doXMath(AbilityUtils.calculateAmount(c, sq[1 if (c.getCastSA() is not None and c.getCastSA().isGiftPromised()) else 2], ctb), expr, c, ctb)
+        if sq[0].startswith("Escaped"):
+            return AbilityUtils.doXMath(AbilityUtils.calculateAmount(c, sq[1 if (c.getCastSA() is not None and c.getCastSA().isEscape()) else 2], ctb), expr, c, ctb)
+        if sq[0].startswith("Emerged"):
+            return AbilityUtils.doXMath(AbilityUtils.calculateAmount(c, sq[1 if (not AbilityUtils.isUnlinkedFromCastSA(ctb, c) and c.getCastSA() is not None and c.getCastSA().isEmerge()) else 2], ctb), expr, c, ctb)
+        if sq[0].startswith("AltCost"):
+            return AbilityUtils.doXMath(AbilityUtils.calculateAmount(c, sq[1 if c.isOptionalCostPaid(OptionalCost.AltCost) else 2], ctb), expr, c, ctb)
+
+        if sq[0] == "CardPower":
+            return AbilityUtils.doXMath(c.getNetPower(), expr, c, ctb)
+        if sq[0] == "CardBasePower":
+            return AbilityUtils.doXMath(c.getCurrentPower(), expr, c, ctb)
+        if sq[0] == "CardToughness":
+            return AbilityUtils.doXMath(c.getNetToughness(), expr, c, ctb)
+        if sq[0] == "CardSumPT":
+            return AbilityUtils.doXMath(c.getNetPower() + c.getNetToughness(), expr, c, ctb)
+
+        if sq[0] == "CardNumNotedTypes":
+            return AbilityUtils.doXMath(c.getNumNotedTypes(), expr, c, ctb)
+
+        if sq[0] == "CardNumColors":
+            return AbilityUtils.doXMath(c.getColor().countColors(), expr, c, ctb)
+
+        if sq[0] == "CardNumAttacksThisTurn":
+            return AbilityUtils.doXMath(c.getDamageHistory().getCreatureAttacksThisTurn(), expr, c, ctb)
+        if sq[0] == "CardNumAttacksThisGame":
+            return AbilityUtils.doXMath(c.getDamageHistory().getAttacksThisGame(), expr, c, ctb)
+
+        if sq[0] == "CrewSize":
+            return AbilityUtils.doXMath(0 if c.getCrewedByThisTurn() is None else c.getCrewedByThisTurn().size(), expr, c, ctb)
+
+        if sq[0] == "Intensity":
+            return AbilityUtils.doXMath(c.getIntensity(True), expr, c, ctb)
+
+        if sq[0].startswith("CardCounters"):
+            # CardCounters.ALL to be used for Kinsbaile Borderguard and anything that cares about all counters
+            count = 0
+            if sq[1] == "ALL":
+                count = c.getNumAllCounters()
+            else:
+                count = c.getCounters(CounterType.getType(sq[1]))
+            return AbilityUtils.doXMath(count, expr, c, ctb)
+
+        if "TotalValue" in sq[0]:
+            return AbilityUtils.doXMath(c.getKeywordMagnitude(Keyword.smartValueOf(l[0].split(" ")[1])), expr, c, ctb)
+        if "TimesKicked" in sq[0]:
+            return AbilityUtils.doXMath(0 if AbilityUtils.isUnlinkedFromCastSA(ctb, c) else c.getKickerMagnitude(), expr, c, ctb)
+        if "TimesMutated" in sq[0]:
+            return AbilityUtils.doXMath(c.getTimesMutated(), expr, c, ctb)
+
+        if sq[0] == "RegeneratedThisTurn":
+            return AbilityUtils.doXMath(c.getRegeneratedThisTurn(), expr, c, ctb)
+
+        if "Converge" in sq[0]:
+            castSA = c.getCastSA()
+            return AbilityUtils.doXMath(0 if castSA is None else castSA.getPayingColors().countColors(), expr, c, ctb)
+
+        if sq[0].startswith("EachPhyrexianPaidWithLife"):
+            castSA = c.getCastSA()
+            if castSA is None:
+                return 0
+            return AbilityUtils.doXMath(castSA.getSpendPhyrexianMana(), expr, c, ctb)
+
+        if sq[0].startswith("EachSpentToCast"):
+            castSA = c.getCastSA()
+            if castSA is None:
+                return 0
+            paidMana = castSA.getPayingMana()
+            type_ = sq[1]
+            count = 0
+            for m in paidMana:
+                if m.toString() == type_:
+                    count += 1
+            return AbilityUtils.doXMath(count, expr, c, ctb)
+
+        # Count$wasCastFrom<Zone>.<true>.<false>
+        if sq[0].startswith("wasCastFrom"):
+            your = "Your" in sq[0]
+            byYou = "ByYou" in sq[0]
+            strZone = sq[0][11:]
+            if your:
+                strZone = strZone[4:]
+            if byYou:
+                strZone = strZone[0:strZone.find("ByYou")]
+            zonesMatch = (c.getCastFrom() is not None and c.getCastFrom().getZoneType() == ZoneType.smartValueOf(strZone)
+                          and (not byYou or player.equals(c.getCastSA().getActivatingPlayer()))
+                          and (not your or c.getCastFrom().getPlayer().equals(player)))
+            return AbilityUtils.doXMath(AbilityUtils.calculateAmount(c, sq[1 if zonesMatch else 2], ctb), expr, c, ctb)
+
+        # Count$Presence_<Type>.<True>.<False>
+        if sq[0].startswith("Presence"):
+            type_ = sq[0].split("_")[1]
+            found = False
+            if c.getCastFrom() is not None and c.getCastSA() is not None:
+                revealed = AbilityUtils.calculateAmount(c, "Revealed$Valid " + type_, c.getCastSA())
+                ctrl = AbilityUtils.calculateAmount(c, "Count$LastStateBattlefield " + type_ + ".YouCtrl", c.getCastSA())
+                if revealed + ctrl >= 1:
+                    found = True
+            return AbilityUtils.doXMath(AbilityUtils.calculateAmount(c, sq[1 if found else 2], ctb), expr, c, ctb)
+
+        if sq[0].startswith("Devoured"):
+            validDevoured = sq[0].split(" ")[1]
+            cl = CardLists.getValidCards(c.getDevouredCards(), validDevoured, player, c, ctb)
+            return AbilityUtils.doXMath(cl.size(), expr, c, ctb)
+
+        if "ChosenNumber" in sq[0]:
+            i = c.getChosenNumber()
+            return AbilityUtils.doXMath(0 if i is None else i, expr, c, ctb)
+
+        # Count$IfCastInOwnMainPhase.<numMain>.<numNotMain>
+        if sq[0].endswith("InOwnMainPhase"):
+            cPhase = game.getPhaseHandler()
+            isMyMain = (cPhase.getPhase().isMain() and cPhase.isPlayerTurn(player) and
+                        (not sq[0].startswith("IfCast") or c.wasCast()))
+            return AbilityUtils.doXMath(int(sq[1 if isMyMain else 2]), expr, c, ctb)
+
+        # Count$FinishedUpkeepsThisTurn
+        if sq[0].startswith("FinishedUpkeepsThisTurn"):
+            return AbilityUtils.doXMath(game.getPhaseHandler().getNumUpkeep() - (1 if game.getPhaseHandler().is_(PhaseType.UPKEEP) else 0), expr, c, ctb)
+
+        # Count$FinishedEndOfTurnsThisTurn
+        if sq[0].startswith("FinishedEndOfTurnsThisTurn"):
+            return AbilityUtils.doXMath(game.getPhaseHandler().getNumEndOfTurn() - (1 if game.getPhaseHandler().is_(PhaseType.END_OF_TURN) else 0), expr, c, ctb)
+
+        # Count$AttachedTo <restriction>
+        if sq[0].startswith("AttachedTo"):
+            k = l[0].split(" ")
+            sum_ = CardLists.getValidCardCount(c.getAttachedCards(), k[1], player, c, ctb)
+            return AbilityUtils.doXMath(sum_, expr, c, ctb)
+
+        # Count$CardManaCost
+        if sq[0].startswith("CardManaCost"):
+            cmc = c.getCMC()
+            if "LKI" in sq[0] and not c.isInZone(ZoneType.Stack) and c.getManaCost() is not None:
+                if isinstance(ctb, SpellAbility) and ctb.getXManaCostPaid() is not None:
+                    cmc += ctb.getXManaCostPaid() * c.getManaCost().countX()
+                else:
+                    cmc += c.getXManaCostPaid() * c.getManaCost().countX()
+            return AbilityUtils.doXMath(cmc, expr, c, ctb)
+
+        # Count$EnchantedControllerCreatures
+        if sq[0] == "EnchantedControllerCreatures":  # maybe refactor into a Valid with ControlledBy
+            v = 0
+            if c.getEnchantingCard() is not None:
+                v = CardLists.count(c.getEnchantingCard().getController().getCardsIn(ZoneType.Battlefield), CardPredicates.CREATURES)
+            return AbilityUtils.doXMath(v, expr, c, ctb)
+
+        ########################
+        # player info
+        if sq[0] == "Hellbent":
+            return AbilityUtils.doXMath(AbilityUtils.calculateAmount(c, sq[1 if player.hasHellbent() else 2], ctb), expr, c, ctb)
+        if sq[0] == "Metalcraft":
+            return AbilityUtils.doXMath(AbilityUtils.calculateAmount(c, sq[1 if player.hasMetalcraft() else 2], ctb), expr, c, ctb)
+        if sq[0] == "Delirium":
+            return AbilityUtils.doXMath(AbilityUtils.calculateAmount(c, sq[1 if player.hasDelirium() else 2], ctb), expr, c, ctb)
+        if sq[0] == "FatefulHour":
+            return AbilityUtils.doXMath(AbilityUtils.calculateAmount(c, sq[1 if player.getLife() <= 5 else 2], ctb), expr, c, ctb)
+        if sq[0] == "Revolt":
+            return AbilityUtils.doXMath(AbilityUtils.calculateAmount(c, sq[1 if player.hasRevolt() else 2], ctb), expr, c, ctb)
+        if sq[0] == "Landfall":
+            return AbilityUtils.doXMath(AbilityUtils.calculateAmount(c, sq[1 if player.hasLandfall() else 2], ctb), expr, c, ctb)
+        if sq[0] == "Monarch":
+            return AbilityUtils.doXMath(AbilityUtils.calculateAmount(c, sq[1 if player.isMonarch() else 2], ctb), expr, c, ctb)
+        if sq[0] == "Initiative":
+            return AbilityUtils.doXMath(AbilityUtils.calculateAmount(c, sq[1 if player.hasInitiative() else 2], ctb), expr, c, ctb)
+        if sq[0] == "StartingPlayer":
+            return AbilityUtils.doXMath(AbilityUtils.calculateAmount(c, sq[1 if player.isStartingPlayer() else 2], ctb), expr, c, ctb)
+        if sq[0] == "Blessing":
+            return AbilityUtils.doXMath(AbilityUtils.calculateAmount(c, sq[1 if player.hasBlessing() else 2], ctb), expr, c, ctb)
+        if sq[0] == "Threshold":
+            return AbilityUtils.doXMath(AbilityUtils.calculateAmount(c, sq[1 if player.hasThreshold() else 2], ctb), expr, c, ctb)
+        if sq[0] == "CommittedCrimeThisTurn":
+            return AbilityUtils.doXMath(AbilityUtils.calculateAmount(c, sq[1 if player.getCommittedCrimeThisTurn() > 0 else 2], ctb), expr, c, ctb)
+        if sq[0] == "ExtraTurn":
+            return AbilityUtils.doXMath(AbilityUtils.calculateAmount(c, sq[1 if game.getPhaseHandler().getPlayerTurn().isExtraTurn() else 2], ctb), expr, c, ctb)
+        if sq[0] == "YourStartingLife":
+            return AbilityUtils.doXMath(player.getStartingLife(), expr, c, ctb)
+
+        if sq[0] == "YourLifeTotal":
+            return AbilityUtils.doXMath(player.getLife(), expr, c, ctb)
+        if sq[0] == "OppGreatestLifeTotal":
+            return AbilityUtils.doXMath(player.getOpponentsGreatestLifeTotal(), expr, c, ctb)
+
+        if sq[0] == "YouDrewThisTurn":
+            return AbilityUtils.doXMath(player.getNumDrawnThisTurn(), expr, c, ctb)
+        if sq[0] == "YouDrewLastTurn":
+            return AbilityUtils.doXMath(player.getNumDrawnLastTurn(), expr, c, ctb)
+
+        if sq[0] == "YouFlipThisTurn":
+            return AbilityUtils.doXMath(player.getNumFlipsThisTurn(), expr, c, ctb)
+
+        if sq[0] == "YouRollThisTurn":
+            return AbilityUtils.doXMath(player.getNumRollsThisTurn(), expr, c, ctb)
+        if sq[0].startswith("YouRolledThisTurn"):
+            n = AbilityUtils.calculateAmount(c, sq[0][17:], ctb)
+            return AbilityUtils.doXMath(list(player.getDiceRollsThisTurn()).count(n), expr, c, ctb)
+
+        if sq[0] == "YouSurveilThisTurn":
+            return AbilityUtils.doXMath(player.getSurveilThisTurn(), expr, c, ctb)
+
+        if sq[0] == "YouDescendedThisTurn":
+            return AbilityUtils.doXMath(player.getDescended(), expr, c, ctb)
+
+        if sq[0] == "YouCastThisGame":
+            return AbilityUtils.doXMath(player.getSpellsCastThisGame(), expr, c, ctb)
+
+        if sq[0] == "YourSpeed":
+            return AbilityUtils.doXMath(player.getSpeed(), expr, c, ctb)
+        if sq[0] == "MaxSpeed":
+            return AbilityUtils.doXMath(AbilityUtils.calculateAmount(c, sq[1 if player.maxSpeed() else 2], ctb), expr, c, ctb)
+
+        if sq[0] == "AllFourBend":
+            return AbilityUtils.doXMath(AbilityUtils.calculateAmount(c, sq[1 if player.hasAllElementBend() else 2], ctb), expr, c, ctb)
+
+        if sq[0] == "Night":
+            return AbilityUtils.doXMath(AbilityUtils.calculateAmount(c, sq[1 if game.isNight() else 2], ctb), expr, c, ctb)
+
+        if sq[0] == "NumPiledGuessedSA":
+            return AbilityUtils.doXMath(game.getNumPiledGuessedSA(), expr, c, ctb)
+
+        if sq[0].startswith("CommanderCastFromCommandZone"):
+            # only used by Opal Palace, and it does add the trigger to the card
+            return AbilityUtils.doXMath(player.getCommanderCast(c), expr, c, ctb)
+        if l[0].startswith("TotalCommanderCastFromCommandZone"):
+            return AbilityUtils.doXMath(player.getTotalCommanderCast(), expr, c, ctb)
+
+        if "LifeYouLostThisTurn" in sq[0]:
+            return AbilityUtils.doXMath(player.getLifeLostThisTurn(), expr, c, ctb)
+        if "LifeYouGainedThisTurn" in sq[0]:
+            return AbilityUtils.doXMath(player.getLifeGainedThisTurn(), expr, c, ctb)
+        if "LifeYourTeamGainedThisTurn" in sq[0]:
+            return AbilityUtils.doXMath(player.getLifeGainedByTeamThisTurn(), expr, c, ctb)
+        if "LifeYouGainedTimesThisTurn" in sq[0]:
+            return AbilityUtils.doXMath(player.getLifeGainedTimesThisTurn(), expr, c, ctb)
+        if "LifeOppsLostThisTurn" in sq[0]:
+            return AbilityUtils.doXMath(player.getOpponentLostLifeThisTurn(), expr, c, ctb)
+        if sq[0] == "BloodthirstAmount":
+            return AbilityUtils.doXMath(player.getBloodthirstAmount(), expr, c, ctb)
+
+        if sq[0].startswith("YourCounters"):
+            # "YourCountersExperience" or "YourCountersPoison"
+            counterType = sq[0][12:]
+            return AbilityUtils.doXMath(player.getCounters(CounterType.getType(counterType)), expr, c, ctb)
+
+        if "TotalOppPoisonCounters" in sq[0]:
+            return AbilityUtils.doXMath(player.getOpponentsTotalPoisonCounters(), expr, c, ctb)
+
+        if sq[0] == "TotalDamageDoneByThisTurn":
+            return AbilityUtils.doXMath(c.getTotalDamageDoneBy(), expr, c, ctb)
+        if sq[0] == "TotalDamageReceivedThisTurn":
+            return AbilityUtils.doXMath(c.getAssignedDamage(), expr, c, ctb)
+        if sq[0] == "ExcessDamageReceivedThisTurn":
+            return AbilityUtils.doXMath(c.getExcessDamageThisTurn(), expr, c, ctb)
+
+        if sq[0] == "MaxOppDamageThisTurn":
+            return AbilityUtils.doXMath(player.getMaxOpponentAssignedDamage(), expr, c, ctb)
+
+        if sq[0] == "MaxCombatDamageThisTurn":
+            return AbilityUtils.doXMath(player.getMaxAssignedCombatDamage(), expr, c, ctb)
+
+        if "TotalDamageThisTurn" in sq[0]:
+            props = l[0].split(" ")
+            sum_ = 0
+            for p in c.getDamageReceivedThisTurn():
+                if game.getDamageLKI(p).getLeft().isValid(props[1], player, c, ctb):
+                    sum_ += p.getLeft()
+            return AbilityUtils.doXMath(sum_, expr, c, ctb)
+
+        if sq[0] == "SingleMaxDamageThisTurn":
+            sum_ = game.getSingleMaxDamageDoneThisTurn()
+            return AbilityUtils.doXMath(sum_, expr, c, ctb)
+
+        if "DamageThisTurn" in sq[0]:
+            props = l[0].split(" ")
+            isCombat = None
+            if "CombatDamage" in sq[0]:
+                isCombat = "Non" not in sq[0]
+            dmgInstances = game.getDamageDoneThisTurn(isCombat, False, props[1], props[2], c, player, ctb)
+            if len(dmgInstances) != 0 and "Max" in sq[0]:
+                num = max(dmgInstances)
+            elif sq[0].startswith("Num"):
+                num = len(dmgInstances)
+            else:
+                num = Aggregates.sum(dmgInstances)
+            return AbilityUtils.doXMath(num, expr, c, ctb)
+
+        if sq[0] == "YourTurns":
+            return AbilityUtils.doXMath(player.getTurn(), expr, c, ctb)
+
+        if sq[0] == "NotedNumber":
+            return AbilityUtils.doXMath(player.getNotedNumberForName(c.getName()), expr, c, ctb)
+
+        if sq[0] == "DraftNotesHighest":
+            # Just in case you are playing this card in a deck without draft notes
+            note = player.getDraftNotes().getOrDefault(sq[1], "0")
+            highest = 0
+            for n in note.split(","):
+                num = int(n)
+                if num > highest:
+                    highest = num
+            return AbilityUtils.doXMath(highest, expr, c, ctb)
+
+        if sq[0] == "DraftNotesCount":
+            # Just in case you are playing this card in a deck without draft notes
+            note = player.getDraftNotes().getOrDefault(sq[1], None)
+            if note is None:
+                return 0
+            highest = len(note.split(";"))
+            return AbilityUtils.doXMath(highest, expr, c, ctb)
+
+        # Count$TypesSharedWith [defined]
+        if sq[0].startswith("TypesSharedWith"):
+            thisTypes = set(c.getType().getCoreTypes())
+            matches = set()
+            for c1 in AbilityUtils.getDefinedCards(ctb.getHostCard(), l[0].split(" ", 1)[1], ctb):
+                for type_ in set(c1.getType().getCoreTypes()):
+                    if type_ in thisTypes:
+                        matches.add(type_)
+            return len(matches)
+
+        # Count$TopOfLibraryCMC
+        if sq[0] == "TopOfLibraryCMC":
+            cmc = 0 if player.getCardsIn(ZoneType.Library).isEmpty() else player.getCardsIn(ZoneType.Library).getFirst().getCMC()
+            return AbilityUtils.doXMath(cmc, expr, c, ctb)
+
+        # Count$AttackersDeclared
+        if sq[0].startswith("AttackersDeclared"):
+            attackers = player.getCreaturesAttackedThisTurn()
+            differentAttackers = []
+            for attacker in attackers:
+                add = True
+                for different in differentAttackers:
+                    if different.equalsWithGameTimestamp(attacker):
+                        add = False
+                        break
+                if add:
+                    differentAttackers.append(attacker)
+            return AbilityUtils.doXMath(len(differentAttackers), expr, c, ctb)
+
+        # Count$CardAttackedThisTurn <Valid>
+        if sq[0].startswith("CreaturesAttackedThisTurn"):
+            workingCopy = l[0].split(" ", 1)
+            validFilter = workingCopy[1]
+            return AbilityUtils.doXMath(CardLists.getValidCardCount(player.getCreaturesAttackedThisTurn(), validFilter, player, c, ctb), expr, c, ctb)
+
+        # Count$LeftBattlefieldThisTurn <Valid>
+        if sq[0].startswith("LeftBattlefieldThisTurn"):
+            workingCopy = l[0].split(" ", 1)
+            validFilter = workingCopy[1]
+            return AbilityUtils.doXMath(CardLists.getValidCardCount(game.getLeftBattlefieldThisTurn(), validFilter, player, c, ctb), expr, c, ctb)
+        if sq[0].startswith("LeftGraveyardThisTurn"):
+            workingCopy = l[0].split(" ", 1)
+            validFilter = workingCopy[1]
+            return AbilityUtils.doXMath(CardLists.getValidCardCount(game.getLeftGraveyardThisTurn(), validFilter, player, c, ctb), expr, c, ctb)
+
+        if sq[0] == "UnlockedDoors":
+            return AbilityUtils.doXMath(player.getUnlockedDoors().size(), expr, c, ctb)
+        # Counts the distinct names of unlocked doors. Used for the "Promising Stairs"
+        if sq[0] == "DistinctUnlockedDoors":
+            return AbilityUtils.doXMath(len(set(player.getUnlockedDoors())), expr, c, ctb)
+
+        # Manapool
+        if sq[0].startswith("ManaPool"):
+            color = l[0].split(":")[1]
+            v = 0
+            if color == "All":
+                v = player.getManaPool().totalMana()
+            else:
+                v = player.getManaPool().getAmountOfColor(ManaAtom.fromName(color))
+            return AbilityUtils.doXMath(v, expr, c, ctb)
+
+        # Count$Domain
+        if sq[0].startswith("Domain"):
+            n = 0
+            neededPlayer = game.getPhaseHandler().getPlayerTurn() if sq[0] == "DomainActivePlayer" else player
+            lands = neededPlayer.getLandsInPlay()
+            for basic in MagicColor.Constant.BASIC_LANDS:
+                if not CardLists.getType(lands, basic).isEmpty():
+                    n += 1
+            return AbilityUtils.doXMath(n, expr, c, ctb)
+
+        if "AbilityYouCtrl" in sq[0]:
+            all_ = CardLists.getValidCards(player.getCardsIn(ZoneType.Battlefield), "Creature", player, c, ctb)
+            count = 0
+            for ab in sq[0][15:].split(","):
+                found = CardLists.getValidCards(all_, "Creature.with" + ab, player, c, ctb)
+                if not found.isEmpty():
+                    count += 1
+            return AbilityUtils.doXMath(count, expr, c, ctb)
+
+        if "Party" in sq[0]:
+            chosenParty = set()
+            wildcard = 0
+            multityped = {}
+            chosenMulti = []
+
+            # Figure out how to count each class separately.
+            for card in player.getCardsIn(ZoneType.Battlefield):
+                if not card.isCreature():
+                    continue
+                type_ = card.getType()
+
+                # extra logic for "all creature types" cards
+                if type_.hasAllCreatureTypes():
+                    # one of the party types could be excluded, so check each of them separate
+                    creatureTypes = set(p for p in CardType.Constant.PARTY_TYPES if type_.hasCreatureType(p))
+                else:  # shortcut for others
+                    creatureTypes = set(type_.getCreatureTypes())
+                    creatureTypes = set(t for t in creatureTypes if t in set(CardType.Constant.PARTY_TYPES))
+
+                size = len(creatureTypes)
+                if size == 0:
+                    continue
+                elif size == 4:
+                    wildcard += 1
+                elif size == 1:
+                    chosenParty.update(creatureTypes)
+                else:
+                    for t in creatureTypes:
+                        multityped.setdefault(t, []).append(card)
+
+                # found enough
+                if len(chosenParty) + wildcard >= 4:
+                    break
+
+            if len(chosenParty) + wildcard < 4:
+                for key in list(multityped.keys()):
+                    if key in chosenParty:
+                        del multityped[key]
+
+                # sort by amount of members
+                for key, value in sorted(multityped.items(), key=lambda e: len(e[1])):
+                    value = [v for v in value if v not in chosenMulti]
+                    if len(value) > 0:
+                        chosenParty.add(key)
+                        chosenMulti.append(value[0])
+
+            return AbilityUtils.doXMath(min(len(chosenParty) + wildcard, 4), expr, c, ctb)
+
+        # TODO make AI part to understand Sunburst better so this isn't needed
+        if sq[0].startswith("UniqueManaColorsProduced"):
+            untappedOnly = "ByUntappedSources" in sq[1]
+            uniqueColors = 0
+            otb = player.getCardsIn(ZoneType.Battlefield)
+            for color in MagicColor.WUBRG:
+                matched = False
+                for card in otb:
+                    if not card.isTapped() or not untappedOnly:
+                        for ma in card.getManaAbilities():
+                            if ma.canProduce(MagicColor.toShortString(color)):
+                                uniqueColors += 1
+                                matched = True
+                                break
+                    if matched:
+                        break
+            return AbilityUtils.doXMath(uniqueColors, expr, c, ctb)
+
+        # TODO change into checking SpellAbility
+        if "xColorPaid" in sq[0]:
+            attrs = sq[0].split(" ")
+            colors = []
+            for i in range(1, len(attrs)):
+                colors.append(attrs[i])
+            return AbilityUtils.doXMath(c.getXManaCostPaidCount("".join(colors)), expr, c, ctb)
+
+        # Count$UrzaLands.<numHB>.<numNotHB>
+        if sq[0].startswith("UrzaLands"):
+            return AbilityUtils.doXMath(AbilityUtils.calculateAmount(c, sq[1 if player.hasUrzaLands() else 2], ctb), expr, c, ctb)
+
+        ###############
+        # game info
+        # Count$Morbid.<True>.<False>
+        if sq[0].startswith("Morbid"):
+            res = CardUtil.getThisTurnEntered(ZoneType.Graveyard, ZoneType.Battlefield, "Creature", c, ctb, player)
+            return AbilityUtils.doXMath(AbilityUtils.calculateAmount(c, sq[1 if len(res) > 0 else 2], ctb), expr, c, ctb)
+        # Count$Void.<True>.<False>
+        if sq[0].startswith("Void"):
+            return AbilityUtils.doXMath(AbilityUtils.calculateAmount(c, sq[1 if game.isVoid() else 2], ctb), expr, c, ctb)
+
+        # Count$Chroma.<color name>
+        if sq[0].startswith("Chroma"):
+            if "ChromaSource" in sq[0]:  # Runs Chroma for passed in Source card
+                cards = CardCollection(c)
+            else:
+                sourceZone = ZoneType.Graveyard if "ChromaInGrave" in sq[0] else ZoneType.Battlefield
+                cards = player.getCardsIn(sourceZone)
+
+            if len(sq) > 1:
+                colorCode = ManaAtom.fromName(sq[1])
+            else:
+                colorCode = ManaAtom.ALL_MANA_COLORS
+
+            return AbilityUtils.doXMath(CardLists.getTotalChroma(cards, colorCode), expr, c, ctb)
+
+        if "ExactManaCost" in l[0]:
+            sqparts = l[0].split(" ", 1)
+            rest = sqparts[1].split(",")
+
+            cardsInZones = (game.getCardsIn(ZoneType.listValueOf(sqparts[0][13:]))
+                            if len(sqparts[0]) > 13
+                            else game.getCardsIn(ZoneType.Battlefield))
+
+            cards = CardLists.getValidCards(cardsInZones, rest, player, c, ctb)
+            manaCost = set()
+
+            for card in cards:
+                manaCost.add(card.getManaCost().getShortString())
+            manaCost.discard(ManaCost.NO_COST.getShortString())
+
+            return AbilityUtils.doXMath(len(manaCost), expr, c, ctb)
+
+        if sq[0] == "StormCount":
+            return AbilityUtils.doXMath(game.getStack().getSpellsCastThisTurn().size() - 1, expr, c, ctb)
+
+        if sq[0] == "FinalChapterNr":
+            return AbilityUtils.doXMath(c.getFinalChapterNr(), expr, c, ctb)
+
+        if sq[0].startswith("PlanarDiceSpecialActionThisTurn"):
+            return game.getPhaseHandler().getPlanarDiceSpecialActionThisTurn()
+
+        if sq[0] == "TotalTurns":
+            return AbilityUtils.doXMath(game.getPhaseHandler().getTurn(), expr, c, ctb)
+
+        if sq[0] == "MaxDistinctOnStack":
+            return AbilityUtils.doXMath(game.getStack().getMaxDistinctSources(), expr, c, ctb)
+
+        if sq[0] == "MaxSameStoredRolls":
+            max_ = 0
+            rolls = c.getStoredRolls()
+            if rolls is not None:
+                lastNum = 0
+                for roll in rolls:
+                    if roll == lastNum:
+                        continue  # no need to count instances of the same roll multiple times
+                    tally = list(rolls).count(roll)
+                    if tally > max_:
+                        max_ = tally
+                    lastNum = roll
+            return AbilityUtils.doXMath(max_, expr, c, ctb)
+
+        # Count$Random.<Min>.<Max>
+        if sq[0] == "Random":
+            min_ = AbilityUtils.calculateAmount(c, sq[1], ctb)
+            max_ = AbilityUtils.calculateAmount(c, sq[2], ctb)
+            return MyRandom.getRandom().nextInt(1 + max_ - min_) + min_
+
+        # Count$ThisTurnCast <Valid>
+        # Count$LastTurnCast <Valid>
+        # Count$CastSinceBeginningOfYourLastTurn_<Valid>
+        if (sq[0].startswith("ThisTurnCast") or sq[0].startswith("LastTurnCast")
+                or sq[0].startswith("CastSince")):
+            workingCopy = paidparts[0].split("_")
+            validFilter = workingCopy[1]
+
+            if "This" in workingCopy[0]:
+                someCards = CardUtil.getThisTurnCast(validFilter, c, ctb, player)
+            elif "SinceBeginningOfYourLastTurn" in workingCopy[0]:
+                someCards = CardUtil.getCastSinceBeginningOfYourLastTurn(validFilter, c, ctb, player)
+            else:
+                someCards = CardUtil.getLastTurnCast(validFilter, c, ctb, player)
+        if sq[0].startswith("ThisTurnActivated"):
+            workingCopy = paidparts[0].split("_")
+            validFilter = workingCopy[1]
+            # use objectXCount ?
+            activated = len(CardUtil.getThisTurnActivated(validFilter, c, ctb, player))
+            for i in game.costPaymentStack:
+                if i.getPayment().getAbility().isValid(validFilter, player, c, ctb):
+                    activated += 1
+            return activated
+
+        # Count$ThisTurnEntered <ZoneDestination> [from <ZoneOrigin>] <Valid>
+        if sq[0].startswith("ThisTurnEntered") or sq[0].startswith("LastTurnEntered"):
+            workingCopy = paidparts[0].split("_", 4)
+            destination = ZoneType.smartValueOf(workingCopy[1])
+            hasFrom = workingCopy[2] == "from"
+            origin = ZoneType.smartValueOf(workingCopy[3]) if hasFrom else None
+            validFilter = workingCopy[4 if hasFrom else 2]
+
+            if sq[0].startswith("This"):
+                someCards = CardUtil.getThisTurnEntered(destination, origin, validFilter, c, ctb, player)
+            else:
+                someCards = CardUtil.getLastTurnEntered(destination, origin, validFilter, c, ctb, player)
+
+        if sq[0].startswith("CountersAddedThisTurn"):
+            parts = l[0].split(" ")
+            cType = CounterType.getType(parts[1])
+            return AbilityUtils.doXMath(game.getCounterAddedThisTurn(cType, parts[2], parts[3], c, player, ctb), expr, c, ctb)
+        if sq[0].startswith("CountersRemovedThisTurn"):
+            parts = l[0].split(" ")
+            cType = CounterType.getType(parts[1])
+            return AbilityUtils.doXMath(game.getCounterRemovedThisTurn(cType, parts[2], c, player, ctb), expr, c, ctb)
+
+        if sq[0].startswith("MostCardName"):
+            lparts = l[0].split(" ", 1)
+            rest = lparts[1].split(",")
+
+            cardsInZones = (game.getCardsIn(ZoneType.listValueOf(lparts[0][12:]))
+                            if len(lparts[0]) > 12
+                            else game.getCardsIn(ZoneType.Battlefield))
+
+            cards = CardLists.getValidCards(cardsInZones, rest, player, c, ctb)
+
+            counts = {}
+            for card in cards:
+                counts[card.getName()] = counts.get(card.getName(), 0) + 1
+            return max(counts.values()) if counts else 0
+
+        if sq[0].startswith("MostProminentCreatureType"):
+            restriction = l[0].split(" ")[1]
+            lst = CardLists.getValidCards(game.getCardsIn(ZoneType.Battlefield), restriction, player, c, ctb)
+            return AbilityUtils.doXMath(CardFactoryUtil.getMostProminentCreatureTypeSize(lst), expr, c, ctb)
+
+        if sq[0].startswith("SecondMostProminentColor"):
+            restriction = l[0].split(" ")[1]
+            lst = CardLists.getValidCards(game.getCardsIn(ZoneType.Battlefield), restriction, player, c, ctb)
+            colorSize = CardFactoryUtil.SortColorsFromList(lst)
+            return AbilityUtils.doXMath(colorSize[len(colorSize) - 2], expr, c, ctb)
+
+        # TODO move below to handlePaid
+        if sq[0].startswith("DifferentCounterKinds_"):
+            kinds = set()
+            rest = l[0][22:]
+            lst = CardLists.getValidCards(game.getCardsIn(ZoneType.Battlefield), rest, player, c, ctb)
+            for card in lst:
+                kinds.update(card.getCounters().keySet())
+            return AbilityUtils.doXMath(len(kinds), expr, c, ctb)
+
+        # Complex counting methods
+        num = None
+        if someCards is None:
+            someCards = AbilityUtils.getCardListForXCount(c, player, sq, ctb)
+        elif len(paidparts) > 1:
+            num = AbilityUtils.handlePaid(someCards, paidparts[1], c, ctb)
+        if num is None:
+            num = len(list(someCards))
+
+        return AbilityUtils.doXMath(num, expr, c, ctb)
+
+    @staticmethod
+    def _isPrime(n):
+        if n < 2:
+            return False
+        i = 2
+        while i * i <= n:
+            if n % i == 0:
+                return False
+            i += 1
+        return True
+
+    @staticmethod
+    def applyManaColorConversion(matrix, conversion):
+        for pair in conversion.split(" "):
+            # Check if conversion is additive or restrictive and how to split
+            additive = "->" in pair
+            sides = pair.split("->" if additive else "<-")
+
+            replacedColor = ManaAtom.fromConversion(sides[1])
+            if sides[0] == "AnyColor" or sides[0] == "AnyType":
+                for c in (MagicColor.WUBRG if sides[0] == "AnyColor" else MagicColor.WUBRGC):
+                    matrix.adjustColorReplacement(c, replacedColor, additive)
+            elif sides[0].startswith("non"):
+                originalColor = ManaAtom.fromConversion(sides[0])
+                for b in ManaAtom.MANATYPES:
+                    if (originalColor & b) != 0:
+                        matrix.adjustColorReplacement(b, replacedColor, additive)
+            else:
+                matrix.adjustColorReplacement(ManaAtom.fromConversion(sides[0]), replacedColor, additive)
+
+    @staticmethod
+    def getBasicSpellsFromPlayEffect(tgtCard, controller):
+        return AbilityUtils.getSpellsFromPlayEffect(tgtCard, controller, CardStateName.Original, False)
+
+    @staticmethod
+    def getSpellsFromPlayEffect(tgtCard, controller, state, withAltCost):
+        sas = []
+        lst = []
+        AbilityUtils.collectSpellsForPlayEffect(lst, tgtCard.getState(tgtCard.getCurrentStateName()), controller, withAltCost)
+        original = tgtCard.getState(state)
+
+        if tgtCard.isFaceDown():
+            AbilityUtils.collectSpellsForPlayEffect(lst, original, controller, withAltCost)
+        else:
+            if state == CardStateName.Backside and not tgtCard.isModal() and tgtCard.isPermanent() and not tgtCard.isAura():
+                # casting defeated battle
+                sp = SpellPermanent(tgtCard, original)
+                sp.setCardState(original)
+                lst.append(sp)
+            if tgtCard.isModal() and tgtCard.hasState(CardStateName.Backside):
+                AbilityUtils.collectSpellsForPlayEffect(lst, tgtCard.getState(CardStateName.Backside), controller, withAltCost)
+
+        for s in lst:
+            if s.isLandAbility():
+                s.setActivatingPlayer(controller)
+                # CR 305.3
+                if controller.getGame().getPhaseHandler().isPlayerTurn(controller) and controller.canPlayLand(tgtCard, True, s):
+                    sas.append(s)
+            else:
+                newSA = s.copy(controller)
+                newSA.getRestrictions().setZone(None)
+                newSA.setCastFromPlayEffect(True)
+                # extra timing restrictions still apply
+                if newSA.canPlay():
+                    sas.append(newSA)
+        return sas
+
+    @staticmethod
+    def collectSpellsForPlayEffect(result, state, controller, withAltCost):
+        if state.getType().isLand():
+            result.append(state.getFirstSpellAbility())
+        spells = state.getSpellAbilities()
+        for sa in spells:
+            if not sa.isSpell():
+                continue
+            if not withAltCost and not sa.isBasicSpell():
+                continue
+            result.append(sa)
+            if withAltCost:
+                result.extend(list(GameActionUtil.getAlternativeCosts(sa, controller, True)))
+
+    @staticmethod
+    def getAnnouncementBounds(ability, announce):
+        host = ability.getHostCard()
+        max_ = sys.maxsize
+        min_ = 0
+        cost = ability.getPayCosts()
+
+        if "X" == announce:
+            abXMin = ability.hasParam("XMin")
+            if abXMin:
+                min_ = int(ability.getParam("XMin"))
+            if ability.hasParam("XMax"):
+                max_ = min(max_, AbilityUtils.calculateAmount(host, ability.getParam("XMax"), ability))
+            if cost is not None and cost.hasManaCost() and not abXMin:
+                min_ = cost.getCostMana().getXMin()
+
+        if ability.hasParam("AnnounceMax"):
+            max_ = min(max_, AbilityUtils.calculateAmount(host, ability.getParam("AnnounceMax"), ability))
+
+        if ability.usesTargeting():
+            # if announce is used as min targets, check what the max possible number would be
+            if announce == ability.getTargetRestrictions().getMinTargets():
+                max_ = min(max_, CardUtil.getValidCardsToTarget(ability).size())
+
+        return Range.of(min_, max_)
+
+    @staticmethod
+    def applyAbilityTextChangeEffects(def_, ability):
+        if ability is None or not ability.isIntrinsic() or ability.hasParam("LockInText"):
+            return def_
+        return AbilityUtils._applyTextChangeEffectsCard(def_, ability.getHostCard(), False)
+
+    @staticmethod
+    def applyKeywordTextChangeEffects(kw, card):
+        if not CardUtil.isKeywordModifiable(kw):
+            return kw
+        return AbilityUtils._applyTextChangeEffectsCard(kw, card, False)
+
+    @staticmethod
+    def applyDescriptionTextChangeEffects(def_, ability):
+        # Java overloads: (String, CardTraitBase) and (String, Card)
+        if isinstance(ability, Card):
+            return AbilityUtils._applyTextChangeEffectsCard(def_, ability, True)
+        if ability is None or not ability.isIntrinsic() or ability.hasParam("LockInText"):
+            return def_
+        return AbilityUtils._applyTextChangeEffectsCard(def_, ability.getHostCard(), True)
+
+    @staticmethod
+    def _applyTextChangeEffectsCard(def_, card, isDescriptive):
+        return AbilityUtils.applyTextChangeEffects(def_, isDescriptive, card.getChangedTextColorWords(), card.getChangedTextTypeWords())
+
+    @staticmethod
+    def applyTextChangeEffects(def_, isDescriptive, colorMap, typeMap):
+        if def_ is None or def_ == "":
+            return def_
+
+        replaced = def_
+        for key in colorMap.keySet():
+            value = colorMap.get(key)
+            if key == "Any":
+                for c in MagicColor.WUBRG:
+                    colorLowerCase = MagicColor.toLongString(c).lower()
+                    colorCaptCase = MagicColor.toLongString(c).capitalize()
+                    # Color should not replace itself.
+                    if value.lower() == colorLowerCase:
+                        continue
+                    replaced = AbilityUtils.getReplacedText(replaced, colorLowerCase, value.lower(), isDescriptive)
+                    replaced = AbilityUtils.getReplacedText(replaced, colorCaptCase, value, isDescriptive)
+            else:
+                replaced = AbilityUtils.getReplacedText(replaced, key.lower(), value.lower(), isDescriptive)
+                replaced = AbilityUtils.getReplacedText(replaced, key, value, isDescriptive)
+        for key in typeMap.keySet():
+            value = typeMap.get(key)
+            if isDescriptive:
+                replaced = AbilityUtils.getReplacedText(replaced, CardType.getPluralType(key), CardType.getPluralType(value), isDescriptive)
+            replaced = AbilityUtils.getReplacedText(replaced, key, value, isDescriptive)
+
+        return replaced
+
+    @staticmethod
+    def getReplacedText(text, originalWord, newWord, isDescriptive):
+        if isDescriptive:
+            newWord = "<strike>" + originalWord + "</strike> " + newWord
+        # use word boundaries and keep negations - java only supports bounded maximum length in negative lookbehind
+        pattern = (("(?<!>)" if isDescriptive else "") + "(?<!named.{0,100})\\b(non)?" + originalWord)
+        return re.sub(pattern, (lambda m: (m.group(1) or "") + newWord), text)
+
+    @staticmethod
+    def getSVar(ability, sVarName):
+        val = ability.getSVar(sVarName)
+        if not ability.isIntrinsic() or val is None or val == "":
+            return val
+        return AbilityUtils.applyAbilityTextChangeEffects(val, ability)
+
+    @staticmethod
+    def addPlayer(objects, def_, players, skipRemembered=False):
+        for o in objects:
+            if isinstance(o, Player):
+                p = o
+                if def_.endswith("Opponents"):
+                    players.addAll(p.getOpponents())
+                else:
+                    players.add(p)
+            elif isinstance(o, Card):
+                c = o
+                if def_.endswith("Controller"):
+                    players.add(c.getController())
+                elif def_.endswith("Owner"):
+                    players.add(c.getOwner())
+                elif def_.endswith("Remembered") and not skipRemembered:
+                    # fixme recursive call to skip so it will not cause StackOverflow, ie Riveteers Overlook
+                    AbilityUtils.addPlayer(c.getRemembered(), def_, players, True)
+            elif isinstance(o, SpellAbility):
+                c = o
+                if def_.endswith("Controller"):
+                    players.add(c.getHostCard().getController())
+
+    @staticmethod
+    def addSpliceEffects(sa):
+        source = sa.getHostCard()
+        player = sa.getActivatingPlayer()
+
+        if not sa.isSpell() or source.isCopiedSpell():
+            return sa
+
+        hand = player.getCardsIn(ZoneType.Hand)
+        if hand.isEmpty():
+            return sa
+
+        def _spliceFilter(input_):
+            for inst in input_.getKeywords(Keyword.SPLICE):
+                if isinstance(inst, KeywordWithCostAndType):
+                    splice = inst
+                    if source.isValid(splice.getValidType().split(","), player, input_, sa):
+                        return True
+            return False
+
+        splices = CardLists.filter(hand, _spliceFilter)
+
+        splices.remove(source)
+
+        if splices.isEmpty():
+            return sa
+
+        choosen = player.getController().chooseCardsForSplice(sa, splices)
+        if not choosen:
+            return sa
+
+        newSA = sa.copy()
+        for c in choosen:
+            AbilityUtils.addSpliceEffect(newSA, c)
+        return newSA
+
+    @staticmethod
+    def addSpliceEffect(sa, c):
+        spliceCost = None
+        # This Function thinks that Splice exist only once on the card
+        for inst in c.getKeywords(Keyword.SPLICE):
+            if isinstance(inst, KeywordWithCostAndType):
+                splice = inst
+                spliceCost = splice.getCost()
+                break
+
+        if spliceCost is None:
+            return
+
+        firstSpell = c.getFirstSpellAbility()
+        params = dict(firstSpell.getMapParams())
+        api = AbilityFactory.AbilityRecordType.getRecordType(params).getApiTypeOf(params)
+        subAbility = AbilityFactory.getAbility(AbilityFactory.AbilityRecordType.SubAbility, api, params, None, c.getCurrentState(), c.getCurrentState())
+
+        subAbility.setActivatingPlayer(sa.getActivatingPlayer())
+        subAbility.setHostCard(sa.getHostCard())
+
+        # add the spliced ability to the end of the chain
+        sa.appendSubAbility(subAbility)
+
+        # update master SpellAbility
+        sa.setBasicSpell(False)
+        sa.getPayCosts().add(spliceCost)
+        sa.setDescription(sa.getDescription() + " (Splicing " + str(c) + " onto it)")
+        sa.addSplicedCards(c)
+
+    @staticmethod
+    def doXMath(num, operators, c, ctb):
+        if operators is None or operators == "none":
+            return num
+
+        s = operators.split(".")
+        secondaryNum = 0
+
+        try:
+            if len(s) == 2:
+                secondaryNum = int(s[1])
+        except Exception:
+            secondaryNum = AbilityUtils.calculateAmount(c, s[1], ctb)
+
+        if "Plus" in s[0]:
+            return num + secondaryNum
+        elif "NMinus" in s[0]:
+            return secondaryNum - num
+        elif "Minus" in s[0]:
+            return num - secondaryNum
+        elif "Twice" in s[0]:
+            return num * 2
+        elif "Thrice" in s[0]:
+            return num * 3
+        elif "HalfUp" in s[0]:
+            return int(math.ceil(num / 2.0))
+        elif "HalfDown" in s[0]:
+            return int(math.floor(num / 2.0))
+        elif "ThirdUp" in s[0]:
+            return int(math.ceil(num / 3.0))
+        elif "ThirdDown" in s[0]:
+            return int(math.floor(num / 3.0))
+        elif "Negative" in s[0]:
+            return num * -1
+        elif "Times" in s[0]:
+            return num * secondaryNum
+        elif "Pow" in s[0]:
+            return int(math.pow(num, secondaryNum))
+        elif "DivideEvenlyUp" in s[0]:
+            if secondaryNum == 0:
+                return 0
+            return num // secondaryNum + (0 if num % secondaryNum == 0 else 1)
+        elif "DivideEvenlyDown" in s[0]:
+            if secondaryNum == 0:
+                return 0
+            return num // secondaryNum
+        elif "Mod" in s[0]:
+            return num % secondaryNum
+        elif "Abs" in s[0]:
+            return abs(num)
+        elif "LimitMax" in s[0]:
+            if num < secondaryNum:
+                return num
+            return secondaryNum
+        elif "LimitMin" in s[0]:
+            if num > secondaryNum:
+                return num
+            return secondaryNum
+        else:
+            return num
+
+    @staticmethod
+    def playerXCount(players, s, source, ctb):
+        if len(players) == 0:
+            return 0
+
+        l = s.split("/")
+        m = CardFactoryUtil.extractOperators(s)
+        controller = ctb.getActivatingPlayer() if isinstance(ctb, SpellAbility) else source.getController()
+
+        n = 0
+
+        if l[0].startswith("TotalCommanderCastFromCommandZone"):
+            totCast = 0
+            for p in players:
+                totCast += p.getTotalCommanderCast()
+            return AbilityUtils.doXMath(totCast, m, source, ctb)
+
+        # methods for getting the highest/lowest playerXCount from a range of players
+        if l[0].startswith("Highest"):
+            for player in players:
+                current = AbilityUtils.playerXProperty(player, TextUtil.fastReplace(s, "Highest", ""), source, ctb)
+                if current > n:
+                    n = current
+            return AbilityUtils.doXMath(n, m, source, ctb)
+
+        if l[0].startswith("Lowest"):
+            n = 99999  # if no players have fewer than 99999 valids, the game is frozen anyway
+            for player in players:
+                current = AbilityUtils.playerXProperty(player, TextUtil.fastReplace(s, "Lowest", ""), source, ctb)
+                if current < n:
+                    n = current
+            return AbilityUtils.doXMath(n, m, source, ctb)
+
+        if l[0].startswith("TiedForHighestLife"):
+            maxLife = -sys.maxsize - 1
+            for player in players:
+                highestTotal = AbilityUtils.playerXProperty(player, "LifeTotal", source, ctb)
+                if highestTotal > maxLife:
+                    maxLife = highestTotal
+            numTied = 0
+            for player in players:
+                if player.getLife() == maxLife:
+                    numTied += 1
+            return AbilityUtils.doXMath(numTied, m, source, ctb)
+
+        if l[0].startswith("TiedForLowestLife"):
+            minLife = sys.maxsize
+            for player in players:
+                lowestTotal = AbilityUtils.playerXProperty(player, "LifeTotal", source, ctb)
+                if lowestTotal < minLife:
+                    minLife = lowestTotal
+            numTied = 0
+            for player in players:
+                if player.getLife() == minLife:
+                    numTied += 1
+            return AbilityUtils.doXMath(numTied, m, source, ctb)
+
+        # the number of players passed in
+        if l[0] == "Amount":
+            return AbilityUtils.doXMath(len(players), m, source, ctb)
+
+        if l[0].startswith("HasProperty"):
+            totPlayer = 0
+            property_ = l[0][11:]
+            for p in players:
+                if p.hasProperty(property_, controller, source, ctb):
+                    totPlayer += 1
+            return AbilityUtils.doXMath(totPlayer, m, source, ctb)
+
+        if l[0].startswith("Condition"):
+            totPlayer = 0
+            parts = l[0].split(" ", 1)
+            def_ = parts[0] == "Condition"
+            comparator = "GE" if def_ else parts[0][9:11]
+            calc = "1" if def_ else parts[0][11:]
+            y = None
+            if "RelativePlayerUID" not in ctb.getSVar(calc):
+                y = AbilityUtils.calculateAmount(source, calc, ctb)
+            for p in players:
+                if y is None:
+                    calc = ctb.getSVar(calc).replace("RelativePlayerUID", str(p.getId()))
+                    y = AbilityUtils.calculateAmount(source, calc, ctb)
+                x = AbilityUtils.playerXProperty(p, parts[1], source, ctb)
+                if Expressions.compare(x, comparator, y):
+                    totPlayer += 1
+            return AbilityUtils.doXMath(totPlayer, m, source, ctb)
+
+        if "DamageThisTurn" in l[0]:
+            totDmg = 0
+            for p in players:
+                totDmg += p.getAssignedDamage()
+            return AbilityUtils.doXMath(totDmg, m, source, ctb)
+
+        if len(players) > 0:
+            totCount = 0
+            for p in players:
+                totCount += AbilityUtils.playerXProperty(p, s, source, ctb)
+            return totCount
+
+        return AbilityUtils.doXMath(n, m, source, ctb)
+
+    @staticmethod
+    def playerXProperty(player, s, source, ctb):
+        l = s.split("/")
+        m = CardFactoryUtil.extractOperators(s)
+
+        game = player.getGame()
+
+        # count valid cards on the battlefield
+        if l[0].startswith("Valid "):
+            restrictions = l[0][6:]
+            num = CardLists.getValidCardCount(game.getCardsIn(ZoneType.Battlefield), restrictions, player, source, ctb)
+            return AbilityUtils.doXMath(num, m, source, ctb)
+
+        # count valid cards in any specified zone/s
+        if l[0].startswith("Valid"):
+            lparts = l[0].split(" ", 1)
+            vZone = ZoneType.listValueOf(lparts[0].split("Valid")[1])
+            restrictions = TextUtil.fastReplace(l[0], TextUtil.addSuffix(lparts[0], " "), "")
+            num = CardLists.getValidCardCount(game.getCardsIn(vZone), restrictions, player, source, ctb)
+            return AbilityUtils.doXMath(num, m, source, ctb)
+
+        if l[0].startswith("ThisTurnEntered"):
+            workingCopy = l[0].split("_")
+            destination = ZoneType.smartValueOf(workingCopy[1])
+            hasFrom = workingCopy[2] == "from"
+            origin = ZoneType.smartValueOf(workingCopy[3]) if hasFrom else None
+            validFilter = workingCopy[4 if hasFrom else 2]
+
+            res = CardUtil.getThisTurnEntered(destination, origin, validFilter, source, ctb, player)
+            return AbilityUtils.doXMath(len(res), m, source, ctb)
+
+        # SacrificedThisTurn <type>
+        if l[0].startswith("SacrificedThisTurn"):
+            lst = player.getSacrificedThisTurn()
+            if " " in l[0]:
+                lparts = l[0].split(" ", 1)
+                restrictions = TextUtil.fastReplace(l[0], TextUtil.addSuffix(lparts[0], " "), "")
+                lst = CardLists.getValidCardsAsList(lst, restrictions, player, source, ctb)
+            return AbilityUtils.doXMath(len(lst), m, source, ctb)
+
+        # SacrificedPermanentTypesThisTurn
+        if l[0].startswith("SacrificedPermanentTypesThisTurn"):
+            return AbilityUtils.doXMath(AbilityUtils.countCardTypesFromList(player.getSacrificedThisTurn(), True), m, source, ctb)
+
+        sq = l[0].split(".")
+        value = sq[0]
+
+        if "NumPowerSurgeLands" in value:
+            return AbilityUtils.doXMath(player.getNumPowerSurgeLands(), m, source, ctb)
+
+        if "DomainPlayer" in value:
+            n = 0
+            someCards = player.getLandsInPlay()
+            basic = MagicColor.Constant.BASIC_LANDS
+            for type_ in basic:
+                if not CardLists.getType(someCards, type_).isEmpty():
+                    n += 1
+            return AbilityUtils.doXMath(n, m, source, ctb)
+
+        if "CardsInHand" in value:
+            return AbilityUtils.doXMath(player.getCardsIn(ZoneType.Hand).size(), m, source, ctb)
+
+        if "CardsInLibrary" in value:
+            return AbilityUtils.doXMath(player.getCardsIn(ZoneType.Library).size(), m, source, ctb)
+
+        if "CardsInGraveyard" in value:
+            return AbilityUtils.doXMath(player.getCardsIn(ZoneType.Graveyard).size(), m, source, ctb)
+        if "LandsInGraveyard" in value:
+            return AbilityUtils.doXMath(CardLists.getType(player.getCardsIn(ZoneType.Graveyard), "Land").size(), m, source, ctb)
+
+        if "CardsInPlay" in value:
+            return AbilityUtils.doXMath(player.getCardsIn(ZoneType.Battlefield).size(), m, source, ctb)
+        if "CreaturesInPlay" in value:
+            return AbilityUtils.doXMath(player.getCreaturesInPlay().size(), m, source, ctb)
+
+        if "StartingLife" in value:
+            return AbilityUtils.doXMath(player.getStartingLife(), m, source, ctb)
+
+        if "LifeTotal" in value:
+            return AbilityUtils.doXMath(player.getLife(), m, source, ctb)
+
+        if "LifeLostThisTurn" in value:
+            return AbilityUtils.doXMath(player.getLifeLostThisTurn(), m, source, ctb)
+        if "LifeLostLastTurn" in value:
+            return AbilityUtils.doXMath(player.getLifeLostLastTurn(), m, source, ctb)
+
+        if "LifeGainedThisTurn" in value:
+            return AbilityUtils.doXMath(player.getLifeGainedThisTurn(), m, source, ctb)
+
+        if "LifeGainedByTeamThisTurn" in value:
+            return AbilityUtils.doXMath(player.getLifeGainedByTeamThisTurn(), m, source, ctb)
+
+        if "LifeStartedThisTurnWith" in value:
+            return AbilityUtils.doXMath(player.getLifeStartedThisTurnWith(), m, source, ctb)
+
+        if "Speed" in value:
+            return AbilityUtils.doXMath(player.getSpeed(), m, source, ctb)
+
+        if "SVarAmount" in value:
+            return AbilityUtils.doXMath(AbilityUtils.calculateAmount(source, ctb.getSVar(player.toString()), ctb), m, source, ctb)
+
+        if "Counters" in value:
+            count = 0
+            if sq[1] == "ALL":
+                count = Aggregates.sum(player.getCounters().values())
+            else:
+                count = player.getCounters(CounterType.getType(sq[1]))
+            return AbilityUtils.doXMath(count, m, source, ctb)
+
+        if "TopOfLibraryCMC" in value:
+            return AbilityUtils.doXMath(Aggregates.sum(player.getCardsIn(ZoneType.Library, 1), Card.getCMC), m, source, ctb)
+
+        if "LandsPlayed" in value:
+            return AbilityUtils.doXMath(player.getLandsPlayedThisTurn(), m, source, ctb)
+
+        if "SpellsCastThisTurn" in value:
+            return AbilityUtils.doXMath(player.getSpellsCastThisTurn(), m, source, ctb)
+
+        if "CardsDrawn" in value:
+            return AbilityUtils.doXMath(player.getNumDrawnThisTurn(), m, source, ctb)
+
+        if "CardsDiscardedThisTurn" in value:
+            return AbilityUtils.doXMath(player.getDiscardedThisTurn().size(), m, source, ctb)
+
+        if "ExploredThisTurn" in value:
+            return AbilityUtils.doXMath(player.getNumExploredThisTurn(), m, source, ctb)
+
+        if "AttackersDeclared" in value:
+            return AbilityUtils.doXMath(player.getCreaturesAttackedThisTurn().size(), m, source, ctb)
+
+        if "DamageToOppsThisTurn" in value:
+            return AbilityUtils.doXMath(player.getOpponentsAssignedDamage(), m, source, ctb)
+
+        if "NonCombatDamageDealtThisTurn" in value:
+            return AbilityUtils.doXMath(player.getAssignedDamage() - player.getAssignedCombatDamage(), m, source, ctb)
+
+        if value == "OpponentsAttackedThisTurn":
+            opps = player.getAttackedPlayersMyTurn()
+            return AbilityUtils.doXMath(0 if opps is None else len(list(opps)), m, source, ctb)
+
+        if value == "OpponentsAttackedThisCombat":
+            amount = 0 if game.getCombat() is None else game.getCombat().getAttackedOpponents(player).size()
+            return AbilityUtils.doXMath(amount, m, source, ctb)
+
+        if value == "BeenDealtCombatDamageSinceLastTurn":
+            return AbilityUtils.doXMath(1 if player.hasBeenDealtCombatDamageSinceLastTurn() else 0, m, source, ctb)
+
+        if value == "RingTemptedYou":
+            return AbilityUtils.doXMath(player.getNumRingTemptedYou(), m, source, ctb)
+
+        if value == "AttractionsVisitedThisTurn":
+            return AbilityUtils.doXMath(player.getAttractionsVisitedThisTurn(), m, source, ctb)
+
+        if value.startswith("PlaneswalkedToThisTurn"):
+            found = 0
+            name = value.split(" ")[1]
+            pwTo = player.getPlaneswalkedToThisTurn()
+            for c in pwTo:
+                if c.getName() == name:
+                    found += 1
+                    break
+            return AbilityUtils.doXMath(found, m, source, ctb)
+
+        return AbilityUtils.doXMath(0, m, source, ctb)
+
+    @staticmethod
+    def objectXCount(objects, s, source, ctb):
+        if len(objects) == 0:
+            return 0
+
+        if s.startswith("Valid"):
+            return AbilityUtils.handlePaid(IterableUtil.filter(objects, Card), s, source, ctb)
+
+        n = len(objects) if s.startswith("Amount") else 0
+        return AbilityUtils.doXMath(n, CardFactoryUtil.extractOperators(s), source, ctb)
+
+    @staticmethod
+    def handlePaid(paidList, def_, source, ctb):
+        if paidList is None or len(list(paidList)) == 0:
+            return AbilityUtils.doXMath(0, CardFactoryUtil.extractOperators(def_), source, ctb)
+        if def_.startswith("Amount"):
+            return AbilityUtils.doXMath(len(list(paidList)), CardFactoryUtil.extractOperators(def_), source, ctb)
+
+        if def_.startswith("TapPowerValue"):
+            return CardLists.getTotalPower(paidList, ctb)
+
+        if def_ == "Colors":
+            return CardUtil.getColorsFromCards(paidList).countColors()
+
+        if def_.startswith("DifferentCardNames"):
+            return AbilityUtils.doXMath(CardLists.getDifferentNamesCount(paidList), CardFactoryUtil.extractOperators(def_), source, ctb)
+
+        if def_ == "DifferentColorPair":
+            diffPair = set()
+            for card in paidList:
+                if card.getColor().countColors() == 2:
+                    diffPair.add(card.getColor())
+            return len(diffPair)
+
+        # shortcut to filter from Defined directly
+        if def_.startswith("Valid"):
+            splitString = def_.split("/", 1)
+            valid = splitString[0][6:]
+            num = CardLists.getValidCardCount(paidList, valid, source.getController(), source, ctb)
+            return AbilityUtils.doXMath(num, splitString[1] if len(splitString) > 1 else None, source, ctb)
+
+        if def_.startswith("AllTypes"):
+            return (AbilityUtils.countCardTypesFromList(paidList, False) +
+                    AbilityUtils.countSuperTypesFromList(paidList) +
+                    AbilityUtils.countSubTypesFromList(paidList))
+
+        if def_.startswith("CardTypes"):
+            return AbilityUtils.doXMath(AbilityUtils.countCardTypesFromList(paidList, def_.startswith("CardTypesPermanent")), CardFactoryUtil.extractOperators(def_), source, ctb)
+
+        if def_.startswith("CreatureType"):
+            creatTypes = set()
+            for card in paidList:
+                creatTypes.update(card.getType().getCreatureTypes())
+            # filter out fun types?
+            return AbilityUtils.doXMath(len(creatTypes), CardFactoryUtil.extractOperators(def_), source, ctb)
+
+        # Per request for custom cards.
+        if def_.startswith("LandType"):
+            landTypes = set()
+            for card in paidList:
+                landTypes.update(card.getType().getLandTypes())
+            return AbilityUtils.doXMath(len(landTypes), CardFactoryUtil.extractOperators(def_), source, ctb)
+
+        if def_.startswith("Least"):
+            func = lambda values: min(values)
+            finalDef = def_[5:]
+        elif def_.startswith("Greatest"):
+            func = lambda values: max(values)
+            finalDef = def_[8:]
+        elif def_.startswith("Different"):
+            func = lambda values: len(set(values))
+            finalDef = def_[9:]
+        else:
+            func = lambda values: sum(values)
+            finalDef = def_
+        return func([AbilityUtils.xCount(c, finalDef, ctb) for c in paidList])
+
+    @staticmethod
+    def getCardListForXCount(c, cc, sq, ctb):
+        opps = cc.getOpponents()
+        someCards = CardCollection()
+        game = c.getGame()
+
+        # Generic Zone-based counting
+        # Count$QualityAndZones.Subquality
+
+        # build a list of cards in each possible specified zone
+
+        if "YouCtrl" in sq[0]:
+            someCards.addAll(cc.getCardsIn(ZoneType.Battlefield))
+
+        if "InYourYard" in sq[0]:
+            someCards.addAll(cc.getCardsIn(ZoneType.Graveyard))
+
+        if "InYourLibrary" in sq[0]:
+            someCards.addAll(cc.getCardsIn(ZoneType.Library))
+
+        if "InYourHand" in sq[0]:
+            someCards.addAll(cc.getCardsIn(ZoneType.Hand))
+
+        if "InYourSideboard" in sq[0]:
+            someCards.addAll(cc.getCardsIn(ZoneType.Sideboard))
+
+        if "OppCtrl" in sq[0]:
+            for p in opps:
+                someCards.addAll(p.getZone(ZoneType.Battlefield).getCards())
+
+        if "OnBattlefield" in sq[0]:
+            someCards.addAll(game.getCardsIn(ZoneType.Battlefield))
+
+        if "SpellsOnStack" in sq[0]:
+            someCards.addAll(game.getCardsIn(ZoneType.Stack))
+
+        if "InAllHands" in sq[0]:
+            someCards.addAll(game.getCardsIn(ZoneType.Hand))
+
+        # filter lists based on the specified quality
+
+        # "Clerics you control" - Count$TypeYouCtrl.Cleric
+        if "Type" in sq[0]:
+            someCards = CardLists.getType(someCards, sq[1])
+
+        # "Named <CARDNAME> in all graveyards" - Count$NamedAllYards.<CARDNAME>
+        if "Named" in sq[0]:
+            if sq[1] == "CARDNAME":
+                sq[1] = c.getName()
+            someCards = CardLists.filter(someCards, CardPredicates.nameEquals(sq[1]))
+
+        # Refined qualities
+
+        if "Multicolor" in sq[0]:
+            someCards = CardLists.filter(someCards, lambda c1: c1.getColor().isMulticolor())
+
+        if "Monocolor" in sq[0]:
+            someCards = CardLists.filter(someCards, lambda c12: c12.getColor().isMonoColor())
+        return someCards
+
+    @staticmethod
+    def getPaidCards(sa, defined):
+        lst = None
+        if isinstance(sa, SpellAbility):
+            root = sa.getRootAbility()
+            lst = root.getPaidList(defined, True)
+        return lst
+
+    @staticmethod
+    def countCardTypesFromList(list_, permanentTypes):
+        types = set()
+        for c1 in list_:
+            for t in c1.getType().getCoreTypes():
+                types.add(t)
+        if permanentTypes:
+            return len([t for t in types if t.isPermanent])
+        return len(types)
+
+    @staticmethod
+    def countSuperTypesFromList(list_):
+        types = set()
+        for c1 in list_:
+            for t in c1.getType().getSupertypes():
+                types.add(t)
+        return len(types)
+
+    @staticmethod
+    def countSubTypesFromList(list_):
+        types = set()
+        for c1 in list_:
+            for t in c1.getType().getSubtypes():
+                types.add(t)
+            for t in c1.getType().getCreatureTypes():
+                types.add(t)
+        return len(types)
+
+    @staticmethod
+    def isUnlinkedFromCastSA(ctb, card):
+        # check if it should come from same host
+        if ctb is not None and ctb.isIntrinsic() and ctb.getHostCard().equals(card):
+            host = ctb.getOriginalHost()
+            castSA = card.getCastSA()
+            if host is not None and castSA is not None:
+                castHost = castSA.getOriginalHost()
+                if castHost is None:
+                    castHost = castSA.getHostCard()
+                # impossible to match with the other part when not even from same host
+                if not host.equals(castHost):
+                    return True
+        return False
+
+    @staticmethod
+    def adjustTriggerContext(def_, ctb):
+        if def_[0].startswith("Spawner>") and isinstance(ctb, SpellAbility):
+            trig = ctb.getTrigger()
+            if trig is None:
+                return ctb
+            spawner = trig.getSpawningAbility()
+            if spawner is None:
+                return ctb
+            def_[0] = def_[0][8:]
+            return spawner
+        if def_[0].startswith("TriggeredSpellAbility>") and isinstance(ctb, SpellAbility):
+            trig = ctb.getTriggeringObject(AbilityKey.SpellAbility)
+            if trig is None:
+                return ctb
+            def_[0] = def_[0][22:]
+            return trig
+        if def_[0].startswith("CastSA>"):
+            sa = ctb.getHostCard().getCastSA()
+            if sa is None:
+                return ctb
+            def_[0] = def_[0][7:]
+            return sa
+        return ctb
 ```

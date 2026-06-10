@@ -79,3 +79,35 @@ public class GameLossEffect extends SpellAbilityEffect {
 
 }
 ```
+
+## Python
+`forge/game/ability/effects/GameLossEffect.py`
+
+```python
+from typing import List
+
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.player.GameLossReason import GameLossReason
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+
+
+class GameLossEffect(SpellAbilityEffect):
+
+    # (non-Javadoc)
+    # @see forge.card.abilityfactory.SpellEffect#getStackDescription(java.util.Map, forge.card.spellability.SpellAbility)
+    def getStackDescription(self, sa: SpellAbility) -> str:
+        sb = []
+
+        tgtPlayers: List[Player] = self.getTargetPlayers(sa)
+        for p in tgtPlayers:
+            sb.append(p.getName())
+            sb.append(" ")
+
+        sb.append("loses the game.")
+        return "".join(sb)
+
+    def resolve(self, sa: SpellAbility) -> None:
+        for p in self.getTargetPlayers(sa):
+            p.loseConditionMet(GameLossReason.SpellEffect, sa.getHostCard().getName())
+```

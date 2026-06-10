@@ -88,3 +88,36 @@ public class AbilityApiBased extends AbilityActivated {
     }
 }
 ```
+
+## Python
+`forge/game/ability/AbilityApiBased.py`
+
+```python
+from forge.game.card.Card import Card
+from forge.game.cost.Cost import Cost
+from forge.game.spellability.AbilityActivated import AbilityActivated
+from forge.game.spellability.TargetRestrictions import TargetRestrictions
+from forge.game.ability.ApiType import ApiType
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+
+import typing
+
+
+class AbilityApiBased(AbilityActivated):
+    def __init__(self, api0: ApiType, sourceCard: Card, abCost: Cost, tgt: TargetRestrictions, params0: typing.Dict[str, str]):
+        super().__init__(sourceCard, abCost, tgt)
+        self.mapParams.update(params0)
+        self.api = api0
+        self.effect = self.api.getSpellEffect()
+
+        self.effect.buildSpellAbility(self)
+        self.originalMapParams.update(self.mapParams)
+
+    def getStackDescription(self) -> str:
+        return self.effect.getStackDescriptionWithSubs(self.mapParams, self)
+
+    #  (non-Javadoc)
+    #  @see forge.card.spellability.SpellAbility#resolve()
+    def resolve(self) -> None:
+        self.effect.resolve(self)
+```

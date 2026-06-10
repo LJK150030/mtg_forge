@@ -39,6 +39,14 @@ classDiagram
 - [[forge.game.card.CounterType|CounterType]]
 - [[forge.game.spellability.SpellAbility|SpellAbility]]
 
+## Design Description
+
+Counters added to a permanent.
+
+The `TriggerCounterAdded` class is a concrete trigger that fires when one or more counters are placed on a card. Extending `Trigger`, it implements the framework's template-method contract: `performTest` evaluates the configured trigger conditions against the runtime parameters, while `setTriggeringObjects` and `getImportantStackObjects` expose the affected `Card` and `Player` to the resulting `SpellAbility`.
+
+It collaborates with `AbilityKey` to read typed values from the run-parameter map, and uses `CounterType` to match a specific kind of counter. Notable design intent includes optional filtering via `ValidCard`/`ValidPlayer`/`ValidSource` predicates, and a `CounterAmount` comparisonâ€”parsed as a two-character operator plus operand and evaluated through `Expressions.compare`â€”specifically noted as supporting Saga cards, which trigger abilities based on their accumulated lore counters.
+
 ## Source
 `forge-game/src/main/java/forge/game/trigger/TriggerCounterAdded.java`
 
@@ -154,4 +162,73 @@ public class TriggerCounterAdded extends Trigger {
         return sb.toString();
     }
 }
+```
+
+## Python
+`forge/game/trigger/TriggerCounterAdded.py`
+
+```python
+from forge.game.trigger.Trigger import Trigger
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.card.CounterType import CounterType
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Expressions import Expressions
+from forge.util.Localizer import Localizer
+
+
+class TriggerCounterAdded(Trigger):
+    """
+    Trigger_CounterAdded class.
+
+    @author Forge
+    @version $Id$
+    """
+
+    def __init__(self, params: dict[str, str], host: Card, intrinsic: bool):
+        super().__init__(params, host, intrinsic)
+
+    def performTest(self, runParams: dict[AbilityKey, object]) -> bool:
+        addedType = runParams.get(AbilityKey.CounterType)
+
+        if not self.matchesValidParam("ValidCard", runParams.get(AbilityKey.Card)):
+            return False
+
+        if not self.matchesValidParam("ValidPlayer", runParams.get(AbilityKey.Player)):
+            return False
+
+        if not self.matchesValidParam("ValidSource", runParams.get(AbilityKey.Source)):
+            return False
+
+        if self.hasParam("CounterType"):
+            type = self.getParam("CounterType")
+            if type != str(addedType):
+                return False
+
+        if self.hasParam("CounterAmount") and AbilityKey.CounterAmount in runParams:
+            # this one is for Saga to trigger
+            # the right ability for the counters on the card
+            fullParam = self.getParam("CounterAmount")
+
+            operator = fullParam[0:2]
+            operand = int(fullParam[2:])
+            actualAmount = runParams.get(AbilityKey.CounterAmount)
+
+            if not Expressions.compare(actualAmount, operator, operand):
+                return False
+
+        return True
+
+    def setTriggeringObjects(self, sa: SpellAbility, runParams: dict[AbilityKey, object]) -> None:
+        sa.setTriggeringObjectsFrom(runParams, AbilityKey.Card, AbilityKey.Player)
+
+    def getImportantStackObjects(self, sa: SpellAbility) -> str:
+        sb = []
+        sb.append(Localizer.getInstance().getMessage("lblAddedOnce"))
+        sb.append(": ")
+        if sa.hasTriggeringObject(AbilityKey.Card):
+            sb.append(str(sa.getTriggeringObject(AbilityKey.Card)))
+        if sa.hasTriggeringObject(AbilityKey.Player):
+            sb.append(str(sa.getTriggeringObject(AbilityKey.Player)))
+        return "".join(sb)
 ```

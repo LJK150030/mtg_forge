@@ -44,7 +44,7 @@ classDiagram
 
 ## Design Description
 
-StoreSVarAi supplies the AI's decision logic for the StoreSVar effect, which records a value into a spell ability's stored variable (SVar). Extending `SpellAbilityAi`, it overrides the base hooks rather than introducing new behavior: `canPlay` and `doTriggerNoCost` both return a maximum-confidence WillPlay decision, treating the effect as always beneficial to resolve. The `doTriggerNoCost` override carries the only card-specific intent—detecting a `WrappedAbility` from "Maralen of the Mornsong Avatar" and forcing its X mana cost to 2 so the wrapped ability resolves with the intended magnitude.
+StoreSVarAi supplies the AI's decision logic for the StoreSVar effect, which records a value into a spell ability's stored variable (SVar). Extending `SpellAbilityAi`, it overrides the base hooks rather than introducing new behavior: `canPlay` and `doTriggerNoCost` both return a maximum-confidence WillPlay decision, treating the effect as always beneficial to resolve. The `doTriggerNoCost` override carries the only card-specific intentâ€”detecting a `WrappedAbility` from "Maralen of the Mornsong Avatar" and forcing its X mana cost to 2 so the wrapped ability resolves with the intended magnitude.
 
 The class also overrides `willPayUnlessCost` to govern optional "unless" payments, collaborating with `Cost`, `Player`, and `FCollectionView` to handle Join Forces cards: when the cost is switched and multiple payers exist, it declines to pay for opponents (players not on the activator's team) while delegating all other cases to the superclass. Overall it is a thin, mostly permissive AI handler with two narrow special cases.
 
@@ -96,4 +96,42 @@ public class StoreSVarAi extends SpellAbilityAi {
         return super.willPayUnlessCost(payer, sa, cost, alreadyPaid, payers);
     }
 }
+```
+
+## Python
+`forge/ai/ability/StoreSVarAi.py`
+
+```python
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.ai.SpellAbilityAi import SpellAbilityAi
+from forge.game.cost.Cost import Cost
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.trigger.WrappedAbility import WrappedAbility
+from forge.util.collect.FCollectionView import FCollectionView
+
+
+class StoreSVarAi(SpellAbilityAi):
+
+    def canPlay(self, ai: Player, sa: SpellAbility) -> AiAbilityDecision:
+        return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+    def doTriggerNoCost(self, aiPlayer: Player, sa: SpellAbility, mandatory: bool) -> AiAbilityDecision:
+        if isinstance(sa, WrappedAbility):
+            origSa = sa.getWrappedAbility()
+            if origSa.getHostCard().getName() == "Maralen of the Mornsong Avatar":
+                origSa.setXManaCostPaid(2)
+
+        return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+    def willPayUnlessCost(self, payer: Player, sa: SpellAbility, cost: Cost, alreadyPaid: bool, payers: FCollectionView) -> bool:
+        # Join Forces cards
+        if sa.hasParam("UnlessSwitched") and payers.size() > 1:
+            p = sa.getActivatingPlayer()
+            # not me or team mate
+            if not p.sameTeam(payer):
+                return False
+
+        return super().willPayUnlessCost(payer, sa, cost, alreadyPaid, payers)
 ```

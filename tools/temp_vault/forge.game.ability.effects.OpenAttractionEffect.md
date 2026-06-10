@@ -43,7 +43,7 @@ classDiagram
 
 ## Design Description
 
-OpenAttractionEffect is a concrete `SpellAbilityEffect` subclass that resolves "open an Attraction" abilities from *Magic: The Gathering*'s Unfinity set. It overrides `getStackDescription` to build player-readable stack text—using `Lang` to pluralize player names, verbs, and Attraction counts—and overrides `resolve` to execute the effect: for each defined or targeted `Player` still in the game, it draws the configured `Amount` of cards from the top of that player's `AttractionDeck` `PlayerZone` and moves them into play.
+OpenAttractionEffect is a concrete `SpellAbilityEffect` subclass that resolves "open an Attraction" abilities from *Magic: The Gathering*'s Unfinity set. It overrides `getStackDescription` to build player-readable stack textâ€”using `Lang` to pluralize player names, verbs, and Attraction countsâ€”and overrides `resolve` to execute the effect: for each defined or targeted `Player` still in the game, it draws the configured `Amount` of cards from the top of that player's `AttractionDeck` `PlayerZone` and moves them into play.
 
 The class delegates relocation to the game action's `moveToPlay`, threading an `AbilityKey` parameter map and a shared `CardZoneTable` so all moves are batched and reported once via `triggerChangesZoneAll`, ensuring zone-change triggers fire correctly. Optional `Remember` support records revealed Attractions on the host `Card`. Amounts and targets are derived entirely from the `SpellAbility`'s parameters, keeping the effect data-driven rather than hardcoded.
 
@@ -113,4 +113,60 @@ public class OpenAttractionEffect extends SpellAbilityEffect {
         triggerList.triggerChangesZoneAll(sa.getHostCard().getGame(), sa);
     }
 }
+```
+
+## Python
+`forge/game/ability/effects/OpenAttractionEffect.py`
+
+```python
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.card.CardZoneTable import CardZoneTable
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.PlayerZone import PlayerZone
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.Lang import Lang
+
+
+class OpenAttractionEffect(SpellAbilityEffect):
+    def getStackDescription(self, sa: SpellAbility) -> str:
+        sb = []
+        tgtPlayers = self.getDefinedPlayersOrTargeted(sa)
+        amount = AbilityUtils.calculateAmount(sa.getHostCard(), sa.getParam("Amount"), sa) if sa.hasParam("Amount") else 1
+
+        if not tgtPlayers:
+            return ""
+
+        sb.append(Lang.joinHomogenous(tgtPlayers))
+
+        if len(tgtPlayers) > 1:
+            sb.append(" each")
+        sb.append(Lang.joinVerb(tgtPlayers, " open"))
+        sb.append(" ")
+        sb.append("an Attraction." if amount == 1 else (Lang.getNumeral(amount) + " Attractions."))
+        return "".join(sb)
+
+    def resolve(self, sa: SpellAbility) -> None:
+        source = sa.getHostCard()
+        tgtPlayers = self.getDefinedPlayersOrTargeted(sa)
+        amount = AbilityUtils.calculateAmount(sa.getHostCard(), sa.getParam("Amount"), sa) if sa.hasParam("Amount") else 1
+
+        moveParams = AbilityKey.newMap()
+        triggerList = AbilityKey.addCardZoneTableParams(moveParams, sa)
+
+        for p in tgtPlayers:
+            if not p.isInGame():
+                continue
+            attractionDeck = p.getZone(ZoneType.AttractionDeck)
+            for i in range(amount):
+                if attractionDeck.isEmpty():
+                    continue
+                attraction = attractionDeck.get(0)
+                attraction = p.getGame().getAction().moveToPlay(attraction, sa, moveParams)
+                if sa.hasParam("Remember"):
+                    source.addRemembered(attraction)
+        triggerList.triggerChangesZoneAll(sa.getHostCard().getGame(), sa)
 ```

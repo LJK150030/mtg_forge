@@ -157,3 +157,92 @@ public class DestroyAllEffect extends SpellAbilityEffect {
 
 }
 ```
+
+## Python
+`forge/game/ability/effects/DestroyAllEffect.py`
+
+```python
+from forge.game.Game import Game
+from forge.game.GameActionUtil import GameActionUtil
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CardZoneTable import CardZoneTable
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.Localizer import Localizer
+from forge.util.TextUtil import TextUtil
+
+
+class DestroyAllEffect(SpellAbilityEffect):
+
+    def getStackDescription(self, sa: SpellAbility) -> str:
+        if sa.hasParam("SpellDescription"):
+            return sa.getParam("SpellDescription")
+
+        sb = []
+        noRegen = sa.hasParam("NoRegen")
+        sb.append(sa.getHostCard().getDisplayName())
+        sb.append(" - Destroy permanents.")
+
+        if noRegen:
+            sb.append(" They can't be regenerated")
+
+        return "".join(sb)
+
+    # (non-Javadoc)
+    # @see forge.card.abilityfactory.SpellEffect#resolve(java.util.Map, forge.card.spellability.SpellAbility)
+    def resolve(self, sa: SpellAbility) -> None:
+        noRegen = sa.hasParam("NoRegen")
+        card = sa.getHostCard()
+        isOptional = sa.hasParam("Optional")
+        game = sa.getActivatingPlayer().getGame()
+        desc = sa.getParamOrDefault("ValidDescription", "")
+
+        targetPlayer = sa.getTargets().getFirstTargetedPlayer()
+        valid = sa.getParamOrDefault("ValidCards", "")
+
+        # Ugh. If calculateAmount needs to be called with DestroyAll it _needs_
+        # to use the X variable
+        # We really need a better solution to this
+        if "X" in valid:
+            valid = TextUtil.fastReplace(valid,
+                    "X", str(AbilityUtils.calculateAmount(card, "X", sa)))
+
+        list = game.getCardsIn(ZoneType.Battlefield)
+
+        if targetPlayer is not None:
+            list = CardLists.filterControlledBy(list, targetPlayer)
+
+        list = AbilityUtils.filterListByType(list, valid, sa)
+
+        remDestroyed = sa.hasParam("RememberDestroyed")
+        if remDestroyed:
+            card.clearRemembered()
+
+        if sa.hasParam("RememberAllObjects"):
+            card.addRemembered(list)
+        if list.isEmpty() and isOptional:
+            return
+        if isOptional and not sa.getActivatingPlayer().getController().confirmAction(sa, None, Localizer.getInstance().getMessage("lblWouldYouLikeDestroy", desc), None):
+            return
+        # exclude cards that can't be destroyed at this moment
+        list = CardLists.filter(list, Card.canBeDestroyed)
+
+        list = GameActionUtil.orderCardsByTheirOwners(game, list, ZoneType.Graveyard, sa)
+
+        params = AbilityKey.newMap()
+        zoneMovements = AbilityKey.addCardZoneTableParams(params, sa)
+
+        for c in list:
+            if sa.hasParam("NoRegenValid"):
+                noRegen = c.isValid(sa.getParam("NoRegenValid"), sa.getActivatingPlayer(), card, sa)
+            if game.getAction().destroy(c, sa, not noRegen, params) and remDestroyed:
+                card.addRemembered(zoneMovements.getLastStateBattlefield().get(c))
+
+        zoneMovements.triggerChangesZoneAll(game, sa)
+```

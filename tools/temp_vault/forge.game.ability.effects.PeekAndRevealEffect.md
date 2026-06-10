@@ -167,3 +167,116 @@ public class PeekAndRevealEffect extends SpellAbilityEffect {
 
 }
 ```
+
+## Python
+`forge/game/ability/effects/PeekAndRevealEffect.py`
+
+```python
+from typing import List
+
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CardCopyService import CardCopyService
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.PlayerZone import PlayerZone
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.Lang import Lang
+from forge.util.Localizer import Localizer
+
+
+class PeekAndRevealEffect(SpellAbilityEffect):
+
+    def getStackDescription(self, sa: SpellAbility) -> str:
+        peeker = sa.getActivatingPlayer()
+        numPeek = AbilityUtils.calculateAmount(sa.getHostCard(), sa.getParam("PeekAmount"), sa) \
+            if sa.hasParam("PeekAmount") else 1
+        verb = " looks at " if sa.hasParam("NoReveal") or sa.hasParam("RevealOptional") \
+            else " reveals "
+        defined = sa.getParamOrDefault("Defined", "")
+        libraryPlayers = self.getDefinedPlayersOrTargeted(sa)
+        defString = Lang.joinHomogenous(libraryPlayers)
+        if defined == "Player" and verb == " reveals ":
+            who = "Each player"
+        elif sa.hasParam("NoPeek") and verb == " reveals ":
+            who = defString
+        else:
+            who = ""
+        if defined == "Player" and verb == " looks at ":
+            whose = "each player's"
+        elif len(libraryPlayers) == 1 and libraryPlayers[0] == peeker:
+            whose = "their"
+        else:
+            whose = defString + "'s"
+
+        sb = []
+
+        sb.append(str(peeker) if who == "" else who)
+        sb.append(verb)
+        sb.append("the top ")
+        sb.append(Lang.getNumeral(numPeek) + " cards " if numPeek > 1 else "card ")
+        sb.append("of ")
+        sb.append(whose)
+        sb.append(" library.")
+
+        return "".join(sb)
+
+    # (non-Javadoc)
+    # @see forge.card.abilityfactory.SpellEffect#resolve(forge.card.spellability.SpellAbility)
+    def resolve(self, sa: SpellAbility) -> None:
+        source = sa.getHostCard()
+        rememberRevealed = sa.hasParam("RememberRevealed")
+        imprintRevealed = sa.hasParam("ImprintRevealed")
+        noPeek = sa.hasParam("NoPeek")
+        revealValid = sa.getParamOrDefault("RevealValid", "Card")
+        peekAmount = sa.getParamOrDefault("PeekAmount", "1")
+        numPeek = AbilityUtils.calculateAmount(source, peekAmount, sa)
+        srcZone = ZoneType.smartValueOf(sa.getParam("SourceZone")) if sa.hasParam("SourceZone") \
+            else ZoneType.Library
+
+        srcZonePlayers = self.getDefinedPlayersOrTargeted(sa)
+        peekingPlayer = sa.getActivatingPlayer()
+
+        for zoneToPeek in srcZonePlayers:
+            playerZone = zoneToPeek.getZone(srcZone)
+            numPeek = min(numPeek, playerZone.size())
+
+            peekCards = CardCollection()
+            for i in range(numPeek):
+                peekCards.add(playerZone.get(i))
+
+            params = {}
+            params["Revealed"] = peekCards
+
+            revealableCards = CardLists.getValidCards(peekCards, revealValid, peekingPlayer, source, sa)
+            doReveal = not sa.hasParam("NoReveal") and not revealableCards.isEmpty()
+            if not noPeek:
+                peekingPlayer.getController().reveal(peekCards, srcZone, zoneToPeek,
+                        source.getTranslatedName() + " - " +
+                                Localizer.getInstance().getMessage("lblLookingCardFrom"))
+
+            if doReveal and sa.hasParam("RevealOptional"):
+                doReveal = peekingPlayer.getController().confirmAction(sa, None, Localizer.getInstance().getMessage("lblRevealCardToOtherPlayers"), params)
+
+            if doReveal:
+                peekingPlayer.getGame().getAction().reveal(revealableCards, srcZone, zoneToPeek, not noPeek,
+                        source.getTranslatedName() + " - " +
+                                Localizer.getInstance().getMessage("lblRevealingCardFrom"))
+
+                if rememberRevealed:
+                    cachedMap = {}
+                    for c in revealableCards:
+                        source.addRemembered(CardCopyService.getLKICopy(c, cachedMap))
+                if imprintRevealed:
+                    cachedMap = {}
+                    for c in revealableCards:
+                        source.addImprintedCard(CardCopyService.getLKICopy(c, cachedMap))
+            elif sa.hasParam("RememberPeeked"):
+                cachedMap = {}
+                for c in revealableCards:
+                    source.addRemembered(CardCopyService.getLKICopy(c, cachedMap))
+```

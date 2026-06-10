@@ -46,7 +46,7 @@ classDiagram
 
 DestroyEffect implements the resolution logic for "destroy" abilities in Forge's card-effect framework. As a concrete subclass of SpellAbilityEffect, it overrides `getStackDescription` to render human-readable text (handling Radiance and no-regeneration variants) and `resolve` to carry out the destruction. During resolution it gathers both directly targeted cards and Radiance-induced collateral targets, orders them by owner for graveyard placement, and routes each through a shared `internalDestroy` helper that delegates the actual state change to the Game's action system.
 
-The design centralizes per-card destruction in `internalDestroy` so targeted and untargeted cards share identical handling of regeneration, remembered-card bookkeeping (RememberDestroyed, AlwaysRemember, RememberLKI), and replacement-ability cause tracking. It carefully validates each card's in-play status and game timestamp before acting—guarding against stale last-known-information references—and accumulates all moves in a CardZoneTable so zone-change triggers fire collectively once the effect completes.
+The design centralizes per-card destruction in `internalDestroy` so targeted and untargeted cards share identical handling of regeneration, remembered-card bookkeeping (RememberDestroyed, AlwaysRemember, RememberLKI), and replacement-ability cause tracking. It carefully validates each card's in-play status and game timestamp before actingâ€”guarding against stale last-known-information referencesâ€”and accumulates all moves in a CardZoneTable so zone-change triggers fire collectively once the effect completes.
 
 ## Source
 `forge-game/src/main/java/forge/game/ability/effects/DestroyEffect.java`
@@ -159,4 +159,103 @@ public class DestroyEffect extends SpellAbilityEffect {
     }
 
 }
+```
+
+## Python
+`forge/game/ability/effects/DestroyEffect.py`
+
+```python
+from typing import List, Map
+
+from forge.game.Game import Game
+from forge.game.GameActionUtil import GameActionUtil
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.card.CardUtil import CardUtil
+from forge.game.card.CardZoneTable import CardZoneTable
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.Lang import Lang
+
+
+class DestroyEffect(SpellAbilityEffect):
+    def getStackDescription(self, sa: SpellAbility) -> str:
+        noRegen = sa.hasParam("NoRegen")
+        sb = []
+
+        tgtCards = self.getTargetCards(sa)
+        # up to X targets and chose 0 or similar situations
+        if not tgtCards:
+            return sa.getParamOrDefault("SpellDescription", "")
+        justOne = len(tgtCards) == 1
+
+        sb.append("Destroy ")
+        sb.append(Lang.joinHomogenous(tgtCards))
+
+        if sa.hasParam("Radiance"):
+            thing = sa.getParamOrDefault("ValidTgts", "thing")
+            sb.append(" and each other ")
+            sb.append(thing)
+            sb.append(" that shares a color with ")
+            sb.append("it" if justOne else "them")
+
+        if noRegen:
+            sb.append(". ")
+            sb.append("It" if justOne else "They")
+            sb.append(" can't be regenerated")
+        sb.append(".")
+
+        return "".join(sb)
+
+    def resolve(self, sa: SpellAbility) -> None:
+        host = sa.getHostCard()
+        game = host.getGame()
+
+        if sa.hasParam("RememberDestroyed"):
+            host.clearRemembered()
+
+        untargetedCards = CardUtil.getRadiance(sa)
+        tgtCards = self.getTargetCards(sa)
+
+        tgtCards = GameActionUtil.orderCardsByTheirOwners(game, tgtCards, ZoneType.Graveyard, sa)
+        untargetedCards = GameActionUtil.orderCardsByTheirOwners(game, untargetedCards, ZoneType.Graveyard, sa)
+
+        params = AbilityKey.newMap()
+        zoneMovements = AbilityKey.addCardZoneTableParams(params, sa)
+
+        for tgtC in tgtCards:
+            if not tgtC.isInPlay():
+                continue
+            gameCard = game.getCardState(tgtC, None)
+            # gameCard is LKI in that case, the card is not in game anymore
+            # or the timestamp did change
+            # this should check Self too
+            if gameCard is None or not tgtC.equalsWithGameTimestamp(gameCard):
+                continue
+            self.internalDestroy(gameCard, sa, params, zoneMovements)
+
+        for unTgtC in untargetedCards:
+            if unTgtC.isInPlay():
+                self.internalDestroy(unTgtC, sa, params, zoneMovements)
+
+        zoneMovements.triggerChangesZoneAll(game, sa)
+
+    def internalDestroy(self, gameCard: Card, sa: SpellAbility, params: "Map[AbilityKey, object]", zoneMovements: CardZoneTable) -> None:
+        host = sa.getHostCard()
+        game = host.getGame()
+        remDestroyed = sa.hasParam("RememberDestroyed")
+        noRegen = sa.hasParam("NoRegen")
+        alwaysRem = sa.hasParam("AlwaysRemember")
+
+        cause = sa
+        if sa.isReplacementAbility():
+            cause = sa.getReplacingObject(AbilityKey.Cause)
+
+        destroyed = game.getAction().destroy(gameCard, cause, not noRegen, params)
+        if destroyed and remDestroyed:
+            host.addRemembered(gameCard)
+        if (destroyed or alwaysRem) and sa.hasParam("RememberLKI"):
+            host.addRemembered(zoneMovements.getLastStateBattlefield().get(gameCard))
 ```

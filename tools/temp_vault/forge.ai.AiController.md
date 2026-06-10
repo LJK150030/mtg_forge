@@ -2590,3 +2590,992 @@ public class AiController {
 
 }
 ```
+
+## Python
+`forge/ai/AiController.py`
+
+````python
+for j in range(validCards.size()):
+                    if (validCards.get(j).getCMC() > numLandsAvailable or freeCastAllowed) and not validCards.get(j).hasSVar("DoNotDiscardIfAble"):
+                        discardList.add(validCards.get(j))
+                        validCards.remove(validCards.get(j))
+                        discardedUnplayable = True
+                        break
+                    elif validCards.get(j).getCMC() <= numLandsAvailable:
+                        # cut short to avoid looping over cards which are guaranteed not to fit the criteria
+                        break
+
+                if not discardedUnplayable:
+                    # discard worst card
+                    worst = ComputerUtilCard.getWorstAI(validCards)
+                    if worst is None:
+                        # there were only instants and sorceries, and maybe cards that are not good to discard, so look
+                        # for more discard options
+                        worst = ComputerUtilCard.getCheapestSpellAI(validCards)
+                    if worst is None and not validCards.isEmpty():
+                        # still nothing chosen, so choose the first thing that works, trying not to make DoNotDiscardIfAble
+                        # discards
+                        for c in validCards:
+                            if not c.hasSVar("DoNotDiscardIfAble"):
+                                worst = c
+                                break
+                        # Only DoNotDiscardIfAble cards? If we have a duplicate for something, discard it
+                        if worst is None:
+                            for c in validCards:
+                                if CardLists.count(self.player.getCardsIn(ZoneType.Hand), CardPredicates.nameEquals(c.getName())) > 1:
+                                    worst = c
+                                    break
+                            if worst is None:
+                                # Otherwise just grab a random card and discard it
+                                worst = Aggregates.random(validCards)
+                    discardList.add(worst)
+                    validCards.remove(worst)
+        return discardList
+
+    def confirmAction(self, sa, mode, message, params):
+        api = None if sa is None else sa.getApi()
+
+        # Abilities without api may also use this routine, However they should provide a unique mode value ?? How could this work?
+        if sa is None or api is None:
+            exMsg = "AI confirmAction does not know what to decide about {} mode ({} is null).".format(
+                mode, "SA" if sa is None else "API")
+            raise ValueError(exMsg)
+        return SpellApiToAi.Converter.get(api).confirmAction(self.player, sa, mode, message, params)
+
+    def confirmBidAction(self, sa, mode, message, bid, winner):
+        if mode is not None:
+            if mode == PlayerActionConfirmMode.BidLife:
+                if sa.hasParam("AIBidMax"):
+                    return not self.player.equals(winner) and bid < int(sa.getParam("AIBidMax")) and self.player.getLife() > bid + 5
+                return False
+            else:
+                return False
+        return False
+
+    def confirmStaticApplication(self, hostCard, logic):
+        return True
+
+    def getProperty(self, propName):
+        return AiProfileUtil.getProperty(self.getPlayer(), propName)
+
+    def getIntProperty(self, propName):
+        return AiProfileUtil.getIntProperty(self.getPlayer(), propName)
+
+    def getBoolProperty(self, propName):
+        return AiProfileUtil.getBoolProperty(self.getPlayer(), propName)
+
+    def canPlayFromEffectAI(self, spell, mandatory, withoutPayingManaCost):
+        if isinstance(spell, SpellApiBased):
+            if withoutPayingManaCost:
+                chance = SpellApiToAi.Converter.get(spell).doTriggerNoCostWithSubs(self.player, spell, mandatory).willingToPlay()
+            else:
+                chance = SpellApiToAi.Converter.get(spell).doTrigger(self.player, spell, mandatory)
+            if not chance:
+                return AiPlayDecision.TargetingFailed
+
+            if mandatory:
+                return AiPlayDecision.WillPlay
+
+        return self.canPlaySpellOrLandBasic(spell.getHostCard(), spell)
+
+    # declares blockers for given defender in a given combat
+    def declareBlockersFor(self, defender, combat):
+        block = AiBlockController(defender, defender != self.player)
+        # When player != defender, AI should declare blockers for its benefit.
+        block.assignBlockersForCombat(combat)
+
+    def declareAttackers(self, attacker, combat):
+        # 12/2/10(sol) the decision making here has moved to getAttackers()
+        aiAtk = AiAttackController(attacker)
+        self.lastAttackAggression = aiAtk.declareAttackers(combat)
+
+        aiAtk.reinforceWithBanding(combat)
+
+        # Per CR 508.1d, the decision to pay attack costs (e.g. Propaganda)
+        # is made at declaration time. Remove attackers the AI can't pay for.
+        self.removeUnpayableAttackers(combat)
+
+        # if invalid: just try an attack declaration that we know to be legal
+        if not CombatUtil.validateAttackers(combat):
+            combat.clearAttackers()
+            legal = combat.getAttackConstraints().getLegalAttackers().getLeft()
+            print("AI Attack declaration invalid, defaulting to: " + str(legal), file=sys.stderr)
+            for mandatoryAttacker in legal.entrySet():
+                combat.addAttacker(mandatoryAttacker.getKey(), mandatoryAttacker.getValue())
+            if not CombatUtil.validateAttackers(combat):
+                aiAtk.declareAttackers(combat)
+
+    def removeUnpayableAttackers(self, combat):
+        for attacker in combat.getAttackers().threadSafeIterable():
+            attackCost = CombatUtil.getAttackCost(self.game, attacker, combat.getDefenderByAttacker(attacker))
+            if attackCost is None:
+                continue
+            fakeSA = EmptySa(attacker, attacker.getController())
+            fakeSA.setCardState(attacker.getCurrentState())
+            fakeSA.setPayCosts(attackCost)
+            fakeSA.setSVar("X", "0")
+            if not ComputerUtilCost.canPayCost(attackCost, fakeSA, self.player, True):
+                combat.removeFromCombat(attacker)
+
+    def singleSpellAbilityList(self, sa):
+        if sa is None:
+            return None
+        return [sa]
+
+    def chooseSpellAbilityToPlay(self):
+        AiCache.clear()
+        # Reset cached predicted combat, as it may be stale. It will be
+        # re-created if needed and used for any AI logic that needs it.
+        self.predictedCombat = None
+        # Also reset predicted combat for next turn here
+        self.predictedCombatNextTurn = None
+
+        # Reset priority mana reservation that's meant to work for one spell only
+        self.memory.clearMemorySet(MemorySet.HELD_MANA_SOURCES_FOR_NEXT_SPELL)
+
+        if self.useSimulation:
+            return self.singleSpellAbilityList(self.simPicker.chooseSpellAbilityToPlay(None))
+
+        playBeforeLand = CardLists.filter(
+            self.player.getCardsIn(ZoneType.Hand), CardPredicates.hasSVar("PlayBeforeLandDrop")
+        )
+        if not playBeforeLand.isEmpty():
+            wantToPlayBeforeLand = self.chooseSpellAbilityToPlayFromList(
+                ComputerUtilAbility.getSpellAbilities(playBeforeLand, self.player), False
+            )
+            if wantToPlayBeforeLand is not None:
+                return self.singleSpellAbilityList(wantToPlayBeforeLand)
+
+        landsWannaPlay = ComputerUtilAbility.getAvailableLandsToPlay(self.game, self.player)
+        if landsWannaPlay is not None:
+            landsWannaPlay = self.filterLandsToPlay(landsWannaPlay)
+            if landsWannaPlay is not None and not landsWannaPlay.isEmpty():
+                # TODO search for other land it might want to play?
+                land = self.chooseBestLandToPlay(landsWannaPlay)
+                if land is not None and (not self.game.getPhaseHandler().is_(PhaseType.MAIN1) or not self.isSafeToHoldLandDropForMain2(land)):
+                    abilities = land.getAllPossibleAbilities(self.player, True)
+                    # skip non Land Abilities
+                    abilities = [sa for sa in abilities if sa.isLandAbility()]
+
+                    if abilities:
+                        # TODO extend this logic to evaluate MDFC with both sides land
+                        return abilities
+
+        return self.singleSpellAbilityList(self.getSpellAbilityToPlay())
+
+    def isSafeToHoldLandDropForMain2(self, landToPlay):
+        hasMomir = self.player.isCardInCommand("Momir Vig, Simic Visionary Avatar")
+        if hasMomir:
+            # Don't do this in Momir variants since it messes with the AI decision making for the avatar.
+            return False
+
+        if not MyRandom.percentTrue(self.getIntProperty(AiProps.HOLD_LAND_DROP_FOR_MAIN2_IF_UNUSED)):
+            # check against the chance specified in the profile
+            return False
+        if self.game.getPhaseHandler().getTurn() <= 2:
+            # too obvious when doing it on the very first turn of the game
+            return False
+
+        inHand = CardLists.filter(self.player.getCardsIn(ZoneType.Hand), CardPredicates.NON_LANDS)
+        otb = self.player.getCardsIn(ZoneType.Battlefield)
+
+        if self.getBoolProperty(AiProps.HOLD_LAND_DROP_ONLY_IF_HAVE_OTHER_PERMS):
+            if not otb.anyMatch(CardPredicates.NON_LANDS):
+                return False
+
+        # TODO: improve the detection of taplands
+        isTapLand = False
+        for repl in landToPlay.getReplacementEffects():
+            if repl.getParamOrDefault("Description", "") == "CARDNAME enters tapped.":
+                isTapLand = True
+
+        totalCMCInHand = Aggregates.sum(inHand, lambda c: c.getCMC())
+        minCMCInHand = Aggregates.min(inHand, lambda c: c.getCMC())
+        if minCMCInHand == 2147483647:
+            minCMCInHand = 0
+        predictedMana = ComputerUtilMana.getAvailableManaEstimate(self.player, True)
+
+        canCastWithLandDrop = (predictedMana + 1 >= minCMCInHand) and minCMCInHand > 0 and not isTapLand
+        cantCastAnythingNow = predictedMana < minCMCInHand
+
+        def relevantAbs(card):
+            isTapLand1 = False
+            for repl in card.getReplacementEffects():
+                # TODO: improve the detection of taplands
+                if repl.getParamOrDefault("Description", "") == "CARDNAME enters tapped.":
+                    isTapLand1 = True
+
+            for sa in card.getSpellAbilities():
+                if sa.isAbility() \
+                        and sa.getPayCosts().getCostMana() is not None \
+                        and sa.getPayCosts().getCostMana().getMana().getCMC() > 0 \
+                        and (not sa.getPayCosts().hasTapCost() or not isTapLand1) \
+                        and (not sa.hasParam("ActivationZone") or "Battlefield" in sa.getParam("ActivationZone")):
+                    return True
+            return False
+
+        hasRelevantAbsOTB = otb.anyMatch(relevantAbs)
+
+        def landBasedEffect(card):
+            for t in card.getTriggers():
+                params = t.getMapParams()
+                if "ChangesZone" == params.get("Mode") \
+                        and params.containsKey("ValidCard") \
+                        and (not params.containsKey("AILogic") or params.get("AILogic") != "SafeToHold") \
+                        and "nonLand" not in params.get("ValidCard") \
+                        and (("Land" in params.get("ValidCard")) or ("Permanent" in params.get("ValidCard"))) \
+                        and "Battlefield" == params.get("Destination"):
+                    # Landfall and other similar triggers
+                    return True
+            for sv in card.getSVars().keySet():
+                varValue = card.getSVar(sv)
+                if varValue == "Count$Domain":
+                    for type in landToPlay.getType().getLandTypes():
+                        if CardType.isABasicLandType(type) and CardLists.getType(otb, type).isEmpty():
+                            return True
+                if varValue.startswith("Count$Valid") or sv == "BuffedBy":
+                    if "Land" in varValue or "Plains" in varValue or "Forest" in varValue \
+                            or "Mountain" in varValue or "Island" in varValue or "Swamp" in varValue \
+                            or "Wastes" in varValue:
+                        # In presence of various cards that get buffs like "equal to the number of lands you control",
+                        # safer for our AI model to just play the land earlier rather than make a blunder
+                        return True
+            return False
+
+        hasLandBasedEffect = otb.anyMatch(landBasedEffect)
+
+        # TODO: add prediction for effects that will untap a tapland as it enters the battlefield
+        if not canCastWithLandDrop and cantCastAnythingNow and not hasLandBasedEffect and (not hasRelevantAbsOTB or isTapLand):
+            # Hopefully there's not much to do with the extra mana immediately, can wait for Main 2
+            return True
+        if (predictedMana <= totalCMCInHand and canCastWithLandDrop) or (hasRelevantAbsOTB and not isTapLand) or hasLandBasedEffect:
+            # Might need an extra land to cast something, or for some kind of an ETB ability with a cost or an
+            # alternative cost (if we cast it in Main 1), or to use an activated ability on the battlefield
+            return False
+
+        # TODO needed to pay propaganda
+
+        return True
+
+    def getSpellAbilityToPlay(self):
+        if self.skipped is not None:
+            # FIXME: this is for failed SA to skip temporarily, don't know why AI computation for mana fails, maybe due to auto mana compute?
+            for sa in self.skipped:
+                # System.out.println("Unskip: " + sa.toString() + " (" +  sa.getHostCard().getName() + ").");
+                sa.setSkip(False)
+        cards = ComputerUtilAbility.getAvailableCards(self.game, self.player)
+        cards = ComputerUtilCard.dedupeCards(cards)
+        saList = []
+
+        top = None
+        if not self.game.getStack().isEmpty():
+            top = self.game.getStack().peekAbility()
+        topOwnedByAI = top is not None and top.getActivatingPlayer().equals(self.player)
+
+        # Must respond: cases where the AI should respond to its own triggers or other abilities (need to add negative stuff to be countered here)
+        mustRespond = False
+        if top is not None:
+            mustRespond = top.hasParam("AIRespondsToOwnAbility")  # Forced combos (currently defined for Sensei's Divining Top)
+            mustRespond |= top.isTrigger() and top.getTrigger().isKeyword(Keyword.EVOKE)  # Evoke sacrifice trigger
+
+        if topOwnedByAI:
+            # AI's own spell: should probably let my stuff resolve first, but may want to copy the SA or respond to it
+            # in a scripted timed fashion.
+
+            if not mustRespond:
+                saList = ComputerUtilAbility.getSpellAbilities(cards, self.player)  # get the SA list early to check for copy SAs
+                if ComputerUtilAbility.getFirstCopySASpell(saList) is None:
+                    # Nothing to copy the spell with, so do nothing.
+                    return None
+
+        if not self.game.getStack().isEmpty():
+            counter = self.chooseCounterSpell(AiController.getPlayableCounters(cards))
+            if counter is not None:
+                return counter
+
+            counterETB = self.chooseSpellAbilityToPlayFromList(self.getPossibleETBCounters(), False)
+            if counterETB is not None:
+                return counterETB
+
+        if not saList:
+            saList = ComputerUtilAbility.getSpellAbilities(cards, self.player)
+
+        # don't include removedAI cards if somehow the AI can play the ability or gain control of unsupported card
+        # TODO allow when experimental profile?
+        saList = [spellAbility for spellAbility in saList if not (
+            spellAbility.isLandAbility() or (spellAbility.getHostCard() is not None and ComputerUtilCard.isCardRemAIDeck(spellAbility.getHostCard())))]
+        # removed skipped SA
+        self.skipped = [sa for sa in saList if sa.isSkip()]
+        if self.skipped:
+            saList = [sa for sa in saList if sa not in self.skipped]
+        # update LivingEndPlayer
+        self.useLivingEnd = IterableUtil.any(self.player.getZone(ZoneType.Library), CardPredicates.nameEquals("Living End"))
+
+        chosenSa = self.chooseSpellAbilityToPlayFromList(saList, True)
+
+        if topOwnedByAI and not mustRespond and chosenSa is not ComputerUtilAbility.getFirstCopySASpell(saList):
+            return None  # not planning to copy the spell and not marked as something the AI would respond to
+
+        return chosenSa
+
+    def chooseSpellAbilityToPlayFromList(self, all, skipCounter):
+        if all is None or not all:
+            return None
+
+        try:
+            all.sort(key=cmp_to_key(ComputerUtilAbility.saEvaluator))  # put best spells first
+            ComputerUtilAbility.sortCreatureSpells(all)
+        except Exception as ex:
+            print(str(ex), file=sys.stderr)
+            assertex = ComparatorUtil.verifyTransitivity(ComputerUtilAbility.saEvaluator, all)
+            Sentry.captureMessage(str(ex) + "\nAssertionError [verifyTransitivity]: " + assertex)
+
+        # in case of infinite loop reset below would not be reached
+        self.timeoutReached = False
+
+        def compute():
+            # avoid ComputerUtil.aiLifeInDanger in loops as it slows down a lot.. call this outside loops will generally be fast...
+            isLifeInDanger = self.useLivingEnd and ComputerUtil.aiLifeInDanger(self.player, True, 0)
+            for sa in ComputerUtilAbility.getOriginalAndAltCostAbilities(all, self.player):
+                # Don't add Counterspells to the "normal" playcard lookups
+                if skipCounter and sa.getApi() == ApiType.Counter:
+                    continue
+
+                if self.timeoutReached:
+                    self.timeoutReached = False
+                    break
+
+                if sa.getHostCard().hasKeyword(Keyword.STORM) \
+                        and sa.getApi() != ApiType.Counter \
+                        and self.player.getZone(ZoneType.Hand).contains(
+                            lambda c: not (CardPredicates.LANDS(c) or CardPredicates.hasKeyword("Storm")(c))):
+                    if self.game.getView().getStormCount() < self.getIntProperty(AiProps.MIN_COUNT_FOR_STORM_SPELLS):
+                        # skip evaluating Storm unless we reached the minimum Storm count
+                        continue
+
+                # living end AI decks
+                # TODO: generalize the implementation so that superfluous logic-specific checks for life, library size, etc. aren't needed
+                aiPlayDecision = AiPlayDecision.CantPlaySa
+                if self.useLivingEnd:
+                    if sa.isCycling() and sa.canCastTiming(self.player) \
+                            and self.player.getCardsIn(ZoneType.Library).size() >= 10:
+                        if ComputerUtilCost.canPayCost(sa, self.player, sa.isTrigger()):
+                            if sa.getPayCosts() is not None and sa.getPayCosts().hasSpecificCostType(CostPayLife) \
+                                    and not self.player.cantLoseForZeroOrLessLife() and self.player.getLife() <= sa.getPayCosts() \
+                                    .getCostPartByType(CostPayLife).getAbilityAmount(sa) * 2:
+                                aiPlayDecision = AiPlayDecision.CantAfford
+                            else:
+                                aiPlayDecision = AiPlayDecision.WillPlay
+                    elif sa.getHostCard().hasKeyword(Keyword.CASCADE):
+                        if isLifeInDanger:  # needs more tune up for certain conditions
+                            aiPlayDecision = AiPlayDecision.CantPlaySa if self.player.getCreaturesInPlay().size() >= 4 \
+                                else AiPlayDecision.WillPlay
+                        elif CardLists.filter(self.player.getZone(ZoneType.Graveyard).getCards(), CardPredicates.CREATURES).size() > 4:
+                            if self.player.getCreaturesInPlay().size() >= 4:  # it's good minimum
+                                continue
+                            elif not sa.getHostCard().isPermanent() and sa.canCastTiming(self.player) \
+                                    and ComputerUtilCost.canPayCost(sa, self.player, sa.isTrigger()):
+                                aiPlayDecision = AiPlayDecision.WillPlay
+                            # needs tuneup for bad matchups like reanimator and other things to check on opponent graveyard
+                        else:
+                            continue
+
+                sa.setActivatingPlayer(self.player)
+                root = sa.getRootAbility()
+
+                if root.isSpell() or root.isTrigger() or root.isReplacementAbility():
+                    sa.setLastStateBattlefield(self.game.getLastStateBattlefield())
+                    sa.setLastStateGraveyard(self.game.getLastStateGraveyard())
+                # override decision for living end player
+                opinion = aiPlayDecision if (self.useLivingEnd and aiPlayDecision == AiPlayDecision.WillPlay) else self.canPlayAndPayFor(sa)
+
+                # reset LastStateBattlefield
+                sa.clearLastState()
+
+                if opinion != AiPlayDecision.WillPlay:
+                    continue
+
+                return sa
+
+            return None
+
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        future = executor.submit(compute)
+        try:
+            return future.result(timeout=self.game.getAITimeout())
+        except Exception as e:
+            traceback.print_exc()
+            # Android and Java 20 dropped support to stop so sadly thread will keep running
+            self.timeoutReached = True
+            future.cancel()
+            # TODO wait a few more seconds to try and exit at a safe point before letting the engine continue
+            # TODO mark some as skipped to increase chance to find something playable next priority
+            return None
+        finally:
+            executor.shutdown(wait=False)
+
+    def chooseCardsToDelve(self, genericCost, grave):
+        toExile = CardCollection()
+        numToExile = builtins.min(grave.size(), genericCost)
+
+        for i in range(numToExile):
+            chosen = None
+            for c in grave:
+                # Exile noncreatures first in case we can revive
+                # Might wanna do some additional checking here for Flashback and the like
+                if not c.isCreature():
+                    chosen = c
+                    break
+            if chosen is None:
+                chosen = ComputerUtilCard.getWorstCreatureAI(grave)
+
+            if chosen is None:
+                # Should never get here but... You know how it is.
+                chosen = grave.get(0)
+
+            toExile.add(chosen)
+            grave.remove(chosen)
+        return toExile
+
+    def doTrigger(self, sa, mandatory):
+        if isinstance(sa, WrappedAbility):
+            return self.doTrigger(sa.getWrappedAbility(), mandatory)
+        if sa.getApi() is not None:
+            return SpellApiToAi.Converter.get(sa).doTrigger(self.player, sa, mandatory)
+        if sa.getPayCosts() is Cost.Zero and not sa.usesTargeting():
+            # For non-converted triggers (such as Cumulative Upkeep) that don't have costs or targets to worry about
+            return True
+        return False
+
+    def aiShouldRun(self, effect, sa, host, affected):
+        if effect.hasParam("AILogic") and effect.getParam("AILogic").lower() == "protectfriendly":
+            controller = host.getController()
+            if isinstance(affected, Player):
+                return not affected.isOpponentOf(controller)
+            if isinstance(affected, Card):
+                return not affected.getController().isOpponentOf(controller)
+        if effect.hasParam("AICheckSVar"):
+            svarToCheck = effect.getParam("AICheckSVar")
+            comparator = "GE"
+            compareTo = 1
+
+            if effect.hasParam("AISVarCompare"):
+                fullCmp = effect.getParam("AISVarCompare")
+                comparator = fullCmp[0:2]
+                strCmpTo = fullCmp[2:]
+                try:
+                    compareTo = int(strCmpTo)
+                except Exception:
+                    if sa is None:
+                        compareTo = AbilityUtils.calculateAmount(host, host.getSVar(strCmpTo), effect)
+                    else:
+                        compareTo = AbilityUtils.calculateAmount(host, host.getSVar(strCmpTo), sa)
+
+            left = 0
+
+            if sa is None:
+                left = AbilityUtils.calculateAmount(host, svarToCheck, effect)
+            else:
+                left = AbilityUtils.calculateAmount(host, svarToCheck, sa)
+            return Expressions.compare(left, comparator, compareTo)
+        elif effect.isKeyword(Keyword.DREDGE):
+            return self.player.getCardsIn(ZoneType.Library).size() > 8 or self.player.isCardInPlay("Laboratory Maniac")
+        else:
+            return sa is not None and self.doTrigger(sa, False)
+
+    def chooseSaToActivateFromOpeningHand(self, usableFromOpeningHand):
+        # AI would play everything. But limits to one copy of (Leyline of Singularity) and (Gemstone Caverns)
+
+        result = []
+        for sa in usableFromOpeningHand:
+            # Is there a better way for the AI to decide this?
+            if self.doTrigger(sa, False):
+                result.append(sa)
+
+        hasLeyline1 = False
+        saGemstones = None
+
+        toRemove = []
+        for sa in result:
+            srcName = sa.getHostCard().getName()
+            if "Gemstone Caverns" == srcName:
+                if saGemstones is None:
+                    saGemstones = sa
+                else:
+                    toRemove.append(sa)
+            elif "Leyline of Singularity" == srcName:
+                if not hasLeyline1:
+                    hasLeyline1 = True
+                else:
+                    toRemove.append(sa)
+        result = [sa for sa in result if sa not in toRemove]
+
+        # Play them last
+        if saGemstones is not None:
+            result.remove(saGemstones)
+            result.append(saGemstones)
+
+        return result
+
+    def chooseNumber(self, sa, title, third, fourth):
+        if isinstance(third, int):
+            min = third
+            max = fourth
+            source = sa.getHostCard()
+            logic = sa.getParamOrDefault("AILogic", "Max")
+            if "GainLife" == logic:
+                if self.player.getLife() < 5 or self.player.getCardsIn(ZoneType.Hand).size() >= self.player.getMaxHandSize():
+                    return min
+            elif "LoseLife" == logic:
+                if self.player.getLife() > 5:
+                    return min
+            elif "Min" == logic:
+                return min
+            elif "DigACard" == logic:
+                random = MyRandom.getRandom().nextInt(builtins.min(4, max)) + 1
+                if self.player.getLife() < random + 5:
+                    return min
+                else:
+                    return random
+            elif "Damnation" == logic:
+                chosenMax = self.player.getLife() - 1
+                cardsInPlay = self.player.getCardsIn(ZoneType.Battlefield).size()
+                return builtins.min(chosenMax, cardsInPlay)
+            elif "OptionalDraw" == logic:
+                cardsInLib = self.player.getCardsIn(ZoneType.Library).size()
+                if cardsInLib >= max and self.player.isCardInPlay("Laboratory Maniac"):
+                    return max
+                cardsInHand = self.player.getCardsIn(ZoneType.Hand).size()
+                maxDraw = builtins.min(self.player.getMaxHandSize() + 2 - cardsInHand, max)
+                maxCheckLib = builtins.min(maxDraw, cardsInLib)
+                return builtins.max(min, maxCheckLib)
+            elif "RepeatDraw" == logic:
+                remaining = self.player.getMaxHandSize() - self.player.getCardsIn(ZoneType.Hand).size() \
+                    + MyRandom.getRandom().nextInt(3)
+                return builtins.max(remaining, min) // 2
+            elif "LowestLoseLife" == logic:
+                return MyRandom.getRandom().nextInt(builtins.min(self.player.getLife() // 3, self.player.getWeakestOpponent().getLife())) + 1
+            elif "HighestLoseLife" == logic:
+                return builtins.min(self.player.getLife() - 1, MyRandom.getRandom().nextInt(builtins.max(self.player.getLife() // 3, self.player.getWeakestOpponent().getLife())) + 1)
+            elif "HighestGetCounter" == logic:
+                return MyRandom.getRandom().nextInt(3)
+            elif sa.hasSVar("EnergyToPay"):
+                return AbilityUtils.calculateAmount(source, sa.getSVar("EnergyToPay"), sa)
+            elif "Vermin" == logic:
+                if self.player.getLife() < 5:
+                    return min
+
+                return MyRandom.getRandom().nextInt(builtins.max(self.player.getLife() - 5, 1))
+            elif "SweepCreatures" == logic:
+                minAllowedChoice = AbilityUtils.calculateAmount(source, sa.getParam("Min"), sa)
+                choiceLimit = AbilityUtils.calculateAmount(source, sa.getParam("Max"), sa)
+                maxCreatures = 0
+                for opp in self.player.getOpponents():
+                    maxCreatures = builtins.max(maxCreatures, opp.getCreaturesInPlay().size())
+                return builtins.min(choiceLimit, builtins.max(minAllowedChoice, maxCreatures))
+            elif "Random" == logic:
+                return MyRandom.getRandom().nextInt((max - min) + 1) + min
+            return max
+        else:
+            options = third
+            relatedPlayer = fourth
+            if sa.getApi() == ApiType.SetLife:  # Reverse the Sands
+                if relatedPlayer.equals(sa.getHostCard().getController()):
+                    return builtins.max(options)
+                elif relatedPlayer.isOpponentOf(sa.getHostCard().getController()):
+                    return builtins.min(options)
+                else:
+                    return options[0]
+            elif sa.getApi() == ApiType.ChooseNumber:
+                if sa.getHostCard().getName() == "Emissary's Ploy":
+                    # Count the amount of creatures in each CMC of 1,2,3 and choose that number
+                    # If you have multiple ploys, technically AI should choose different numbers
+                    # But thats not what happens currently
+                    counter = [0, 0, 0]
+                    max = 0
+                    slot = 0
+                    for c in relatedPlayer.getZone(ZoneType.Library).getCards():
+                        if not c.isCreature():
+                            continue
+
+                        if c.getCMC() > 0 and c.getCMC() < 4:
+                            counter[c.getCMC() - 1] = counter[c.getCMC() - 1] + 1
+                    for i in range(len(counter)):
+                        if counter[i] >= max:
+                            max = counter[i]
+                            slot = i
+                    return slot
+
+                return Aggregates.random(options)
+            else:
+                return options[0]
+
+    def confirmPayment(self, costPart):
+        raise NotImplementedError("AI is not supposed to reach this code at the moment")
+
+    def attemptToAssist(self, sa, max, request):
+        activator = sa.getActivatingPlayer()
+
+        if self.game.getPlayers().size() == 2:
+            # Never help your opponent in a 2 player game
+            return 0
+
+        allies = self.player.getAllies()
+
+        if allies.isEmpty():
+            # AI only has opponents.
+            # TODO: Maybe help out someone if it seems good for us, but who knows how you calculate that.
+            # Probably needs some specific AI here.
+            # If the spell is a creature, probably don't help.
+            # If spell is a instant/sorcery, help based on the situation
+            return 0
+        else:
+            # AI has allies, don't help out anyone but allies.
+            if not allies.contains(activator):
+                return 0
+
+        # AI has decided to help. Now let's figure out how much they can help
+        mana = ComputerUtilMana.getAvailableManaEstimate(self.player, True)
+
+        # TODO We should make a logical guess here, but for now just uh yknow randomly decide?
+        # What do I want to play next? Can I still pay for that and have mana left over to help?
+        # Is the spell I'm helping cast better for me than the thing I would cast?
+        if MyRandom.percentTrue(80):
+            return 0
+
+        willingToPay = 0
+        if mana >= request:
+            return request
+        else:
+            return mana
+
+    def chooseCardsForEffect(self, pool, sa, min, max, isOptional, params):
+        if sa is None or sa.getApi() is None:
+            raise NotImplementedError()
+        result = CardCollection()
+        if sa.hasParam("AIMaxAmount"):
+            max = AbilityUtils.calculateAmount(sa.getHostCard(), sa.getParam("AIMaxAmount"), sa)
+        if sa.getApi() == ApiType.TwoPiles:
+            # TODO: improve AI
+            biggest = pool.get(0)
+            smallest = pool.get(0)
+
+            for c in pool:
+                if c.getCMC() >= biggest.getCMC():
+                    biggest = c
+                elif c.getCMC() <= smallest.getCMC():
+                    smallest = c
+            result.add(biggest)
+
+            if max > 3 and not result.contains(smallest):
+                result.add(smallest)
+        elif sa.getApi() == ApiType.MultiplePiles:
+            # Whims of the Fates {all, 0, 0}
+            result.addAll(pool)
+        elif sa.getApi() == ApiType.FlipOntoBattlefield:
+            if "DamageCreatures" == sa.getParam("AILogic"):
+                maxToughness = int(sa.getSubAbility().getParam("NumDmg"))
+                rightToughness = CardLists.filter(pool, lambda card: card.getController().isOpponentOf(sa.getActivatingPlayer())
+                                                  and card.getNetToughness() <= maxToughness
+                                                  and card.canBeDestroyed())
+                bestCreature = ComputerUtilCard.getBestCreatureAI(pool if rightToughness.isEmpty() else rightToughness)
+                if bestCreature is not None:
+                    result.add(bestCreature)
+                    return self._reviseFlip(sa, result)
+            else:
+                viableOptions = CardLists.filter(pool, CardPredicates.isControlledByAnyOf(sa.getActivatingPlayer().getOpponents()), lambda c: c.canBeDestroyed())
+                best = ComputerUtilCard.getBestAI(viableOptions)
+                if best is not None:
+                    result.add(best)
+                    return self._reviseFlip(sa, result)
+            result.add(Aggregates.random(pool))  # should ideally never get here
+            return self._reviseFlip(sa, result)
+        else:
+            editablePool = CardCollection(pool)
+            for i in range(max):
+                c = self.player.getController().chooseSingleEntityForEffect(editablePool, sa, None, isOptional, params)
+                if c is None:
+                    break
+                result.add(c)
+                editablePool.remove(c)
+
+                # Special case for Bow to My Command which simulates a complex tap cost via ChooseCard
+                # TODO: consider enhancing support for tapXType<Any/...> in UnlessCost to get rid of this hack
+                if "BowToMyCommand" == sa.getParam("AILogic"):
+                    if not sa.getHostCard().isInZone(ZoneType.Command):
+                        # Make sure that other opponents do not tap for an already abandoned scheme
+                        result.clear()
+                        break
+
+                    totPower = 0
+                    for p in result:
+                        totPower += p.getNetPower()
+                    if totPower >= 8:
+                        break
+
+        return self._reviseFlip(sa, result)
+
+    def _reviseFlip(self, sa, result):
+        # TODO: Hack for Phyrexian Dreadnought. Might need generalization (possibly its own AI logic)
+        if "Phyrexian Dreadnought" == ComputerUtilAbility.getAbilitySourceName(sa):
+            result = SpecialCardAi.PhyrexianDreadnought.reviseCreatureSacList(self.player, sa, result)
+
+        return result
+
+    def complainCardsCantPlayWell(self, myDeck):
+        complaints = {}
+        # When using simulation, AI should be able to figure out most cards.
+        if not self.useSimulation:
+            complaints = myDeck.getUnplayableAICards().unplayable
+        return complaints
+
+    # this is where the computer cheats
+    # changes AllZone.getComputerPlayer().getZone(Zone.Library)
+    def cheatShuffle(self, in_):
+        if in_.size() < 20 or not self.getBoolProperty(AiProps.CHEAT_WITH_MANA_ON_SHUFFLE) or not self.getGame().getRules().isAllowCheatShuffle():
+            return in_
+
+        library = CardCollection(in_)
+        CardLists.shuffle(library)
+
+        # remove all land, keep non-basicland in there, shuffled
+        land = CardLists.filter(library, CardPredicates.LANDS)
+        for c in land:
+            if c.isLand():
+                library.remove(c)
+
+        try:
+            # mana weave, total of 7 land
+            # The Following have all been reduced by 1, to account for the
+            # computer starting first.
+            library.add(5, land.get(0))
+            library.add(6, land.get(1))
+            library.add(8, land.get(2))
+            library.add(9, land.get(3))
+            library.add(10, land.get(4))
+
+            library.add(12, land.get(5))
+            library.add(15, land.get(6))
+        except IndexError:
+            print("Error: cannot smooth mana curve, not enough land", file=sys.stderr)
+            return in_
+
+        # add the rest of land to the end of the deck
+        for card in land:
+            if not library.contains(card):
+                library.add(card)
+
+        return library  # smoothComputerManaCurve()
+
+    def chooseDirection(self, sa):
+        if sa is None or sa.getApi() is None:
+            raise NotImplementedError()
+        # Left:True; Right:False
+        if "GainControl" == sa.getParam("AILogic") and self.game.getPlayers().size() > 2:
+            creats = CardLists.getType(self.game.getCardsIn(ZoneType.Battlefield), "Creature")
+            left = CardLists.filterControlledBy(creats, self.game.getNextPlayerAfter(self.player, Direction.Left))
+            right = CardLists.filterControlledBy(creats, self.game.getNextPlayerAfter(self.player, Direction.Right))
+            if not left.isEmpty() or not right.isEmpty():
+                all = CardCollection(left)
+                all.addAll(right)
+                return left.contains(ComputerUtilCard.getBestCreatureAI(all))
+        if "Aminatou" == sa.getParam("AILogic") and self.game.getPlayers().size() > 2:
+            all = CardLists.filter(self.game.getCardsIn(ZoneType.Battlefield), CardPredicates.NONLAND_PERMANENTS)
+            left = CardLists.filterControlledBy(all, self.game.getNextPlayerAfter(self.player, Direction.Left))
+            right = CardLists.filterControlledBy(all, self.game.getNextPlayerAfter(self.player, Direction.Right))
+            return Aggregates.sum(left, lambda c: c.getCMC()) > Aggregates.sum(right, lambda c: c.getCMC())
+        return MyRandom.getRandom().nextBoolean()
+
+    def chooseEvenOdd(self, sa):
+        aiLogic = sa.getParamOrDefault("AILogic", "")
+
+        if aiLogic == "AlwaysEven":
+            return False
+        elif aiLogic == "AlwaysOdd":
+            return True
+        elif aiLogic == "Random":
+            return MyRandom.getRandom().nextBoolean()
+        elif aiLogic == "CMCInHand":
+            hand = sa.getActivatingPlayer().getCardsIn(ZoneType.Hand)
+            numEven = CardLists.filter(hand, CardPredicates.evenCMC()).size()
+            numOdd = CardLists.filter(hand, CardPredicates.oddCMC()).size()
+            return numOdd > numEven
+        elif aiLogic == "CMCOppControls":
+            hand = sa.getActivatingPlayer().getOpponents().getCardsIn(ZoneType.Battlefield)
+            numEven = CardLists.filter(hand, CardPredicates.evenCMC()).size()
+            numOdd = CardLists.filter(hand, CardPredicates.oddCMC()).size()
+            return numOdd > numEven
+        elif aiLogic == "CMCOppControlsByPower":
+            # TODO: improve this to check for how dangerous those creatures actually are relative to host card
+            hand = sa.getActivatingPlayer().getOpponents().getCardsIn(ZoneType.Battlefield)
+            powerEven = Aggregates.sum(CardLists.filter(hand, CardPredicates.evenCMC()), lambda c: c.getNetPower())
+            powerOdd = Aggregates.sum(CardLists.filter(hand, CardPredicates.oddCMC()), lambda c: c.getNetPower())
+            return powerOdd > powerEven
+        return MyRandom.getRandom().nextBoolean()  # outside of any specific logic, choose randomly
+
+    def chooseCardToHiddenOriginChangeZone(self, destination, origin, sa, fetchList, player2, decider):
+        if self.useSimulation:
+            return self.simPicker.chooseCardToHiddenOriginChangeZone(destination, origin, sa, fetchList, player2, decider)
+
+        if sa.getApi() == ApiType.Learn:
+            return LearnAi.chooseCardToLearn(fetchList, decider, sa)
+        else:
+            return ChangeZoneAi.chooseCardToHiddenOriginChangeZone(destination, origin, sa, fetchList, player2, decider)
+
+    def orderPlaySa(self, activePlayerSAs):
+        # list is only one or empty, no need to filter
+        if len(activePlayerSAs) < 2:
+            return activePlayerSAs
+
+        # filter list by ApiTypes
+        discard = AiController.filterListByApi(activePlayerSAs, ApiType.Discard)
+        mandatoryDiscard = AiController.filterList(discard, lambda sa: sa.isMandatory())
+
+        draw = AiController.filterListByApi(activePlayerSAs, ApiType.Draw)
+
+        putCounter = AiController.filterListByApi(activePlayerSAs, ApiType.PutCounter)
+        putCounterAll = AiController.filterListByApi(activePlayerSAs, ApiType.PutCounterAll)
+
+        evolve = AiController.filterList(putCounter, CardTraitPredicates.isKeyword(Keyword.EVOLVE))
+
+        token = AiController.filterListByApi(activePlayerSAs, ApiType.Token)
+        pump = AiController.filterListByApi(activePlayerSAs, ApiType.Pump)
+        pumpAll = AiController.filterListByApi(activePlayerSAs, ApiType.PumpAll)
+
+        result = list(activePlayerSAs)
+
+        # do mandatory discard early if hand is empty or has DiscardMe card
+        playerHand = self.player.getCardsIn(ZoneType.Hand)
+        if not playerHand.isEmpty() and not playerHand.anyMatch(CardPredicates.hasSVar("DiscardMe")):
+            result.extend(mandatoryDiscard)
+            mandatoryDiscard.clear()
+
+        # optional Discard, probably combined with Draw
+        result.extend(discard)
+        # do Draw before Discard
+        result.extend(draw)
+
+        result.extend(putCounterAll)
+        # do putCounter before Draw/Discard because it can cause a Draw Trigger
+        result.extend(putCounter)
+        # do Evolve Trigger before other PutCounter SpellAbilities
+        result.extend(evolve)
+
+        # token should be added first so they might get the pump bonus
+        result.extend(pumpAll)
+        result.extend(pump)
+        result.extend(token)
+
+        result.extend(mandatoryDiscard)
+
+        return result
+
+    # TODO move to more common place
+    @staticmethod
+    def filterList(input, pred, value=None, _hasValue=False):
+        if not _hasValue and value is None:
+            filtered = [x for x in input if pred(x)]
+            input[:] = [x for x in input if not pred(x)]
+            return filtered
+        return AiController.filterList(input, lambda trb: trb.ensureAbility() is not None and pred(trb.ensureAbility()) == value)
+
+    # TODO move to more common place
+    @staticmethod
+    def filterListByApi(input, type):
+        return AiController.filterList(input, SpellAbilityPredicates.isApi(type))
+
+    def filterListByAiLogic(self, list, logic):
+        return AiController.filterList(list, CardTraitPredicates.hasParam("AILogic", logic))
+
+    def chooseModeForAbility(self, sa, possible, min, num, allowRepeat):
+        if self.simPicker is not None:
+            return self.simPicker.chooseModeForAbility(sa, possible, min, num, allowRepeat)
+        return None
+
+    def chooseSacrificeType(self, type, ability, effect, amount, exclude):
+        if self.simPicker is not None:
+            return self.simPicker.chooseSacrificeType(type, ability, effect, amount, exclude)
+        return ComputerUtil.chooseSacrificeType(self.player, type, ability, ability.getTargetCard(), effect, amount, exclude)
+
+    def checkAiSpecificRestrictions(self, sa):
+        # AI-specific restrictions specified as activation parameters in spell abilities
+
+        if sa.hasParam("AILifeThreshold"):
+            return self.player.getLife() > int(sa.getParam("AILifeThreshold"))
+
+        return True
+
+    # AI logic for choosing which replacement effect to apply happens here.
+    def chooseSingleReplacementEffect(self, list):
+        # no need to choose anything
+        if len(list) <= 1:
+            return list[0]
+
+        mode = list[0].getMode()
+
+        if mode == ReplacementType.GainLife:
+            noGain = self.filterListByAiLogic(list, "NoLife")
+            loseLife = self.filterListByAiLogic(list, "LoseLife")
+            doubleLife = self.filterListByAiLogic(list, "DoubleLife")
+            lichDraw = self.filterListByAiLogic(list, "LichDraw")
+
+            if noGain:
+                # no lifegain is better than lose life
+                return noGain[0]
+            elif loseLife:
+                # lose life before double life to prevent lose double
+                return loseLife[0]
+            elif lichDraw:
+                # lich draw before double life to prevent to draw to much
+                return lichDraw[0]
+            elif doubleLife:
+                # other than that, do double life
+                return doubleLife[0]
+        elif mode == ReplacementType.DamageDone:
+            prevention = AiController.filterList(list, CardTraitPredicates.hasParam("Prevent"))
+
+            # TODO when Protection is done as ReplacementEffect do them
+            # before normal prevention
+            if prevention:
+                return prevention[0]
+        elif mode == ReplacementType.Destroy:
+            shield = AiController.filterList(list, CardTraitPredicates.hasParam("ShieldCounter"))
+            regeneration = AiController.filterList(list, CardTraitPredicates.hasParam("Regeneration"))
+            umbraArmor = AiController.filterList(list, CardTraitPredicates.isKeyword(Keyword.UMBRA_ARMOR))
+            umbraArmorIndestructible = AiController.filterList(umbraArmor, lambda x: x.getHostCard().hasKeyword(Keyword.INDESTRUCTIBLE))
+
+            # Indestructible umbra armor is the best
+            if umbraArmorIndestructible:
+                return umbraArmorIndestructible[0]
+
+            # then it might be better to remove shield counter if able?
+            if shield:
+                return shield[0]
+
+            # TODO get the RunParams for Affected to check if the creature already dealt combat damage for Regeneration effects
+            # is using a Regeneration Effect better than using a Umbra Armor?
+            if regeneration:
+                return regeneration[0]
+
+            if umbraArmor:
+                # sort them by cmc
+                umbraArmor.sort(key=lambda x: x.getHostCard().getCMC())
+                return umbraArmor[0]
+        elif mode == ReplacementType.Draw:
+            winGame = AiController.filterList(list, lambda ab: ab.getApi(), ApiType.WinsGame, _hasValue=True)
+            if winGame:
+                return winGame[0]
+
+        # TODO always lower counters with Vorinclex first, might turn it from 1 to 0 as final
+
+        return list[0]
+```
+
+That completes the port. A few translation notes worth flagging, since they're places where Python and Java diverge and I had to make judgment calls:
+
+- **Overloaded methods** (`getCardsToDiscard`, `chooseNumber`, `reserveManaSources`, the static `filterList`) were collapsed into single methods using `*args`/default-parameter dispatch, since Python has no method overloading. The dispatch keys on argument count and runtime type (e.g. `isinstance(second, int)` distinguishes the two 4-arg `getCardsToDiscard` forms).
+- **`game.getPhaseHandler().is(...)`** became `is_(...)` because `is` is a Python keyword ΓÇö the only identifier I couldn't keep byte-identical.
+- The `FutureTask` + `Thread.stop()` timeout machinery maps to `concurrent.futures`; since Python can't force-kill a thread, the translation always falls into the "can't stop" path (sets `timeoutReached`, cancels the future), preserving the comment.
+- `all.sort(comparator)` uses `functools.cmp_to_key`, since Python's `sort` takes a key, not a comparator.
+- I used `builtins.min`/`builtins.max` inside `chooseNumber`'s int branch because the parameters `min`/`max` (kept identical per the naming rule) shadow the builtins there.
+````

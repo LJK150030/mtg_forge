@@ -42,6 +42,12 @@ classDiagram
 - [[forge.game.spellability.SpellAbility|SpellAbility]]
 - [[forge.game.zone.ZoneType|ZoneType]]
 
+## Design Description
+
+TriggerChangesZone is a concrete trigger that fires on zone-change events, extending the abstract `Trigger` base class to implement the engine's standard trigger contract (`performTest`, `setTriggeringObjects`, `getImportantStackObjects`). Its core responsibility is `performTest`, which gates a card's zone movement against the trigger's declarative parameters â€” Origin/Destination zones, exclusions, `ValidCard`/`ValidCause` filters, fizzle state, and count conditions â€” returning whether the observed move (read from the `runParams` map keyed by `AbilityKey`) should fire the ability.
+
+Notable design intent is its careful handling of MTG's "last-known-information" rules: it substitutes `CardLKI` for cards leaving the battlefield or graveyard (CR 603.10a) and exposes both the old and new card to the resolving `SpellAbility`. The protected `correctZones()` helper pre-computes the host's active zones (via `ZoneType`/`CardCollectionView`) so leave-battlefield and self-enter triggers are correctly scoped, reflecting a parameter-driven, data-configured trigger design rather than per-card code.
+
 ## Source
 `forge-game/src/main/java/forge/game/trigger/TriggerChangesZone.java`
 
@@ -285,4 +291,154 @@ public class TriggerChangesZone extends Trigger {
     }
 
 }
+```
+
+## Python
+`forge/game/trigger/TriggerChangesZone.py`
+
+```python
+from forge.game.trigger.Trigger import Trigger
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.card.Card import Card
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CardPredicates import CardPredicates
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.Expressions import Expressions
+from forge.util.Localizer import Localizer
+from forge.util.IterableUtil import IterableUtil
+
+
+class TriggerChangesZone(Trigger):
+    """
+    Trigger_ChangesZone class.
+
+    @author Forge
+    """
+
+    def __init__(self, params: dict[str, str], host: Card, intrinsic: bool):
+        super().__init__(params, host, intrinsic)
+        self.correctZones()
+
+    def performTest(self, runParams: dict[AbilityKey, object]) -> bool:
+        if self.hasParam("Origin"):
+            if self.getParam("Origin") != "Any":
+                if self.getParam("Origin") is None:
+                    return False
+                if runParams.get(AbilityKey.Origin) not in self.getParam("Origin").split(","):
+                    return False
+
+        if self.hasParam("Destination"):
+            if self.getParam("Destination") != "Any":
+                if runParams.get(AbilityKey.Destination) not in self.getParam("Destination").split(","):
+                    return False
+
+        if self.hasParam("ExcludedOrigins"):
+            if runParams.get(AbilityKey.Origin) in self.getParam("ExcludedOrigins").split(","):
+                return False
+
+        if self.hasParam("ExcludedDestinations"):
+            if runParams.get(AbilityKey.Destination) in self.getParam("ExcludedDestinations").split(","):
+                return False
+
+        if "Battlefield" == self.getParam("Origin") and self.getActiveZone() is not None and self.getActiveZone().contains(ZoneType.Graveyard):
+            # extra check for Boneyard Scourge
+            lastState = runParams.get(AbilityKey.LastStateGraveyard)
+            if not lastState.contains(self.getHostCard()):
+                return False
+
+        moved = runParams.get(AbilityKey.Card)
+        if self.hasParam("ValidCard"):
+            # CR 603.10a leaves battlefield or GY look back in time
+            if ("Battlefield" == self.getParam("Origin")
+                    or ("Graveyard" == self.getParam("Origin") and "Battlefield" != self.getParam("Destination"))):
+                moved = runParams.get(AbilityKey.CardLKI)
+            elif "Battlefield" == runParams.get(AbilityKey.Destination):
+                etbLKI = moved.getController().getZone(ZoneType.Battlefield).getCardsAddedThisTurn(None)
+                etbLKI.sort(key=CardPredicates.compareByGameTimestamp())
+                lastIndex = len(etbLKI) - 1 - etbLKI[::-1].index(moved)
+                moved = etbLKI[lastIndex]
+
+            if not self.matchesValidParam("ValidCard", moved):
+                return False
+
+        if self.hasParam("CheckOnTriggeredCard"):
+            condition = self.getParam("CheckOnTriggeredCard").split(" ", 1)
+
+            comparator = "GE1" if len(condition) < 2 else condition[1]
+            referenceValue = AbilityUtils.calculateAmount(self.getHostCard(), comparator[2:], self)
+            actualValue = AbilityUtils.calculateAmount(moved, condition[0], self)
+            if not Expressions.compare(actualValue, comparator[0:2], referenceValue):
+                return False
+
+        if not self.matchesValidParam("ValidCause", runParams.get(AbilityKey.Cause)):
+            return False
+
+        if self.hasParam("Fizzle"):
+            if AbilityKey.Fizzle not in runParams:
+                return False
+            val = runParams.get(AbilityKey.Fizzle)
+            if ("True" == self.getParam("Fizzle")) != val:
+                return False
+
+        if self.hasParam("NotThisAbility"):
+            if AbilityKey.Cause in runParams:
+                cause = runParams.get(AbilityKey.Cause)
+                if cause is not None and self == cause.getRootAbility().getTrigger():
+                    return False
+
+        # this trigger only activates for the nth spell you cast this turn
+        if self.hasParam("ConditionYouCastThisTurn"):
+            compare = self.getParam("ConditionYouCastThisTurn")
+            thisTurnCast = self.getHostCard().getGame().getStack().getSpellsCastThisTurn()
+            thisTurnCast = CardLists.filterControlledByAsList(thisTurnCast, self.getHostCard().getController())
+
+            # checks which card this spell was the castSA
+            castSA = self.getHostCard().getCastSA()
+            left = IterableUtil.indexOf(thisTurnCast, CardPredicates.castSA(lambda x: x == castSA))
+            right = int(compare[2:])
+            if not Expressions.compare(left + 1, compare, right):
+                return False
+
+        return True
+
+    def setTriggeringObjects(self, sa: SpellAbility, runParams: dict[AbilityKey, object]) -> None:
+        # TODO use better way to always copy both Card and CardLKI
+        if "Battlefield" == self.getParam("Origin"):
+            sa.setTriggeringObject(AbilityKey.Card, runParams.get(AbilityKey.CardLKI))
+            sa.setTriggeringObject(AbilityKey.NewCard, runParams.get(AbilityKey.Card))
+        else:
+            sa.setTriggeringObjectsFrom(runParams, AbilityKey.Card, AbilityKey.CardLKI)
+
+    def getImportantStackObjects(self, sa: SpellAbility) -> str:
+        sb = []
+        sb.append(Localizer.getInstance().getMessage("lblZoneChanger"))
+        sb.append(": ")
+        sb.append(str(sa.getTriggeringObject(AbilityKey.Card)))
+        return "".join(sb)
+
+    def correctZones(self) -> None:
+        # only if host zones isn't set
+        if self.validHostZones is not None:
+            return
+
+        # in case the game is null (for GUI) the later check does fail
+        if self.getHostCard().getGame() is None:
+            return
+
+        if not self.hasParam("ValidCard"):
+            return
+
+        if self.hasParam("Origin"):
+            # leave battlefield
+            leavesBattlefield = ZoneType.Battlefield.toString() in self.getParam("Origin").split(",")
+            # Static triggers aren't triggered abilities rules-wise
+            if leavesBattlefield and not self.isStatic():
+                self.setActiveZone({ZoneType.Battlefield})
+
+        # enter Zone Effect only for Self
+        if "Self" in self.getParam("ValidCard") and (not self.hasParam("Origin") or "Any" == self.getParam("Origin")):
+            self.setActiveZone(set(ZoneType.listValueOf(self.getParam("Destination"))))
 ```

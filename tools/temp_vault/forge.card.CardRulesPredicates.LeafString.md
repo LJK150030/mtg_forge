@@ -44,12 +44,12 @@ classDiagram
 
 ## Design Description
 
-`LeafString` is a private leaf predicate within `CardRulesPredicates` that tests whether a single `CardRules` instance matches a string criterion against one of several searchable fields—name, oracle text, subtype, joined type, or mana cost—as designated by its `CardField` enum. Extending `PredicateString<CardRules>`, it inherits the configured `StringOp` operator (contains, equals, etc.) and applies it through the shared `op` helper, pairing a target `field` with a literal `operand`.
+`LeafString` is a private leaf predicate within `CardRulesPredicates` that tests whether a single `CardRules` instance matches a string criterion against one of several searchable fieldsâ€”name, oracle text, subtype, joined type, or mana costâ€”as designated by its `CardField` enum. Extending `PredicateString<CardRules>`, it inherits the configured `StringOp` operator (contains, equals, etc.) and applies it through the shared `op` helper, pairing a target `field` with a literal `operand`.
 
 Its `test` method dispatches on the field, iterating each `ICardFace` of the card so multi-faced cards match on any face. Notable design intent appears in its tolerance for localization and variants: name, oracle, and type checks also compare against `CardTranslation` translations and accent-stripped forms, and functional variants are each examined while flavor-named variants are deliberately excluded from oracle matching so flavor-name searches stay precise. A TODO acknowledges this variant handling as a known compromise pending a `PaperCard`-based rewrite.
 
 ## Source
-`forge-core/src/main/java/forge/card/CardRulesPredicates.java` â€” declaration excerpt
+`forge-core/src/main/java/forge/card/CardRulesPredicates.java` Ã¢â‚¬â€ declaration excerpt
 
 ```java
     private static class LeafString extends PredicateString<CardRules> {
@@ -156,4 +156,98 @@ Its `test` method dispatches on the field, iterating each `ICardFace` of the car
             this.operand = operand;
         }
     }
+```
+
+## Python
+`forge/card/CardRulesPredicates/LeafString.py`
+
+```python
+from forge.card.CardRules import CardRules
+from forge.card.CardRulesPredicates.LeafString.CardField import CardField
+from forge.card.ICardFace import ICardFace
+from forge.util.PredicateString import PredicateString
+from forge.util.PredicateString.StringOp import StringOp
+
+
+class LeafString(PredicateString):
+    class CardField:
+        ORACLE_TEXT = "ORACLE_TEXT"
+        NAME = "NAME"
+        SUBTYPE = "SUBTYPE"
+        JOINED_TYPE = "JOINED_TYPE"
+        COST = "COST"
+
+    def __init__(self, field: "CardField", operator: StringOp, operand: str):
+        super().__init__(operator)
+        self.field = field
+        self.operand = operand
+
+    def checkName(self, name: str) -> bool:
+        return (self.op(name, self.operand)
+                or self.op(CardTranslation.getTranslatedName(name), self.operand)
+                or self.op(StringUtils.stripAccents(name), self.operand))
+
+    def checkOracle(self, face: ICardFace) -> bool:
+        if face is None:
+            return False
+        if face.hasFunctionalVariants():
+            # Couple quirks here - an ICardFace doesn't have a specific variant, so they all need to be checked.
+            # This means text matching the rules of one variant will match prints with any variant. In the case of
+            # flavor names though, we exclude their oracle modified text from matching, so that searching a flavor
+            # name will return only the card matching that name.
+            # TODO: Fix all that someday by doing rules searches by the PaperCard rather than the CardRules.
+            for key, vFace in face.getFunctionalVariants().items():
+                if vFace.getFlavorName() is not None:
+                    continue
+                origOracle = vFace.getOracleText()
+                if self.op(origOracle, self.operand):
+                    return True
+                name = vFace.getFlavorName() if vFace.getFlavorName() is not None else vFace.getName() + " $" + key
+                if self.op(CardTranslation.getTranslatedOracle(name), self.operand):
+                    return True
+        if self.op(face.getOracleText(), self.operand) or self.op(CardTranslation.getTranslatedOracle(face.getName()), self.operand):
+            return True
+        return False
+
+    def checkType(self, face: ICardFace) -> bool:
+        if face is None:
+            return False
+        if face.hasFunctionalVariants():
+            for key, vFace in face.getFunctionalVariants().items():
+                origType = vFace.getType().toString()
+                if self.op(origType, self.operand):
+                    return True
+                name = vFace.getFlavorName() if vFace.getFlavorName() is not None else vFace.getName() + " $" + key
+                if self.op(CardTranslation.getTranslatedType(name, origType), self.operand):
+                    return True
+        return (self.op(CardTranslation.getTranslatedType(face.getName(), face.getType().toString()), self.operand)
+                or self.op(face.getType().toString(), self.operand))
+
+    def test(self, card: CardRules) -> bool:
+        if self.field == LeafString.CardField.NAME:
+            for face in card.getAllFaces():
+                if self.checkName(face.getName()):
+                    return True
+            return False
+        elif self.field == LeafString.CardField.SUBTYPE:
+            shouldContain = (self.getOperator() == StringOp.CONTAINS) or (self.getOperator() == StringOp.EQUALS)
+            return shouldContain == card.getType().hasSubtype(self.operand)
+        elif self.field == LeafString.CardField.ORACLE_TEXT:
+            for face in card.getAllFaces():
+                if self.checkOracle(face):
+                    return True
+            return False
+        elif self.field == LeafString.CardField.JOINED_TYPE:
+            if (self.op(CardTranslation.getTranslatedType(card.getName(), card.getType().toString()), self.operand)
+                    or self.op(card.getType().toString(), self.operand)):
+                return True
+            for face in card.getAllFaces():
+                if self.checkType(face):
+                    return True
+            return False
+        elif self.field == LeafString.CardField.COST:
+            cost = card.getManaCost().toString()
+            return self.op(cost, self.operand)
+        else:
+            return False
 ```

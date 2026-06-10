@@ -321,3 +321,217 @@ public class SubgameEffect extends SpellAbilityEffect {
 
 }
 ```
+
+## Python
+`forge/game/ability/effects/SubgameEffect.py`
+
+```python
+from typing import List
+
+from forge.game.Game import Game
+from forge.game.GameOutcome import GameOutcome
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.event.EventValueChangeType import EventValueChangeType
+from forge.game.event.GameEventDayTimeChanged import GameEventDayTimeChanged
+from forge.game.event.GameEventSubgameEnd import GameEventSubgameEnd
+from forge.game.event.GameEventSubgameStart import GameEventSubgameStart
+from forge.game.event.GameEventZone import GameEventZone
+from forge.game.player.Player import Player
+from forge.game.player.RegisteredPlayer import RegisteredPlayer
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.PlayerZone import PlayerZone
+from forge.game.zone.ZoneType import ZoneType
+from forge.item.PaperCard import PaperCard
+from forge.util.Localizer import Localizer
+from forge.util.collect.FCollectionView import FCollectionView
+
+
+class SubgameEffect(SpellAbilityEffect):
+
+    def createSubGame(self, maingame: Game, startingLife: int) -> Game:
+        players: List[RegisteredPlayer] = []
+
+        # Add remaining players to subgame
+        for p in maingame.getPlayers():
+            players.append(p.getRegisteredPlayer())
+
+        return Game(players, maingame.getRules(), maingame.getMatch(), maingame, startingLife)
+
+    def setCardsInZone(self, player: Player, zoneType: ZoneType, oldCards: CardCollectionView, addMapping: bool) -> None:
+        zone: PlayerZone = player.getZone(zoneType)
+        newCards: List[Card] = []
+        for card in oldCards:
+            if card.isToken() or card.isCopiedSpell():
+                continue
+            newCard = Card.fromPaperCard(card.getPaperCard(), player)
+            newCards.append(newCard)
+            if addMapping:
+                # Build mapping between maingame cards and subgame cards,
+                # so when subgame pick a card from maingame (like Wish effects),
+                # The maingame card will also be moved.
+                # (Will be move to Subgame zone, which will be added back to library after subgame ends.)
+                player.addMaingameCardMapping(newCard, card)
+        zone.setCards(newCards)
+
+    def initVariantsZonesSubgame(self, subgame: Game, maingamePlayer: Player, player: Player) -> None:
+        com: PlayerZone = player.getZone(ZoneType.Command)
+        registeredPlayer: RegisteredPlayer = player.getRegisteredPlayer()
+
+        # Vanguard
+        if registeredPlayer.getVanguardAvatars() is not None:
+            for avatar in registeredPlayer.getVanguardAvatars():
+                com.add(Card.fromPaperCard(avatar, player))
+
+        # Commander
+        commandCards: CardCollectionView = maingamePlayer.getCardsIn(ZoneType.Command)
+        for card in commandCards:
+            if card.isCommander():
+                cmd = Card.fromPaperCard(card.getPaperCard(), player)
+                player.initCommanderColor(cmd)
+                com.add(cmd)
+                player.addCommander(cmd)
+
+        # Conspiracies
+        # 720.2 doesn't mention Conspiracy cards so I guess they don't move
+
+    def prepareAllZonesSubgame(self, maingame: Game, subgame: Game) -> None:
+        players: FCollectionView[Player] = subgame.getPlayers()
+        maingamePlayers: FCollectionView[Player] = maingame.getPlayers()
+        outsideZones: List[ZoneType] = [ZoneType.Hand, ZoneType.Battlefield,
+                ZoneType.Graveyard, ZoneType.Exile, ZoneType.Stack, ZoneType.Sideboard, ZoneType.Ante, ZoneType.Merged]
+
+        for i in range(players.size()):
+            player: Player = players.get(i)
+            maingamePlayer: Player = maingamePlayers.get(i)
+
+            # Library
+            self.setCardsInZone(player, ZoneType.Library, maingamePlayer.getCardsIn(ZoneType.Library), False)
+
+            # Sideboard
+            # 720.4
+            outsideCards: CardCollectionView = maingame.getCardsInOwnedBy(outsideZones, maingamePlayer)
+            if not outsideCards.isEmpty():
+                self.setCardsInZone(player, ZoneType.Sideboard, outsideCards, True)
+                # Update card view so it shows the origin zone in text.
+                for c in player.getCardsIn(ZoneType.Sideboard):
+                    c.updateStateForView()
+
+                player.assignCompanion(subgame, player.getController())
+
+            # Schemes
+            self.setCardsInZone(player, ZoneType.SchemeDeck, maingamePlayer.getCardsIn(ZoneType.SchemeDeck), False)
+
+            # Planes
+            self.setCardsInZone(player, ZoneType.PlanarDeck, maingamePlayer.getCardsIn(ZoneType.PlanarDeck), False)
+
+            # Attractions
+            self.setCardsInZone(player, ZoneType.AttractionDeck, maingamePlayer.getCardsIn(ZoneType.AttractionDeck), False)
+
+            # Contraptions
+            self.setCardsInZone(player, ZoneType.ContraptionDeck, maingamePlayer.getCardsIn(ZoneType.ContraptionDeck), False)
+
+            # Vanguard and Commanders
+            self.initVariantsZonesSubgame(subgame, maingamePlayer, player)
+
+            player.shuffle(None)
+            player.getZone(ZoneType.SchemeDeck).shuffle()
+            player.getZone(ZoneType.PlanarDeck).shuffle()
+            player.getZone(ZoneType.AttractionDeck).shuffle()
+            player.getZone(ZoneType.ContraptionDeck).shuffle()
+
+    def resolve(self, sa: SpellAbility) -> None:
+        hostCard: Card = sa.getHostCard()
+        maingame: Game = hostCard.getGame()
+
+        startingLife = -1
+        if sa.hasParam("StartingLife"):
+            startingLife = int(sa.getParam("StartingLife"))
+        subgame: Game = self.createSubGame(maingame, startingLife)
+
+        startMessage = Localizer.getInstance().getMessage("lblSubgameStart", hostCard.getTranslatedName())
+        maingame.getMatch().fireEvent(GameEventSubgameStart(subgame, startMessage))
+
+        self.prepareAllZonesSubgame(maingame, subgame)
+        subgame.getAction().startGame(None, None)
+        subgame.clearCaches()
+
+        # Find out winners and losers
+        outcome: GameOutcome = subgame.getOutcome()
+        winPlayers: List[Player] = []
+        notWinPlayers: List[Player] = []
+        sbWinners = []
+        sbLosers = []
+        for p in maingame.getPlayers():
+            if outcome.isWinner(p.getRegisteredPlayer()):
+                if winPlayers:
+                    sbWinners.append(", ")
+                sbWinners.append(p.getName())
+                winPlayers.append(p)
+            else:
+                if notWinPlayers:
+                    sbLosers.append(", ")
+                sbLosers.append(p.getName())
+                notWinPlayers.append(p)
+
+        if sa.hasParam("RememberPlayers"):
+            param = sa.getParam("RememberPlayers")
+            if param == "Win":
+                hostCard.addRemembered(winPlayers)
+            elif param == "NotWin":
+                hostCard.addRemembered(notWinPlayers)
+
+        endMessage = Localizer.getInstance().getMessage("lblSubgameEndDraw") if outcome.isDraw() else \
+                Localizer.getInstance().getMessage("lblSubgameEnd", "".join(sbWinners), "".join(sbLosers))
+        maingame.getMatch().fireEvent(GameEventSubgameEnd(maingame, endMessage))
+        if maingame.getDayTime() is not None:
+            maingame.fireEvent(GameEventDayTimeChanged(maingame.getDayTime()))
+        # only mobile seems to need this
+        for p in maingame.getPlayers():
+            maingame.fireEvent(GameEventZone(ZoneType.Battlefield, p, EventValueChangeType.ComplexUpdate, None))
+            maingame.fireEvent(GameEventZone(ZoneType.Hand, p, EventValueChangeType.ComplexUpdate, None))
+            maingame.fireEvent(GameEventZone(ZoneType.Graveyard, p, EventValueChangeType.ComplexUpdate, None))
+            maingame.fireEvent(GameEventZone(ZoneType.Exile, p, EventValueChangeType.ComplexUpdate, None))
+            maingame.fireEvent(GameEventZone(ZoneType.Command, p, EventValueChangeType.ComplexUpdate, None))
+
+        # Setup maingame library
+        subgamePlayers: FCollectionView[Player] = subgame.getRegisteredPlayers()
+        players: FCollectionView[Player] = maingame.getPlayers()
+        for i in range(players.size()):
+            subgamePlayer: Player = subgamePlayers.get(i)
+            player: Player = players.get(i)
+
+            # All cards moved to Subgame Zone will be put into library when subgame ends.
+            # 720.5
+            movedCards: CardCollectionView = player.getCardsIn(ZoneType.Subgame)
+            library: PlayerZone = player.getZone(ZoneType.Library)
+            for card in movedCards:
+                library.add(card)
+            player.getZone(ZoneType.Subgame).removeAllCards(True)
+
+            # Move commander if it is no longer in subgame's commander zone
+            # 720.5c
+            subgameCommanders: List[Card] = []
+            movedCommanders: List[Card] = []
+            for card in subgamePlayer.getCardsIn(ZoneType.Command):
+                if card.isCommander():
+                    subgameCommanders.append(card)
+            for card in player.getCardsIn(ZoneType.Command):
+                if card.isCommander():
+                    isInSubgameCommand = False
+                    for subCard in subgameCommanders:
+                        if card.getName() == subCard.getName():
+                            isInSubgameCommand = True
+                    if not isInSubgameCommand:
+                        movedCommanders.append(card)
+            for card in movedCommanders:
+                maingame.getAction().moveTo(ZoneType.Library, card, None, AbilityKey.newMap())
+
+            player.shuffle(sa)
+            player.getZone(ZoneType.SchemeDeck).shuffle()
+            player.getZone(ZoneType.PlanarDeck).shuffle()
+            player.getZone(ZoneType.AttractionDeck).shuffle()
+            player.getZone(ZoneType.ContraptionDeck).shuffle()
+```

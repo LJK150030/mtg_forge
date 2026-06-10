@@ -39,6 +39,12 @@ classDiagram
 - [[forge.game.card.CounterType|CounterType]]
 - [[forge.game.spellability.SpellAbility|SpellAbility]]
 
+## Design Description
+
+TriggerCounterAddedOnce is a concrete trigger that fires once when one or more counters are placed on a card or player, modeling Magic effects keyed to a single counter-addition event. As a subclass of Trigger, it implements the engine's trigger contract: performTest filters the event against optional declarative parametersâ€”matching a specific CounterType, validating the affected entity, card, player, and source, and honoring a FirstTime restrictionâ€”while setTriggeringObjects exposes the affected Card or Player and the counter Amount to the resolving SpellAbility.
+
+The class collaborates with AbilityKey to read and write strongly typed run parameters from the event map, and with CounterType to compare counter kinds. getImportantStackObjects builds a localized, human-readable stack summary via Localizer, reflecting a design that keeps trigger conditions data-driven and the engine's parameter-matching logic centralized in the Trigger base class.
+
 ## Source
 `forge-game/src/main/java/forge/game/trigger/TriggerCounterAddedOnce.java`
 
@@ -152,4 +158,66 @@ public class TriggerCounterAddedOnce extends Trigger {
         return sb.toString();
     }
 }
+```
+
+## Python
+`forge/game/trigger/TriggerCounterAddedOnce.py`
+
+```python
+from typing import Map
+
+from forge.game.trigger.Trigger import Trigger
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.card.CounterType import CounterType
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Localizer import Localizer
+
+
+class TriggerCounterAddedOnce(Trigger):
+
+    def __init__(self, params: dict[str, str], host: Card, intrinsic: bool):
+        super().__init__(params, host, intrinsic)
+
+    def performTest(self, runParams: dict[AbilityKey, object]) -> bool:
+        if self.hasParam("CounterType"):
+            addedType = runParams.get(AbilityKey.CounterType)
+            type = self.getParam("CounterType")
+            if type != str(addedType):
+                return False
+
+        if not self.matchesValidParam("ValidEntity", runParams.get(AbilityKey.Card)) and not self.matchesValidParam("ValidEntity", runParams.get(AbilityKey.Player)):
+            return False
+
+        if not self.matchesValidParam("ValidCard", runParams.get(AbilityKey.Card)):
+            return False
+        if not self.matchesValidParam("ValidPlayer", runParams.get(AbilityKey.Player)):
+            return False
+        if not self.matchesValidParam("ValidSource", runParams.get(AbilityKey.Source)):
+            return False
+
+        if self.hasParam("FirstTime"):
+            if not runParams.get(AbilityKey.FirstTime):
+                return False
+
+        return True
+
+    def setTriggeringObjects(self, sa: SpellAbility, runParams: dict[AbilityKey, object]) -> None:
+        sa.setTriggeringObjectsFrom(runParams, AbilityKey.Card, AbilityKey.Player)
+        sa.setTriggeringObject(AbilityKey.Amount, runParams.get(AbilityKey.CounterAmount))
+
+    def getImportantStackObjects(self, sa: SpellAbility) -> str:
+        sb = []
+        sb.append(Localizer.getInstance().getMessage("lblAddedOnce"))
+        sb.append(": ")
+        if sa.hasTriggeringObject(AbilityKey.Card):
+            sb.append(str(sa.getTriggeringObject(AbilityKey.Card)))
+        if sa.hasTriggeringObject(AbilityKey.Player):
+            sb.append(str(sa.getTriggeringObject(AbilityKey.Player)))
+
+        sb.append(" ")
+        sb.append(Localizer.getInstance().getMessage("lblAmount"))
+        sb.append(": ")
+        sb.append(str(sa.getTriggeringObject(AbilityKey.Amount)))
+        return "".join(sb)
 ```

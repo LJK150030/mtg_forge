@@ -136,3 +136,83 @@ public class ExploreAi extends SpellAbilityAi {
     }
 }
 ```
+
+## Python
+`forge/ai/ability/ExploreAi.py`
+
+```python
+from forge.ai.SpellAbilityAi import SpellAbilityAi
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.ai.ComputerUtilCard import ComputerUtilCard
+from forge.ai.ComputerUtilMana import ComputerUtilMana
+from forge.ai.AiProps import AiProps
+from forge.ai.AiProfileUtil import AiProfileUtil
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CardPredicates import CardPredicates
+from forge.game.player.Player import Player
+from forge.game.player.PlayerActionConfirmMode import PlayerActionConfirmMode
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+
+from typing import Map
+
+
+class ExploreAi(SpellAbilityAi):
+    # (non-Javadoc)
+    # @see forge.card.abilityfactory.SpellAiLogic#canPlayAI(forge.game.player.Player, java.util.Map, forge.card.spellability.SpellAbility)
+    def canPlay(self, aiPlayer: Player, sa: SpellAbility) -> AiAbilityDecision:
+        # Explore with a target (e.g. Enter the Unknown)
+        if sa.usesTargeting():
+            bestCreature = ComputerUtilCard.getBestCreatureAI(aiPlayer.getCardsIn(ZoneType.Battlefield))
+            if bestCreature is None:
+                return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+            sa.resetTargets()
+            sa.getTargets().add(bestCreature)
+
+        return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+    @staticmethod
+    def shouldPutInGraveyard(topCard: Card, ai: Player) -> bool:
+        predictedMana = ComputerUtilMana.getAvailableManaSources(ai, False).size()
+        cardsOTB = ai.getCardsIn(ZoneType.Battlefield)
+        cardsInHand = ai.getCardsIn(ZoneType.Hand)
+        landsOTB = CardLists.filter(cardsOTB, CardPredicates.LANDS_PRODUCING_MANA)
+        landsInHand = CardLists.filter(cardsInHand, CardPredicates.LANDS_PRODUCING_MANA)
+
+        maxCMCDiff = AiProfileUtil.getIntProperty(ai, AiProps.EXPLORE_MAX_CMC_DIFF_TO_PUT_IN_GRAVEYARD)
+        numLandsToStillNeedMore = AiProfileUtil.getIntProperty(ai, AiProps.EXPLORE_NUM_LANDS_TO_STILL_NEED_MORE)
+
+        if landsInHand.isEmpty() and landsOTB.size() <= numLandsToStillNeedMore:
+            # We need more lands to improve our mana base, explore away the non-lands
+            return True
+        elif topCard.getCMC() - maxCMCDiff >= predictedMana and not topCard.hasSVar("DoNotDiscardIfAble"):
+            # We're not casting this in foreseeable future, put it in the graveyard
+            return True
+
+        # Put on top of the library (do not mark the card for placement in the graveyard)
+        return False
+
+    def confirmAction(self, player: Player, sa: SpellAbility, mode: PlayerActionConfirmMode, message: str, params: Map[str, object]) -> bool:
+        return ExploreAi.shouldPutInGraveyard(params.get("RevealedCard"), player)
+
+    def doTriggerNoCost(self, aiPlayer: Player, sa: SpellAbility, mandatory: bool) -> AiAbilityDecision:
+        if sa.usesTargeting():
+            list = CardLists.getValidCards(aiPlayer.getGame().getCardsIn(ZoneType.Battlefield),
+                    sa.getTargetRestrictions().getValidTgts(), aiPlayer, sa.getHostCard(), sa)
+
+            if not list.isEmpty():
+                sa.getTargets().add(ComputerUtilCard.getBestCreatureAI(list))
+                return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+            return AiAbilityDecision(0, AiPlayDecision.TargetingFailed)
+
+        if mandatory:
+            return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+        return self.canPlay(aiPlayer, sa)
+```

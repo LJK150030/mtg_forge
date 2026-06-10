@@ -55,7 +55,7 @@ classDiagram
 
 ## Design Description
 
-PumpAllAi supplies the AI's decision logic for "pump all" effects—spells and abilities that buff or debuff every creature matching a `ValidCards` filter rather than a single target. Extending PumpAiBase, it overrides the standard AI hooks (`checkApiLogic`, `chkDrawback`, `doTriggerNoCost`) to return AiAbilityDecision verdicts telling the engine whether, and how eagerly, to play the SpellAbility.
+PumpAllAi supplies the AI's decision logic for "pump all" effectsâ€”spells and abilities that buff or debuff every creature matching a `ValidCards` filter rather than a single target. Extending PumpAiBase, it overrides the standard AI hooks (`checkApiLogic`, `chkDrawback`, `doTriggerNoCost`) to return AiAbilityDecision verdicts telling the engine whether, and how eagerly, to play the SpellAbility.
 
 Its central responsibility is board evaluation. It splits the battlefield into the AI's own valid CardCollection and the opponent's, then branches on whether the effect is a curse or a boost. For curses it identifies lethal `-X/-X` and combat-shrinking `-X/-0` cases, consulting Combat, PhaseHandler, and PhaseType so it fires only during the right combat step and when the opponent's creatures are collectively worth more. For boosts it defers to `shouldPumpCard` heuristics and, via `pumpAgainstRemoval`, reacts defensively to creatures threatened on the stack. Cost and Game collaborators gate activations by affordability and timing.
 
@@ -228,4 +228,142 @@ public class PumpAllAi extends PumpAiBase {
         return false;
     }
 }
+```
+
+## Python
+`forge/ai/ability/PumpAllAi.py`
+
+```python
+from forge.ai.ability.PumpAiBase import PumpAiBase
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.ai.ComputerUtil import ComputerUtil
+from forge.ai.ComputerUtilCard import ComputerUtilCard
+from forge.ai.ComputerUtilCombat import ComputerUtilCombat
+from forge.ai.ComputerUtilCost import ComputerUtilCost
+from forge.game.Game import Game
+from forge.game.GameObject import GameObject
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardLists import CardLists
+from forge.game.combat.Combat import Combat
+from forge.game.cost.Cost import Cost
+from forge.game.keyword.Keyword import Keyword
+from forge.game.phase.PhaseHandler import PhaseHandler
+from forge.game.phase.PhaseType import PhaseType
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+
+
+class PumpAllAi(PumpAiBase):
+
+    # (non-Javadoc)
+    # @see forge.card.abilityfactory.SpellAiLogic#canPlayAI(forge.game.player.Player, java.util.Map, forge.card.spellability.SpellAbility)
+    def checkApiLogic(self, ai: Player, sa: SpellAbility) -> AiAbilityDecision:
+        source = sa.getHostCard()
+        game = ai.getGame()
+        combat = game.getCombat()
+        abCost = sa.getPayCosts()
+        logic = sa.getParamOrDefault("AILogic", "")
+
+        if logic == "UntapCombatTrick":
+            ph = ai.getGame().getPhaseHandler()
+            if not (ph.is_(PhaseType.COMBAT_DECLARE_BLOCKERS, ai)
+                    or (not ph.getPlayerTurn() == ai and ph.is_(PhaseType.COMBAT_DECLARE_ATTACKERS))):
+                return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+        if abCost is not None and source.hasSVar("AIPreference"):
+            if not ComputerUtilCost.checkSacrificeCost(ai, abCost, source, sa, True):
+                return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+        opp = ai.getStrongestOpponent()
+
+        if sa.usesTargeting():
+            if sa.canTarget(opp) and sa.isCurse():
+                sa.resetTargets()
+                sa.getTargets().add(opp)
+                return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+            if sa.canTarget(ai) and not sa.isCurse():
+                sa.resetTargets()
+                sa.getTargets().add(ai)
+                return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+        power = AbilityUtils.calculateAmount(source, sa.getParam("NumAtt"), sa)
+        defense = AbilityUtils.calculateAmount(source, sa.getParam("NumDef"), sa)
+        keywords = sa.getParam("KW").split(" & ") if sa.hasParam("KW") else []
+        phase = game.getPhaseHandler().getPhase()
+
+        valid = sa.getParamOrDefault("ValidCards", "")
+
+        comp = CardLists.getValidCards(ai.getCardsIn(ZoneType.Battlefield), valid, source.getController(), source, sa)
+        human = CardLists.getValidCards(opp.getCardsIn(ZoneType.Battlefield), valid, source.getController(), source, sa)
+
+        if sa.isCurse():
+            if defense < 0:  # try to destroy creatures
+                def kills(c):
+                    if c.getNetToughness() <= -defense:
+                        return True  # can kill indestructible creatures
+                    return ComputerUtilCombat.getDamageToKill(c, False) <= -defense and not c.hasKeyword(Keyword.INDESTRUCTIBLE)
+                comp = CardLists.filter(comp, kills)  # leaves all creatures that will be destroyed
+                human = CardLists.filter(human, kills)  # leaves all creatures that will be destroyed
+            # -X/-X end
+            elif power < 0:  # -X/-0
+                if (phase.isAfter(PhaseType.COMBAT_DECLARE_BLOCKERS)
+                        or phase.isBefore(PhaseType.COMBAT_DECLARE_ATTACKERS)
+                        or game.getPhaseHandler().isPlayerTurn(sa.getActivatingPlayer())
+                        or game.getReplacementHandler().isPreventCombatDamageThisTurn()):
+                    return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+                totalPower = 0
+                for c in human:
+                    if combat is None or not combat.isAttacking(c):
+                        continue
+                    totalPower += min(c.getNetPower(), power * -1)
+                    if phase == PhaseType.COMBAT_DECLARE_BLOCKERS and combat.isUnblocked(c):
+                        if ComputerUtilCombat.lifeInDanger(sa.getActivatingPlayer(), combat):
+                            return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+                        totalPower += min(c.getNetPower(), power * -1)
+                    if totalPower >= power * -2:
+                        return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+                return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+            # -X/-0 end
+
+            if comp.isEmpty() and ComputerUtil.activateForCost(sa, ai):
+                return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+            # evaluate both lists and pass only if human creatures are more valuable
+            result = (ComputerUtilCard.evaluateCreatureList(comp) + 200) < ComputerUtilCard.evaluateCreatureList(human)
+            return AiAbilityDecision(100, AiPlayDecision.WillPlay) if result else AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+        # end Curse
+
+        if not game.getStack().isEmpty():
+            result = self.pumpAgainstRemoval(ai, sa, comp)
+            return AiAbilityDecision(100, AiPlayDecision.WillPlay) if result else AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+        result = ai.getCreaturesInPlay().anyMatch(lambda c: c.isValid(valid, source.getController(), source, sa)
+                                                  and ComputerUtilCard.shouldPumpCard(ai, sa, c, defense, power, keywords))
+        return AiAbilityDecision(100, AiPlayDecision.WillPlay) if result else AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+    def chkDrawback(self, aiPlayer: Player, sa: SpellAbility) -> AiAbilityDecision:
+        return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+    def doTriggerNoCost(self, ai: Player, sa: SpellAbility, mandatory: bool) -> AiAbilityDecision:
+        # it might help so take it
+        if not sa.usesTargeting() and not sa.isCurse() and sa.hasParam("ValidCards") and "YouCtrl" in sa.getParam("ValidCards"):
+            return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+        # important to call canPlay first so targets are added if needed
+        decision = self.canPlay(ai, sa)
+        if mandatory and not decision.decision().willingToPlay():
+            return AiAbilityDecision(50, AiPlayDecision.MandatoryPlay)
+        return decision
+
+    def pumpAgainstRemoval(self, ai: Player, sa: SpellAbility, comp: list[Card]) -> bool:
+        objects = ComputerUtil.predictThreatenedObjects(sa.getActivatingPlayer(), sa, True)
+        for c in comp:
+            if c in objects:
+                return True
+        return False
 ```

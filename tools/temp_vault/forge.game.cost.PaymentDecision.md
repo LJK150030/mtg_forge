@@ -68,7 +68,7 @@ classDiagram
 
 ## Design Description
 
-PaymentDecision is a lightweight, immutable-leaning value object in `forge.game.cost` that captures the player's concrete choices for paying a single cost component. It aggregates the various forms a payment answer can take—a count, a set of chosen cards, produced mana, target players, spell abilities, a color selection, a type string, or a counter table—so that cost-payment logic can return a uniform result regardless of the cost kind.
+PaymentDecision is a lightweight, immutable-leaning value object in `forge.game.cost` that captures the player's concrete choices for paying a single cost component. It aggregates the various forms a payment answer can takeâ€”a count, a set of chosen cards, produced mana, target players, spell abilities, a color selection, a type string, or a counter tableâ€”so that cost-payment logic can return a uniform result regardless of the cost kind.
 
 Its design centers on static factory methods (`card`, `number`, `mana`, `colors`, `players`, `spellabilities`, `counters`, `type`) layered over private constructors, giving callers an expressive, self-documenting way to build the appropriate decision while keeping the many optional fields consistent. It collaborates broadly but owns nothing: it merely references domain types like Card, CardCollection, Mana, Player, SpellAbility, ColorSet, and GameEntityCounterTable (the last noted as serving CostRemoveAnyCounter), acting as a simple data carrier between cost evaluation and cost execution rather than implementing behavior itself.
 
@@ -191,4 +191,97 @@ public class PaymentDecision {
         return new PaymentDecision(null, null, null, null, counterTable);
     }
 }
+```
+
+## Python
+`forge/game/cost/PaymentDecision.py`
+
+```python
+from forge.card.ColorSet import ColorSet
+from forge.game.GameEntityCounterTable import GameEntityCounterTable
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.mana.Mana import Mana
+from forge.game.mana.ManaConversionMatrix import ManaConversionMatrix
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.TextUtil import TextUtil
+
+from typing import Iterable, List
+
+
+class PaymentDecision:
+    def __init__(self, *args):
+        self.c = 0
+        self.type = None
+        self.colors = None
+
+        self.cards = CardCollection()
+        self.matrix = None
+
+        if len(args) == 5:
+            chosen, manaProduced, players, sp, counterTable = args
+            if chosen is not None:
+                self.cards.addAll(chosen)
+            self.mana = manaProduced
+            self.players = players
+            self.sp = sp
+            self.counterTable = counterTable
+        else:
+            # delegate to the private (null, null, null, null, null) form
+            self.mana = None
+            self.players = None
+            self.sp = None
+            self.counterTable = None
+
+            arg = args[0]
+            if isinstance(arg, Card):
+                self.cards.add(arg)
+            elif isinstance(arg, str):
+                self.type = arg
+            elif isinstance(arg, ColorSet):
+                self.colors = arg
+            elif isinstance(arg, int):
+                self.c = arg
+
+    @staticmethod
+    def card(chosen, n: int = None) -> "PaymentDecision":
+        if isinstance(chosen, Card):
+            res = PaymentDecision(chosen)
+        else:
+            res = PaymentDecision(chosen, None, None, None, None)
+        if n is not None:
+            res.c = n
+        return res
+
+    @staticmethod
+    def number(c: int) -> "PaymentDecision":
+        return PaymentDecision(c)
+
+    @staticmethod
+    def mana(manas: List[Mana]) -> "PaymentDecision":
+        return PaymentDecision(None, manas, None, None, None)
+
+    def __str__(self) -> str:
+        return TextUtil.concatWithSpace("Payment Decision:", TextUtil.addSuffix(str(self.c), ","), self.cards.toString())
+
+    @staticmethod
+    def type(choice: str) -> "PaymentDecision":
+        return PaymentDecision(choice)
+
+    @staticmethod
+    def colors(choices: ColorSet) -> "PaymentDecision":
+        return PaymentDecision(choices)
+
+    @staticmethod
+    def players(players: List[Player]) -> "PaymentDecision":
+        return PaymentDecision(None, None, players, None, None)
+
+    @staticmethod
+    def spellabilities(sp: List[SpellAbility]) -> "PaymentDecision":
+        return PaymentDecision(None, None, None, sp, None)
+
+    @staticmethod
+    def counters(counterTable: GameEntityCounterTable) -> "PaymentDecision":
+        return PaymentDecision(None, None, None, None, counterTable)
 ```

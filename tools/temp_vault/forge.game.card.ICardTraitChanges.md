@@ -43,9 +43,9 @@ classDiagram
 
 ## Design Description
 
-`ICardTraitChanges` defines a uniform contract for components that mutate a card's trait set—its spell abilities, triggers, replacement effects, and static abilities—as well as its rules text. Each `apply*` method takes a list of the relevant trait type and returns the transformed list, allowing implementors to filter, augment, or rewrite a card's behaviors during gameplay. By collaborating with `Card`, `SpellAbility`, `Trigger`, `ReplacementEffect`, and `StaticAbility`, it sits between a card's host and the engine's effect-resolution machinery.
+`ICardTraitChanges` defines a uniform contract for components that mutate a card's trait setâ€”its spell abilities, triggers, replacement effects, and static abilitiesâ€”as well as its rules text. Each `apply*` method takes a list of the relevant trait type and returns the transformed list, allowing implementors to filter, augment, or rewrite a card's behaviors during gameplay. By collaborating with `Card`, `SpellAbility`, `Trigger`, `ReplacementEffect`, and `StaticAbility`, it sits between a card's host and the engine's effect-resolution machinery.
 
-The design favors composability and low friction: all mutation methods are `default` no-ops returning their input unchanged, so implementors override only the trait kinds they affect. `changeText()` signals text-altering changes, while `copy(Card host, boolean lki)` rebinds a change set to a new host—the `lki` flag supporting last-known-information snapshots needed when an effect's source has left play.
+The design favors composability and low friction: all mutation methods are `default` no-ops returning their input unchanged, so implementors override only the trait kinds they affect. `changeText()` signals text-altering changes, while `copy(Card host, boolean lki)` rebinds a change set to a new hostâ€”the `lki` flag supporting last-known-information snapshots needed when an effect's source has left play.
 
 ## Source
 `forge-game/src/main/java/forge/game/card/ICardTraitChanges.java`
@@ -69,4 +69,38 @@ public interface ICardTraitChanges {
     default void changeText() {}
     ICardTraitChanges copy(Card host, boolean lki);
 }
+```
+
+## Python
+`forge/game/card/ICardTraitChanges.py`
+
+```python
+from abc import ABC, abstractmethod
+
+from forge.game.card.Card import Card
+from forge.game.replacement.ReplacementEffect import ReplacementEffect
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.staticability.StaticAbility import StaticAbility
+from forge.game.trigger.Trigger import Trigger
+
+
+class ICardTraitChanges(ABC):
+    def applySpellAbility(self, list: list[SpellAbility]) -> list[SpellAbility]:
+        return list
+
+    def applyTrigger(self, list: list[Trigger]) -> list[Trigger]:
+        return list
+
+    def applyReplacementEffect(self, list: list[ReplacementEffect]) -> list[ReplacementEffect]:
+        return list
+
+    def applyStaticAbility(self, list: list[StaticAbility]) -> list[StaticAbility]:
+        return list
+
+    def changeText(self) -> None:
+        pass
+
+    @abstractmethod
+    def copy(self, host: Card, lki: bool) -> "ICardTraitChanges":
+        ...
 ```

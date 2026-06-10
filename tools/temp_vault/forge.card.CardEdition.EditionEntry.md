@@ -34,12 +34,12 @@ classDiagram
 
 ## Design Description
 
-EditionEntry is an immutable record nested within `CardEdition` that captures a single card's printing details within a set: its name, collector number, rarity, artist, and an open-ended map of extra parameters. It implements `Comparable` to define a canonical sort order—first by name (case-insensitive), then by a normalized collector number, then by rarity—so entries can be ordered consistently in collections and listings.
+EditionEntry is an immutable record nested within `CardEdition` that captures a single card's printing details within a set: its name, collector number, rarity, artist, and an open-ended map of extra parameters. It implements `Comparable` to define a canonical sort orderâ€”first by name (case-insensitive), then by a normalized collector number, then by rarityâ€”so entries can be ordered consistently in collections and listings.
 
 Beyond storage, it provides presentation and accessor logic: `toString()` renders a compact human-readable form that conditionally includes collector number, meaningful rarity (suppressing `CardRarity.Unknown`/`Token`), artist, and serialized extra parameters. The `getFlavorName()` and `getFunctionalVariantName()` helpers expose specific well-known keys ("flavorname", "variant") from the extraParams map, keeping that loosely-typed bag's conventions encapsulated. Its sole domain collaborator is `CardRarity`.
 
 ## Source
-`forge-core/src/main/java/forge/card/CardEdition.java` â€” declaration excerpt
+`forge-core/src/main/java/forge/card/CardEdition.java` Ã¢â‚¬â€ declaration excerpt
 
 ```java
     public record EditionEntry(String name, String collectorNumber, CardRarity rarity, String artistName, Map<String, String> extraParams) implements Comparable<EditionEntry> {
@@ -93,4 +93,64 @@ Beyond storage, it provides presentation and accessor logic: `toString()` render
             return extraParams.get("variant");
         }
     }
+```
+
+## Python
+`forge/card/CardEdition/EditionEntry.py`
+
+```python
+from forge.card.CardEdition import CardEdition
+from forge.card.CardRarity import CardRarity
+from dataclasses import dataclass
+from typing import Optional
+
+
+@dataclass(frozen=True)
+class EditionEntry:
+    name: str
+    collectorNumber: str
+    rarity: CardRarity
+    artistName: str
+    extraParams: dict[str, str]
+
+    def toString(self) -> str:
+        sb = []
+        if self.collectorNumber is not None:
+            sb.append(self.collectorNumber)
+            sb.append(' ')
+        if self.rarity != CardRarity.Unknown and self.rarity != CardRarity.Token:
+            sb.append(str(self.rarity))
+            sb.append(' ')
+        sb.append(self.name)
+        if self.artistName is not None:
+            sb.append(" @")
+            sb.append(self.artistName)
+        if self.extraParams is not None:
+            sb.append(" $")
+            sb.append(", ".join('"%s"="%s"' % (k, v) for k, v in self.extraParams.items()))
+        return "".join(sb)
+
+    def __str__(self) -> str:
+        return self.toString()
+
+    def compareTo(self, o: "EditionEntry") -> int:
+        nameCmp = (self.name.lower() > o.name.lower()) - (self.name.lower() < o.name.lower())
+        if 0 != nameCmp:
+            return nameCmp
+        thisCollNr = CardEdition.getSortableCollectorNumber(self.collectorNumber)
+        othrCollNr = CardEdition.getSortableCollectorNumber(o.collectorNumber)
+        collNrCmp = (thisCollNr > othrCollNr) - (thisCollNr < othrCollNr)
+        if 0 != collNrCmp:
+            return collNrCmp
+        return self.rarity.compareTo(o.rarity)
+
+    def getFlavorName(self) -> Optional[str]:
+        if self.extraParams is None:
+            return None
+        return self.extraParams.get("flavorname")
+
+    def getFunctionalVariantName(self) -> Optional[str]:
+        if self.extraParams is None:
+            return None
+        return self.extraParams.get("variant")
 ```

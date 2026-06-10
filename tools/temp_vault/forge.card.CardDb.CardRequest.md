@@ -53,12 +53,12 @@ classDiagram
 
 ## Design Description
 
-CardRequest is a static nested helper within `CardDb` that models a parsed card lookup specification — name, edition, art index, foil status, collector number, and arbitrary string flags — and defines the canonical serialization format that ties these attributes together. Its core responsibility is bidirectional translation between structured card identity and a single delimited request string: the overloaded `compose` methods build that string from individual fields or from a `PaperCard`, while `fromString` parses one back, heuristically classifying each segment (set code, art index, bracketed collector number, flag block) and applying fallbacks such as preferred-art lookup and a default art index.
+CardRequest is a static nested helper within `CardDb` that models a parsed card lookup specification â€” name, edition, art index, foil status, collector number, and arbitrary string flags â€” and defines the canonical serialization format that ties these attributes together. Its core responsibility is bidirectional translation between structured card identity and a single delimited request string: the overloaded `compose` methods build that string from individual fields or from a `PaperCard`, while `fromString` parses one back, heuristically classifying each segment (set code, art index, bracketed collector number, flag block) and applying fallbacks such as preferred-art lookup and a default art index.
 
 The design favors a flexible, position-tolerant grammar over rigid ordering, using private predicate helpers (`isSetCode`, `isArtIndex`, `isCollectorNumber`) to disambiguate optional segments. A private constructor forces construction through these factory methods, keeping parsing logic centralized. It collaborates with `PaperCard`/`IPaperCard` for field defaults and conventions, and retains backward compatibility by accepting a legacy marked-colors flag form.
 
 ## Source
-`forge-core/src/main/java/forge/card/CardDb.java` â€” declaration excerpt
+`forge-core/src/main/java/forge/card/CardDb.java` Ã¢â‚¬â€ declaration excerpt
 
 ```java
     public static class CardRequest {
@@ -263,4 +263,231 @@ The design favors a flexible, position-tolerant grammar over rigid ordering, usi
                     ));
         }
     }
+```
+
+## Python
+`forge/card/CardDb/CardRequest.py`
+
+```python
+from forge.item.PaperCard import PaperCard
+from forge.item.IPaperCard import IPaperCard
+from forge.card.CardEdition import CardEdition
+from forge.card.ColorSet import ColorSet
+from forge.ImageKeys import ImageKeys
+from forge.util.TextUtil import TextUtil
+from forge.card.CardDb import CardDb
+
+import sys
+
+
+def _isBlank(s):
+    return s is None or len(s.strip()) == 0
+
+
+def _isNumeric(s):
+    return s is not None and len(s) > 0 and s.isdigit()
+
+
+class CardRequest:
+    cardName: str
+    edition: str
+    artIndex: int
+    isFoil: bool
+    collectorNumber: str
+    flags: dict[str, str]
+
+    def __init__(self, name, edition, artIndex, isFoil, collectorNumber, flags):
+        self.cardName = name
+        self.edition = edition
+        self.artIndex = artIndex
+        self.isFoil = isFoil
+        self.collectorNumber = collectorNumber
+        self.flags = flags
+
+    @staticmethod
+    def isFoilCardName(cardName):
+        return cardName.strip().endswith(CardDb.foilSuffix)
+
+    @staticmethod
+    def compose(*args):
+        # compose(PaperCard card)
+        if len(args) == 1:
+            card = args[0]
+            name = CardRequest.compose(card.getName(), card.isFoil())
+            return CardRequest.compose(name, card.getEdition(), card.getCollectorNumber(), card.getMarkedFlags().toMap())
+
+        if len(args) == 2:
+            cardName, second = args
+            # compose(String cardName, boolean isFoil)
+            if isinstance(second, bool):
+                isFoil = second
+                if isFoil:
+                    return cardName if CardRequest.isFoilCardName(cardName) else cardName + CardDb.foilSuffix
+                return cardName[0:len(cardName) - len(CardDb.foilSuffix)] if CardRequest.isFoilCardName(cardName) else cardName
+            # compose(String cardName, String setCode)
+            setCode = second
+            if setCode is None or _isBlank(setCode) or setCode == CardEdition.UNKNOWN_CODE:
+                setCode = ""
+            cardName = cardName if cardName is not None else ""
+            if cardName.find(CardDb.NameSetSeparator) != -1:
+                # If cardName is another RequestString, just get card name and forget about the rest.
+                cardName = CardRequest.fromString(cardName).cardName
+            return cardName + CardDb.NameSetSeparator + setCode
+
+        if len(args) == 3:
+            cardName, setCode, third = args
+            # compose(String cardName, String setCode, int artIndex)
+            if isinstance(third, int) and not isinstance(third, bool):
+                artIndex = third
+                requestInfo = CardRequest.compose(cardName, setCode)
+                artIndex = max(artIndex, IPaperCard.DEFAULT_ART_INDEX)
+                return requestInfo + CardDb.NameSetSeparator + str(artIndex)
+            # compose(String cardName, String setCode, String collectorNumber)
+            collectorNumber = third
+            requestInfo = CardRequest.compose(cardName, setCode)
+            # CollectorNumber will be wrapped in square brackets
+            collectorNumber = CardRequest.preprocessCollectorNumber(collectorNumber)
+            return requestInfo + CardDb.NameSetSeparator + collectorNumber
+
+        if len(args) == 4:
+            cardName, setCode, third, fourth = args
+            if isinstance(third, int) and not isinstance(third, bool):
+                artIndex = third
+                # compose(String cardName, String setCode, int artIndex, Map<String,String> flags)
+                if isinstance(fourth, dict) or fourth is None:
+                    flags = fourth
+                    requestInfo = CardRequest.compose(cardName, setCode)
+                    artIndex = max(artIndex, IPaperCard.DEFAULT_ART_INDEX)
+                    if flags is None:
+                        return requestInfo + CardDb.NameSetSeparator + str(artIndex)
+                    return requestInfo + CardDb.NameSetSeparator + str(artIndex) + CardRequest.getFlagSegment(flags)
+                # compose(String cardName, String setCode, int artIndex, String collectorNumber)
+                collectorNumber = fourth
+                requestInfo = CardRequest.compose(cardName, setCode, artIndex)
+                # CollectorNumber will be wrapped in square brackets
+                collectorNumber = CardRequest.preprocessCollectorNumber(collectorNumber)
+                return requestInfo + CardDb.NameSetSeparator + collectorNumber
+            # compose(String cardName, String setCode, String collectorNumber, Map<String,String> flags)
+            collectorNumber = third
+            flags = fourth
+            requestInfo = CardRequest.compose(cardName, setCode)
+            collectorNumber = CardRequest.preprocessCollectorNumber(collectorNumber)
+            if flags is None or len(flags) == 0:
+                return requestInfo + CardDb.NameSetSeparator + collectorNumber
+            return requestInfo + CardDb.NameSetSeparator + collectorNumber + CardRequest.getFlagSegment(flags)
+
+        raise TypeError("Invalid compose arguments")
+
+    @staticmethod
+    def preprocessCollectorNumber(collectorNumber):
+        if collectorNumber is None:
+            return ""
+        collectorNumber = collectorNumber.strip()
+        if not collectorNumber.startswith("["):
+            collectorNumber = "[" + collectorNumber
+        if not collectorNumber.endswith("]"):
+            collectorNumber += "]"
+        return collectorNumber
+
+    @staticmethod
+    def getFlagSegment(flags):
+        if flags is None:
+            return ""
+        flagText = CardDb.FlagSeparator.join(k + "=" + v for k, v in flags.items())
+        return CardDb.NameSetSeparator + CardDb.FlagPrefix + "{" + flagText + "}"
+
+    @staticmethod
+    def isCollectorNumber(s):
+        return s.startswith("[") and s.endswith("]")
+
+    @staticmethod
+    def isFlagSegment(s):
+        return s.startswith(CardDb.FlagPrefix)
+
+    @staticmethod
+    def isArtIndex(s):
+        return _isNumeric(s) and len(s) <= 2  # only artIndex between 1-99
+
+    @staticmethod
+    def isSetCode(s):
+        return not _isNumeric(s)
+
+    @staticmethod
+    def fromPreferredArtEntry(preferredArt, isFoil):
+        # Preferred Art Entry are supposed to be cardName|setCode|artIndex only
+        info = TextUtil.split(preferredArt, CardDb.NameSetSeparator)
+        if len(info) != 3:
+            return None
+        try:
+            cardName = info[0]
+            setCode = info[1]
+            artIndex = int(info[2])
+            return CardRequest(cardName, setCode, artIndex, isFoil, IPaperCard.NO_COLLECTOR_NUMBER, None)
+        except ValueError:
+            return None
+
+    @staticmethod
+    def fromString(reqInfo):
+        if reqInfo is None:
+            return None
+
+        info = TextUtil.split(reqInfo, CardDb.NameSetSeparator)
+        index = 1
+        cardName = info[0]
+        isFoil = False
+        artIndex = IPaperCard.NO_ART_INDEX
+        setCode = None
+        collectorNumber = IPaperCard.NO_COLLECTOR_NUMBER
+        flags = None
+        if CardRequest.isFoilCardName(cardName):
+            cardName = cardName[0:len(cardName) - len(CardDb.foilSuffix)]
+            isFoil = True
+
+        if len(info) > index and CardRequest.isSetCode(info[index]):
+            setCode = info[index]
+            index += 1
+        if len(info) > index and CardRequest.isArtIndex(info[index].replace(ImageKeys.BACKFACE_POSTFIX, "")):
+            artIndex = int(info[index].replace(ImageKeys.BACKFACE_POSTFIX, ""))
+            index += 1
+        if len(info) > index and CardRequest.isCollectorNumber(info[index]):
+            collectorNumber = info[index][1:len(info[index]) - 1]
+            index += 1
+        if len(info) > index and CardRequest.isFlagSegment(info[index]):
+            flagText = info[index][len(CardDb.FlagPrefix):]
+            flags = CardRequest.parseRequestFlags(flagText)
+
+        if CardEdition.UNKNOWN_CODE == setCode:  # ???
+            setCode = None
+        if setCode is None:
+            preferredArt = CardDb.artPrefs.get(cardName)
+            if preferredArt is not None:  # account for preferred art if needed
+                request = CardRequest.fromPreferredArtEntry(preferredArt, isFoil)
+                if request is not None:  # otherwise, simply discard it and go on.
+                    return request
+                sys.stderr.write("[LOG]: Faulty Entry in Preferred Art for Card %s - Please check!\n" % cardName)
+        # finally, check whether any between artIndex and CollectorNumber has been set
+        if collectorNumber == IPaperCard.NO_COLLECTOR_NUMBER and artIndex == IPaperCard.NO_ART_INDEX:
+            artIndex = IPaperCard.DEFAULT_ART_INDEX
+        return CardRequest(cardName, setCode, artIndex, isFoil, collectorNumber, flags)
+
+    @staticmethod
+    def parseRequestFlags(flagText):
+        flagText = flagText.strip()
+        if flagText == "":
+            return None
+        if not flagText.startswith("{"):
+            # Legacy form for marked colors. They'll be of the form "W#B#R"
+            flags = {}
+            normalizedColorString = ColorSet.fromNames(flagText.split(CardDb.FlagPrefix)).toString()
+            flags["markedColors"] = "".join(normalizedColorString)
+            return flags
+        flagText = flagText[1:len(flagText) - 1]  # Trim the braces.
+        # List of flags, a series of "key=value" text broken up by tabs.
+        result = {}
+        for f in flagText.split(CardDb.FlagSeparator):
+            entry = f.split("=", 1)
+            if len(entry) > 0:
+                # If there's no '=' in the entry, treat it as a boolean flag.
+                result[entry[0]] = entry[1] if len(entry) > 1 else "true"
+        return result
 ```

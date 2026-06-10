@@ -90,3 +90,40 @@ public class AbandonEffect extends SpellAbilityEffect {
 
 }
 ```
+
+## Python
+`forge/game/ability/effects/AbandonEffect.py`
+
+```python
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.trigger.TriggerType import TriggerType
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.Localizer import Localizer
+
+
+class AbandonEffect(SpellAbilityEffect):
+
+    # (non-Javadoc)
+    # @see forge.card.abilityfactory.SpellEffect#resolve(java.util.Map, forge.card.spellability.SpellAbility)
+    def resolve(self, sa: SpellAbility) -> None:
+        source = sa.getHostCard()
+        controller = source.getController()
+
+        isOptional = sa.hasParam("Optional")
+        if isOptional and not controller.getController().confirmAction(sa, None, Localizer.getInstance().getMessage("lblWouldYouLikeAbandonSource", source.getTranslatedName()), None):
+            return
+
+        if sa.hasParam("RememberAbandoned"):
+            source.addRemembered(source)
+
+        controller.getZone(ZoneType.Command).remove(source)
+        controller.getZone(ZoneType.SchemeDeck).add(source)
+
+        runParams: dict[AbilityKey, object] = AbilityKey.newMap()
+        runParams[AbilityKey.Scheme] = source
+        controller.getGame().getTriggerHandler().runTrigger(TriggerType.Abandoned, runParams, False)
+```

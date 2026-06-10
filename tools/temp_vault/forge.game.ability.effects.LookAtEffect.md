@@ -64,3 +64,29 @@ public class LookAtEffect extends SpellAbilityEffect {
 
 }
 ```
+
+## Python
+`forge/game/ability/effects/LookAtEffect.py`
+
+````python
+The output:
+
+```python
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Lang import Lang
+
+
+class LookAtEffect(SpellAbilityEffect):
+
+    def resolve(self, sa: SpellAbility) -> None:
+        sa.getHostCard().getGame().getAction().revealTo(self.getTargetCards(sa), sa.getActivatingPlayer())
+
+    def getStackDescription(self, sa: SpellAbility) -> str:
+        sb = []
+        sb.append(str(sa.getActivatingPlayer()))
+        sb.append(" looks at ")
+        sb.append(Lang.joinHomogenous(self.getTargetCards(sa)))
+        sb.append('.')
+        return "".join(sb)
+````

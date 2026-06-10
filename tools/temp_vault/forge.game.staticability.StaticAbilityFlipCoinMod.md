@@ -33,6 +33,12 @@ classDiagram
 - [[forge.game.staticability.StaticAbility|StaticAbility]]
 - [[forge.game.staticability.StaticAbilityMode|StaticAbilityMode]]
 
+## Design Description
+
+StaticAbilityFlipCoinMod is a stateless utility that resolves how continuous static abilities modify coin flips for a given player. Its two public methods answer distinct questions: `fixedResult` reports whether some effect forces a predetermined flip outcome, while `getFlipMultiplier` computes how many times flips are doubled, returning a power of two via a bit shift over the count of applicable doublers. Both delegate to the private `filterStaticAbilities` helper, which scans cards in the relevant zones, flattens their StaticAbility instances, and filters by StaticAbilityMode (FlipCoinMod or FlipCoinDoubler) and player validity.
+
+As a non-instantiable helper rather than a subtype, it centralizes flip-modification logic so callers stay decoupled from how abilities are located. It collaborates with Player to reach the game state, StaticAbility for ability data and condition checks, and StaticAbilityMode to distinguish effect categories, using Java streams for a compact, declarative query.
+
 ## Source
 `forge-game/src/main/java/forge/game/staticability/StaticAbilityFlipCoinMod.java`
 
@@ -70,4 +76,36 @@ public class StaticAbilityFlipCoinMod {
     }
 
 }
+```
+
+## Python
+`forge/game/staticability/StaticAbilityFlipCoinMod.py`
+
+```python
+from forge.game.player.Player import Player
+from forge.game.zone.ZoneType import ZoneType
+from forge.game.staticability.StaticAbility import StaticAbility
+from forge.game.staticability.StaticAbilityMode import StaticAbilityMode
+
+import typing
+
+
+class StaticAbilityFlipCoinMod:
+
+    @staticmethod
+    def fixedResult(flipper: Player) -> typing.Optional[bool]:
+        for stAb in StaticAbilityFlipCoinMod.filterStaticAbilities(flipper, StaticAbilityMode.FlipCoinMod):
+            return bool(stAb.getParam("Result"))
+        return None
+
+    @staticmethod
+    def getFlipMultiplier(flipper: Player) -> int:
+        return 1 << sum(1 for _ in StaticAbilityFlipCoinMod.filterStaticAbilities(flipper, StaticAbilityMode.FlipCoinDoubler))
+
+    @staticmethod
+    def filterStaticAbilities(flipper: Player, mode: StaticAbilityMode) -> typing.Iterator[StaticAbility]:
+        for card in flipper.getGame().getCardsIn(ZoneType.STATIC_ABILITIES_SOURCE_ZONES):
+            for stAb in card.getStaticAbilities():
+                if stAb.checkConditions(mode) and stAb.matchesValidParam("ValidPlayer", flipper):
+                    yield stAb
 ```

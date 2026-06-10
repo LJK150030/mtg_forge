@@ -46,7 +46,7 @@ classDiagram
 
 ## Design Description
 
-AlterAttributeAi provides the AI's reasoning for spell abilities that change card attributes—Solve, Suspect, Saddle, and Prepare. As a concrete subclass of `SpellAbilityAi`, it overrides the framework's decision hooks: `checkApiLogic` decides whether (and on which card) to activate, `checkPhaseRestrictions` gates timing, and `confirmAction` answers runtime prompts. Each returns through `AiAbilityDecision`/`AiPlayDecision` verdicts the engine consumes. It reads parameters and targets from `SpellAbility`, and inspects `Card`/`CardCollection` via `CardLists`, `CardPredicates`, and `ComputerUtilCard` to score creatures.
+AlterAttributeAi provides the AI's reasoning for spell abilities that change card attributesâ€”Solve, Suspect, Saddle, and Prepare. As a concrete subclass of `SpellAbilityAi`, it overrides the framework's decision hooks: `checkApiLogic` decides whether (and on which card) to activate, `checkPhaseRestrictions` gates timing, and `confirmAction` answers runtime prompts. Each returns through `AiAbilityDecision`/`AiPlayDecision` verdicts the engine consumes. It reads parameters and targets from `SpellAbility`, and inspects `Card`/`CardCollection` via `CardLists`, `CardPredicates`, and `ComputerUtilCard` to score creatures.
 
 The design embeds per-attribute heuristics keyed off the `Attributes` parameter: it treats Suspected as beneficial, preferring to grant Menace to its own or allied creatures and otherwise saddling weak opposing blockers (those with Defender or Vigilance); it skips redundant Solve/Saddle/Prepare on already-affected cards; and it enforces Saddle's sorcery-speed, pre-combat, must-be-able-to-attack timing through `PhaseHandler` and `CombatUtil`. Targeting remains partially unimplemented, flagged by an explicit TODO.
 
@@ -213,4 +213,128 @@ public class AlterAttributeAi extends SpellAbilityAi {
         return true;
     }
 }
+```
+
+## Python
+`forge/ai/ability/AlterAttributeAi.py`
+
+```python
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.ai.ComputerUtilCard import ComputerUtilCard
+from forge.ai.SpellAbilityAi import SpellAbilityAi
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CardPredicates import CardPredicates
+from forge.game.combat.CombatUtil import CombatUtil
+from forge.game.keyword.Keyword import Keyword
+from forge.game.phase.PhaseHandler import PhaseHandler
+from forge.game.phase.PhaseType import PhaseType
+from forge.game.player.Player import Player
+from forge.game.player.PlayerActionConfirmMode import PlayerActionConfirmMode
+from forge.game.spellability.SpellAbility import SpellAbility
+
+from typing import List, Map
+
+
+class AlterAttributeAi(SpellAbilityAi):
+
+    def checkApiLogic(self, aiPlayer: Player, sa: SpellAbility) -> AiAbilityDecision:
+        source = sa.getHostCard()
+        activate = sa.getParamOrDefault("Activate", "true").lower() == "true"
+        attributes = sa.getParam("Attributes").split(",")
+
+        if sa.usesTargeting():
+            # TODO add targeting logic
+            # needed for Suspected
+            for attr in attributes:
+                match attr.strip():
+                    case "Suspect" | "Suspected":
+                        # below, Suspected is treated as better, so target own beefy stuff to give it Menace if possible
+                        # first, check our own and our teammates' cards
+                        targetableCards = CardLists.getTargetableCards(aiPlayer.getCreaturesInPlay(), sa)
+                        if targetableCards.isEmpty():
+                            # look for allied stuff if we have nothing
+                            targetableCards = CardLists.getTargetableCards(aiPlayer.getAllies().getCreaturesInPlay(), sa)
+                        if not targetableCards.isEmpty():
+                            bestTgt = ComputerUtilCard.getBestAI(CardLists.filter(targetableCards,
+                                    CardPredicates.hasKeyword(Keyword.MENACE).negate()))
+                            if bestTgt is None:
+                                bestTgt = ComputerUtilCard.getBestAI(targetableCards)
+                            sa.resetTargets()
+                            sa.getTargets().add(bestTgt)
+                            return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+                        # still no target, so look at the opposing stuff, try to target things that have Defender, Vigilance, or are weak
+                        # in general, target worst stuff here, hopefully chump blockers and the like
+                        targetableCards = CardLists.getTargetableCards(aiPlayer.getOpponents().getCreaturesInPlay(), sa)
+                        if not targetableCards.isEmpty():
+                            bestTgt = ComputerUtilCard.getWorstAI(CardLists.filter(targetableCards,
+                                    CardPredicates.hasKeyword(Keyword.VIGILANCE).or_(CardPredicates.hasKeyword(Keyword.DEFENDER))))
+                            if bestTgt is None:
+                                bestTgt = ComputerUtilCard.getWorstAI(targetableCards)
+                            sa.resetTargets()
+                            sa.getTargets().add(bestTgt)
+                            return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+                        # still no target, so bail, because nothing is targetable at this point
+            return AiAbilityDecision(0, AiPlayDecision.TargetingFailed)
+
+        defined = AbilityUtils.getDefinedCards(source, sa.getParam("Defined"), sa)
+
+        for c in defined:
+            for attr in attributes:
+                match attr.strip():
+                    case "Solve" | "Solved":
+                        # there is currently no effect that would un-solve something
+                        if not c.isSolved() and activate:
+                            return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+                    case "Suspect" | "Suspected":
+                        # is Suspected good or bad?
+                        # currently Suspected is better
+                        if not activate:
+                            return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+                        return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+                    case "Saddle" | "Saddled":
+                        # AI should not try to Saddle again?
+                        if c.isSaddled():
+                            return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+                        return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+                    case "Prepare" | "Prepared":
+                        # AI should not try to Prepare creatures that are already Prepared
+                        if c.isPrepared():
+                            return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+                        return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+        return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+    def checkPhaseRestrictions(self, ai: Player, sa: SpellAbility, ph: PhaseHandler) -> bool:
+        source = sa.getHostCard()
+        attributes = sa.getParam("Attributes").split(",")
+
+        # currently Phase is only checked for Saddled
+
+        for attr in attributes:
+            match attr.strip():
+                case "Saddle" | "Saddled":
+                    if not ph.isPlayerTurn(ai):
+                        return False
+                    # it is too late for combat, Saddle is Sorcery Speed
+                    if not ph.getPhase().isBefore(PhaseType.COMBAT_BEGIN):
+                        return False
+                    # would card attack?
+                    if not CombatUtil.canAttack(source):
+                        return False
+
+        return True
+
+    def confirmAction(self, player: Player, sa: SpellAbility, mode: PlayerActionConfirmMode, message: str, params: Map[str, object]) -> bool:
+        activate = sa.getParamOrDefault("Activate", "true").lower() == "true"
+        attributes = sa.getParam("Attributes").split(",")
+
+        for attr in attributes:
+            match attr.strip():
+                case "Suspect" | "Suspected":
+                    return activate
+
+        return True
 ```

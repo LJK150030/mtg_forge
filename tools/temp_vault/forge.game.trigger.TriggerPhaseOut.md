@@ -37,6 +37,12 @@ classDiagram
 - [[forge.game.card.Card|Card]]
 - [[forge.game.spellability.SpellAbility|SpellAbility]]
 
+## Design Description
+
+Phasing out is a triggered ability that fires when a permanent phases out of the game. The class extends `Trigger`, supplying the three hooks the trigger framework requires: `performTest` filters firing against the host's `ValidCard` restriction, matching it against the `AbilityKey.Card` run parameter; `setTriggeringObjects` binds that card onto the resolving `SpellAbility` so downstream effects can reference it; and `getImportantStackObjects` produces a localized, human-readable stack description naming the phased-out card.
+
+The design is deliberately minimalâ€”a thin, declarative specialization of `Trigger` that carries no state beyond what the base constructor stores, delegating all parameter parsing and lifecycle handling to the superclass. It collaborates with `Card` and `SpellAbility` only transiently through the `AbilityKey` map, and routes user-facing text through `Localizer` to keep presentation translatable.
+
 ## Source
 `forge-game/src/main/java/forge/game/trigger/TriggerPhaseOut.java`
 
@@ -80,4 +86,37 @@ public class TriggerPhaseOut extends Trigger {
         return sb.toString();
     }
 }
+```
+
+## Python
+`forge/game/trigger/TriggerPhaseOut.py`
+
+```python
+from forge.game.trigger.Trigger import Trigger
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Localizer import Localizer
+
+
+class TriggerPhaseOut(Trigger):
+
+    def __init__(self, params: dict[str, str], host: Card, intrinsic: bool):
+        super().__init__(params, host, intrinsic)
+
+    def performTest(self, runParams: dict[AbilityKey, object]) -> bool:
+        if not self.matchesValidParam("ValidCard", runParams.get(AbilityKey.Card)):
+            return False
+
+        return True
+
+    def setTriggeringObjects(self, sa: SpellAbility, runParams: dict[AbilityKey, object]) -> None:
+        sa.setTriggeringObjectsFrom(runParams, AbilityKey.Card)
+
+    def getImportantStackObjects(self, sa: SpellAbility) -> str:
+        sb = []
+        sb.append(Localizer.getInstance().getMessage("lblPhasedOut"))
+        sb.append(": ")
+        sb.append(str(sa.getTriggeringObject(AbilityKey.Card)))
+        return "".join(sb)
 ```

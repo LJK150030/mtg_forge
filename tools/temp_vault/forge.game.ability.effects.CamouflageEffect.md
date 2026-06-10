@@ -43,7 +43,7 @@ classDiagram
 
 CamouflageEffect is a concrete `SpellAbilityEffect` that resolves the Camouflage combat mechanic, in which a defender's creatures are committed as randomized, hidden blocker piles. Its overridden `resolve` builds one blocker pile per attacker, branching on the declarer: an AI declarer simply declares blockers normally and has them pulled back into piles, while a human declarer is prompted to partition the defender's legal creatures into numbered piles, tracking how many attackers each creature may block. The private `randomizeBlockers` helper then shuffles the attackers and commits piles into the live `Combat`.
 
-It collaborates with `Card` and `CardCollection` to represent creatures and piles, `Player` for the declarer and defender roles, and `SpellAbility` for parameters and controller prompts. A deliberate design choice is that legality is re-checked after shuffling—`CombatUtil` strips illegal blockers, enforces minimum-blocker counts, and forces a single choice when restrictions cap blocking—so the random reassignment can never yield an illegal block.
+It collaborates with `Card` and `CardCollection` to represent creatures and piles, `Player` for the declarer and defender roles, and `SpellAbility` for parameters and controller prompts. A deliberate design choice is that legality is re-checked after shufflingâ€”`CombatUtil` strips illegal blockers, enforces minimum-blocker counts, and forces a single choice when restrictions cap blockingâ€”so the random reassignment can never yield an illegal block.
 
 ## Source
 `forge-game/src/main/java/forge/game/ability/effects/CamouflageEffect.java`
@@ -156,4 +156,95 @@ public class CamouflageEffect extends SpellAbilityEffect {
     }
 
 }
+```
+
+## Python
+`forge/game/ability/effects/CamouflageEffect.py`
+
+```python
+from typing import List
+
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardLists import CardLists
+from forge.game.combat.Combat import Combat
+from forge.game.combat.CombatUtil import CombatUtil
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.staticability.StaticAbilityCantAttackBlock import StaticAbilityCantAttackBlock
+from forge.util.Localizer import Localizer
+
+
+class CamouflageEffect(SpellAbilityEffect):
+
+    def randomizeBlockers(self, sa: SpellAbility, combat: Combat, declarer: Player, defender: Player, attackers: List[Card], blockerPiles: List[CardCollection]) -> None:
+        CardLists.shuffle(attackers)
+        for i in range(len(attackers)):
+            attacker = attackers[i]
+            blockers = blockerPiles[i]
+
+            # Remove all illegal blockers first
+            for j in range(blockers.size() - 1, -1, -1):
+                blocker = blockers.get(j)
+                if not CombatUtil.canBlock(attacker, blocker, combat):
+                    blockers.remove(j)
+
+            if blockers.size() < CombatUtil.getMinNumBlockersForAttacker(attacker, defender):
+                # If not enough remaining creatures to block, don't add them as blocker
+                continue
+
+            if StaticAbilityCantAttackBlock.getMinMaxBlocker(attacker, defender).getRight() < blockers.size():
+                # If no more than one creature can block, order the player to choose one to block
+                chosen = declarer.getController().chooseCardsForEffect(blockers, sa,
+                    Localizer.getInstance().getMessage("lblChooseBlockerForAttacker", attacker.toString()), 1, 1, False, None).get(0)
+                combat.addBlocker(attacker, chosen)
+                continue
+
+            # Add all remaning blockers normally
+            for blocker in blockers:
+                combat.addBlocker(attacker, blocker)
+
+    def resolve(self, sa: SpellAbility) -> None:
+        hostCard = sa.getHostCard()
+        declarer = self.getDefinedPlayersOrTargeted(sa).get(0)
+        defender = AbilityUtils.getDefinedPlayers(hostCard, sa.getParam("Defender"), sa).get(0)
+        combat = hostCard.getGame().getCombat()
+        attackers = combat.getAttackers()
+        blockerPiles: List[CardCollection] = []
+
+        if declarer.isAI():
+            # For AI player, just let it declare blockers normally, then randomize it later.
+            declarer.getController().declareBlockers(defender, combat)
+            # Remove all blockers first
+            for attacker in attackers:
+                blockers = combat.getBlockers(attacker)
+                blockerPiles.append(blockers)
+                for blocker in blockers:
+                    combat.removeFromCombat(blocker)
+        else:  # Human player
+            pool = CardCollection(defender.getCreaturesInPlay())
+            # remove all blockers that can't block
+            for blocker in pool:
+                if not CombatUtil.canBlock(blocker):
+                    pool.remove(blocker)
+            blockedSoFar = [0] * pool.size()
+
+            for i in range(len(attackers)):
+                size = pool.size()
+                blockers = CardCollection(declarer.getController().chooseCardsForEffect(
+                    pool, sa, Localizer.getInstance().getMessage("lblChooseBlockersForPile", str(i + 1)), 0, size, False, None))
+                blockerPiles.append(blockers)
+                # Remove chosen creatures, unless it can block additional attackers
+                for blocker in blockers:
+                    index = pool.indexOf(blocker)
+                    blockedCount = blockedSoFar[index] + 1
+                    if not blocker.canBlockAny() and blocker.canBlockAdditional() < blockedCount:
+                        pool.remove(index)
+                        del blockedSoFar[index]
+                    else:
+                        blockedSoFar[index] = blockedCount
+
+        self.randomizeBlockers(sa, combat, declarer, defender, attackers, blockerPiles)
 ```

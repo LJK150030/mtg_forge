@@ -34,6 +34,12 @@ classDiagram
 - [[forge.game.player.Player|Player]]
 - [[forge.game.staticability.StaticAbility|StaticAbility]]
 
+## Design Description
+
+Infect-style damage modification rules for player targets via the static-ability system. Its static `isInfectDamage` scans every card in the zones that can source static abilities, checking each `StaticAbility` whose mode and conditions match `InfectDamage`, and reports whether any applies to the given `Player` target. The companion `applyInfectDamageAbility` performs the per-ability test, validating the target against the ability's `ValidTarget` parameter.
+
+As a stateless utility holding only static methods, it owns no data and implements no interface; it collaborates with `StaticAbility` for condition and parameter matching and reaches the relevant cards through `Player` and `Game`. This mirrors Forge's broader `StaticAbility*` convention of grouping each static-ability mode's evaluation logic into a dedicated helper, keeping rule-resolution concerns separate from the ability and game-state classes it consults.
+
 ## Source
 `forge-game/src/main/java/forge/game/staticability/StaticAbilityInfectDamage.java`
 
@@ -69,4 +75,35 @@ public class StaticAbilityInfectDamage {
         return true;
     }
 }
+```
+
+## Python
+`forge/game/staticability/StaticAbilityInfectDamage.py`
+
+```python
+from forge.game.Game import Game
+from forge.game.card.Card import Card
+from forge.game.player.Player import Player
+from forge.game.staticability.StaticAbility import StaticAbility
+from forge.game.zone.ZoneType import ZoneType
+
+
+class StaticAbilityInfectDamage:
+
+    @staticmethod
+    def isInfectDamage(target: Player) -> bool:
+        game = target.getGame()
+        for ca in game.getCardsIn(ZoneType.STATIC_ABILITIES_SOURCE_ZONES):
+            for stAb in ca.getStaticAbilities():
+                if not stAb.checkConditions(StaticAbilityMode.InfectDamage):
+                    continue
+                if StaticAbilityInfectDamage.applyInfectDamageAbility(stAb, target):
+                    return True
+        return False
+
+    @staticmethod
+    def applyInfectDamageAbility(stAb: StaticAbility, target: Player) -> bool:
+        if not stAb.matchesValidParam("ValidTarget", target):
+            return False
+        return True
 ```

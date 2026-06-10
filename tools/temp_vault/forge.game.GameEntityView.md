@@ -145,3 +145,79 @@ public abstract class GameEntityView extends TrackableObject {
     }
 }
 ```
+
+## Python
+`forge/game/GameEntityView.py`
+
+```python
+from forge.game.GameEntity import GameEntity
+from forge.game.GameEntityViewMap import GameEntityViewMap
+from forge.game.card.CardView import CardView
+from forge.trackable.TrackableCollection import TrackableCollection
+from forge.trackable.TrackableObject import TrackableObject
+from forge.trackable.TrackableProperty import TrackableProperty
+from forge.trackable.Tracker import Tracker
+
+
+class GameEntityView(TrackableObject):
+    serialVersionUID = -5129089945124455670
+
+    @staticmethod
+    def get(e: GameEntity) -> "GameEntityView":
+        return None if e is None else e.getView()
+
+    @staticmethod
+    def getEntityCollection(entities) -> "TrackableCollection[GameEntityView]":
+        if entities is None:
+            return None
+        collection = TrackableCollection()
+        for e in entities:
+            collection.add(e.getView())
+        return collection
+
+    @staticmethod
+    def getMap(spabs) -> "GameEntityViewMap":
+        gameViewCache = GameEntityViewMap()
+        gameViewCache.putAll(spabs)
+        return gameViewCache
+
+    def __init__(self, id0: int, tracker: Tracker):
+        super().__init__(id0, tracker)
+
+    def toString(self) -> str:
+        return self.getName()
+
+    def getName(self) -> str:
+        return self.get(TrackableProperty.Name)
+
+    def updateName(self, e: GameEntity) -> None:
+        self.set(TrackableProperty.Name, e.getName())
+
+    def getPreventNextDamage(self) -> int:
+        return self.get(TrackableProperty.PreventNextDamage)
+
+    def updatePreventNextDamage(self, e: GameEntity) -> None:
+        self.set(TrackableProperty.PreventNextDamage, e.getPreventNextDamageTotalShields())
+
+    def getAttachedCards(self):
+        if self.hasAnyCardAttachments():
+            active = [c for c in self.get(TrackableProperty.AttachedCards) if not c.isPhasedOut()]
+            if len(active) != 0:
+                return active
+        return None
+
+    def hasCardAttachments(self) -> bool:
+        return self.getAttachedCards() is not None
+
+    def getAllAttachedCards(self):
+        return self.get(TrackableProperty.AttachedCards)
+
+    def hasAnyCardAttachments(self) -> bool:
+        return self.getAllAttachedCards() is not None
+
+    def updateAttachedCards(self, e: GameEntity) -> None:
+        if not e.getAllAttachedCards().isEmpty():
+            self.set(TrackableProperty.AttachedCards, CardView.getCollection(e.getAllAttachedCards()))
+        else:
+            self.set(TrackableProperty.AttachedCards, None)
+```

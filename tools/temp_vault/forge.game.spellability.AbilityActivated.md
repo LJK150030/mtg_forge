@@ -46,6 +46,12 @@ classDiagram
 - [[forge.game.player.Player|Player]]
 - [[forge.game.spellability.TargetRestrictions|TargetRestrictions]]
 
+## Design Description
+
+AbilityActivated is an abstract base class for activated abilities in Forge's spell-ability subsystem, sitting between the generic SpellAbility supertype and concrete ability implementations. Extending SpellAbility and implementing Cloneable, it specializes that hierarchy by distinguishing activated abilities from triggers (isActivatedAbility) and by enforcing the rules governing when such an ability may be used. Its convenience constructors build a Cost from either a raw mana-cost string or an explicit Cost plus TargetRestrictions, delegating to the superclass.
+
+Its core responsibility is play-legality checking: canPlay collaborates with Card, Player, and Game to verify mana payability (CR 118.6), split-second, detention, suppression, restriction, and additional-cost constraints, while checkRestrictions consults static cant-be-activated effects and isPossible enforces zone and activator restrictions. The design intentionally treats abilities as always "possible" but conditionally playable, and overrides clone() as final to guarantee safe copying.
+
 ## Source
 `forge-game/src/main/java/forge/game/spellability/AbilityActivated.java`
 
@@ -195,4 +201,97 @@ public abstract class AbilityActivated extends SpellAbility implements Cloneable
         }
     }
 }
+```
+
+## Python
+`forge/game/spellability/AbilityActivated.py`
+
+```python
+from forge.game.Game import Game
+from forge.game.card.Card import Card
+from forge.game.cost.Cost import Cost
+from forge.game.cost.CostPayment import CostPayment
+from forge.game.player.Player import Player
+from forge.game.player.PlayerController.FullControlFlag import FullControlFlag
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.spellability.TargetRestrictions import TargetRestrictions
+from forge.game.staticability.StaticAbilityCantBeCast import StaticAbilityCantBeCast
+
+
+class AbilityActivated(SpellAbility):
+    """
+    Abstract Ability_Activated class.
+
+    @author Forge
+    @version $Id$
+    """
+
+    def __init__(self, *args):
+        # Constructor for Ability_Activated.
+        #
+        # Overload 1: (Card card, String manacost)
+        # Overload 2: (Card sourceCard, Cost abCost, TargetRestrictions tgt)
+        if len(args) == 2:
+            card, manacost = args
+            self.__init__(card, Cost(manacost, True), None)
+            return
+
+        sourceCard, abCost, tgt = args
+        super().__init__(sourceCard, abCost)
+        self.setTargetRestrictions(tgt)
+
+    def isActivatedAbility(self) -> bool:
+        return not self.isTrigger()
+
+    def canPlay(self) -> bool:
+        # CR 118.6 cost is unpayable
+        if self.getPayCosts().hasManaCost() and self.getPayCosts().getCostMana().getManaCostFor(self).isNoCost():
+            return False
+
+        player = self.getActivatingPlayer()
+        if player is None:
+            player = self.getHostCard().getController()
+
+        game = player.getGame()
+        if game.getStack().isSplitSecondOnStack() and not self.isManaAbility():
+            return False
+
+        c = self.getHostCard()
+
+        if self.isSuppressed():
+            return False
+        if c.isDetained():
+            return False
+
+        if not self.getRestrictions().canPlay(c, self):
+            return False
+
+        return player.getController().isFullControl(FullControlFlag.AllowPaymentStartWithMissingResources) \
+            or CostPayment.canPayAdditionalCosts(self.getPayCosts(), self, False)
+
+    def checkRestrictions(self, host: Card, activator: Player) -> bool:
+        return not StaticAbilityCantBeCast.cantBeActivatedAbility(self, host, activator)
+
+    def isPossible(self) -> bool:
+        # consider activated abilities possible always and simply disable if not currently playable
+        # the exception is to consider them not possible if there's a zone or activator restriction that's not met
+
+        # FIXME: Something is potentially leading to hard-to-reproduce conditions where this method is getting called
+        # with no activator set for the SA (by the AI). Most likely deserves a better fix in the future.
+        if self.getActivatingPlayer() is None:
+            self.setActivatingPlayer(self.getHostCard().getController())
+            print(self.getHostCard().getName() + " Did not have activator set in AbilityActivated.isPossible")
+
+        return self.getRestrictions().checkZoneRestrictions(self.getHostCard(), self) and \
+               self.getRestrictions().checkActivatorRestrictions(self.getHostCard(), self)
+
+    def promptIfOnlyPossibleAbility(self) -> bool:
+        return False  # TODO: allow showing prompt based on whether ability has cost that requires user input and possible "misclick protection" setting
+        # return not self.isManaAbility()  # prompt user for non-mana activated abilities even is only possible ability
+
+    def clone(self):
+        try:
+            return super().clone()
+        except Exception as ex:
+            raise RuntimeError("AbilityActivated : clone() error, " + str(ex))
 ```

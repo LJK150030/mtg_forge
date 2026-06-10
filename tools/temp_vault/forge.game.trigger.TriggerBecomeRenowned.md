@@ -37,6 +37,12 @@ classDiagram
 - [[forge.game.card.Card|Card]]
 - [[forge.game.spellability.SpellAbility|SpellAbility]]
 
+## Design Description
+
+Renowned is a card that becomes renowned when it deals combat damage to a player.
+
+TriggerBecomeRenowned is a concrete trigger that fires when a creature becomes renowned. Extending the abstract `Trigger` base class, it specializes the generic trigger machinery for this single event type. Its `performTest` filters firings against the optional `ValidCard` restriction by examining the `AbilityKey.Card` entry in the run-parameter map, while `setTriggeringObjects` forwards that card into the resolving `SpellAbility` so downstream effects can reference it. `getImportantStackObjects` produces a localized, human-readable stack summary naming the renowned card. The design follows the engine's data-driven trigger pattern: behavior is configured through the `params` map passed to the superclass constructor, and the class collaborates with `AbilityKey`, `Card`, and `SpellAbility` purely to route the triggering creature through Forge's shared event-resolution pipeline.
+
 ## Source
 `forge-game/src/main/java/forge/game/trigger/TriggerBecomeRenowned.java`
 
@@ -117,4 +123,54 @@ public class TriggerBecomeRenowned extends Trigger {
         return sb.toString();
     }
 }
+```
+
+## Python
+`forge/game/trigger/TriggerBecomeRenowned.py`
+
+```python
+package forge.game.trigger
+
+from typing import Optional
+
+from forge.game.trigger.Trigger import Trigger
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Localizer import Localizer
+
+
+class TriggerBecomeRenowned(Trigger):
+    """
+    Trigger_BecomeRenowned class.
+
+    @author Forge
+    @version $Id: TriggerBecomeRenowned.java 21543 2013-05-19 21:35:20Z Max mtg $
+    """
+
+    def __init__(self, params: dict[str, str], host: Card, intrinsic: bool):
+        """
+        Constructor for Trigger_BecomeRenowned.
+
+        :param params: a dict object.
+        :param host: a Card object.
+        :param intrinsic: the intrinsic
+        """
+        super().__init__(params, host, intrinsic)
+
+    def performTest(self, runParams: dict[AbilityKey, object]) -> bool:
+        if not self.matchesValidParam("ValidCard", runParams.get(AbilityKey.Card)):
+            return False
+
+        return True
+
+    def setTriggeringObjects(self, sa: SpellAbility, runParams: dict[AbilityKey, object]) -> None:
+        sa.setTriggeringObjectsFrom(runParams, AbilityKey.Card)
+
+    def getImportantStackObjects(self, sa: SpellAbility) -> str:
+        sb = []
+        sb.append(Localizer.getInstance().getMessage("lblRenowned"))
+        sb.append(": ")
+        sb.append(str(sa.getTriggeringObject(AbilityKey.Card)))
+        return "".join(sb)
 ```

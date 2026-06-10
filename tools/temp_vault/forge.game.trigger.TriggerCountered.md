@@ -37,6 +37,12 @@ classDiagram
 - [[forge.game.card.Card|Card]]
 - [[forge.game.spellability.SpellAbility|SpellAbility]]
 
+## Design Description
+
+TriggerCountered is a concrete trigger that fires when a spell or ability is countered. Extending the abstract `Trigger` base class, it specializes the template by implementing `performTest` to gate firing against the trigger's configured `ValidCard`, `ValidCause`, and `ValidSA` parameters, and `setTriggeringObjects` to bind the corresponding `Card`, `Cause`, and `SpellAbility` values from the runtime parameter map onto the firing `SpellAbility`. It identifies the relevant objects through the type-safe `AbilityKey` enum rather than raw string keys, and is constructed from a parameter map alongside a host `Card` and an intrinsic flag.
+
+The class reflects Forge's data-driven trigger design, where each subclass supplies only the matching and binding logic specific to one game event while inheriting the firing lifecycle from `Trigger`. Its `getImportantStackObjects` override builds a localized, human-readable summary of the countered card and its cause via `Localizer`, keeping presentation strings out of the engine core and supporting internationalization.
+
 ## Source
 `forge-game/src/main/java/forge/game/trigger/TriggerCountered.java`
 
@@ -128,4 +134,55 @@ public class TriggerCountered extends Trigger {
         return sb.toString();
     }
 }
+```
+
+## Python
+`forge/game/trigger/TriggerCountered.py`
+
+```python
+from forge.game.trigger.Trigger import Trigger
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Localizer import Localizer
+
+
+class TriggerCountered(Trigger):
+    """
+    Trigger_Countered class.
+
+    @author Forge
+    @version $Id: TriggerCountered.java 17802 2012-10-31 08:05:14Z Max mtg $
+    """
+
+    def __init__(self, params: dict[str, str], host: Card, intrinsic: bool):
+        super().__init__(params, host, intrinsic)
+
+    def performTest(self, runParams: dict[AbilityKey, object]) -> bool:
+        if not self.matchesValidParam("ValidCard", runParams.get(AbilityKey.Card)):
+            return False
+        if not self.matchesValidParam("ValidCause", runParams.get(AbilityKey.Cause)):
+            return False
+        if not self.matchesValidParam("ValidSA", runParams.get(AbilityKey.SpellAbility)):
+            return False
+        return True
+
+    def setTriggeringObjects(self, sa: SpellAbility, runParams: dict[AbilityKey, object]) -> None:
+        sa.setTriggeringObjectsFrom(
+            runParams,
+            AbilityKey.Card,
+            AbilityKey.Cause,
+            AbilityKey.SpellAbility
+        )
+
+    def getImportantStackObjects(self, sa: SpellAbility) -> str:
+        sb = []
+        sb.append(Localizer.getInstance().getMessage("lblCountered"))
+        sb.append(": ")
+        sb.append(str(sa.getTriggeringObject(AbilityKey.Card)))
+        sb.append(", ")
+        sb.append(Localizer.getInstance().getMessage("lblCause"))
+        sb.append(": ")
+        sb.append(str(sa.getTriggeringObject(AbilityKey.Cause)))
+        return "".join(sb)
 ```

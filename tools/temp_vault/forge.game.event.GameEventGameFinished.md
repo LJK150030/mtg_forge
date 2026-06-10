@@ -34,7 +34,7 @@ classDiagram
 
 ## Design Description
 
-A record representing the terminal event in a game's lifecycle, signaling that play has concluded. As a parameterless record it carries no state — its existence in the event stream is the entire payload, making it a lightweight, immutable notification.
+A record representing the terminal event in a game's lifecycle, signaling that play has concluded. As a parameterless record it carries no state â€” its existence in the event stream is the entire payload, making it a lightweight, immutable notification.
 
 It implements the `GameEvent` interface and participates in the visitor pattern via the generic `visit` method, dispatching to `IGameEventVisitor.visit(this)` so that handlers can supply type-specific return values without the event itself knowing its consumers. The overridden `toString` yields a fixed human-readable label, "Game finished," useful for logging. A telling source comment notes the class must fire after the game log is assembled from prior events, revealing its intended ordering as a final, post-processing signal in the event sequence.
 
@@ -59,4 +59,24 @@ public record GameEventGameFinished() implements GameEvent {
         return "Game finished";
     }
 } // need this class to launch after log was built via previous event
+```
+
+## Python
+`forge/game/event/GameEventGameFinished.py`
+
+```python
+from forge.game.event.GameEvent import GameEvent
+from forge.game.event.IGameEventVisitor import IGameEventVisitor
+
+
+class GameEventGameFinished(GameEvent):
+
+    def visit(self, visitor: "IGameEventVisitor") -> object:
+        return visitor.visit(self)
+
+    # (non-Javadoc)
+    # @see java.lang.Object#toString()
+    def __str__(self) -> str:
+        return "Game finished"
+# need this class to launch after log was built via previous event
 ```

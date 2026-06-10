@@ -48,7 +48,7 @@ classDiagram
 
 ## Design Description
 
-The `IEntityMap` interface defines a mapping abstraction that translates game objects from one game state into their corresponding objects in another—primarily to support cloning or simulating a `Game`, where entities must be rebound to equivalents in a parallel state. It centers on two required operations, `getGame()` and the polymorphic `map(GameObject)`, from which all other behavior derives.
+The `IEntityMap` interface defines a mapping abstraction that translates game objects from one game state into their corresponding objects in anotherâ€”primarily to support cloning or simulating a `Game`, where entities must be rebound to equivalents in a parallel state. It centers on two required operations, `getGame()` and the polymorphic `map(GameObject)`, from which all other behavior derives.
 
 The interface leans heavily on default methods to minimize implementer burden: typed overloads for `Player`, `Card`, and `GameEntity` simply delegate to the core `map(GameObject)` via casts, while `mapCollection` and the generic `mapList` provide bulk translation by iterating and remapping each element into a fresh `CardCollection` or `List`. This design concentrates the real logic in a single implementer-supplied method and exposes convenience, type-safe entry points for the various collaborator types (`Player`, `Card`, `CardCollectionView`) it operates over.
 
@@ -101,4 +101,48 @@ public interface IEntityMap {
     }
 
 }
+```
+
+## Python
+`forge/game/IEntityMap.py`
+
+```python
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.player.Player import Player
+from forge.game.Game import Game
+from forge.game.GameEntity import GameEntity
+from forge.game.GameObject import GameObject
+
+import typing
+
+
+class IEntityMap:
+    def getGame(self) -> Game:
+        raise NotImplementedError
+
+    def map(self, o: GameObject) -> GameObject:
+        raise NotImplementedError
+
+    def mapPlayer(self, p: Player) -> Player:
+        return self.map(p)
+
+    def mapCard(self, c: Card) -> Card:
+        return self.map(c)
+
+    def mapGameEntity(self, e: GameEntity) -> GameEntity:
+        return self.map(e)
+
+    def mapCollection(self, cards: CardCollectionView) -> CardCollection:
+        collection = CardCollection()
+        for c in cards:
+            collection.add(self.mapCard(c))
+        return collection
+
+    def mapList(self, objects: typing.List[typing.Any]) -> typing.List[typing.Any]:
+        result = []
+        for o in objects:
+            result.append(self.map(o))
+        return result
 ```

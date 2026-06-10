@@ -37,7 +37,7 @@ classDiagram
 
 ## Design Description
 
-RevealHandAi is the AI decision handler for the "reveal hand" spell ability in Forge's AI module, determining whether and how the computer player should play or trigger an effect that reveals an opponent's hand. As a concrete subclass of RevealAiBase, it implements the two standard hooks—`checkApiLogic` for proactive casting and `doTriggerNoCost` for mandatory/triggered resolution—returning AiAbilityDecision values that encode both a numeric score and an AiPlayDecision verdict.
+RevealHandAi is the AI decision handler for the "reveal hand" spell ability in Forge's AI module, determining whether and how the computer player should play or trigger an effect that reveals an opponent's hand. As a concrete subclass of RevealAiBase, it implements the two standard hooksâ€”`checkApiLogic` for proactive casting and `doTriggerNoCost` for mandatory/triggered resolutionâ€”returning AiAbilityDecision values that encode both a numeric score and an AiPlayDecision verdict.
 
 The design delegates target validation to the inherited `revealHandTargetAI` helper and reuses the base class's `playReusable` check, short-circuiting to a high-confidence WillPlay when the ability is reusable and otherwise deferring to `super.checkApiLogic`. This layering keeps shared reveal logic in the base while RevealHandAi contributes only the hand-reveal-specific targeting and scoring, collaborating with Player and SpellAbility to evaluate game state.
 
@@ -79,4 +79,35 @@ public class RevealHandAi extends RevealAiBase {
         }
     }
 }
+```
+
+## Python
+`forge/ai/ability/RevealHandAi.py`
+
+```python
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.ai.ability.RevealAiBase import RevealAiBase
+
+
+class RevealHandAi(RevealAiBase):
+
+    # (non-Javadoc)
+    # @see forge.card.abilityfactory.SpellAiLogic#canPlayAI(forge.game.player.Player, java.util.Map, forge.card.spellability.SpellAbility)
+    def checkApiLogic(self, ai: Player, sa: SpellAbility) -> AiAbilityDecision:
+        if not self.revealHandTargetAI(ai, sa, False):
+            return AiAbilityDecision(0, AiPlayDecision.TargetingFailed)
+
+        if self.playReusable(ai, sa):
+            return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+        return super().checkApiLogic(ai, sa)
+
+    def doTriggerNoCost(self, ai: Player, sa: SpellAbility, mandatory: bool) -> AiAbilityDecision:
+        if self.revealHandTargetAI(ai, sa, mandatory):
+            return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+        else:
+            return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
 ```

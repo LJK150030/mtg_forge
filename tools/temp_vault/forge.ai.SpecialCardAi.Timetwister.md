@@ -35,10 +35,10 @@ classDiagram
 
 The `Timetwister` class is a static nested AI helper within `SpecialCardAi`, providing the decision logic for whether the AI should cast the Timetwister card (which shuffles all hands and graveyards into libraries and redraws seven). Its sole responsibility is exposed through the static `consider` method, which evaluates a `Player` and `SpellAbility` and returns an `AiAbilityDecision` encoding the AI's willingness to play.
 
-Rather than holding state, the class acts as a pure decision function collaborating with the game model: it inspects hand sizes via `ZoneType.Hand` for both the AI and its opponents. The design intent is plainly heuristic — the AI commits to the play (confidence 100, `WillPlay`) only when running low on cards (below a `HAND_SIZE_THRESHOLD` of three) or when significantly behind an opponent's hand size, otherwise declining (`CantPlayAi`). This ensures the symmetric reset benefits the AI rather than refilling a leading opponent.
+Rather than holding state, the class acts as a pure decision function collaborating with the game model: it inspects hand sizes via `ZoneType.Hand` for both the AI and its opponents. The design intent is plainly heuristic â€” the AI commits to the play (confidence 100, `WillPlay`) only when running low on cards (below a `HAND_SIZE_THRESHOLD` of three) or when significantly behind an opponent's hand size, otherwise declining (`CantPlayAi`). This ensures the symmetric reset benefits the AI rather than refilling a leading opponent.
 
 ## Source
-`forge-ai/src/main/java/forge/ai/SpecialCardAi.java` â€” declaration excerpt
+`forge-ai/src/main/java/forge/ai/SpecialCardAi.java` Ã¢â‚¬â€ declaration excerpt
 
 ```java
     // Timetwister
@@ -67,4 +67,38 @@ Rather than holding state, the class acts as a pure decision function collaborat
             }
         }
     }
+```
+
+## Python
+`forge/ai/SpecialCardAi/Timetwister.py`
+
+```python
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+
+
+class Timetwister:
+    @staticmethod
+    def consider(ai: Player, sa: SpellAbility) -> AiAbilityDecision:
+        aiHandSize = len(ai.getCardsIn(ZoneType.Hand))
+        maxOppHandSize = 0
+
+        HAND_SIZE_THRESHOLD = 3
+
+        for p in ai.getOpponents():
+            handSize = len(p.getCardsIn(ZoneType.Hand))
+            if handSize > maxOppHandSize:
+                maxOppHandSize = handSize
+
+        # use in case we're getting low on cards or if we're significantly behind our opponent in cards in hand
+        if aiHandSize < HAND_SIZE_THRESHOLD or maxOppHandSize - aiHandSize > HAND_SIZE_THRESHOLD:
+            # if the AI has less than 3 cards in hand or the opponent has more than 3 cards in hand than the AI
+            # then the AI is willing to play this ability
+            return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+        else:
+            # otherwise, don't play this ability
+            return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
 ```

@@ -69,7 +69,7 @@ classDiagram
 
 CardPool is a specialized collection that models a deck or card collection as a multiset of `PaperCard` instances mapped to quantities. Extending the generic `ItemPool<PaperCard>`, it inherits count-based storage while adding card-specific behavior: flexible `add` overloads that resolve requests through `StaticData`'s `CardDb` instances by name, set code, art index, or collector number, with fallbacks for Alchemy variants, unsupported cards, and random art distribution. Static factories (`fromCardList`, `fromSingleCardRequest`) and `toCardList` handle parsing and serializing human-readable deck lists.
 
-Beyond storage, the class concentrates edition-analysis logic: it computes per-`CardEdition` and `CardEdition.Type` frequency statistics and derives higher-level judgments such as the dominant edition type, whether the pool is "modern," and a weighted "pivot edition." This design intentâ€”centralizing card-resolution and edition-heuristics hereâ€”lets callers treat the pool as the authoritative source for art-preference and reprint decisions rather than scattering that logic across the deck layer.
+Beyond storage, the class concentrates edition-analysis logic: it computes per-`CardEdition` and `CardEdition.Type` frequency statistics and derives higher-level judgments such as the dominant edition type, whether the pool is "modern," and a weighted "pivot edition." This design intentÃ¢â‚¬â€centralizing card-resolution and edition-heuristics hereÃ¢â‚¬â€lets callers treat the pool as the authoritative source for art-preference and reprint decisions rather than scattering that logic across the deck layer.
 
 ## Source
 `forge-core/src/main/java/forge/deck/CardPool.java`
@@ -568,4 +568,365 @@ public class CardPool extends ItemPool<PaperCard> {
         return filteredPool;
     }
 }
+```
+
+## Python
+`forge/deck/CardPool.py`
+
+```python
+from forge.StaticData import StaticData
+from forge.card.CardDb import CardDb
+from forge.card.CardDb.CardRequest import CardRequest
+from forge.card.CardEdition import CardEdition
+from forge.card.CardEdition.Type import Type
+from forge.item.IPaperCard import IPaperCard
+from forge.item.PaperCard import PaperCard
+from forge.util.ItemPool import ItemPool
+from forge.util.ItemPoolSorter import ItemPoolSorter
+from forge.util.MyRandom import MyRandom
+
+import re
+import sys
+from functools import cmp_to_key
+from typing import Optional
+
+
+class CardPool(ItemPool):
+    serialVersionUID = -5379091255613968393
+
+    def __init__(self, cards=None):
+        super().__init__(PaperCard)
+        if cards is not None:
+            self.addAll(cards)
+
+    def add(self, *args):
+        n = len(args)
+        if n == 1:
+            arg = args[0]
+            if isinstance(arg, PaperCard):
+                # inherited single-item add
+                super().add(arg)
+            else:
+                # add(Iterable<PaperCard> list)
+                for cp in arg:
+                    self.add(cp)
+            return
+        if n == 2:
+            a0, a1 = args
+            if isinstance(a0, PaperCard):
+                # inherited add(PaperCard, amount)
+                super().add(a0, a1)
+            elif isinstance(a1, str):
+                # add(String cardName, String setCode)
+                self.add(a0, a1, IPaperCard.DEFAULT_ART_INDEX, 1)
+            else:
+                # add(String cardRequest, int amount)
+                request = CardRequest.fromString(a0)
+                if request.collectorNumber is not None and request.collectorNumber != IPaperCard.NO_COLLECTOR_NUMBER:
+                    self.add(CardRequest.compose(request.cardName, request.isFoil), request.edition, request.collectorNumber, a1, False, request.flags)
+                else:
+                    self.add(CardRequest.compose(request.cardName, request.isFoil), request.edition, request.artIndex, a1, False, request.flags)
+            return
+        if n == 3:
+            # add(String cardName, String setCode, int amount)
+            cardName, setCode, amount = args
+            self.add(cardName, setCode, IPaperCard.DEFAULT_ART_INDEX, amount)
+            return
+        if n == 4:
+            a0, a1, a2, a3 = args
+            if isinstance(a3, bool):
+                # add(String cardName, String setCode, int amount, boolean addAny)
+                self.add(a0, a1, IPaperCard.NO_ART_INDEX, a2, a3, None)
+            else:
+                # NOTE: ART indices are "1" -based
+                # add(String cardName, String setCode, int artIndex, int amount)
+                self.add(a0, a1, a2, a3, False, None)
+            return
+        if n == 6:
+            a0, a1, a2, a3, a4, a5 = args
+            if isinstance(a2, str):
+                self._addByCollectorNumber(a0, a1, a2, a3, a4, a5)
+            else:
+                self._addByArtIndex(a0, a1, a2, a3, a4, a5)
+            return
+
+    def _addByCollectorNumber(self, cardName, setCode, collectorNumber, amount, addAny, flags):
+        dbs = StaticData.instance().getAvailableDatabases()
+        for dbName, db in dbs.items():
+            paperCard = db.getCard(cardName, setCode, collectorNumber, flags)
+            if paperCard is not None:
+                self.add(paperCard, amount)
+                return
+
+        # Try to get non-Alchemy version if it cannot find it.
+        if cardName.startswith("A-"):
+            print("Alchemy card not found for '" + cardName + "'. Trying to get its non-Alchemy equivalent.")
+            cardName = cardName.replace("A-", "", 1)
+
+        # Failed to find it. Fall back accordingly?
+        self.add(cardName, setCode, IPaperCard.NO_ART_INDEX, amount, addAny, flags)
+
+    def _addByArtIndex(self, cardName, setCode, artIndex, amount, addAny, flags):
+        dbs = StaticData.instance().getAvailableDatabases()
+        paperCard = None
+        selectedDbName = ""
+        artIndex = max(artIndex, IPaperCard.DEFAULT_ART_INDEX)
+        loadAttempt = 0
+        while paperCard is None and loadAttempt < 2:
+            for dbName, db in dbs.items():
+                paperCard = db.getCard(cardName, setCode, artIndex, flags)
+                if paperCard is not None:
+                    selectedDbName = dbName
+                    break
+            loadAttempt += 1
+            if paperCard is None and loadAttempt < 2:
+                # Attempt to load the card first, and then try again all the three available DBs
+                # as we simply don't know which db the card has been added to (in case).
+                StaticData.instance().attemptToLoadCard(cardName, setCode)
+                artIndex = IPaperCard.DEFAULT_ART_INDEX  # Reset Any artIndex passed in, at this point
+        if addAny and paperCard is None:
+            paperCard = StaticData.instance().getCommonCards().getCard(cardName)
+            selectedDbName = "Common"
+        if paperCard is None:
+            # after all still null
+            print("An unsupported card was requested: \"" + cardName + "\" from \"" + setCode + "\". \n", file=sys.stderr)
+            paperCard = StaticData.instance().getCommonCards().createUnsupportedCard(cardName)
+            selectedDbName = "Common"
+        cardDb = dbs.get(selectedDbName, StaticData.instance().getCommonCards())
+        # Determine Art Index
+        setCode = paperCard.getEdition()
+        cardName = paperCard.getName()
+        artCount = cardDb.getArtCount(cardName, setCode)
+        artIndexExplicitlySet = (artIndex > IPaperCard.DEFAULT_ART_INDEX) or \
+            (CardRequest.fromString(cardName).artIndex > IPaperCard.NO_ART_INDEX)
+
+        if (artIndexExplicitlySet or artCount == 1) and not addAny:
+            # either a specific art index is specified, or there is only one art, so just add the card
+            self.add(paperCard, amount)
+        else:
+            # random art index specified, make sure we get different groups of cards with different art
+            artGroups = MyRandom.splitIntoRandomGroups(amount, artCount)
+            for i in range(1, len(artGroups) + 1):
+                cnt = artGroups[i - 1]
+                if cnt <= 0:
+                    continue
+                randomCard = cardDb.getCard(cardName, setCode, i, flags)
+                self.add(randomCard, cnt)
+
+    def get(self, n: int) -> Optional[PaperCard]:
+        """returns n-th card from this DeckSection. LINEAR time. No fixed order between changes"""
+        for e in self:
+            n -= e.getValue()
+            if n <= 0:
+                return e.getKey()
+        return None
+
+    def countByName(self, cardName) -> int:
+        if isinstance(cardName, PaperCard):
+            card = cardName
+            return self.countAll(lambda c: c.getName() == card.getName())
+        return self.countAll(lambda c: c.getName() == cardName)
+
+    def getCardEditionStatistics(self, includeBasicLands: bool) -> dict:
+        """Get the Map of frequencies (i.e. counts) for all the CardEdition found among cards in the Pool."""
+        editionStatistics = {}
+        for card, count in self.items.items():
+            # Check whether or not including basic land in stats count
+            if card.getRules().getType().isBasicLand() and not includeBasicLands:
+                continue
+            edition = StaticData.instance().getCardEdition(card.getEdition())
+            if edition is None:
+                continue
+            currentCount = editionStatistics.get(edition, 0)
+            currentCount += count
+            editionStatistics[edition] = currentCount
+        return editionStatistics
+
+    def getCardEditionsGroupedByNumberOfCards(self, includeBasicLands: bool) -> dict:
+        """Returns the map of card frequency indexed by frequency value, rather than single card edition."""
+        editionsFrequencyMap = self.getCardEditionStatistics(includeBasicLands)
+        reverseMap = {}
+        for edition, freq in editionsFrequencyMap.items():
+            reverseMap.setdefault(freq, []).append(edition)
+        return reverseMap
+
+    def getCardEditionTypeStatistics(self, includeBasicLands: bool) -> dict:
+        """Gather Statistics per Edition Type from cards included in the CardPool."""
+        editionTypeStats = {}
+        editionStatistics = self.getCardEditionStatistics(includeBasicLands)
+        for edition, count in editionStatistics.items():
+            key = edition.getType()
+            currentCount = editionTypeStats.get(key, 0)
+            currentCount += count
+            editionTypeStats[key] = currentCount
+        return editionTypeStats
+
+    def getTheMostFrequentEditionType(self):
+        """Returns the CardEdition.Type that is the most frequent among cards' editions in the pool."""
+        editionTypeStats = self.getCardEditionTypeStatistics(False)
+        mostFrequentType = 0
+        mostFrequentEditionTypes = []
+        for key, value in editionTypeStats.items():
+            if value > mostFrequentType:
+                mostFrequentType = value
+                mostFrequentEditionTypes.append(key)
+        if not mostFrequentEditionTypes:
+            return None
+        mostFrequentEditionType = mostFrequentEditionTypes[0]
+        for i in range(1, len(mostFrequentEditionTypes)):
+            frequentType = mostFrequentEditionTypes[i]
+            if frequentType == Type.EXPANSION:
+                return frequentType
+        return mostFrequentEditionType
+
+    def isModern(self) -> bool:
+        """Determines whether (the majority of the) cards in the Pool are modern framed."""
+        modernEditionsCount = 0
+        preModernEditionsCount = 0
+        editionStats = self.getCardEditionStatistics(False)
+        for edition, value in editionStats.items():
+            if edition.isModern():
+                modernEditionsCount += value
+            else:
+                preModernEditionsCount += value
+        if modernEditionsCount == preModernEditionsCount:
+            return StaticData.instance().cardArtPreferenceIsLatest()
+        return modernEditionsCount > preModernEditionsCount
+
+    def getPivotCardEdition(self, isLatestCardArtPreference: bool):
+        """Determines the Pivot Edition for cards in the Pool."""
+        editionsStatistics = self.getCardEditionsGroupedByNumberOfCards(False)
+        frequencyValues = list(editionsStatistics.keys())
+        # Sort in descending order
+        frequencyValues.sort(reverse=True)
+        weightedMean = 0.0
+        sumWeights = 0
+        for freq in frequencyValues:
+            editionsCount = len(editionsStatistics[freq])
+            weightedFrequency = freq * editionsCount
+            sumWeights += editionsCount
+            weightedMean += weightedFrequency
+
+        if not frequencyValues:
+            return None
+
+        totalNoCards = int(weightedMean)
+        weightedMean /= sumWeights
+
+        topFrequency = frequencyValues[0]
+        ratio = float(topFrequency) / totalNoCards
+        # determine the Pivot Frequency
+        if ratio >= 0.33:  # 1 over 3 cards are from the most frequent edition(s)
+            pivotFrequency = topFrequency
+        else:
+            pivotFrequency = CardPool.getMedianFrequency(frequencyValues, weightedMean)
+
+        # Now Get editions corresponding to pivot frequency
+        pivotCandidates = list(editionsStatistics.get(pivotFrequency, []))
+        # Now Sort candidates chronologically
+        pivotCandidates.sort(key=cmp_to_key(CardEdition.compareTo))
+        searchPolicyAndPoolAreCompliant = isLatestCardArtPreference == self.isModern()
+        if not searchPolicyAndPoolAreCompliant:
+            pivotCandidates.reverse()  # reverse to have latest-first.
+        return pivotCandidates[0]
+
+    @staticmethod
+    def getMedianFrequency(frequencyValues, meanFrequency: float) -> int:
+        """Utility (static) method to return the median value given a target mean."""
+        medianFrequency = frequencyValues[0]
+        refDelta = abs(meanFrequency - medianFrequency)
+        for i in range(1, len(frequencyValues)):
+            currentFrequency = frequencyValues[i]
+            delta = abs(meanFrequency - currentFrequency)
+            if delta < refDelta:
+                medianFrequency = currentFrequency
+                refDelta = delta
+        return medianFrequency
+
+    def __str__(self) -> str:
+        if self.isEmpty():
+            return "[]"
+
+        isFirst = True
+        sb = []
+        sb.append('[')
+        for e in self:
+            if isFirst:
+                isFirst = False
+            else:
+                sb.append(", ")
+            sb.append(str(e.getValue()))
+            sb.append(" x ")
+            sb.append(e.getKey().getName())
+        sb.append(']')
+        return "".join(sb)
+
+    p = re.compile(r"((\d+)\s+)?(.*?)")
+
+    @staticmethod
+    def fromCardList(lines):
+        pool = CardPool()
+        if lines is None:
+            return pool
+        cardRequests = CardPool.processCardList(lines)
+        for pair in cardRequests:
+            cardRequest = pair[0]
+            count = pair[1]
+            pool.add(cardRequest, count)
+        return pool
+
+    @staticmethod
+    def fromSingleCardRequest(cardRequest):
+        if cardRequest is None or not cardRequest.strip():
+            return CardPool()
+        return CardPool.fromCardList([cardRequest])
+
+    @staticmethod
+    def processCardList(lines):
+        cardRequests = []
+        if lines is None:
+            return cardRequests  # empty list
+
+        for line in lines:
+            if line.startswith(";") or line.startswith("#"):
+                continue
+            # that is a comment or not-yet-supported card
+
+            m = CardPool.p.fullmatch(line.strip())
+            matches = m is not None
+            if not matches:
+                continue
+            sCnt = m.group(2)
+            cardRequest = m.group(3)
+            if cardRequest is None or not cardRequest.strip():
+                continue
+            count = 1 if sCnt is None else int(sCnt)
+            cardRequests.append((cardRequest, count))
+        return cardRequests
+
+    def toCardList(self, separator: str) -> str:
+        main2sort = list(self)
+        main2sort.sort(key=cmp_to_key(ItemPoolSorter.BY_NAME_THEN_SET))
+        sb = []
+
+        isFirst = True
+
+        for e in main2sort:
+            if not isFirst:
+                sb.append(separator)
+            else:
+                isFirst = False
+
+            sb.append(str(e.getValue()))
+            sb.append(" ")
+            sb.append(CardRequest.compose(e.getKey()))
+        return "".join(sb)
+
+    def getFilteredPool(self, predicate):
+        """Applies a predicate to this CardPool's cards."""
+        filteredPool = CardPool()
+        for c in self.items.keys():
+            if predicate(c):
+                filteredPool.add(c, self.items.get(c))
+        return filteredPool
 ```

@@ -163,3 +163,101 @@ public class EndureEffect extends TokenEffectBase {
 
 }
 ```
+
+## Python
+`forge/game/ability/effects/EndureEffect.py`
+
+```python
+from typing import List, Map
+
+import forge.game.GameActionUtil as GameActionUtil
+from forge.game.Game import Game
+from forge.game.GameEntityCounterTable import GameEntityCounterTable
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.card.Card import Card
+from forge.game.card.CardZoneTable import CardZoneTable
+from forge.game.card.CounterEnumType import CounterEnumType
+from forge.game.card.TokenCreateTable import TokenCreateTable
+from forge.game.card.token.TokenInfo import TokenInfo
+from forge.game.event.GameEventCombatChanged import GameEventCombatChanged
+from forge.game.event.GameEventTokenCreated import GameEventTokenCreated
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.Lang import Lang
+from forge.util.Localizer import Localizer
+
+from forge.game.ability.effects.TokenEffectBase import TokenEffectBase
+
+
+class EndureEffect(TokenEffectBase):
+
+    def getStackDescription(self, sa: SpellAbility) -> str:
+        host = sa.getHostCard()
+        sb = []
+
+        tgt = self.getTargetCards(sa)
+
+        sb.append(Lang.joinHomogenous(tgt))
+        sb.append(" ")
+        sb.append("endure" if len(tgt) > 1 else "endures")
+
+        amount = AbilityUtils.calculateAmount(host, sa.getParamOrDefault("Num", "1"), sa)
+
+        sb.append(" ")
+        sb.append(str(amount))
+        sb.append(". ")
+
+        return "".join(sb)
+
+    def resolve(self, sa: SpellAbility) -> None:
+        host = sa.getHostCard()
+        game = host.getGame()
+        num = sa.getParamOrDefault("Num", "1")
+        amount = AbilityUtils.calculateAmount(host, num, sa)
+
+        if amount < 1:
+            # CR 701.63b
+            return
+
+        table = GameEntityCounterTable()
+        tokenTable = TokenCreateTable()
+        for c in GameActionUtil.orderCardsByTheirOwners(game, self.getTargetCards(sa), ZoneType.Battlefield, sa):
+            pl = c.getController()
+
+            gamec = game.getCardState(c, None)
+
+            params = {}
+            params["RevealedCard"] = c
+            params["Amount"] = amount
+            if (gamec is not None and gamec.isInPlay() and gamec.equalsWithGameTimestamp(c)
+                    and gamec.canReceiveCounters(CounterEnumType.P1P1)
+                    and pl.getController().confirmAction(sa, None,
+                        Localizer.getInstance().getMessage("lblEndureAction", c.getTranslatedName(), amount),
+                        gamec, params)):
+                gamec.addCounter(CounterEnumType.P1P1, amount, pl, table)
+            else:
+                result = TokenInfo.getProtoType("w_x_x_spirit", sa, pl, False)
+
+                # set PT
+                result.setBasePowerString(num)
+                result.setBasePower(amount)
+                result.setBaseToughnessString(num)
+                result.setBaseToughness(amount)
+
+                tokenTable.put(pl, result, 1)
+        table.replaceCounterEffect(game, sa)
+
+        if not tokenTable.isEmpty():
+            triggerList = CardZoneTable()
+            combatChanged = MutableBoolean(False)
+            self.makeTokenTable(tokenTable, False, triggerList, combatChanged, sa)
+
+            triggerList.triggerChangesZoneAll(game, sa)
+
+            game.fireEvent(GameEventTokenCreated())
+
+            if combatChanged.isTrue():
+                game.updateCombatForView()
+                game.fireEvent(GameEventCombatChanged())
+```

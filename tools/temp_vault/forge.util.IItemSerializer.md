@@ -30,6 +30,10 @@ classDiagram
 **Extends:**
 - [[forge.util.IItemReader|IItemReader]]
 
+## Design Description
+
+A serializer interface that adds persistence capabilities to the read-only contract it inherits from `IItemReader<T>`. By extending `IItemReader`, it composes retrieval with mutation, presenting a complete read-write storage abstraction for a generic item type `T`. Its three operationsâ€”`save` to persist a unit, `erase` to remove one, and `getDirectory` to expose the backing file locationâ€”frame the items as file-backed resources, reflecting an intent to abstract over on-disk storage rather than an arbitrary persistence medium. As an interface it decouples callers from any concrete serialization strategy, letting Forge swap storage implementations while keeping a uniform contract for saving and erasing items.
+
 ## Source
 `forge-core/src/main/java/forge/util/IItemSerializer.java`
 
@@ -79,4 +83,44 @@ public interface IItemSerializer<T> extends IItemReader<T> {
 
     File getDirectory();
 }
+```
+
+## Python
+`forge/util/IItemSerializer.py`
+
+```python
+from abc import abstractmethod
+from typing import Generic, TypeVar
+from pathlib import Path
+
+from forge.util.IItemReader import IItemReader
+
+T = TypeVar("T")
+
+
+class IItemSerializer(IItemReader[T], Generic[T]):
+    """TODO: Write javadoc for this type.
+
+    :param T: the generic type
+    """
+
+    @abstractmethod
+    def save(self, unit: T) -> None:
+        """Save.
+
+        :param unit: the unit
+        """
+        ...
+
+    @abstractmethod
+    def erase(self, unit: T) -> None:
+        """Erase.
+
+        :param unit: the unit
+        """
+        ...
+
+    @abstractmethod
+    def getDirectory(self) -> Path:
+        ...
 ```

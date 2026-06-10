@@ -176,3 +176,110 @@ public class DetainAi extends SpellAbilityAi {
     }
 }
 ```
+
+## Python
+`forge/ai/ability/DetainAi.py`
+
+````python
+Output should be the Python source itself, not a file write. Here it is:
+
+```
+from typing import List
+
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiAttackController import AiAttackController
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.ai.ComputerUtil import ComputerUtil
+from forge.ai.ComputerUtilCard import ComputerUtilCard
+from forge.ai.SpellAbilityAi import SpellAbilityAi
+from forge.game.Game import Game
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CardPredicates import CardPredicates
+from forge.game.combat.CombatUtil import CombatUtil
+from forge.game.phase.PhaseHandler import PhaseHandler
+from forge.game.phase.PhaseType import PhaseType
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+
+
+class DetainAi(SpellAbilityAi):
+
+    def checkApiLogic(self, ai: Player, sa: SpellAbility) -> AiAbilityDecision:
+        return self.doTriggerNoCost(ai, sa, False)
+
+    def doTriggerNoCost(self, ai: Player, sa: SpellAbility, mandatory: bool) -> AiAbilityDecision:
+        if self.prefTargeting(ai, sa, mandatory):
+            return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+        return AiAbilityDecision(0, AiPlayDecision.CantPlaySa)
+
+    def prefTargeting(self, ai: Player, sa: SpellAbility, mandatory: bool) -> bool:
+        if not sa.usesTargeting():
+            return mandatory
+
+        game = ai.getGame()
+        source = sa.getHostCard()
+        targetables = CardLists.getTargetableCards(ai.getOpponents().getCardsIn(ZoneType.Battlefield), sa)
+        list = CardLists.filter(targetables, CREATURE_OR_TAP_ABILITY)
+
+        # Filter AI-specific targets if provided
+        list = ComputerUtil.filterAITgts(sa, ai, list, True)
+
+        if list.isEmpty():
+            if not mandatory:
+                return False
+            list = targetables
+        sa.resetTargets()
+
+        while sa.canAddMoreTarget():
+            choice = None
+            if list.isEmpty():
+                if not sa.isMinTargetChosen() or sa.isZeroTargets():
+                    return False
+
+            phase = game.getPhaseHandler()
+            opp = AiAttackController.choosePreferredDefenderPlayer(ai)
+            primeTarget = ComputerUtil.getKilledByTargeting(sa, list)
+            if primeTarget is not None:
+                choice = primeTarget
+            elif phase.isPlayerTurn(ai) and phase.getPhase().isBefore(PhaseType.COMBAT_DECLARE_BLOCKERS):
+                # Tap creatures possible blockers before combat during AI's turn.
+                if phase.getPhase().isAfter(PhaseType.COMBAT_DECLARE_ATTACKERS):
+                    # Combat has already started
+                    attackers = game.getCombat().getAttackers()
+                else:
+                    attackers = CardLists.filter(ai.getCreaturesInPlay(), lambda c: CombatUtil.canAttack(c, opp))
+                    attackers.remove(source)
+                creatureList = CardLists.filter(list, CardPredicates.possibleBlockerForAtLeastOne(attackers))
+
+                # TODO check if own creature would be forced to attack and we want to keep it alive
+
+                if not attackers.isEmpty() and not creatureList.isEmpty():
+                    choice = ComputerUtilCard.getBestCreatureAI(creatureList)
+                elif sa.isTrigger() or ComputerUtil.castSpellInMain1(ai, sa):
+                    choice = ComputerUtilCard.getMostExpensivePermanentAI(list)
+            elif phase.isPlayerTurn(opp) and phase.getPhase().isBefore(PhaseType.COMBAT_DECLARE_ATTACKERS):
+                # Tap creatures possible blockers before combat during AI's turn.
+                if list.anyMatch(CardPredicates.CREATURES):
+                    creatureList = CardLists.filter(list, lambda c: c.isCreature() and CombatUtil.canAttack(c, opp))
+                    choice = ComputerUtilCard.getBestCreatureAI(creatureList)
+                else:  # no creatures available
+                    choice = ComputerUtilCard.getMostExpensivePermanentAI(list)
+            else:
+                choice = ComputerUtilCard.getMostExpensivePermanentAI(list)
+
+            if choice is None:  # can't find anything left
+                if not sa.isMinTargetChosen() or sa.isZeroTargets():
+                    return False
+                else:
+                    if not ComputerUtil.shouldCastLessThanMax(ai, source):
+                        return False
+                    break
+
+            list.remove(choice)
+            sa.getTargets().add(choice)
+
+        return True
+````

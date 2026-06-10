@@ -120,7 +120,7 @@ classDiagram
 
 ## Design Description
 
-ChangeZoneAi is the forge-ai decision handler for every zone-changing effect—blink, bounce, exile, tutoring, reanimation, ramp, and the like. Extending `SpellAbilityAi`, it overrides the framework's evaluation hooks (`checkApiLogic`, `chkDrawback`, `doTriggerNoCost`, `willPayCosts`/`willPayUnlessCost`, `checkPhaseRestrictions`) plus the `chooseSingle*`/`confirmAction` selection callbacks to decide whether the AI should activate a ChangeZone ability and which card, player, or attackable entity it picks. Decisions are returned as `AiAbilityDecision` verdicts, and a large `AILogic`-keyed dispatch routes many specific cards to dedicated handlers or `SpecialCardAi` helpers.
+ChangeZoneAi is the forge-ai decision handler for every zone-changing effectâ€”blink, bounce, exile, tutoring, reanimation, ramp, and the like. Extending `SpellAbilityAi`, it overrides the framework's evaluation hooks (`checkApiLogic`, `chkDrawback`, `doTriggerNoCost`, `willPayCosts`/`willPayUnlessCost`, `checkPhaseRestrictions`) plus the `chooseSingle*`/`confirmAction` selection callbacks to decide whether the AI should activate a ChangeZone ability and which card, player, or attackable entity it picks. Decisions are returned as `AiAbilityDecision` verdicts, and a large `AILogic`-keyed dispatch routes many specific cards to dedicated handlers or `SpecialCardAi` helpers.
 
 Its core design organizes logic along two axes: hidden origin (cards chosen at resolution, e.g. library tutors) versus known origin (targeted cards on battlefield/graveyard/exile), each crossed with can-play, drawback, and trigger paths. It collaborates closely with the game model (`Player`, `Card`, `CardCollection`, `ZoneType`, `Cost` subtypes, `Combat`, `PhaseHandler`). The author's own header comment flags the class as doing "too much" and a candidate for decomposition into narrower effect handlers.
 
@@ -2214,7 +2214,7 @@ public class ChangeZoneAi extends SpellAbilityAi {
             }
         }
 
-        // We have enough mana sources Ã¢â‚¬â€ let the caller use keycardFound (may be null, triggering fallthrough)
+        // We have enough mana sources ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â let the caller use keycardFound (may be null, triggering fallthrough)
         return keycardFound;
     }
 
@@ -2250,3 +2250,637 @@ public class ChangeZoneAi extends SpellAbilityAi {
     }
 }
 ```
+
+## Python
+`forge/ai/ability/ChangeZoneAi.py`
+
+````python
+Continuing the file from `isUnpreferredTarget`:
+
+```python
+                        choice = list.get(0)
+                else:
+                    choice = ComputerUtilCard.getBestAI(list)
+            if choice is None:  # can't find anything left
+                if sa.getTargets().isEmpty() or sa.getTargets().size() < sa.getMinTargets():
+                    sa.resetTargets()
+                    return False
+                if not ComputerUtil.shouldCastLessThanMax(ai, source):
+                    return False
+                break
+
+            list.remove(choice)
+            sa.getTargets().add(choice)
+
+        return True
+
+    @staticmethod
+    def knownOriginTriggerAI(ai, sa, mandatory):
+        logic = sa.getParamOrDefault("AILogic", "")
+
+        if "DeathgorgeScavenger" == logic:
+            if SpecialCardAi.DeathgorgeScavenger.consider(ai, sa):
+                return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+            return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+        elif "ExtraplanarLens" == logic:
+            if SpecialCardAi.ExtraplanarLens.consider(ai, sa):
+                return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+            return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+        elif "ExileCombatThreat" == logic:
+            return ChangeZoneAi.doExileCombatThreatLogic(ai, sa)
+
+        if not sa.usesTargeting():
+            # Just in case of Defined cases
+            if not mandatory and sa.hasParam("AttachedTo"):
+                list = AbilityUtils.getDefinedCards(sa.getHostCard(), sa.getParam("AttachedTo"), sa)
+                if len(list) > 0:
+                    attachedTo = list[0]
+                    # This code is for the Dragon auras
+                    if not attachedTo.getController().isOpponentOf(ai):
+                        # If the AI is not the controller of the attachedTo card, then it is not a valid target.
+                        return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+                    else:
+                        # If the AI is the controller of the attachedTo card, then it is a valid target.
+                        return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+        elif ChangeZoneAi.isPreferredTarget(ai, sa, mandatory, True):
+            # do nothing
+            pass
+        else:
+            if ChangeZoneAi.isUnpreferredTarget(ai, sa, mandatory):
+                return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+            # If the AI is not the controller of the attachedTo card, then it is not a valid target.
+            return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+        return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+    @staticmethod
+    def chooseCardToHiddenOriginChangeZone(destination, origin, sa, fetchList, player, decider):
+        if fetchList.isEmpty():
+            return None
+        keyCards = player.getRegisteredPlayer().getDeck().getKeyCards()
+        position = sa.getParamOrDefault("LibraryPosition", None)
+        # Focus on the keycards I don't already have access to
+        if (destination == ZoneType.Battlefield or destination == ZoneType.Hand or
+                (destination == ZoneType.Library and "0" == position)):
+            for c in player.getCardsIn([ZoneType.Hand, ZoneType.Battlefield]):
+                name = c.getName()
+                if name in keyCards:
+                    keyCards.remove(name)
+
+        # Can we extract this up to SPellAbilityAi for everything to have access to?
+        keycardFound = None
+        for keyName in keyCards:
+            withKeyCard = CardLists.filter(fetchList, CardPredicates.nameEquals(keyName))
+            if withKeyCard.isEmpty():
+                continue
+            keycardFound = withKeyCard.getFirst()
+            break
+
+        if sa.hasParam("AILogic"):
+            logic = sa.getParamOrDefault("AILogic", "")
+            if "NeverBounceItself" == logic:
+                source = sa.getHostCard()
+                if fetchList.contains(source) and (fetchList.size() > 1 or not sa.getRootAbility().isMandatory()):
+                    # For cards that should never be bounced back to hand with their own [e.g. triggered] abilities, such as guild lands.
+                    fetchList.remove(source)
+            elif "WorstCard" == logic:
+                return ComputerUtilCard.getWorstAI(fetchList)
+            elif "BestCard" == logic:
+                if keycardFound is not None:
+                    return keycardFound
+
+                return ComputerUtilCard.getBestAI(fetchList)  # generally also means the most expensive one or close to it
+            elif "Mairsil" == logic:
+                return SpecialCardAi.MairsilThePretender.considerCardFromList(fetchList, sa)
+            elif "SurvivalOfTheFittest" == logic:
+                return SpecialCardAi.SurvivalOfTheFittest.considerCardToGet(decider, sa)
+            elif "MazesEnd" == logic:
+                return SpecialCardAi.MazesEnd.considerCardToGet(decider, sa)
+            elif "Intuition" == logic:
+                if not ChangeZoneAi.multipleCardsToChoose.isEmpty():
+                    choice = ChangeZoneAi.multipleCardsToChoose.get(0)
+                    ChangeZoneAi.multipleCardsToChoose.remove(0)
+                    return choice
+            elif logic.startswith("ExilePreference"):
+                return ChangeZoneAi.doExilePreferenceLogic(decider, sa, fetchList)
+            elif logic == "BounceOwnTrigger":
+                return ChangeZoneAi.doBounceOwnTriggerLogic(decider, sa, fetchList)
+            elif logic == "ConsiderRamp":
+                c = ChangeZoneAi.considerRamp(decider, sa, fetchList, keycardFound)
+
+                if c is not None:
+                    return c
+        if fetchList.isEmpty():
+            return None
+        type_ = sa.getParamOrDefault("ChangeType", "")
+
+        c = None
+        activator = sa.getActivatingPlayer()
+
+        CardLists.shuffle(fetchList)
+        # Save a card as a default, in case we can't find anything suitable.
+        first = fetchList.get(0)
+
+        if ZoneType.Battlefield == destination:
+            def _legendFilter(c1):
+                if c1.getType().isLegendary():
+                    return not decider.isCardInPlay(c1.getName())
+                return True
+            fetchList = CardLists.filter(fetchList, _legendFilter)
+            if player.isOpponentOf(decider) and sa.hasParam("GainControl") and activator == decider:
+                fetchList = CardLists.filter(fetchList, lambda c12: not ComputerUtilCard.isCardRemAIDeck(c12) and not ComputerUtilCard.isCardRemRandomDeck(c12))
+        if (ZoneType.Exile == destination or ZoneType.Battlefield in origin
+                or (ZoneType.Library == destination and ZoneType.Hand in origin)):
+            # Exiling or bouncing stuff
+            if player.isOpponentOf(decider):
+                c = ComputerUtilCard.getBestAI(fetchList)
+            else:
+                if not sa.hasParam("Mandatory") and ZoneType.Battlefield in origin and sa.hasParam("ChangeNum"):
+                    # exclude tokens, they won't come back, and enchanted stuff, since auras will go away
+                    fetchList = ChangeZoneAi.prefilterOwnListForBounceAnyNum(fetchList, decider)
+                    if fetchList.isEmpty():
+                        return None
+
+                c = ComputerUtilCard.getWorstAI(fetchList)
+                if ComputerUtilAbility.getAbilitySourceName(sa) == "Temur Sabertooth":
+                    tobounce = ChangeZoneAi.canBouncePermanent(player, sa, fetchList)
+                    if tobounce is not None:
+                        c = tobounce
+                        ChangeZoneAi.rememberBouncedThisTurn(player, c)
+        elif ZoneType.Library in origin and ("Basic" in type_ or ChangeZoneAi.areAllBasics(type_)):
+            if keycardFound is not None:
+                return keycardFound
+
+            c = ChangeZoneAi.basicManaFixing(decider, fetchList)
+        elif ZoneType.Hand == destination and CardLists.getNotType(fetchList, "Creature").isEmpty():
+            if keycardFound is not None:
+                return keycardFound
+
+            c = ChangeZoneAi.chooseCreature(decider, fetchList)
+        elif ZoneType.Battlefield == destination or ZoneType.Graveyard == destination:
+            if activator != decider and sa.hasParam("GainControl"):
+                c = ComputerUtilCard.getWorstAI(fetchList)
+            else:
+                if keycardFound is not None:
+                    return keycardFound
+
+                c = ComputerUtilCard.getBestAI(fetchList)
+        else:
+            # Don't fetch another tutor with the same name
+            sameNamed = CardLists.filter(fetchList, CardPredicates.nameNotEquals(ComputerUtilAbility.getAbilitySourceName(sa)))
+            if ZoneType.Library in origin and not sameNamed.isEmpty():
+                fetchList = sameNamed
+
+            # Tutor for the first key card in the list, since the list should be in priority order
+            if keycardFound is not None:
+                return keycardFound
+
+            # Does AI need a land?
+            # The logic here seems wrong if the decider isn't the same as the player
+            hand = decider.getCardsIn(ZoneType.Hand)
+            if (not hand.anyMatch(CardPredicates.LANDS) and CardLists.count(decider.getCardsIn(ZoneType.Battlefield), CardPredicates.LANDS) < 4 and
+                    not hand.anyMatch(lambda crd: ComputerUtilMana.hasEnoughManaSourcesToCast(crd.getFirstSpellAbility(), decider))):
+                c = ChangeZoneAi.basicManaFixing(decider, fetchList)
+            if c is None:
+                if fetchList.allMatch(CardPredicates.LANDS):
+                    # we're only choosing from lands, so get the best land
+                    c = ComputerUtilCard.getBestLandAI(fetchList)
+                else:
+                    fetchList = CardLists.getNotType(fetchList, "Land")
+                    # Prefer to pull a creature, generally more useful for AI.
+                    c = ChangeZoneAi.chooseCreature(decider, CardLists.filter(fetchList, CardPredicates.CREATURES))
+            if c is None:  # Could not find a creature.
+                if decider.getLife() <= 5:  # Desperate?
+                    # Get something AI can cast soon.
+                    CardLists.sortByCmcDesc(fetchList)
+                    for potentialCard in fetchList:
+                        if ComputerUtilMana.hasEnoughManaSourcesToCast(potentialCard.getFirstSpellAbility(), decider):
+                            c = potentialCard
+                            break
+                else:
+                    # Get the best card in there.
+                    c = ComputerUtilCard.getBestAI(fetchList)
+        if c is None:
+            c = first
+        return c
+
+    @staticmethod
+    def prefilterOwnListForBounceAnyNum(fetchList, decider):
+        def _f(card):
+            if card.isToken():
+                return False
+            if card.isCreature() and ComputerUtilCard.isUselessCreature(decider, card):
+                return True
+            if card.isEquipped():
+                return False
+            if card.isEnchanted():
+                for enc in card.getEnchantedBy():
+                    if enc.getOwner().isOpponentOf(decider):
+                        return True
+                return False
+            if card.hasCounters():
+                if card.isPlaneswalker():
+                    maxLoyaltyToConsider = AiProfileUtil.getIntProperty(decider, AiProps.BLINK_RELOAD_PLANESWALKER_MAX_LOYALTY)
+                    loyaltyDiff = AiProfileUtil.getIntProperty(decider, AiProps.BLINK_RELOAD_PLANESWALKER_LOYALTY_DIFF)
+                    chance = AiProfileUtil.getIntProperty(decider, AiProps.BLINK_RELOAD_PLANESWALKER_CHANCE)
+                    if MyRandom.percentTrue(chance):
+                        curLoyalty = card.getCounters(CounterEnumType.LOYALTY)
+                        freshLoyalty = int(card.getCurrentState().getBaseLoyalty())
+                        if freshLoyalty - curLoyalty >= loyaltyDiff and curLoyalty <= maxLoyaltyToConsider:
+                            return True
+                elif card.isCreature() and card.getCounters(CounterEnumType.M1M1) > 0:
+                    return True
+                return False  # TODO: improve for other counters
+            elif card.isAura():
+                return False
+            return True
+
+        fetchList = CardLists.filter(fetchList, _f)
+
+        return fetchList
+
+    def confirmAction(self, player, sa, mode, message, params):
+        # AI was never asked
+        return True
+
+    def chooseSingleCard(self, ai, sa, options, isOptional, targetedPlayer, params):
+        # Called when looking for creature to attach aura or equipment
+
+        if "Attach" in params:
+            return AttachAi.attachGeneralAI(ai, sa, options, not isOptional, params.get("Attach"), sa.getParam("AILogic"))
+
+        return super().chooseSingleCard(ai, sa, options, isOptional, targetedPlayer, params)
+
+    def chooseSinglePlayer(self, ai, sa, options, params):
+        # Called when attaching Aura to player or adding creature to combat
+        if params is not None and "Attacker" in params:
+            return ComputerUtilCombat.addAttackerToCombat(sa, params.get("Attacker"), options)
+        return AttachAi.attachToPlayerAIPreferences(ai, sa, True, options)
+
+    def chooseSingleAttackableEntity(self, ai, sa, options, params):
+        if params is not None and "Attacker" in params:
+            return ComputerUtilCombat.addAttackerToCombat(sa, params.get("Attacker"), options)
+        # should not be reached
+        return super().chooseSingleAttackableEntity(ai, sa, options, params)
+
+    def doSacAndReturnFromGraveLogic(self, ai, sa):
+        source = sa.getHostCard()
+        definedSac = source.getSVar("AIPreference").split("$")[1]
+
+        listToSac = CardLists.getValidCards(ai.getCardsIn(ZoneType.Battlefield), definedSac, ai, source, sa)
+        listToSac.sort(CardLists.CmcComparator)
+
+        listToRet = CardLists.filter(ai.getCardsIn(ZoneType.Graveyard), CardPredicates.CREATURES)
+        listToRet.sort(CardLists.CmcComparatorInv)
+
+        if not listToSac.isEmpty() and not listToRet.isEmpty():
+            worstSac = listToSac.getFirst()
+            bestRet = listToRet.getFirst()
+
+            if (bestRet.getCMC() > worstSac.getCMC()
+                    and ComputerUtilCard.evaluateCreature(bestRet) > ComputerUtilCard.evaluateCreature(worstSac)):
+                sa.resetTargets()
+                sa.getTargets().add(bestRet)
+                source.setSVar("AIPreferenceOverride", "Creature.cmcEQ" + str(worstSac.getCMC()))
+                return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+        return AiAbilityDecision(0, AiPlayDecision.TargetingFailed)
+
+    def doSacAndUpgradeLogic(self, ai, sa):
+        source = sa.getHostCard()
+        ph = ai.getGame().getPhaseHandler()
+        logic = sa.getParam("AILogic")
+        sacWorst = "SacWorst" in logic
+
+        if not getattr(ph, "is")(PhaseType.MAIN2):
+            # Should be given a chance to cast other spells as well as to use a previously upgraded creature
+            return AiAbilityDecision(0, AiPlayDecision.WaitForMain2)
+
+        definedSac = source.getSVar("AIPreference").split("$")[1]
+        definedGoal = sa.getParam("ChangeType")
+        anyCMC = ".cmc" not in definedGoal
+
+        listToSac = CardLists.getValidCards(ai.getCardsIn(ZoneType.Battlefield), definedSac, ai, source, sa)
+        listToSac.sort(CardLists.CmcComparatorInv if not sacWorst else CardLists.CmcComparator)
+
+        for sacCandidate in listToSac:
+            sacCMC = sacCandidate.getCMC()
+
+            goalCMC = (AbilityUtils.calculateAmount(source, source.getSVar("X").replace("Sacrificed$CardManaCost", "Number$" + str(sacCMC)), sa)
+                       if source.hasSVar("X") else sacCMC + 1)
+            curGoal = definedGoal
+
+            if not anyCMC:
+                # TODO: improve the detection of X in the "cmc**X" part to avoid clashing with other letters in the definition
+                curGoal = definedGoal.replace("X", "%d" % goalCMC)
+
+            listGoal = CardLists.getValidCards(ai.getCardsIn(ZoneType.Library), curGoal, ai, source, sa)
+
+            if not anyCMC:
+                listGoal = CardLists.getValidCards(listGoal, curGoal, source.getController(), source, sa)
+            else:
+                listGoal = CardLists.getValidCards(listGoal, curGoal + ("+" if "." in curGoal else ".") + "cmcGE" + str(goalCMC), source.getController(), source, sa)
+
+            def _legendFilter(c):
+                if c.getType().isLegendary():
+                    return not ai.isCardInPlay(c.getName())
+                return True
+            listGoal = CardLists.filter(listGoal, _legendFilter)
+
+            if not listGoal.isEmpty():
+                # make sure we're upgrading sacCMC->goalCMC
+                source.setSVar("AIPreferenceOverride", "Creature.cmcEQ" + str(sacCMC))
+                return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+        return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+    def doReturnCommanderLogic(self, sa, aiPlayer):
+        originalParams = sa.getReplacingObject(AbilityKey.OriginalParams)
+        causeSa = originalParams.get(AbilityKey.Cause)
+        causeSub = None
+        destination = originalParams.get(AbilityKey.Destination)
+
+        if ZoneType.Hand == destination:
+            # don't replace since its easier to cast it again
+            return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+        affected = originalParams.get(AbilityKey.Affected)
+        if (isinstance(affected, Card) and affected.getName() == "Squee, the Immortal"
+                and (destination == ZoneType.Graveyard or destination == ZoneType.Exile)):
+            # easier to recast it
+            return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+        if causeSa is not None:
+            causeSub = causeSa.getSubAbility()
+        if causeSa is not None and causeSub is not None:
+            subApi = causeSub.getApi()
+
+            if (subApi == ApiType.ChangeZone and "Exile" == causeSub.getParam("Origin")
+                    and "Battlefield" == causeSub.getParam("Destination")):
+                # A blink effect implemented using ChangeZone API
+                return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+            elif subApi == ApiType.DelayedTrigger:
+                exec_ = causeSub.getAdditionalAbility("Execute")
+                if exec_ is not None and exec_.getApi() == ApiType.ChangeZone:
+                    # A blink effect implemented using a delayed trigger
+                    if "Exile" != exec_.getParam("Origin") or "Battlefield" != exec_.getParam("Destination"):
+                        return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+                    return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+            else:
+                if (causeSa.getHostCard() is None or causeSa.getHostCard() != sa.getReplacingObject(AbilityKey.Card)
+                        or causeSa.getActivatingPlayer() != aiPlayer):
+                    return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+                return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+        # Normally we want the commander back in Command zone to recast it later
+        return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+    @staticmethod
+    def doExileCombatThreatLogic(aiPlayer, sa):
+        combat = aiPlayer.getGame().getCombat()
+
+        if combat is None:
+            return AiAbilityDecision(0, AiPlayDecision.AnotherTime)
+
+        choice = None
+        highestEval = -1
+        if combat.getAttackingPlayer().isOpponentOf(aiPlayer):
+            for attacker in combat.getAttackers():
+                if sa.canTarget(attacker):
+                    eval_ = ComputerUtilCard.evaluateCreature(attacker)
+                    if combat.isUnblocked(attacker):
+                        eval_ += 100  # TODO: make this smarter
+                    if eval_ > highestEval:
+                        highestEval = eval_
+                        choice = attacker
+        else:
+            # either the current AI player or one of its teammates is attacking, the opponent(s) are blocking
+            for blocker in combat.getAllBlockers():
+                if sa.canTarget(blocker):
+                    if blocker.getController().isOpponentOf(aiPlayer):  # TODO: unnecessary sanity check?
+                        eval_ = ComputerUtilCard.evaluateCreature(blocker)
+                        if eval_ > highestEval:
+                            highestEval = eval_
+                            choice = blocker
+
+        if choice is not None:
+            sa.getTargets().add(choice)
+            return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+        return AiAbilityDecision(0, AiPlayDecision.TargetingFailed)
+
+    @staticmethod
+    def doExilePreferenceLogic(aiPlayer, sa, fetchList):
+        # Filter by preference. If nothing is preferred, choose the best/worst/random target for the opponent
+        # or for the AI depending on the settings. This logic must choose at least something if at all possible,
+        # since it's called from chooseSingleCard.
+        if fetchList.isEmpty():
+            return None  # there was nothing to choose at all
+
+        host = sa.getHostCard()
+        logic = sa.getParamOrDefault("AILogic", "")
+        valid = logic.split(":")[1]
+        isCurse = "Curse" in logic
+        isOwnOnly = "OwnOnly" in logic
+        isWorstChoice = "Worst" in logic
+        isRandomChoice = "Random" in logic
+
+        if logic.endswith("HighestCMC"):
+            return ComputerUtilCard.getMostExpensivePermanentAI(fetchList)
+        elif "MostProminent" in logic:
+            scanList = CardCollection()
+            if logic.endswith("OwnType"):
+                scanList.addAll(aiPlayer.getCardsIn(ZoneType.Library))
+                scanList.addAll(aiPlayer.getCardsIn(ZoneType.Hand))
+            elif logic.endswith("OppType"):
+                # this assumes that the deck list is known to the AI before the match starts,
+                # so it's possible to figure out what remains in library/hand if you know what's
+                # in graveyard, exile, etc.
+                scanList.addAll(aiPlayer.getOpponents().getCardsIn(ZoneType.Library))
+                scanList.addAll(aiPlayer.getOpponents().getCardsIn(ZoneType.Hand))
+
+            if "NonLand" in logic:
+                scanList = CardLists.filter(scanList, CardPredicates.NON_LANDS)
+
+            if "NonExiled" in logic:
+                exiledBy = CardCollection()
+                for exiled in aiPlayer.getGame().getCardsIn(ZoneType.Exile):
+                    if exiled.getExiledWith() is not None and exiled.getExiledWith().getName() == host.getName():
+                        exiledBy.add(exiled)
+
+                def _nonExiled(card):
+                    if exiledBy.isEmpty():
+                        return True
+                    for c in exiledBy:
+                        return not c.getType().sharesCardTypeWith(card.getType())
+                    return True
+                scanList = CardLists.filter(scanList, _nonExiled)
+
+            presentTypes = set()
+            for inGrave in aiPlayer.getGame().getCardsIn(ZoneType.Graveyard):
+                for ct in inGrave.getType().getCoreTypes():
+                    presentTypes.add(ct)
+            counts = {}
+            for c in scanList:
+                for ct in c.getType().getCoreTypes():
+                    if ct in presentTypes:
+                        counts[ct] = counts.get(ct, 0) + 1
+            if counts:
+                determinedMaxType = max(counts.items(), key=lambda e: e[1])[0]
+            else:
+                determinedMaxType = CardType.CoreType.Land
+            preferredList = CardLists.filter(fetchList, lambda card: card.getType().hasType(determinedMaxType))
+            preferredOppList = CardLists.filter(preferredList, CardPredicates.isControlledByAnyOf(aiPlayer.getOpponents()))
+
+            if not preferredOppList.isEmpty():
+                return Aggregates.random(preferredOppList)
+            elif not preferredList.isEmpty():
+                return Aggregates.random(preferredList)
+
+            return Aggregates.random(fetchList)
+
+        def _prefFilter(card):
+            playerPref = True
+            if isCurse:
+                playerPref = card.getController().isOpponentOf(aiPlayer)
+            elif isOwnOnly:
+                playerPref = card.getController() == aiPlayer or not card.getController().isOpponentOf(aiPlayer)
+
+            if not playerPref:
+                return False
+
+            return card.isValid(valid, aiPlayer, host, sa)  # for things like ExilePreference:Land.Basic
+        preferredList = CardLists.filter(fetchList, _prefFilter)
+
+        if not preferredList.isEmpty():
+            if isRandomChoice:
+                return Aggregates.random(preferredList)
+            return ComputerUtilCard.getWorstAI(preferredList) if isWorstChoice else ComputerUtilCard.getBestAI(preferredList)
+        else:
+            if isRandomChoice:
+                return Aggregates.random(preferredList)
+            return ComputerUtilCard.getWorstAI(fetchList) if isWorstChoice else ComputerUtilCard.getBestAI(fetchList)
+
+    @staticmethod
+    def doExileSpellLogic(ai, sa, mandatory):
+        dangerousApi = None
+        spells = CardCollection(ai.getGame().getStackZone().getCards())
+        spells.reverse()
+        if not mandatory and not spells.isEmpty():
+            spells = spells.subList(0, 1)
+            spells = ComputerUtil.filterAITgts(sa, ai, spells, True)
+            dangerousApi = [ApiType.DealDamage, ApiType.DamageAll, ApiType.Destroy, ApiType.DestroyAll, ApiType.Sacrifice, ApiType.SacrificeAll]
+
+        for c in spells:
+            topSA = ai.getGame().getStack().getSpellMatchingHost(c)
+            if (topSA is not None and (dangerousApi is None or
+                    (topSA.getApi() in dangerousApi and topSA.getActivatingPlayer().isOpponentOf(ai)))
+                    and sa.canTarget(topSA)):
+                sa.resetTargets()
+                sa.getTargets().add(topSA)
+                return sa.isTargetNumberValid()
+        return False
+
+    @staticmethod
+    def getSafeTargetsIfUnlessCostPaid(ai, sa, potentialTgts):
+        # Determines if the controller of each potential target can negate the ChangeZone effect
+        # by paying the Unless cost. Returns the list of targets that can be saved that way.
+        source = sa.getHostCard()
+        canBeSaved = CardCollection()
+
+        for potentialTgt in potentialTgts:
+            unlessCost = sa.getParam("UnlessCost").strip() if sa.hasParam("UnlessCost") else None
+
+            if unlessCost is not None and not unlessCost.endswith(">"):
+                opp = potentialTgt.getController()
+                usableManaSources = ComputerUtilMana.getAvailableManaEstimate(opp)
+
+                if unlessCost == "X" and sa.getSVar(unlessCost) == "Count$xPaid":
+                    toPay = ComputerUtilCost.setMaxXValue(sa, ai, True)
+                else:
+                    toPay = AbilityUtils.calculateAmount(source, unlessCost, sa)
+
+                if toPay == 0 or toPay <= usableManaSources:
+                    canBeSaved.add(potentialTgt)
+
+        return canBeSaved
+
+    @staticmethod
+    def rememberBouncedThisTurn(ai, c):
+        AiCardMemory.rememberCard(ai, c, AiCardMemory.MemorySet.BOUNCED_THIS_TURN)
+
+    @staticmethod
+    def isBouncedThisTurn(ai, c):
+        return AiCardMemory.isRememberedCard(ai, c, AiCardMemory.MemorySet.BOUNCED_THIS_TURN)
+
+    @staticmethod
+    def doBounceOwnTriggerLogic(ai, sa, choices):
+        unprefChoices = CardLists.filter(choices, lambda c: not c.isToken() and c.getOwner() == ai)
+        # TODO check for threatened cards
+        prefChoices = CardLists.filter(unprefChoices, lambda c: c.hasETBTrigger(False))
+        if not prefChoices.isEmpty():
+            return ComputerUtilCard.getBestAI(prefChoices)
+        if not unprefChoices.isEmpty() and sa.getSubAbility() is not None:
+            # some extra benefit like First Responder
+            return ComputerUtilCard.getWorstAI(unprefChoices)
+        return None
+
+    @staticmethod
+    def considerRamp(ai, sa, choices, keycardFound):
+        # For cards that might fetch a land or other things, but really might need the land right now.
+        # Do a rough check of available mana sources (lands on battlefield, other mana producers on battlefield,
+        # and lands in hand) to decide whether to prioritize fetching a land.
+
+        # Count non-land permanents on the battlefield that produce mana (e.g. mana rocks, dorks)
+        manaProducers = 0
+        for c in ai.getCardsIn(ZoneType.Battlefield):
+            if not c.getManaAbilities().isEmpty():
+                manaProducers += 1
+
+        # Count lands in hand (they represent future mana sources we expect to play)
+        landsInHand = CardLists.filter(ai.getCardsIn(ZoneType.Hand), CardPredicates.LANDS).size()
+
+        totalManaSources = manaProducers + landsInHand
+
+        # Base threshold: below this many total mana sources we should prioritize getting a land
+        threshold = 4
+
+        # If we have a keycard target, also make sure we'll eventually have enough mana to cast it.
+        # If the keycard's CMC is further than one land drop away from our current sources, keep ramping.
+        if keycardFound is not None and keycardFound.getCMC() > totalManaSources + 1:
+            threshold = max(threshold, keycardFound.getCMC() - 1)
+
+        # If we are below the threshold, look for a land in the available choices and prefer it
+        if totalManaSources < threshold:
+            manaFixing = ChangeZoneAi.basicManaFixing(ai, choices)
+            if manaFixing is not None:
+                return manaFixing
+
+        # We have enough mana sources - let the caller use keycardFound (may be null, triggering fallthrough)
+        return keycardFound
+
+    def willPayUnlessCost(self, payer, sa, cost, alreadyPaid, payers):
+        host = sa.getHostCard()
+
+        lifeLoss = 0
+        if cost.hasSpecificCostType(CostDamage):
+            if not payer.canLoseLife():
+                return True
+            damageCost = cost.getCostPartByType(CostDamage)
+            lifeLoss = ComputerUtilCombat.predictDamageTo(payer, damageCost.getAbilityAmount(sa), host, False)
+            if lifeLoss == 0:
+                return True
+        elif cost.hasSpecificCostType(CostPayLife):
+            lifeCost = cost.getCostPartByType(CostPayLife)
+            lifeLoss = lifeCost.getAbilityAmount(sa)
+
+        for c in AbilityUtils.getDefinedCards(host, sa.getParam("Defined"), sa):
+            if c.isToken():
+                return False
+            if not c.isCreature() or c.getBasePower() < lifeLoss or payer.getLife() < lifeLoss * 2:  # costs use either pay 3 life or deal 3 damage
+                return False
+
+        return super().willPayUnlessCost(payer, sa, cost, alreadyPaid, payers)
+```
+
+That completes the full `ChangeZoneAi` port.
+````

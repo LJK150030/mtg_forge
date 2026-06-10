@@ -200,3 +200,103 @@ public class CostUntapType extends CostPartWithList {
     }
 }
 ```
+
+## Python
+`forge/game/cost/CostUntapType.py`
+
+```python
+from forge.game.cost.CostPartWithList import CostPartWithList
+from forge.game.cost.Cost import Cost
+from forge.game.cost.ICostVisitor import ICostVisitor
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CounterEnumType import CounterEnumType
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.trigger.TriggerType import TriggerType
+from forge.game.zone.ZoneType import ZoneType
+
+
+class CostUntapType(CostPartWithList):
+    """The Class CostUntapType."""
+
+    serialVersionUID = 1
+
+    def __init__(self, amount: str, type: str, description: str, hasUntapInPrice: bool):
+        super().__init__(amount, type, description)
+        self.canUntapSource = not hasUntapInPrice
+
+    def paymentOrder(self) -> int:
+        return 18
+
+    def isReusable(self) -> bool:
+        return True
+
+    def isRenewable(self) -> bool:
+        return True
+
+    def toString(self) -> str:
+        sb = []
+        sb.append("Untap ")
+
+        i = self.convertAmount()
+        desc = self.getDescriptiveType()
+
+        sb.append(Cost.convertAmountTypeToWords(i, self.getAmount(), " tapped " + desc))
+
+        if "OppCtrl" in self.getType():
+            sb.append(" an opponent controls")
+        elif "YouCtrl" in self.getType():
+            sb.append(" you control")
+        return "".join(sb)
+
+    def refund(self, source: Card) -> None:
+        for c in self.getCardList():
+            c.setTapped(True)
+
+    def canPay(self, ability: SpellAbility, payer: Player, effect: bool) -> bool:
+        activator = ability.getActivatingPlayer()
+        source = ability.getHostCard()
+
+        typeList = CardLists.getValidCards(activator.getGame().getCardsIn(ZoneType.Battlefield), self.getType().split(";"), activator, source, ability)
+
+        if not self.canUntapSource:
+            typeList.remove(source)
+        typeList = CardLists.filter(typeList, lambda c: c.canUntap(None, False) and
+                (c.getCounters(CounterEnumType.STUN) == 0 or c.canRemoveCounters(CounterEnumType.STUN)))
+
+        amount = self.getAbilityAmount(ability)
+        return typeList.size() != 0 and typeList.size() >= amount
+
+    def doPayment(self, payer: Player, ability: SpellAbility, targetCard: Card, effect: bool) -> Card:
+        targetCard.untap()
+        return targetCard
+
+    def canPayListAtOnce(self) -> bool:
+        return True
+
+    def doListPayment(self, payer: Player, ability: SpellAbility, targetCards: CardCollectionView, effect: bool) -> CardCollectionView:
+        untapped = CardCollection()
+        for c in targetCards:
+            if c.untap():
+                untapped.add(c)
+        if not untapped.isEmpty():
+            runParams = AbilityKey.newMap()
+            map = {}
+            map[payer] = untapped
+            runParams[AbilityKey.Map] = map
+            payer.getGame().getTriggerHandler().runTrigger(TriggerType.UntapAll, runParams, False)
+        return targetCards
+
+    def getHashForLKIList(self) -> str:
+        return "Untapped"
+
+    def getHashForCardList(self) -> str:
+        return "UntappedCards"
+
+    def accept(self, visitor: ICostVisitor):
+        return visitor.visit(self)
+```

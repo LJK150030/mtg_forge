@@ -56,6 +56,12 @@ classDiagram
 - [[forge.game.zone.Zone|Zone]]
 - [[forge.util.collect.FCollection|FCollection]]
 
+## Design Description
+
+SpellAbilityRestriction encapsulates the conditions that govern whether a spell or activated ability may legally be played in the current game state. Extending SpellAbilityVariablesâ€”the data holder for restriction fields such as zone, timing, speed, activator, and threshold-style conditionsâ€”it parses raw card-script parameters via setRestrictions and exposes a layered set of predicate checks: checkZoneRestrictions, checkTimingRestrictions, checkActivatorRestrictions, and checkOtherRestrictions, all orchestrated by canPlay.
+
+Collaborating with Card, SpellAbility, Player, Zone, and Game, it evaluates contextual rules ranging from comprehensive-rules legality (legendary instants/sorceries, mana-ability timing) to mechanic-specific gates (Bestow, Aftermath, morph, prowl, planeswalker activation limits). The design intent is a single, declarative restriction object populated from card data and reused as the authoritative play-legality gatekeeper, cleanly separating restriction state from the staged validation logic that consumes it.
+
 ## Source
 `forge-game/src/main/java/forge/game/spellability/SpellAbilityRestriction.java`
 
@@ -694,4 +700,450 @@ public class SpellAbilityRestriction extends SpellAbilityVariables {
     }
 
 }
+```
+
+## Python
+`forge/game/spellability/SpellAbilityRestriction.py`
+
+```python
+/*
+ * Forge: Play Magic: the Gathering.
+ * Copyright (C) 2011  Forge Team
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
+from typing import List, Map
+
+from com.google.common.collect.Sets import Sets
+
+from forge.game.Game import Game
+from forge.game.GameObject import GameObject
+from forge.game.GameObjectPredicates import GameObjectPredicates
+from forge.game.GameType import GameType
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardCopyService import CardCopyService
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CardPlayOption import CardPlayOption
+from forge.game.cost.IndividualCostPaymentInstance import IndividualCostPaymentInstance
+from forge.game.keyword.Keyword import Keyword
+from forge.game.phase.PhaseType import PhaseType
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.spellability.SpellAbilityVariables import SpellAbilityVariables
+from forge.game.staticability.StaticAbilityCastWithFlash import StaticAbilityCastWithFlash
+from forge.game.staticability.StaticAbilityExhaust import StaticAbilityExhaust
+from forge.game.staticability.StaticAbilityNumLoyaltyAct import StaticAbilityNumLoyaltyAct
+from forge.game.zone.Zone import Zone
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.Expressions import Expressions
+from forge.util.collect.FCollection import FCollection
+
+
+class SpellAbilityRestriction(SpellAbilityVariables):
+    # A class for handling SpellAbility Restrictions. These restrictions include:
+    # Zone, Phase, OwnTurn, Speed (instant/sorcery), Amount per Turn, Player,
+    # Threshold, Metalcraft, LevelRange, etc
+    # Each value will have a default, that can be overridden (mostly by AbilityFactory)
+    # The canPlay function will use these values to determine if the current
+    # game state is ok with these restrictions
+
+    def __init__(self):
+        super().__init__()
+
+    def setRestrictions(self, params):
+        if "Activation" in params:
+            value = params.get("Activation")
+            if value == "Threshold":
+                self.setThreshold(True)
+            if value == "Metalcraft":
+                self.setMetalcraft(True)
+            if value == "Delirium":
+                self.setDelirium(True)
+            if value == "Hellbent":
+                self.setHellbent(True)
+            if value == "Desert":
+                self.setDesert(True)
+            if value == "Blessing":
+                self.setBlessing(True)
+            if value == "Solved":
+                self.setSolved(True)
+
+        if "ActivationZone" in params:
+            self.setZone(ZoneType.smartValueOf(params.get("ActivationZone")))
+
+        if "SorcerySpeed" in params:
+            self.setSorcerySpeed(True)
+
+        if "InstantSpeed" in params:
+            self.setInstantSpeed(True)
+
+        if "PlayerTurn" in params:
+            self.setPlayerTurn(True)
+
+        if "OpponentTurn" in params:
+            self.setOpponentTurn(True)
+
+        if "Activator" in params:
+            self.setActivator(params.get("Activator"))
+
+        if "ActivationLimit" in params:
+            self.setLimitToCheck(params.get("ActivationLimit"))
+
+        if "GameActivationLimit" in params:
+            self.setGameLimitToCheck(params.get("GameActivationLimit"))
+
+        if "ActivationPhases" in params:
+            self.setPhases(PhaseType.parseRange(params.get("ActivationPhases")))
+
+        if "ActivationFirstCombat" in params:
+            self.setFirstCombatOnly(True)
+
+        if "ActivationAfterBlockers" in params:
+            self.setAfterBlockersOnly(True)
+
+        if "ActivationGameTypes" in params:
+            self.setGameTypes(GameType.listValueOf(params.get("ActivationGameTypes")))
+
+        if "IsPresent" in params:
+            self.setIsPresent(params.get("IsPresent"))
+            if "PresentCompare" in params:
+                self.setPresentCompare(params.get("PresentCompare"))
+            if "PresentZone" in params:
+                self.setPresentZone(ZoneType.smartValueOf(params.get("PresentZone")))
+
+        if "PresentDefined" in params:
+            self.setPresentDefined(params.get("PresentDefined"))
+
+        # basically PresentCompare for life totals:
+        if "ActivationLifeTotal" in params:
+            self.setLifeTotal(params.get("ActivationLifeTotal"))
+            if "ActivationLifeAmount" in params:
+                self.setLifeAmount(params.get("ActivationLifeAmount"))
+
+        if "CheckSVar" in params:
+            self.setSvarToCheck(params.get("CheckSVar"))
+        if "SVarCompare" in params:
+            self.setSvarOperator(params.get("SVarCompare")[0:2])
+            self.setSvarOperand(params.get("SVarCompare")[2:])
+
+        if "ClassLevel" in params:
+            self.setClassLevelOperator(params.get("ClassLevel")[0:2])
+            self.setClassLevel(params.get("ClassLevel")[2:])
+
+    def checkZoneRestrictions(self, c, sa):
+        activator = sa.getActivatingPlayer()
+        cardZone = c.getLastKnownZone()
+        cp = c
+
+        # for Bestow need to check the animated State
+        if sa.isSpell() and sa.isBestow():
+            # already bestowed or in battlefield, no need to check for spell
+            if c.isInPlay():
+                return False
+
+            # if card is lki and bestowed, then do nothing there, it got already animated
+            if not (c.isLKI() and c.isBestowed()):
+                if not c.isLKI():
+                    cp = CardCopyService.getLKICopy(c)
+
+                cp.animateBestow(not cp.isLKI())
+
+        if cardZone is None or self.getZone() is None or not cardZone.is_(self.getZone()):
+            # If Card is not in the default activating zone, do some additional checks
+            if sa.hasParam("AdditionalActivationZone"):
+                if cardZone is not None and cardZone.is_(ZoneType.valueOf(sa.getParam("AdditionalActivationZone"))):
+                    return True
+            # Not a Spell, or on Battlefield, return false
+            if not sa.isSpell() or (cardZone is not None and ZoneType.Battlefield == cardZone.getZoneType()) \
+                    or (self.getZone() is not None and self.getZone() != ZoneType.Hand):
+                return False
+            # Prevent AI from casting spells with "May be played" from the Stack
+            if cardZone is not None and cardZone.is_(ZoneType.Stack):
+                return False
+            if sa.isSpell():
+                o = c.mayPlay(sa.getMayPlay())
+                if o is None or sa.isCastFromPlayEffect():
+                    return self.getZone() is None or (cardZone is not None and cardZone.is_(self.getZone()))
+                elif o.getPlayer() == activator:
+                    params = sa.getMayPlay().getMapParams()
+
+                    # NOTE: this assumes that it's always possible to cast cards from hand and you don't
+                    # need special permissions for that. If WotC ever prints a card that forbids casting
+                    # cards from hand, this may become relevant.
+                    if not o.grantsZonePermissions() and cardZone is not None and (not cardZone.is_(ZoneType.Hand) or activator != c.getOwner()):
+                        opts = c.mayPlay(activator)
+                        hasOtherGrantor = False
+                        for opt in opts:
+                            if opt.grantsZonePermissions():
+                                hasOtherGrantor = True
+                                break
+                        if cardZone.is_(ZoneType.Graveyard) and sa.isAftermath():
+                            # Special exclusion for Aftermath, useful for e.g. As Foretold
+                            return True
+                        if not hasOtherGrantor:
+                            return False
+
+                    if "Affected" in params:
+                        if not cp.isValid(params.get("Affected").split(","), activator, o.getHost(), o.getAbility()):
+                            return False
+
+                    if "ValidSA" in params:
+                        if not sa.isValid(params.get("ValidSA").split(","), activator, o.getHost(), o.getAbility()):
+                            return False
+
+                    # TODO: this is an exception for Aftermath. Needs to be somehow generalized.
+                    if self.getZone() != ZoneType.Graveyard and sa.isAftermath() and sa.getCardState() is not None:
+                        return False
+
+                    return True
+            return False
+
+        return True
+
+    def checkTimingRestrictions(self, c, sa):
+        activator = sa.getActivatingPlayer()
+        game = activator.getGame()
+
+        if self.isPlayerTurn() and not game.getPhaseHandler().isPlayerTurn(activator):
+            return False
+
+        if self.isOpponentTurn() and not game.getPhaseHandler().getPlayerTurn().isOpponentOf(activator):
+            return False
+
+        if self.getPhases().size() > 0:
+            if not self.getPhases().contains(game.getPhaseHandler().getPhase()):
+                return False
+
+        if self.getFirstCombatOnly():
+            if game.getPhaseHandler().getNumCombat() > (1 if game.getPhaseHandler().inCombat() else 0):
+                return False
+
+        # CR 506.7f
+        if self.getAfterBlockersOnly():
+            if game.getPhaseHandler().skippedDeclareBlockers():
+                return False
+        if sa.isSneak():
+            if not game.getPhaseHandler().is_(PhaseType.COMBAT_DECLARE_BLOCKERS):
+                return False
+        return True
+
+    def checkActivatorRestrictions(self, c, sa):
+        activator = sa.getActivatingPlayer()
+
+        if sa.isCastFromPlayEffect():
+            return True
+
+        if sa.isSpell():
+            # Spells should always default to "controller" but use mayPlay check.
+            o = c.mayPlay(sa.getMayPlay())
+            if o is not None and o.getPlayer() == activator:
+                return True
+
+        validPlayer = self.getActivator()
+        return activator.isValid(validPlayer, c.getController(), c, sa)
+
+    def checkOtherRestrictions(self, c, sa, activator):
+        game = activator.getGame()
+
+        # 205.4e. Any instant or sorcery spell with the supertype "legendary" is subject to a casting restriction
+        if (c.isSorcery() or c.isInstant()) and c.getType().isLegendary() and CardLists.getValidCardCount(
+                activator.getCardsIn(ZoneType.Battlefield),
+                "Creature.Legendary,Planeswalker.Legendary", c.getController(), c, sa) <= 0:
+            return False
+
+        # Explicit Aftermath check there
+        if (sa.isAftermath() or sa.isDisturb()) and not c.isInZone(ZoneType.Graveyard):
+            return False
+
+        if sa.isKeyword(Keyword.FUSE) and not c.isInZone(ZoneType.Hand):
+            return False
+
+        if self.isHellbent():
+            if not activator.hasHellbent():
+                return False
+        if self.isThreshold():
+            if not activator.hasThreshold():
+                return False
+        if self.isMetalcraft():
+            if not activator.hasMetalcraft():
+                return False
+        if self.isDelirium():
+            if not activator.hasDelirium():
+                return False
+        if sa.isSurged():
+            if not activator.hasSurge():
+                return False
+        if sa.isSpectacle():
+            if activator.getOpponentLostLifeThisTurn() <= 0:
+                return False
+        if self.isDesert():
+            if not activator.hasDesert():
+                return False
+        if self.isBlessing():
+            if not activator.hasBlessing():
+                return False
+        if self.isSolved():
+            if not c.isSolved():
+                return False
+        if sa.isProwl():
+            if not activator.hasProwl(sa):
+                return False
+        if sa.isFreerunning():
+            if not activator.hasFreerunning():
+                return False
+        if self.getIsPresent() is not None:
+            if self.getPresentDefined() is not None:
+                list = AbilityUtils.getDefinedObjects(sa.getHostCard(), self.getPresentDefined(), sa)
+            else:
+                list = FCollection(game.getCardsIn(self.getPresentZone()))
+
+            restriction = GameObjectPredicates.restriction(self.getIsPresent().split(","), activator, c, sa)
+            left = int(sum(1 for x in list.stream() if restriction(x)))
+
+            rightString = self.getPresentCompare()[2:]
+            right = AbilityUtils.calculateAmount(c, rightString, sa)
+
+            if not Expressions.compare(left, self.getPresentCompare(), right):
+                return False
+
+        if self.getLifeTotal() is not None:
+            life = 1
+            if self.getLifeTotal() == "You":
+                life = activator.getLife()
+
+            right = AbilityUtils.calculateAmount(sa.getHostCard(), self.getLifeAmount()[2:], sa)
+
+            if not Expressions.compare(life, self.getLifeAmount(), right):
+                return False
+
+        if sa.isPwAbility():
+            numActivates = c.getPlaneswalkerAbilityActivated()
+            limit = 2 if StaticAbilityNumLoyaltyAct.limitIncrease(c) else 1
+
+            if numActivates >= limit:
+                # increased limit only counts if it's been used already
+                limit += StaticAbilityNumLoyaltyAct.additionalActivations(c, sa) - (0 if limit == 1 or c.planeswalkerActivationLimitUsed() else 1)
+                if numActivates >= limit:
+                    return False
+
+        # CR 702.37e / 702.168b
+        # If the permanent wouldn't have a morph / disguise cost if it were face up, it can't be turned face up this way.
+        if (sa.isMorphUp() or sa.isDisguiseUp()) and c.isInPlay():
+            cp = c
+            if not c.isLKI():
+                cp = CardCopyService.getLKICopy(c)
+            cp.forceTurnFaceUp()
+
+            # check static abilities
+            game.getTracker().freeze()
+            cp.clearStaticChangedCardKeywords(False)
+            preList = CardCollection(cp)
+            game.getAction().checkStaticAbilities(False, Sets.newHashSet(cp), preList)
+
+            found = cp.hasSpellAbility(sa)
+
+            game.getAction().checkStaticAbilities(False)
+            # clear delayed changes, this check should not have updated the view
+            game.getTracker().clearDelayed()
+            # need to unfreeze tracker
+            game.getTracker().unfreeze()
+
+            if not found:
+                return False
+
+        if sa.isBoast():
+            limit = 2 if activator.hasKeyword("Creatures you control can boast twice during each of your turns rather than once.") else 1
+            if limit <= sa.getActivationsThisTurn():
+                return False
+        elif sa.isExhaust():
+            if sa.getActivationsThisGame() > 0 and not StaticAbilityExhaust.anyWithExhaust(activator):
+                return False
+        elif sa.isPowerUp():
+            if sa.getActivationsThisGame() > 0:
+                return False
+
+        # Rule 605.3c about Mana Abilities
+        if sa.isManaAbility():
+            for i in game.costPaymentStack:
+                if i.getPayment().getAbility().equals(sa):
+                    return False
+
+        if self.getsVarToCheck() is not None:
+            svarValue = AbilityUtils.calculateAmount(c, self.getsVarToCheck(), sa)
+            operandValue = AbilityUtils.calculateAmount(c, self.getsVarOperand(), sa)
+
+            if not Expressions.compare(svarValue, self.getsVarOperator(), operandValue):
+                return False
+
+        if self.getClassLevel() is not None:
+            level = c.getClassLevel()
+            levelOperand = AbilityUtils.calculateAmount(c, self.getClassLevel(), sa)
+
+            if not Expressions.compare(level, self.getClassLevelOperator(), levelOperand):
+                return False
+
+        if self.getGameTypes().size() > 0:
+            pgt = lambda type: game.getRules().hasAppliedVariant(type)
+            if not any(pgt(type) for type in self.getGameTypes()):
+                return False
+
+        return True
+
+    def canPlay(self, c, sa):
+        if c.isPhasedOut() or c.isUsedToPay():
+            return False
+
+        activator = sa.getActivatingPlayer()
+        if activator is None:
+            activator = c.getController()
+            sa.setActivatingPlayer(activator)
+            print(c.getName() + " Did not have activator set in SpellAbilityRestriction.canPlay()")
+
+        if not StaticAbilityCastWithFlash.anyWithFlashNeedsInfo(sa, c, activator):
+            if not sa.canCastTiming(c, activator):
+                return False
+
+        # Special check for Lion's Eye Diamond
+        if sa.isManaAbility() and c.getGame().costPaymentStack.peek() is not None and self.isInstantSpeed():
+            return False
+
+        if not self.checkActivatorRestrictions(c, sa):
+            return False
+
+        if not self.checkTimingRestrictions(c, sa):
+            return False
+
+        if not self.checkZoneRestrictions(c, sa):
+            return False
+
+        if not self.checkOtherRestrictions(c, sa, activator):
+            return False
+
+        if self.getLimitToCheck() is not None:
+            limit = AbilityUtils.calculateAmount(c, self.getLimitToCheck(), sa)
+
+            if sa.getActivationsThisTurn() >= limit:
+                return False
+
+        if self.getGameLimitToCheck() is not None:
+            limit = AbilityUtils.calculateAmount(c, self.getGameLimitToCheck(), sa)
+
+            if sa.getActivationsThisGame() >= limit:
+                return False
+
+        return True
 ```

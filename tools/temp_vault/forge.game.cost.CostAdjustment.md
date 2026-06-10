@@ -77,9 +77,9 @@ classDiagram
 
 ## Design Description
 
-CostAdjustment is a stateless utility (all methods static) that centralizes the computation of how a spell's or ability's cost is modified before it is paid. Its first responsibility, via `adjust(Cost, …)`, is to raise the base Cost—applying Commander tax, explicit `RaiseCost` parameters, and battlefield-wide `RaiseCost` static abilities. Its second, via `adjust(ManaCostBeingPaid, …)`, drives the reduction and payment-alternative phase: it applies `ReduceCost`/`SetCost` static abilities in player-chosen order, then resolves keyword mechanics such as Delve, Convoke, Improvise, Offering, Emerge, Assist, and Waterbend.
+CostAdjustment is a stateless utility (all methods static) that centralizes the computation of how a spell's or ability's cost is modified before it is paid. Its first responsibility, via `adjust(Cost, â€¦)`, is to raise the base Costâ€”applying Commander tax, explicit `RaiseCost` parameters, and battlefield-wide `RaiseCost` static abilities. Its second, via `adjust(ManaCostBeingPaid, â€¦)`, drives the reduction and payment-alternative phase: it applies `ReduceCost`/`SetCost` static abilities in player-chosen order, then resolves keyword mechanics such as Delve, Convoke, Improvise, Offering, Emerge, Assist, and Waterbend.
 
-The class collaborates broadly without owning state: it queries the Game for cards across Battlefield, Stack, and Command zones, filters StaticAbilities by mode, and delegates choices back to each Player's controller. The `checkRequirement` gatekeeper enforces a static ability's conditions and Valid* restrictions uniformly, while ordering guarantees—set costs applied last, generic reductions batched to handle hybrid mana—encode the game's precise rules sequencing.
+The class collaborates broadly without owning state: it queries the Game for cards across Battlefield, Stack, and Command zones, filters StaticAbilities by mode, and delegates choices back to each Player's controller. The `checkRequirement` gatekeeper enforces a static ability's conditions and Valid* restrictions uniformly, while ordering guaranteesâ€”set costs applied last, generic reductions batched to handle hybrid manaâ€”encode the game's precise rules sequencing.
 
 ## Source
 `forge-game/src/main/java/forge/game/cost/CostAdjustment.java`
@@ -395,7 +395,7 @@ public class CostAdjustment {
         // 702.132a Assist is a static ability that modifies the rules of paying for the spell with assist (see rules 601.2g-h).
         // If the total cost to cast a spell with assist includes a generic mana component, before you activate mana abilities while casting it, you may choose another player.
         // That player has a chance to activate mana abilities. Once that player chooses not to activate any more mana abilities, you have a chance to activate mana abilities.
-        // Before you begin to pay the total cost of the spell, the player you chose may pay for any amount of the generic mana in the spellâ€™s total cost.
+        // Before you begin to pay the total cost of the spell, the player you chose may pay for any amount of the generic mana in the spellÃ¢â‚¬â„¢s total cost.
         int genericLeft = cost.getUnpaidShards(ManaCostShard.GENERIC);
         if (genericLeft == 0) {
             return true;
@@ -697,4 +697,511 @@ public class CostAdjustment {
         return true;
     }
 }
+```
+
+## Python
+`forge/game/cost/CostAdjustment.py`
+
+```python
+from forge.card.CardStateName import CardStateName
+from forge.card.mana.ManaAtom import ManaAtom
+from forge.card.mana.ManaCost import ManaCost
+from forge.card.mana.ManaCostShard import ManaCostShard
+from forge.game.Game import Game
+from forge.game.GameObject import GameObject
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.card.CardZoneTable import CardZoneTable
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CardPredicates import CardPredicates
+from forge.game.card.CardUtil import CardUtil
+from forge.game.cost.Cost import Cost
+from forge.game.keyword.Emerge import Emerge
+from forge.game.keyword.Keyword import Keyword
+from forge.game.keyword.KeywordInterface import KeywordInterface
+from forge.game.mana.ManaCostBeingPaid import ManaCostBeingPaid
+from forge.game.player.Player import Player
+from forge.game.player.PlayerCollection import PlayerCollection
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.spellability.SpellAbilityPredicates import SpellAbilityPredicates
+from forge.game.spellability.TargetChoices import TargetChoices
+from forge.game.staticability.StaticAbility import StaticAbility
+from forge.game.staticability.StaticAbilityMode import StaticAbilityMode
+from forge.game.trigger.TriggerType import TriggerType
+from forge.game.zone.Zone import Zone
+from forge.game.zone.ZoneType import ZoneType
+
+
+class CostAdjustment:
+
+    @staticmethod
+    def adjust(cost: Cost, sa: SpellAbility, effect: bool) -> Cost:
+        if sa.isTrigger() or cost is None or effect:
+            sa.setMaxWaterbend(cost)
+            return cost
+
+        activator = sa.getActivatingPlayer()
+        host = sa.getHostCard()
+        game = activator.getGame()
+        result = cost.copy()
+        isStateChangeToFaceDown = False
+
+        if sa.isSpell():
+            if sa.isCastFaceDown() and not host.isFaceDown():
+                # Turn face down to apply cost modifiers correctly
+                host.turnFaceDownNoUpdate()
+                isStateChangeToFaceDown = True
+
+            # Commander Tax there
+            if host.isCommander() and host.getCastFrom() is not None and ZoneType.Command == host.getCastFrom().getZoneType():
+                n = activator.getCommanderCast(host) * 2
+                if n > 0:
+                    result.add(Cost(ManaCost.get(n), False))
+
+        cardsOnBattlefield = CardCollection(game.getCardsIn(ZoneType.Battlefield))
+        cardsOnBattlefield.addAll(game.getCardsIn(ZoneType.Stack))
+        cardsOnBattlefield.addAll(game.getCardsIn(ZoneType.Command))
+        if not cardsOnBattlefield.contains(host):
+            cardsOnBattlefield.add(host)
+        raiseAbilities: list[StaticAbility] = []
+
+        # Sort abilities to apply them in proper order
+        for c in cardsOnBattlefield:
+            for stAb in c.getStaticAbilities():
+                if stAb.checkMode(StaticAbilityMode.RaiseCost):
+                    raiseAbilities.append(stAb)
+
+        if sa.hasParam("RaiseCost"):
+            raise_ = sa.getParam("RaiseCost")
+            if sa.hasSVar(raise_):
+                inc = Cost(ManaCost.get(AbilityUtils.calculateAmount(host, raise_, sa)), False)
+            else:
+                inc = Cost(raise_, False)
+            result.add(inc)
+
+        for stAb in raiseAbilities:
+            CostAdjustment.applyRaiseCostAbility(result, sa, stAb)
+
+        # Reset card state (if changed)
+        if isStateChangeToFaceDown:
+            host.setState(CardStateName.Original, False)
+            host.setFaceDown(False)
+
+        sa.setMaxWaterbend(result)
+
+        return result
+
+    @staticmethod
+    def applyRaiseCostAbility(cost: Cost, sa: SpellAbility, st: StaticAbility) -> None:
+        hostCard = st.getHostCard()
+
+        if not CostAdjustment.checkRequirement(sa, st):
+            return
+
+        scost = st.getParamOrDefault("Cost", "1")
+        count = 0
+
+        if st.hasParam("ForEachShard"):
+            mc = ManaCost.ZERO
+            if sa.isSpell():
+                mc = sa.getHostCard().getManaCost()
+            elif sa.isAbility() and sa.getPayCosts().hasManaCost():
+                # TODO check for AlternateCost$, it should always be part of the activation cost too
+                mc = sa.getPayCosts().getCostMana().getMana()
+            atom = ManaAtom.fromName(st.getParam("ForEachShard").lower())
+            for shard in mc:
+                if (shard.getColorMask() & atom) != 0:
+                    count += 1
+        elif st.hasParam("Amount"):
+            amount = st.getParam("Amount")
+            if "Escalate" == amount:
+                tail = sa.getTailAbility()
+                if tail.hasSVar("CharmOrder"):
+                    count = tail.getSVarInt("CharmOrder") - 1
+            elif "Strive" == amount:
+                for tc in sa.getAllTargetChoices():
+                    count += tc.size()
+                count -= 1
+            elif "Spree" == amount or "Tiered" == amount:
+                sub = sa
+                while sub is not None:
+                    if sub.hasParam("ModeCost"):
+                        part = Cost(sub.getParam("ModeCost"), sa.isAbility(), sa.getHostCard() == hostCard)
+                        cost.mergeTo(part, count, sa)
+                    sub = sub.getSubAbility()
+            elif amount.isdigit():
+                count = int(amount)
+            elif st.hasParam("Relative"):
+                # grab SVar here already to avoid potential collision when SA has one with same name
+                count = AbilityUtils.calculateAmount(hostCard, st.getSVar(amount) if st.hasSVar(amount) else amount, sa)
+            else:
+                count = AbilityUtils.calculateAmount(hostCard, amount, st)
+        else:
+            # Amount 1 as default
+            count = 1
+        if count > 0:
+            part = Cost(scost, sa.isAbility(), sa.getHostCard() == hostCard)
+            cost.mergeTo(part, count, sa)
+
+    # If cardsToDelveOut is null, will immediately exile the delved cards and remember them on the host card.
+    # Otherwise, will return them in cardsToDelveOut and the caller is responsible for doing the above.
+    @staticmethod
+    def adjust(cost: ManaCostBeingPaid, sa: SpellAbility, payer: Player, cardsToDelveOut: CardCollection, test: bool, effect: bool) -> bool:
+        if effect:
+            CostAdjustment.adjustCostByWaterbend(cost, sa, payer, test)
+        if effect or sa.isTrigger() or sa.isReplacementAbility():
+            return True
+
+        activator = sa.getActivatingPlayer()
+        game = activator.getGame()
+        host = sa.getHostCard()
+
+        isStateChangeToFaceDown = False
+        if sa.isSpell() and sa.isCastFaceDown() and not host.isFaceDown():
+            # Turn face down to apply cost modifiers correctly
+            host.turnFaceDownNoUpdate()
+            isStateChangeToFaceDown = True
+
+        cardsOnBattlefield = CardCollection(game.getCardsIn(ZoneType.Battlefield))
+        cardsOnBattlefield.addAll(game.getCardsIn(ZoneType.Stack))
+        cardsOnBattlefield.addAll(game.getCardsIn(ZoneType.Command))
+        if not cardsOnBattlefield.contains(host):
+            cardsOnBattlefield.add(host)
+        reduceAbilities: list[StaticAbility] = []
+        setAbilities: list[StaticAbility] = []
+
+        # Sort abilities to apply them in proper order
+        for c in cardsOnBattlefield:
+            for stAb in c.getStaticAbilities():
+                if stAb.checkMode(StaticAbilityMode.ReduceCost) and CostAdjustment.checkRequirement(sa, stAb):
+                    reduceAbilities.append(stAb)
+                elif stAb.checkMode(StaticAbilityMode.SetCost):
+                    setAbilities.append(stAb)
+
+        sumGeneric = 0
+        if sa.hasParam("ReduceCost"):
+            cst = sa.getParam("ReduceCost")
+            amt = sa.getParamOrDefault("ReduceAmount", cst)
+            num = AbilityUtils.calculateAmount(host, amt, sa)
+
+            if sa.hasParam("ReduceAmount") and num > 0:
+                cost.subtractManaCost(ManaCost((cst + " ") * num))
+            else:
+                sumGeneric += num
+        if sa.isPowerUp() and host.enteredThisTurn():
+            # TODO handle hybrid ManaCost
+            cost.subtractManaCost(host.getManaCost())
+
+        while reduceAbilities:
+            choice = activator.getController().chooseSingleStaticAbility(reduceAbilities)
+            reduceAbilities.remove(choice)
+            sumGeneric += CostAdjustment.applyReduceCostAbility(choice, sa, cost, sumGeneric)
+        # need to reduce generic extra because of 2 hybrid mana
+        cost.decreaseGenericMana(sumGeneric)
+
+        if sa.isSpell():
+            for pip in sa.getPipsToReduce():
+                cost.decreaseShard(ManaCostShard.parseNonGeneric(pip), 1)
+
+        if sa.isSpell() and sa.isOffering():
+            CostAdjustment.adjustCostByOffering(cost, sa)
+        if sa.isSpell() and sa.isEmerge() and isinstance(sa.getKeyword(), Emerge):
+            emerge = sa.getKeyword()
+            CostAdjustment.adjustCostByEmerge(cost, sa, emerge)
+
+        # Set cost (only used by Trinisphere) is applied last
+        for stAb in setAbilities:
+            CostAdjustment.applySetCostAbility(stAb, sa, cost)
+
+        if sa.isSpell():
+            if host.hasKeyword(Keyword.ASSIST) and not CostAdjustment.adjustCostByAssist(cost, sa, test):
+                return False
+
+            if host.hasKeyword(Keyword.DELVE):
+                host.clearDelved()
+
+                table = CardZoneTable()
+                mutableGrave = CardCollection(activator.getCardsIn(ZoneType.Graveyard))
+                toExile = activator.getController().chooseCardsToDelve(cost.getUnpaidShards(ManaCostShard.GENERIC), mutableGrave)
+                for c in toExile:
+                    cost.decreaseGenericMana(1)
+                    if cardsToDelveOut is not None:
+                        cardsToDelveOut.add(c)
+                    elif not test:
+                        host.addDelved(c)
+                        d = game.getAction().exile(c, None, None)
+                        host.addExiledCard(d)
+                        d.setExiledWith(host)
+                        d.setExiledBy(host.getController())
+                        d.setExiledSA(sa)
+                        table.put(ZoneType.Graveyard, d.getZone().getZoneType(), d)
+                table.triggerChangesZoneAll(game, sa)
+            if host.hasKeyword(Keyword.CONVOKE):
+                CostAdjustment.adjustCostByConvokeOrImprovise(cost, sa, activator, False, True, test)
+            if host.hasKeyword(Keyword.IMPROVISE):
+                CostAdjustment.adjustCostByConvokeOrImprovise(cost, sa, activator, True, False, test)
+
+        if sa.hasParam("TapCreaturesForMana"):
+            CostAdjustment.adjustCostByConvokeOrImprovise(cost, sa, activator, False, True, test)
+
+        CostAdjustment.adjustCostByWaterbend(cost, sa, payer, test)
+
+        # Reset card state (if changed)
+        if isStateChangeToFaceDown:
+            host.setFaceDown(False)
+            host.setState(CardStateName.Original, False)
+
+        return True
+
+    # GetSpellCostChange
+
+    @staticmethod
+    def adjustCostByAssist(cost: ManaCostBeingPaid, sa: SpellAbility, test: bool) -> bool:
+        # 702.132a Assist is a static ability that modifies the rules of paying for the spell with assist (see rules 601.2g-h).
+        # If the total cost to cast a spell with assist includes a generic mana component, before you activate mana abilities while casting it, you may choose another player.
+        # That player has a chance to activate mana abilities. Once that player chooses not to activate any more mana abilities, you have a chance to activate mana abilities.
+        # Before you begin to pay the total cost of the spell, the player you chose may pay for any amount of the generic mana in the spell's total cost.
+        genericLeft = cost.getUnpaidShards(ManaCostShard.GENERIC)
+        if genericLeft == 0:
+            return True
+
+        activator = sa.getActivatingPlayer()
+        otherPlayers = activator.getAllOtherPlayers()
+
+        assistant = activator.getController().choosePlayerToAssistPayment(otherPlayers, sa, "Choose a player to assist paying this spell", genericLeft)
+        if assistant is None:
+            return True
+        requestedAmount = genericLeft
+        # TODO: Nice to have. Ask the player how much mana you are hoping someone will pay.
+        return assistant.getController().helpPayForAssistSpell(cost, sa, genericLeft, requestedAmount)
+
+    @staticmethod
+    def adjustCostByWaterbend(cost: ManaCostBeingPaid, sa: SpellAbility, payer: Player, test: bool) -> None:
+        maxWaterbend = sa.getMaxWaterbend()
+        if maxWaterbend is not None and maxWaterbend > 0:
+            CostAdjustment.adjustCostByConvokeOrImprovise(cost, sa, payer, True, True, test)
+
+    @staticmethod
+    def adjustCostByConvokeOrImprovise(cost: ManaCostBeingPaid, sa: SpellAbility, payer: Player, artifacts: bool, creatures: bool, test: bool) -> None:
+        if creatures and not artifacts:
+            sa.clearTappedForConvoke()
+
+        untappedCards = CardLists.filter(payer.getCardsIn(ZoneType.Battlefield),
+                CardPredicates.CAN_TAP)
+
+        maxReduction = None
+        if artifacts and creatures:
+            maxReduction = sa.getMaxWaterbend()
+            isArtifactOrCreature = lambda card: card.isArtifact() or card.isCreature()
+            untappedCards = CardLists.filter(untappedCards, isArtifactOrCreature)
+        elif artifacts:
+            untappedCards = CardLists.filter(untappedCards, CardPredicates.ARTIFACTS)
+        else:
+            untappedCards = CardLists.filter(untappedCards, CardPredicates.CREATURES)
+
+        convokedCards = payer.getController().chooseCardsForConvokeOrImprovise(sa,
+                cost.toManaCost(), untappedCards, artifacts, creatures, maxReduction)
+
+        tapped = CardCollection()
+        for c, shard in convokedCards.items():
+            if creatures and not artifacts:
+                sa.addTappedForConvoke(c)
+            cost.decreaseShard(shard, 1)
+            if not test:
+                if c.tap(True, sa, payer):
+                    tapped.add(c)
+        if not tapped.isEmpty():
+            runParams = AbilityKey.newMap()
+            runParams.put(AbilityKey.Cards, tapped)
+            payer.getGame().getTriggerHandler().runTrigger(TriggerType.TapAll, runParams, False)
+
+    @staticmethod
+    def adjustCostByOffering(cost: ManaCostBeingPaid, sa: SpellAbility) -> None:
+        offeringType = ""
+        for inst in sa.getHostCard().getKeywords(Keyword.OFFERING):
+            kw = inst.getOriginal()
+            offeringType = kw.split(":")[1]
+            break
+
+        canOffer = CardLists.filter(sa.getActivatingPlayer().getCardsIn(ZoneType.Battlefield),
+                CardPredicates.isType(offeringType), CardPredicates.canBeSacrificedBy(sa, False))
+
+        toSacList = sa.getHostCard().getController().getController().choosePermanentsToSacrifice(sa, 0, 1, canOffer, offeringType)
+
+        if toSacList.isEmpty():
+            return
+        toSac = toSacList.getFirst()
+
+        cost.subtractManaCost(toSac.getManaCost())
+
+        sa.setSacrificedAsOffering(toSac)
+        toSac.setUsedToPay(True)  # stop it from interfering with mana input
+
+    @staticmethod
+    def adjustCostByEmerge(cost: ManaCostBeingPaid, sa: SpellAbility, emerge: Emerge) -> None:
+        validStr = emerge.getValidType()
+        p = sa.getActivatingPlayer()
+        canEmerge = CardLists.filter(p.getCardsIn(ZoneType.Battlefield),
+                CardPredicates.restriction(validStr, p, sa.getHostCard(), sa),
+                CardPredicates.canBeSacrificedBy(sa, False))
+
+        toSacList = p.getController().choosePermanentsToSacrifice(sa, 0, 1, canEmerge, validStr)
+
+        if toSacList.isEmpty():
+            return
+        toSac = toSacList.getFirst()
+
+        cost.decreaseGenericMana(toSac.getCMC())
+
+        sa.setSacrificedAsEmerge(toSac)
+        toSac.setUsedToPay(True)  # stop it from interfering with mana input
+
+    # Applies applyRaiseCostAbility ability.
+    #
+    # @param staticAbility a StaticAbility
+    # @param sa the SpellAbility
+    # @param manaCost a ManaCost
+    @staticmethod
+    def applySetCostAbility(staticAbility: StaticAbility, sa: SpellAbility, manaCost: ManaCostBeingPaid) -> None:
+        amount = staticAbility.getParam("Amount")
+
+        if not CostAdjustment.checkRequirement(sa, staticAbility):
+            return
+
+        value = int(amount)
+
+        if staticAbility.hasParam("RaiseTo"):
+            value = max(value - manaCost.getConvertedManaCost(), 0)
+
+        manaCost.increaseGenericMana(value)
+
+    # Applies applyReduceCostAbility ability.
+    #
+    # @param staticAbility a StaticAbility
+    # @param sa the SpellAbility
+    # @param manaCost a ManaCost
+    @staticmethod
+    def applyReduceCostAbility(staticAbility: StaticAbility, sa: SpellAbility, manaCost: ManaCostBeingPaid, sumReduced: int) -> int:
+        # Can't reduce zero cost
+        if manaCost.toString() == "{0}":
+            return 0
+        hostCard = staticAbility.getHostCard()
+        card = sa.getHostCard()
+        amount = staticAbility.getParam("Amount")
+
+        if "AffectedX" == amount:
+            value = AbilityUtils.calculateAmount(card, amount, staticAbility)
+        elif "Undaunted" == amount:
+            value = card.getController().getOpponents().size()
+        elif staticAbility.hasParam("Relative"):
+            # TODO: update cards with "This spell costs X less to cast...if you..."
+            # The caster is sa.getActivatingPlayer()
+            # cards like Hostage Taker can cast spells from other players.
+            value = AbilityUtils.calculateAmount(hostCard, staticAbility.getSVar(amount) if staticAbility.hasSVar(amount) else amount, sa)
+        else:
+            value = AbilityUtils.calculateAmount(hostCard, amount, staticAbility)
+
+        if staticAbility.hasParam("UpTo"):
+            value = sa.getActivatingPlayer().getController().chooseNumberForCostReduction(sa, 0, value)
+
+        if staticAbility.hasParam("Color"):
+            color = staticAbility.getParam("Color")
+            sumGeneric = 0
+            # might be problematic for weird hybrid combinations
+            for cost in color.split(" "):
+                if cost.isdigit():
+                    sumGeneric += int(cost) * value
+                elif staticAbility.hasParam("IgnoreGeneric"):
+                    manaCost.decreaseShard(ManaCostShard.parseNonGeneric(cost), value)
+                else:
+                    manaCost.subtractManaCost(ManaCost((cost + " ") * value))
+            return sumGeneric
+        else:
+            minMana = 0
+            if staticAbility.hasParam("MinMana"):
+                minMana = int(staticAbility.getParam("MinMana"))
+
+            maxReduction = manaCost.getConvertedManaCost() - minMana - sumReduced
+            if maxReduction > 0:
+                return min(value, maxReduction)
+        return 0
+
+    @staticmethod
+    def checkRequirement(sa: SpellAbility, st: StaticAbility) -> bool:
+        if not st.checkConditions():
+            return False
+
+        hostCard = st.getHostCard()
+        controller = hostCard.getController()
+        activator = sa.getActivatingPlayer()
+        card = sa.getHostCard()
+        game = hostCard.getGame()
+
+        if not st.matchesValidParam("ValidCard", card):
+            return False
+        if not st.matchesValidParam("ValidSpell", sa):
+            return False
+        if not st.matchesValidParam("Activator", activator):
+            return False
+
+        if st.hasParam("Type"):
+            type_ = st.getParam("Type")
+            if type_ == "Spell":
+                if not sa.isSpell():
+                    return False
+                if st.hasParam("OnlyFirstSpell"):
+                    if activator is None:
+                        return False
+                    if st.hasParam("ValidCard"):
+                        list_ = CardUtil.getThisTurnCast(st.getParam("ValidCard"), hostCard, st, controller)
+                    else:
+                        list_ = game.getStack().getSpellsCastThisTurn()
+
+                    if st.hasParam("ValidSpell"):
+                        list_ = CardLists.filterAsList(list_, CardPredicates.castSA(
+                                SpellAbilityPredicates.isValid(st.getParam("ValidSpell").split(","), controller, hostCard, st)))
+
+                    if not CardLists.filterControlledBy(list_, activator).isEmpty():
+                        return False
+            elif type_ == "Ability":
+                if not sa.isActivatedAbility() or sa.isReplacementAbility():
+                    return False
+            elif type_ == "Foretell":
+                if not sa.isForetelling():
+                    return False
+                if st.hasParam("FirstForetell") and activator.getNumForetoldThisTurn() > 0:
+                    return False
+
+        if st.hasParam("AffectedZone"):
+            zones = ZoneType.listValueOf(st.getParam("AffectedZone"))
+            if sa.isSpell() and card.wasCast():
+                if card.getCastFrom().getZoneType() not in zones:
+                    return False
+            else:
+                z = card.getLastKnownZone()
+                if z is None or z.getZoneType() not in zones:
+                    return False
+        if st.hasParam("ValidTarget"):
+            curSa = sa
+            targetValid = False
+            while curSa is not None:
+                if not curSa.usesTargeting():
+                    curSa = curSa.getSubAbility()
+                    continue
+                for target in curSa.getTargets():
+                    if target.isValid(st.getParam("ValidTarget").split(","), controller, hostCard, curSa):
+                        targetValid = True
+                        break
+                if targetValid:
+                    break
+                curSa = curSa.getSubAbility()
+            if st.hasParam("UnlessValidTarget"):
+                if targetValid:
+                    return False
+            elif not targetValid:
+                return False
+        return True
 ```

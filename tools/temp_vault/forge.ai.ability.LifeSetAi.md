@@ -237,3 +237,163 @@ public class LifeSetAi extends SpellAbilityAi {
 
 }
 ```
+
+## Python
+`forge/ai/ability/LifeSetAi.py`
+
+```python
+from forge.ai.SpellAbilityAi import SpellAbilityAi
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.ai.ComputerUtilCost import ComputerUtilCost
+from forge.ai.ComputerUtilAbility import ComputerUtilAbility
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.card.Card import Card
+from forge.game.card.CardPredicates import CardPredicates
+from forge.game.card.CounterEnumType import CounterEnumType
+from forge.game.phase.PhaseType import PhaseType
+from forge.game.player.Player import Player
+from forge.game.player.PlayerCollection import PlayerCollection
+from forge.game.player.PlayerPredicates import PlayerPredicates
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.spellability.TargetRestrictions import TargetRestrictions
+from forge.game.zone.ZoneType import ZoneType
+
+
+class LifeSetAi(SpellAbilityAi):
+
+    def checkApiLogic(self, ai: Player, sa: SpellAbility) -> AiAbilityDecision:
+        myLife = ai.getLife()
+        targetableOpps = ai.getOpponents().filter(PlayerPredicates.isTargetableBy(sa))
+        opponent = targetableOpps.max(PlayerPredicates.compareByLife())
+        hlife = 0 if opponent is None else opponent.getLife()
+        amountStr = sa.getParam("LifeAmount")
+
+        # Don't use setLife before main 2 if possible
+        if ai.getGame().getPhaseHandler().getPhase().isBefore(PhaseType.MAIN2) \
+                and not sa.hasParam("ActivationPhases"):
+            return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+        # TODO add AI logic for that
+        if sa.hasParam("Redistribute"):
+            return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+        # TODO handle proper calculation of X values based on Cost and what would be paid
+        if amountStr == "X" and sa.getSVar(amountStr) == "Count$xPaid":
+            amount = ComputerUtilCost.setMaxXValue(sa, ai, sa.isTrigger())
+        else:
+            amount = AbilityUtils.calculateAmount(sa.getHostCard(), amountStr, sa)
+
+        tgt = sa.getTargetRestrictions()
+        if tgt is not None:
+            sa.resetTargets()
+            if tgt.canOnlyTgtOpponent():
+                # if we can only target the human, and the Human's life
+                # would go up, don't play it.
+                # possibly add a combo here for Magister Sphinx and
+                # Higedetsu's (sp?) Second Rite
+                if opponent is None or amount > hlife or not opponent.canLoseLife():
+                    return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+                sa.getTargets().add(opponent)
+            else:
+                if amount > myLife and myLife <= 10 and ai.canGainLife():
+                    sa.getTargets().add(ai)
+                elif hlife > amount:
+                    sa.getTargets().add(opponent)
+                elif amount > myLife and ai.canGainLife():
+                    sa.getTargets().add(ai)
+                else:
+                    return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+        else:
+            if sa.getParam("Defined") == "Player":
+                if amount == 0:
+                    return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+                elif myLife > amount:  # will decrease computer's life
+                    if (myLife < 5) or ((myLife - amount) > (hlife - amount)):
+                        return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+            if amount <= myLife:
+                return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+        # if life is in danger, always activate
+        if myLife < 3 and amount > myLife and ai.canGainLife():
+            return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+        return super().checkApiLogic(ai, sa)
+
+    def doTriggerNoCost(self, ai: Player, sa: SpellAbility, mandatory: bool) -> AiAbilityDecision:
+        myLife = ai.getLife()
+        targetableOpps = ai.getOpponents().filter(PlayerPredicates.isTargetableBy(sa))
+        opponent = targetableOpps.max(PlayerPredicates.compareByLife())
+        hlife = 0 if opponent is None else opponent.getLife()
+        source = sa.getHostCard()
+        sourceName = ComputerUtilAbility.getAbilitySourceName(sa)
+
+        # TODO add AI logic for that
+        if sa.hasParam("Redistribute"):
+            return AiAbilityDecision(100, AiPlayDecision.WillPlay) if mandatory else AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+        amountStr = sa.getParam("LifeAmount")
+
+        if amountStr == "X" and sa.getSVar(amountStr) == "Count$xPaid":
+            amount = ComputerUtilCost.setMaxXValue(sa, ai, True)
+        else:
+            amount = AbilityUtils.calculateAmount(source, amountStr, sa)
+
+        # special cases when amount can't be calculated without targeting first
+        if amount == 0 and "TargetedPlayer$StartingLife/HalfDown" == source.getSVar(amountStr):
+            # e.g. Torgaar, Famine Incarnate
+            result = self.doHalfStartingLifeLogic(ai, opponent, sa)
+            return AiAbilityDecision(100, AiPlayDecision.WillPlay) if (result or mandatory) else AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+        if sourceName == "Eternity Vessel" \
+                and (ai.getOpponents().getCardsIn(ZoneType.Battlefield).anyMatch(CardPredicates.nameEquals("Vampire Hexmage")) or (source.getCounters(CounterEnumType.CHARGE) == 0)):
+            return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+        # If the Target is gaining life, target self.
+        # if the Target is modifying how much life is gained, this needs to be handled better
+        tgt = sa.getTargetRestrictions()
+        if tgt is not None:
+            sa.resetTargets()
+            if tgt.canOnlyTgtOpponent():
+                if opponent is None:
+                    return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+                sa.getTargets().add(opponent)
+            else:
+                if amount > myLife and myLife <= 10:
+                    sa.getTargets().add(ai)
+                elif hlife > amount:
+                    sa.getTargets().add(opponent)
+                elif amount > myLife or mandatory:
+                    sa.getTargets().add(ai)
+                else:
+                    return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+        return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+    def doHalfStartingLifeLogic(self, ai: Player, opponent: Player, sa: SpellAbility) -> bool:
+        aiAmount = ai.getStartingLife() // 2
+        oppAmount = 0 if opponent is None else opponent.getStartingLife() // 2
+        aiLife = ai.getLife()
+        oppLife = 0 if opponent is None else opponent.getLife()
+
+        sa.resetTargets()
+
+        tgt = sa.getTargetRestrictions()
+        if tgt is not None:
+            if tgt.canOnlyTgtOpponent():
+                if oppLife > oppAmount:
+                    sa.getTargets().add(opponent)
+                else:
+                    return False
+            else:
+                if aiAmount > ai.getLife() and aiLife < 5:
+                    sa.getTargets().add(ai)
+                elif oppLife > oppAmount:
+                    sa.getTargets().add(opponent)
+                elif aiAmount > aiLife:
+                    sa.getTargets().add(ai)
+                else:
+                    return False
+
+        return True
+```

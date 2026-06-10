@@ -45,7 +45,7 @@ classDiagram
 
 GameEventManaPool is an immutable record-based event that signals a change to a player's mana pool, fitting into the engine's event-notification framework. It implements the `GameEvent` interface and supports the visitor pattern: its `visit` method dispatches to an `IGameEventVisitor`, letting consumers handle the event without the event itself knowing their concerns. The record carries a lightweight `PlayerView`, an `EventValueChangeType` mode describing the change (e.g., Added or Removed), and the mana's color as a `byte`.
 
-Notably, a convenience constructor accepts the domain `Player` and `Mana` types, converting them to the view layer (`PlayerView`) and extracting just the color byte—decoupling event consumers from the live game model and tolerating a null `Mana` by defaulting to colorless. The overridden `toString` produces a human-readable, localized summary via `Lang`.
+Notably, a convenience constructor accepts the domain `Player` and `Mana` types, converting them to the view layer (`PlayerView`) and extracting just the color byteâ€”decoupling event consumers from the live game model and tolerating a null `Mana` by defaulting to colorless. The overridden `toString` produces a human-readable, localized summary via `Lang`.
 
 ## Source
 `forge-game/src/main/java/forge/game/event/GameEventManaPool.java`
@@ -88,4 +88,42 @@ public record GameEventManaPool(PlayerView player, EventValueChangeType mode, by
         return sb.toString();
     }
 }
+```
+
+## Python
+`forge/game/event/GameEventManaPool.py`
+
+```python
+from forge.game.event.GameEvent import GameEvent
+from forge.game.event.EventValueChangeType import EventValueChangeType
+from forge.game.event.IGameEventVisitor import IGameEventVisitor
+from forge.game.mana.Mana import Mana
+from forge.game.player.Player import Player
+from forge.game.player.PlayerView import PlayerView
+from forge.util.Lang import Lang
+
+
+class GameEventManaPool(GameEvent):
+
+    def __init__(self, player: Player, mode: EventValueChangeType, mana: Mana):
+        self.player = PlayerView.get(player)
+        self.mode = mode
+        self.manaColor = mana.getColor() if mana is not None else 0
+
+    def visit(self, visitor: IGameEventVisitor):
+        return visitor.visit(self)
+
+    # (non-Javadoc)
+    # @see java.lang.Object#toString()
+    def toString(self) -> str:
+        sb = [Lang.getInstance().getPossessedObject(self.player.getName(), "mana pool")]
+        sb.append(" ")
+        sb.append(str(self.mode))
+        if self.mode in (EventValueChangeType.Added, EventValueChangeType.Removed):
+            sb.append(" - ")
+            sb.append(str(self.manaColor))
+        return "".join(sb)
+
+    def __str__(self) -> str:
+        return self.toString()
 ```

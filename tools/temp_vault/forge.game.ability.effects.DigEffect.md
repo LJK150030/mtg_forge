@@ -552,3 +552,389 @@ public class DigEffect extends SpellAbilityEffect {
 
 }
 ```
+
+## Python
+`forge/game/ability/effects/DigEffect.py`
+
+```python
+from forge.card.MagicColor import MagicColor
+from forge.game.Game import Game
+from forge.game.GameActionUtil import GameActionUtil
+from forge.game.GameEntityCounterTable import GameEntityCounterTable
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardZoneTable import CardZoneTable
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CardPredicates import CardPredicates
+from forge.game.card.CounterType import CounterType
+from forge.game.card.CardFactoryUtil import CardFactoryUtil
+from forge.game.event.GameEventCombatChanged import GameEventCombatChanged
+from forge.game.player.DelayedReveal import DelayedReveal
+from forge.game.player.Player import Player
+from forge.game.player.PlayerView import PlayerView
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.Lang import Lang
+from forge.util.Localizer import Localizer
+from forge.util.TextUtil import TextUtil
+from forge.util.collect.FCollectionView import FCollectionView
+from org.apache.commons.lang3.StringUtils import StringUtils
+
+
+class DigEffect(SpellAbilityEffect):
+
+    def getStackDescription(self, sa: SpellAbility) -> str:
+        host = sa.getHostCard()
+        sb = []
+        tgtPlayers = self.getTargetPlayers(sa)
+        spellDesc = sa.getParamOrDefault("SpellDescription", "")
+        if "X card" in spellDesc:  # X value can be changed after this goes to the stack, so use set desc
+            sb.append("[" + str(host.getController()) + "] " + spellDesc)
+        else:
+            numToDig = AbilityUtils.calculateAmount(host, sa.getParam("DigNum"), sa)
+            toChange = sa.getParamOrDefault("ChangeNum", "1")
+            numToChange = numToDig if (toChange == "All" or toChange == "Any") else AbilityUtils.calculateAmount(host, toChange, sa)
+
+            verb = " looks at "
+            if sa.hasParam("DestinationZone") and sa.getParam("DestinationZone") == "Exile" and numToDig == numToChange:
+                verb = " exiles "
+            elif sa.hasParam("Reveal") and sa.getParam("Reveal") == "True":
+                verb = " reveals "
+            sb.append(str(host.getController()) + verb + "the top ")
+            sb.append(("card" if numToDig == 1 else Lang.getNumeral(numToDig) + " cards") + " of ")
+
+            if host.getController() in tgtPlayers:
+                sb.append("their ")
+            else:
+                for p in tgtPlayers:
+                    sb.append(Lang.getInstance().getPossesive(p.getName()) + " ")
+            sb.append("library.")
+
+            if numToDig != numToChange:
+                destZone1 = sa.getParam("DestinationZone").lower() if sa.hasParam("DestinationZone") else "hand"
+                destZone2 = sa.getParam("DestinationZone2").lower() if sa.hasParam("DestinationZone2") else "on the bottom of their library in any order."
+                if sa.hasParam("RestRandomOrder"):
+                    destZone2 = destZone2.replace("any", "a random")
+
+                verb2 = "put "
+                where = " into their hand "
+                if destZone1 == "exile":
+                    verb2 = "exile "
+                    where = " "
+                elif destZone1 == "battlefield":
+                    verb2 = "put "
+                    where = " onto the battlefield "
+
+                sb.append(" They " + ("may " if sa.hasParam("Optional") else "") + verb2)
+                if sa.hasParam("ChangeValid"):
+                    what = sa.getParam("ChangeValidDesc") if sa.hasParam("ChangeValidDesc") else sa.getParam("ChangeValid").lower()
+                    if not StringUtils.containsIgnoreCase(what, "card"):
+                        what = what + " card"
+                    sb.append(Lang.nounWithNumeralExceptOne(numToChange, what) + " from among them" + where)
+                else:
+                    sb.append(Lang.getNumeral(numToChange) + " of them" + where)
+                sb.append("face down " if sa.hasParam("ExileFaceDown") else "")
+                if sa.hasParam("WithCounters") or sa.hasParam("ExileWithCounters"):
+                    ctr = sa.getParam("WithCounters") if sa.hasParam("WithCounters") else sa.getParam("ExileWithCounters")
+                    sb.append("with a ")
+                    sb.append(CounterType.getType(ctr).getName().lower())
+                    sb.append(" counter on it. They ")
+                else:
+                    sb.append("and ")
+                sb.append("put the rest " + destZone2)
+        return "".join(sb)
+
+    def resolve(self, sa: SpellAbility) -> None:
+        host = sa.getHostCard()
+        activator = sa.getActivatingPlayer()
+        game = activator.getGame()
+        cont = host.getController()
+        chooser = activator
+        digNum = AbilityUtils.calculateAmount(host, sa.getParam("DigNum"), sa)
+
+        srcZone = ZoneType.smartValueOf(sa.getParam("SourceZone")) if sa.hasParam("SourceZone") else ZoneType.Library
+
+        destZone1 = ZoneType.smartValueOf(sa.getParam("DestinationZone")) if sa.hasParam("DestinationZone") else ZoneType.Hand
+        destZone2 = ZoneType.smartValueOf(sa.getParam("DestinationZone2")) if sa.hasParam("DestinationZone2") else ZoneType.Library
+
+        libraryPosition = int(sa.getParam("LibraryPosition")) if sa.hasParam("LibraryPosition") else -1
+        libraryPosition2 = int(sa.getParam("LibraryPosition2")) if sa.hasParam("LibraryPosition2") else -1
+
+        changeValid = sa.getParamOrDefault("ChangeValid", "")
+        optional = sa.hasParam("Optional")
+        skipReorder = sa.hasParam("SkipReorder")
+
+        # A hack for cards like Explorer's Scope that need to ensure that a card is revealed to the player activating the ability
+        forceReveal = sa.hasParam("ForceRevealToController") or sa.hasParam("ForceReveal") or sa.hasParam("WithMayLook")
+
+        # These parameters are used to indicate that a dialog box must be show to the player asking if the player wants to proceed
+        # with an optional ability, otherwise the optional ability is skipped.
+        mayBeSkipped = sa.hasParam("PromptToSkipOptionalAbility")
+        optionalAbilityPrompt = sa.getParam("OptionalAbilityPrompt")
+
+        remZone1 = False
+        remZone2 = False
+        if sa.hasParam("RememberChanged"):
+            remZone1 = True
+        if sa.hasParam("RememberMovedToZone"):
+            if "1" in sa.getParam("RememberMovedToZone"):
+                remZone1 = True
+            if "2" in sa.getParam("RememberMovedToZone"):
+                remZone2 = True
+
+        totalCMC = sa.hasParam("WithTotalCMC")
+        totcmc = AbilityUtils.calculateAmount(host, sa.getParam("WithTotalCMC"), sa)
+
+        destZone1ChangeNum = 1
+        changeAll = False
+        anyNumber = False
+        if sa.hasParam("ChangeNum"):
+            if sa.getParam("ChangeNum").lower() == "all":
+                changeAll = True
+            elif sa.getParam("ChangeNum").lower() == "any":
+                anyNumber = True
+            else:
+                destZone1ChangeNum = AbilityUtils.calculateAmount(host, sa.getParam("ChangeNum"), sa)
+
+        zoneMovements = CardZoneTable(game.copyLastStateBattlefield(), game.copyLastStateGraveyard())
+        counterTable = GameEntityCounterTable()
+        combatChanged = False
+
+        for p in self.getDefinedPlayersOrTargeted(sa):
+            if not p.isInGame():
+                continue
+
+            top = CardCollection()
+            rest = CardCollection()
+            all = CardCollection(p.getCardsIn(srcZone))
+
+            if sa.hasParam("FromBottom"):
+                all.reverse()
+
+            numToDig = min(digNum, all.size())
+            for i in range(numToDig):
+                top.add(all.get(i))
+
+            if not top.isEmpty():
+                delayedReveal = None
+                hasRevealed = True
+                if sa.hasParam("Reveal") and "True".lower() == sa.getParam("Reveal").lower():
+                    game.getAction().reveal(top, p, False)
+                elif sa.hasParam("RevealOptional"):
+                    hasRevealed = p.getController().confirmAction(sa, None, Localizer.getInstance().getMessage("lblRevealCardToOtherPlayers"), None)
+                    if hasRevealed:
+                        game.getAction().reveal(top, p)
+                elif not sa.hasParam("NoLooking"):
+                    # show the user the revealed cards
+                    delayedReveal = DelayedReveal(top, srcZone, PlayerView.get(p), host.getTranslatedName() + " - " + Localizer.getInstance().getMessage("lblLookingCardIn") + " ")
+
+                if sa.hasParam("RememberRevealed") and hasRevealed:
+                    host.addRemembered(top)
+                if sa.hasParam("ImprintRevealed") and hasRevealed:
+                    host.addImprintedCards(top)
+                if sa.hasParam("Choser"):
+                    choosers = AbilityUtils.getDefinedPlayers(host, sa.getParam("Choser"), sa)
+                    if not choosers.isEmpty():
+                        chooser = activator.getController().chooseSingleEntityForEffect(choosers, None, sa, Localizer.getInstance().getMessage("lblChooser") + ":", False, p, None)
+                    if sa.hasParam("SetChosenPlayer"):
+                        host.setChosenPlayer(chooser)
+
+                rest.addAll(top)
+                valid = top
+                if totalCMC:
+                    valid = CardLists.getValidCards(valid, "Card.cmcLE" + str(totcmc), cont, host, sa)
+                if changeValid != "":
+                    if "ChosenType" in changeValid:
+                        changeValid = changeValid.replace("ChosenType", host.getChosenType())
+                    valid = CardLists.getValidCards(valid, changeValid, cont, host, sa)
+                elif not totalCMC and p == chooser and destZone1ChangeNum > 1:
+                    # If all the cards are valid choices, no need for a separate reveal dialog to the chooser
+                    delayedReveal = None
+
+                if forceReveal:
+                    # Force revealing the card to defined (e.g. Gonti, Night Minister) or the player activating the
+                    # ability (e.g. Explorer's Scope)
+                    revealTo = self.getDefinedPlayersOrTargeted(sa, "ForceReveal").get(0) if sa.hasParam("ForceReveal") else activator
+                    game.getAction().revealTo(top, revealTo)
+                    delayedReveal = None  # top is already seen by the player, do not reveal twice
+
+                # Optional abilities that use a dialog box to prompt the user to skip the ability (e.g. Explorer's Scope, Quest for Ula's Temple)
+                if optional and mayBeSkipped and not valid.isEmpty():
+                    prompt = optionalAbilityPrompt if optionalAbilityPrompt is not None else Localizer.getInstance().getMessage("lblWouldYouLikeProceedWithOptionalAbility") + " " + str(host) + "?\n\n(" + sa.getDescription() + ")"
+                    if not p.getController().confirmAction(sa, None, TextUtil.fastReplace(prompt, "CARDNAME", host.getTranslatedName()), None):
+                        return
+
+                if changeAll:
+                    movedCards = CardCollection(valid)
+                elif sa.hasParam("RandomChange"):
+                    numChanging = min(destZone1ChangeNum, valid.size())
+                    movedCards = CardLists.getRandomSubList(valid, numChanging)
+                elif totalCMC:
+                    movedCards = CardCollection()
+                    if p == chooser:
+                        chooser.getController().tempShowCards(top)
+                    if valid.isEmpty():
+                        chooser.getController().notifyOfValue(sa, None, Localizer.getInstance().getMessage("lblNoValidCards"))
+                    while not valid.isEmpty() and (anyNumber or movedCards.size() < destZone1ChangeNum):
+                        chosen = chooser.getController().chooseSingleEntityForEffect(valid, delayedReveal, sa, Localizer.getInstance().getMessage("lblChooseOne"), anyNumber or optional, p, None)
+                        if chosen is None:
+                            # if they can and did choose nothing, we're done here
+                            break
+                        movedCards.add(chosen)
+                        valid.remove(chosen)
+                        totcmc = totcmc - chosen.getCMC()
+                        valid = CardLists.getValidCards(valid, "Card.cmcLE" + str(totcmc), cont, host, sa)
+                    chooser.getController().endTempShowCards()
+                    if not movedCards.isEmpty():
+                        game.getAction().reveal(movedCards, chooser, True, Localizer.getInstance().getMessage("lblPlayerPickedChosen", chooser.getName(), ""))
+                elif sa.hasParam("ForEachColorPair"):
+                    movedCards = CardCollection()
+                    if p == chooser:
+                        chooser.getController().tempShowCards(top)
+                    for pair in MagicColor.COLORPAIR:
+                        chosen = chooser.getController().chooseSingleEntityForEffect(CardLists.filter(valid, CardPredicates.isExactlyColor(pair)), delayedReveal, sa, Localizer.getInstance().getMessage("lblChooseOne"), False, p, None)
+                        if chosen is not None:
+                            movedCards.add(chosen)
+                    chooser.getController().endTempShowCards()
+                    if not movedCards.isEmpty():
+                        game.getAction().reveal(movedCards, chooser, True, Localizer.getInstance().getMessage("lblPlayerPickedChosen", chooser.getName(), ""))
+                elif sa.hasParam("WithDifferentPowers"):
+                    movedCards = CardCollection()
+                    while not valid.isEmpty() and (anyNumber or movedCards.size() < destZone1ChangeNum):
+                        title = Localizer.getInstance().getMessage("lblChooseCreature" if movedCards.isEmpty() else "lblChooseCreatureWithDiffPower")
+                        choice = p.getController().chooseSingleEntityForEffect(valid, sa, title, True, None)
+                        if choice is None:
+                            break
+                        movedCards.add(choice)
+                        valid = CardLists.getValidCards(valid, "Card.powerNE" + str(choice.getNetPower()), activator, host, sa)
+                else:
+                    if sa.hasParam("PrimaryPrompt"):
+                        prompt = sa.getParam("PrimaryPrompt")
+                    else:
+                        prompt = Localizer.getInstance().getMessage("lblChooseCardsPutIntoZone", destZone1.getTranslatedName())
+                        if destZone1 == ZoneType.Library:
+                            if destZone2 != ZoneType.Library and destZone1ChangeNum == 1:
+                                if libraryPosition == 0:
+                                    prompt = Localizer.getInstance().getMessage("lblChooseACardToLeaveTargetLibraryTop", p.getName())
+                                else:
+                                    prompt = Localizer.getInstance().getMessage("lblChooseACardLeaveTarget", p.getName(), destZone1.getTranslatedName())
+                            elif libraryPosition == -1:
+                                prompt = Localizer.getInstance().getMessage("lblChooseCardPutOnTargetLibraryBottom", p.getName())
+                            elif libraryPosition == 0:
+                                prompt = Localizer.getInstance().getMessage("lblChooseCardPutOnTargetLibraryTop", p.getName())
+
+                    movedCards = CardCollection()
+                    if valid.isEmpty():
+                        chooser.getController().notifyOfValue(sa, None, Localizer.getInstance().getMessage("lblNoValidCards"))
+                    else:
+                        if p == chooser:  # the digger can still see all the dug cards when choosing
+                            chooser.getController().tempShowCards(top)
+
+                        max = valid.size() if anyNumber else min(valid.size(), destZone1ChangeNum)
+                        min_ = 0 if (anyNumber or optional) else max
+                        if max > 0:  # if max is 0 don't make a choice
+                            movedCards.addAll(chooser.getController().chooseEntitiesForEffect(valid, min_, max, delayedReveal, sa, prompt, p, None))
+
+                        chooser.getController().endTempShowCards()
+
+                    if changeValid != "" and not sa.hasParam("ExileFaceDown") and not sa.hasParam("NoReveal"):
+                        game.getAction().reveal(movedCards, chooser, True, Localizer.getInstance().getMessage("lblPlayerPickedCardFrom", chooser.getName()))
+                if sa.hasParam("ForgetOtherRemembered"):
+                    host.clearRemembered()
+                movedCards.reverse()
+
+                if destZone1 == ZoneType.Battlefield or destZone1 == ZoneType.Library:
+                    if sa.hasParam("GainControl"):
+                        # for Cybership
+                        movedCards = activator.getController().orderMoveToZoneList(rest, destZone2, sa)
+                    else:
+                        movedCards = GameActionUtil.orderCardsByTheirOwners(game, movedCards, destZone1, sa)
+
+                for c in movedCards:
+                    moveParams = AbilityKey.newMap()
+                    AbilityKey.addCardZoneTableParams(moveParams, zoneMovements)
+
+                    if destZone1.isDeck():
+                        c = game.getAction().moveTo(destZone1, c, libraryPosition, sa, AbilityKey.newMap())
+                    else:
+                        if destZone1 == ZoneType.Exile and not c.canExiledBy(sa, True):
+                            continue
+
+                        if sa.hasParam("Tapped"):
+                            c.setTapped(True)
+                        if sa.hasParam("FaceDown"):
+                            c.turnFaceDown(True)
+                            CardFactoryUtil.setFaceDownState(c, sa)
+                        if destZone1 == ZoneType.Battlefield:
+                            moveParams.put(AbilityKey.SimultaneousETB, movedCards)
+                            if sa.hasParam("GainControl"):
+                                c.setController(activator, game.getNextTimestamp())
+                            if sa.hasParam("WithCounters"):
+                                numCtr = AbilityUtils.calculateAmount(host, sa.getParamOrDefault("WithCountersAmount", "1"), sa)
+
+                                table = GameEntityCounterTable()
+                                table.put(activator, c, CounterType.getType(sa.getParam("WithCounters")), numCtr)
+                                moveParams.put(AbilityKey.CounterTable, table)
+                        c = game.getAction().moveTo(c.getController().getZone(destZone1), c, sa, moveParams)
+                        if destZone1 == ZoneType.Battlefield:
+                            if self.addToCombat(c, sa, "Attacking", "Blocking"):
+                                combatChanged = True
+                        elif destZone1 == ZoneType.Exile:
+                            if sa.hasParam("ExileWithCounters"):
+                                c.addCounter(CounterType.getType(sa.getParam("ExileWithCounters")), 1, activator, counterTable)
+                            self.handleExiledWith(c, sa)
+
+                    if sa.hasParam("ExileFaceDown"):
+                        c.turnFaceDown(True)
+                    if sa.hasParam("WithMayLook"):
+                        c.addMayLookFaceDownExile(activator)
+                    if sa.hasParam("Imprint"):
+                        host.addImprintedCard(c)
+                    if remZone1:
+                        host.addRemembered(c)
+                    rest.remove(c)
+
+                # now, move the rest to destZone2
+                if not rest.isEmpty() and (not sa.hasParam("DestZone2Optional") or p.getController().confirmAction(sa, None, Localizer.getInstance().getMessage("lblDoYouWantPutCardToZone", destZone2.getTranslatedName()), None)):
+                    if destZone2.isDeck() or destZone2 == ZoneType.Graveyard:
+                        afterOrder = rest
+                        if sa.hasParam("RestRandomOrder"):
+                            CardLists.shuffle(afterOrder)
+                        elif not skipReorder and rest.size() > 1:
+                            if destZone2 == ZoneType.Graveyard:
+                                afterOrder = GameActionUtil.orderCardsByTheirOwners(game, rest, destZone2, sa)
+                            else:
+                                afterOrder = chooser.getController().orderMoveToZoneList(rest, destZone2, sa)
+
+                        for c in afterOrder:
+                            moveParams = AbilityKey.newMap()
+                            AbilityKey.addCardZoneTableParams(moveParams, zoneMovements)
+
+                            m = game.getAction().moveTo(destZone2, c, libraryPosition2, sa, moveParams)
+                            if remZone2:
+                                host.addRemembered(m)
+                    else:
+                        # just move them randomly
+                        for c in rest:
+                            moveParams = AbilityKey.newMap()
+                            AbilityKey.addCardZoneTableParams(moveParams, zoneMovements)
+
+                            if destZone2 == ZoneType.Exile and not c.canExiledBy(sa, True):
+                                continue
+                            c = game.getAction().moveTo(destZone2, c, sa, moveParams)
+                            if destZone2 == ZoneType.Exile:
+                                if sa.hasParam("ExileWithCounters"):
+                                    c.addCounter(CounterType.getType(sa.getParam("ExileWithCounters")), 1, activator, counterTable)
+                                self.handleExiledWith(c, sa)
+                                if remZone2:
+                                    host.addRemembered(c)
+        if combatChanged:
+            game.updateCombatForView()
+            game.fireEvent(GameEventCombatChanged())
+
+        zoneMovements.triggerChangesZoneAll(game, sa)
+        counterTable.replaceCounterEffect(game, sa)
+```

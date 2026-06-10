@@ -23,6 +23,10 @@ classDiagram
     }
 ```
 
+## Design Description
+
+RSSReader is a stateless utility in `forge.util` (module forge-core) that fetches and parses Atom/RSS feeds from GitHub, exposing two static methods. `getCommitLog` reads a commits feed and builds a human-readable changelog, filtering out merge commits and entries outside the supplied build/max date window while capping the output at roughly fifteen items. `getLatestReleaseTag` reads a releases feed and extracts the newest release tag from the first item's link. It collaborates with `TextUtil` for date formatting and XML sanitization, the apptastic `RssReader`/`Item` types for feed parsing, and Apache Commons `StringEscapeUtils` for unescaping titles. Having no instance state or supertype, it is a purely functional helper; the design intent is defensive, swallowing all exceptions and returning empty strings so feed or network failures degrade gracefully rather than disrupting callers presenting update information.
+
 ## Source
 `forge-core/src/main/java/forge/util/RSSReader.java`
 
@@ -104,4 +108,76 @@ public class RSSReader {
         return tag;
     }
 }
+```
+
+## Python
+`forge/util/RSSReader.py`
+
+```python
+from com.apptasticsoftware.rssreader.Item import Item
+from com.apptasticsoftware.rssreader.RssReader import RssReader
+from org.apache.commons.text.StringEscapeUtils import StringEscapeUtils
+
+from forge.util.TextUtil import TextUtil
+
+import traceback
+from datetime import datetime
+from urllib.request import urlopen
+
+
+class RSSReader:
+    @staticmethod
+    def getCommitLog(commitsAtom: str, buildDateOriginal, maxDate) -> str:
+        message = ""
+        simpleDate = TextUtil.getSimpleDate()
+        try:
+            reader = RssReader()
+            inputStream = urlopen(commitsAtom)
+            items = list(reader.read(inputStream))
+            logs = []
+            c = 0
+            for i in items:
+                if i.getTitle().isEmpty():
+                    continue
+                title = TextUtil.stripNonValidXMLCharacters(i.getTitle().get())
+                if "Merge" in title:
+                    continue
+                zonedDateTime = i.getPubDateZonedDateTime().get() if i.getPubDateZonedDateTime().isPresent() else None
+                if zonedDateTime is None:
+                    continue
+                feedDate = Date.from_(zonedDateTime.toInstant())
+                if buildDateOriginal is not None and feedDate.before(buildDateOriginal):
+                    continue
+                if maxDate is not None and feedDate.after(maxDate):
+                    continue
+                logs.append(simpleDate.format(feedDate) + " | " + StringEscapeUtils.unescapeXml(title).replace("\n", "").replace("        ", "") + "\n\n")
+                if c >= 15:
+                    break
+                c += 1
+            if len(logs) > 0:
+                message += ("\n\nLatest Changes:\n\n" + "".join(logs))
+            inputStream.close()
+        except Exception as e:
+            traceback.print_exc()
+        return message
+
+    @staticmethod
+    def getLatestReleaseTag(releaseAtom: str) -> str:
+        tag = ""
+        try:
+            reader = RssReader()
+            inputStream = urlopen(releaseAtom)
+            items = list(reader.read(inputStream))
+            for i in items:
+                if i.getLink().isPresent():
+                    try:
+                        val = i.getLink().get()
+                        tag = val[val.rfind("forge"):]
+                        break
+                    except Exception as e:
+                        traceback.print_exc()
+            inputStream.close()
+        except Exception as e:
+            traceback.print_exc()
+        return tag
 ```

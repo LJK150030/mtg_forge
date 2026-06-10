@@ -734,7 +734,7 @@ public class CountersPutEffect extends SpellAbilityEffect {
             }
         }
         //for cards like Agitator Ant/Spectacular Showdown that care if counters were actually put on,
-        // instead use "RememberPut" Ã¢â‚¬â€œ this checks after replacement
+        // instead use "RememberPut" ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“ this checks after replacement
         if (sa.hasParam("RememberCards")) { // remembers whether counters actually placed or not
             card.addRemembered(table.columnKeySet());
         }
@@ -853,7 +853,7 @@ public class CountersPutEffect extends SpellAbilityEffect {
                 StringBuilder sb = new StringBuilder("Monstrosity");
                 sb.append(" ").append(n);
                 String desc = Lang.nounWithNumeralExceptOne(n, "+1/+1 counter");
-                sb.append(" (If this creature isnÃ¢â‚¬â„¢t monstrous, put ").append(desc).append(" on it and it becomes monstrous.)");
+                sb.append(" (If this creature isnÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢t monstrous, put ").append(desc).append(" on it and it becomes monstrous.)");
                 sa.putParam("SpellDescription", sb.toString());
             }
         } else if (sa.hasParam("Support")) {
@@ -883,4 +883,704 @@ public class CountersPutEffect extends SpellAbilityEffect {
         }
     }
 }
+```
+
+## Python
+`forge/game/ability/effects/CountersPutEffect.py`
+
+```python
+package forge.game.ability.effects
+
+import re
+
+from forge.card.MagicColor import MagicColor
+from forge.game.Game import Game
+from forge.game.GameEntity import GameEntity
+from forge.game.GameEntityCounterTable import GameEntityCounterTable
+from forge.game.ability.AbilityFactory import AbilityFactory
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.card.CounterType import CounterType
+from forge.game.card.CounterEnumType import CounterEnumType
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CardPredicates import CardPredicates
+from forge.game.card.CardFactoryUtil import CardFactoryUtil
+from forge.game.card.CardCopyService import CardCopyService
+from forge.game.event.GameEventRandomLog import GameEventRandomLog
+from forge.game.keyword.Keyword import Keyword
+from forge.game.player.Player import Player
+from forge.game.player.PlayerActionConfirmMode import PlayerActionConfirmMode
+from forge.game.player.PlayerController import PlayerController
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.spellability.TargetRestrictions import TargetRestrictions
+from forge.game.staticability.StaticAbilityAdapt import StaticAbilityAdapt
+from forge.game.trigger.Trigger import Trigger
+from forge.game.trigger.TriggerHandler import TriggerHandler
+from forge.game.trigger.TriggerType import TriggerType
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.Lang import Lang
+from forge.util.Localizer import Localizer
+from forge.util.Aggregates import Aggregates
+
+
+class CountersPutEffect(SpellAbilityEffect):
+    def getStackDescription(self, sa):
+        sb = []
+        card = sa.getHostCard()
+        who = sa.getActivatingPlayer().getName()
+        pronoun = False
+
+        if sa.hasParam("IfDesc"):
+            ifD = sa.getParam("IfDesc")
+            if ifD == "True":
+                ifDesc = sa.getDescription()
+                if "," in ifDesc:
+                    if " you " in ifDesc:
+                        ifDesc = ifDesc.replace(" you ", " " + who + " ", 1)
+                        pronoun = True
+                        if " you " in ifDesc:
+                            ifDesc = ifDesc.replace(" you ", " they ")
+                        if " your " in ifDesc:
+                            ifDesc = ifDesc.replace(" your ", " their ")
+                    sb.append(ifDesc[0:ifDesc.index(",") + 1])
+                else:
+                    sb.append("[CountersPutEffect IfDesc parsing error]")
+            else:
+                sb.append(ifD)
+            sb.append(" ")
+
+        sb.append("they" if pronoun else who)
+        sb.append(" ")
+        typeName = CounterType.getType(sa.getParam("CounterType")).getName().lower() if sa.hasParam("CounterType") else ""
+
+        playerCounters = ["energy", "experience", "poison", "ticket"]
+        if typeName in playerCounters:
+            sb.append("get " if pronoun else "gets ")
+            sb.append(Lang.nounWithNumeralExceptOne(AbilityUtils.calculateAmount(card,
+                    sa.getParamOrDefault("CounterNum", "1"), sa), typeName + " counter"))
+            sb.append(".")
+            return "".join(sb)
+
+        desc = sa.getDescription()
+        forEach = "for each" in desc
+        if sa.hasParam("CounterTypes"):
+            if "Put " in desc and " on " in desc:
+                desc = desc[desc.index("Put "):desc.index(" on ") + 4].replace("Put ", "puts ", 1)
+            sb.append(desc)
+            sb.append(Lang.joinHomogenous(self.getTargets(sa)))
+            sb.append(".")
+            return "".join(sb)
+        # skip the StringBuilder if no targets are chosen ("up to" scenario)
+        if sa.usesTargeting():
+            targetCards = self.getTargetCards(sa)
+            if len(targetCards) == 0:
+                return "".join(sb)
+
+        amount = AbilityUtils.calculateAmount(card, sa.getParamOrDefault("CounterNum", "1"), sa)
+
+        if sa.hasParam("Bolster"):
+            sb.append("bolsters ")
+            sb.append(str(amount))
+            sb.append(".")
+            return "".join(sb)
+        divAsChoose = sa.isDividedAsYouChoose()
+        divRandom = sa.hasParam("DividedRandomly")
+        if divAsChoose:
+            sb.append("distribute " if pronoun else "distributes ")
+        elif divRandom:
+            sb.append("randomly distribute " if pronoun else "randomly distributes ")
+        else:
+            sb.append("put " if pronoun else "puts ")
+        if sa.hasParam("UpTo"):
+            sb.append("up to ")
+
+        sb.append(Lang.nounWithNumeralExceptOne(amount, typeName + " counter"))
+        sb.append(" among " if (divAsChoose or divRandom) else " on ")
+
+        # special handling for multiple Defined
+        if sa.hasParam("Defined") and " & " in sa.getParam("Defined"):
+            def_ = sa.getParam("Defined").split(" & ")
+            for i in range(len(def_)):
+                sb.append(re.sub(r"[\[\]]", "", str(AbilityUtils.getDefinedEntities(card, def_[i], sa))))
+                if i + 1 < len(def_):
+                    sb.append(" and ")
+                    sb.append(Lang.nounWithNumeralExceptOne(amount, typeName + " counter"))
+                    sb.append(" on ")
+            # if use targeting we show all targets and corresponding counters
+        elif sa.usesTargeting():
+            targetCards = self.getTargetCards(sa)
+            for i in range(len(targetCards)):
+                targetCard = targetCards[i]
+                sb.append(str(targetCard))
+                v = sa.getDividedValue(targetCard)
+                if v is not None:  # fix null counter stack description
+                    sb.append(" (")
+                    sb.append(str(v))
+                    sb.append(" counter)" if v == 1 else " counters)")
+
+                if i == len(targetCards) - 2:
+                    sb.append(" and ")
+                elif i + 1 < len(targetCards):
+                    sb.append(", ")
+        elif sa.hasParam("Choices"):
+            n = AbilityUtils.calculateAmount(card, sa.getParamOrDefault("ChoiceAmount", "1"), sa)
+            what = sa.getParamOrDefault("ChoicesDesc", sa.getParam("Choices"))
+            sb.append(Lang.nounWithNumeralExceptOne(n, what))
+        else:
+            targetCards = self.getTargetCards(sa)
+            for idx in range(len(targetCards)):
+                targetCard = targetCards[idx]
+                if targetCard.isFaceDown():
+                    sb.append("Morph")
+                else:
+                    sb.append(str(targetCard))
+
+                if idx + 1 < len(targetCards):
+                    sb.append(", ")
+        sb.append(desc[desc.index(" for each"):] if forEach else ".")
+        return "".join(sb)
+
+    def resolvePerType(self, sa, placer, counterType, counterAmount, table, stopForTypes):
+        card = sa.getHostCard()
+        game = card.getGame()
+        activator = sa.getActivatingPlayer()
+        pc = activator.getController()
+        etbcounter = sa.hasParam("ETB")
+
+        existingCounter = sa.hasParam("CounterType") and sa.getParam("CounterType") == "ExistingCounter"
+        eachExistingCounter = sa.hasParam("EachExistingCounter")
+        putOnEachOther = sa.hasParam("PutOnEachOther")
+        putOnDefined = sa.hasParam("PutOnDefined")
+
+        if sa.hasParam("Optional") and not pc.confirmAction(
+                sa, None, Localizer.getInstance().getMessage("lblDoYouWantPutCounter"), None):
+            return
+
+        tgtObjects = []
+        divrem = 0
+        if sa.hasParam("Choices") and (counterType is not None or putOnEachOther or putOnDefined):
+            choiceZone = ZoneType.Battlefield
+            if sa.hasParam("ChoiceZone"):
+                choiceZone = ZoneType.smartValueOf(sa.getParam("ChoiceZone"))
+            chooser = activator
+            if sa.hasParam("Chooser"):
+                choosers = AbilityUtils.getDefinedPlayers(card, sa.getParam("Chooser"), sa)
+                if len(choosers) == 0:
+                    return
+                chooser = choosers[0]
+
+            n = AbilityUtils.calculateAmount(card, sa.getParamOrDefault("ChoiceAmount", "1"), sa)
+            m = AbilityUtils.calculateAmount(card,
+                    sa.getParamOrDefault("MinChoiceAmount", sa.getParamOrDefault("ChoiceAmount", "1")), sa)
+
+            # no choices allowed
+            if n <= 0:
+                return
+
+            choices = CardLists.getValidCards(game.getCardsIn(choiceZone), sa.getParam("Choices"),
+                    activator, card, sa)
+            if counterType is not None and not sa.hasParam("SkipReceiveCounters"):
+                choices = CardLists.filter(choices, CardPredicates.canReceiveCounters(counterType))
+
+            # TODO might use better message
+            title = Localizer.getInstance().getMessage("lblChooseaCard") + " "
+            if sa.hasParam("ChoiceTitle"):
+                title = sa.getParam("ChoiceTitle")
+            if (sa.hasParam("ChoiceTitle") or sa.hasParam("SpecifyCounter")) and counterType is not None:
+                title += " (" + counterType.getName() + ")"
+            elif putOnEachOther or putOnDefined:
+                title += Localizer.getInstance().getMessage("lblWithKindCounter")
+                if putOnEachOther:
+                    title += " " + Localizer.getInstance().getMessage("lblEachOther")
+
+            params = {}
+            if counterType is not None:
+                params["CounterType"] = counterType
+            if sa.hasParam("DividedRandomly"):
+                tgtObjects.extend(choices)
+            else:
+                for x in chooser.getController().chooseCardsForEffect(choices, sa, title, m, n,
+                        sa.hasParam("ChoiceOptional"), params):
+                    tgtObjects.append(x)
+        else:
+            tgtObjects.extend(self.getDefinedEntitiesOrTargeted(sa, "Defined"))
+
+        counterRemain = counterAmount
+        if sa.hasParam("DividedRandomly"):
+            targets = CardCollection()
+            for obj in list(tgtObjects):  # check if each target is still OK
+                if isinstance(obj, Card):
+                    tgtCard = obj
+                    gameCard = game.getCardState(tgtCard, None)
+                    if gameCard is None or not tgtCard.equalsWithGameTimestamp(gameCard):
+                        tgtObjects.remove(obj)
+                    else:
+                        targets.add(gameCard)
+                else:  # for now, we can remove non-card objects if they somehow got targeted
+                    tgtObjects.remove(obj)
+            if len(tgtObjects) == 0:
+                return
+            randomMap = {}
+            for i in range(counterRemain):
+                found = Aggregates.random(targets)
+                found.addCounter(counterType, 1, placer, table)
+                if found in randomMap:
+                    oN = randomMap[found]
+                    nN = oN + 1
+                    randomMap[found] = nN
+                else:
+                    randomMap[found] = 1
+            game.fireEvent(GameEventRandomLog(self.logOutput(randomMap, card)))
+        else:
+            for obj in tgtObjects:
+                # check if the object is still in game or if it was moved
+                gameCard = None
+                if isinstance(obj, Card):
+                    tgtCard = obj
+                    gameCard = game.getCardState(tgtCard, None)
+                    # gameCard is LKI in that case, the card is not in game anymore
+                    # or the timestamp did change
+                    # this should check Self too
+                    if gameCard is None or not tgtCard.equalsWithGameTimestamp(gameCard):
+                        continue
+
+                if sa.hasParam("ChooseDifferent"):
+                    num = int(sa.getParam("ChooseDifferent"))
+                    typesToAdd = []
+                    options = sa.getParam("CounterType")
+                    for i in range(num):
+                        ct = self.chooseTypeFromList(sa, options, obj, pc)
+                        typesToAdd.append(ct)
+                        options = options.replace(ct.getName(), "")
+                    for ct in typesToAdd:
+                        if isinstance(obj, Player):
+                            obj.addCounter(ct, counterAmount, placer, table)
+                        if isinstance(obj, Card):
+                            if etbcounter:
+                                etbTable = sa.getReplacingObject(AbilityKey.CounterTable)
+                                etbTable.put(placer, gameCard, ct, counterAmount)
+                            else:
+                                gameCard.addCounter(ct, counterAmount, placer, table)
+                    continue
+
+                if stopForTypes and sa.hasParam("CounterTypes"):
+                    typesToAdd = []
+                    types = sa.getParam("CounterTypes")
+                    if "ChosenFromList" in types:
+                        typesToAdd.append(self.chooseTypeFromList(sa, sa.getParam("TypeList"), obj, pc))
+                        types = types.replace("ChosenFromList", "")
+                    for type in types.split(","):
+                        if "EachType" in type:
+                            counterCards = CardLists.getValidCards(game.getCardsIn(ZoneType.Battlefield),
+                                    type.split("_")[1], activator, card, sa)
+                            counterTypes = []
+                            for c in counterCards:
+                                for map in c.getCounters().entrySet():
+                                    if map.getKey() not in counterTypes:
+                                        counterTypes.append(map.getKey())
+                            for ct in counterTypes:
+                                if sa.hasParam("AltChoiceForEach"):
+                                    typeChoices = sa.getParam("AltChoiceForEach") + "," + ct.toString()
+                                    ct = self.chooseTypeFromList(sa, typeChoices, obj, pc)
+                                self.resolvePerType(sa, placer, ct, counterAmount, table, False)
+                        else:
+                            typesToAdd.append(CounterType.getType(type))
+                    remaining = counterAmount
+                    for ct in typesToAdd:
+                        if sa.hasParam("SplitAmount"):
+                            if len(typesToAdd) - typesToAdd.index(ct) > 1:
+                                params = {}
+                                params["Target"] = obj
+                                params["CounterType"] = counterType
+                                counterAmount = pc.chooseNumber(sa, ct.toString() + ": " +
+                                        Localizer.getInstance().getMessage("lblHowManyCounters"), 0, remaining, params)
+                                if counterAmount == 0:
+                                    continue
+                                remaining -= counterAmount
+                            else:
+                                counterAmount = remaining
+                        if isinstance(obj, Player):
+                            obj.addCounter(ct, counterAmount, placer, table)
+                        if isinstance(obj, Card):
+                            if etbcounter:
+                                etbTable = sa.getReplacingObject(AbilityKey.CounterTable)
+                                etbTable.put(placer, gameCard, ct, counterAmount)
+                            else:
+                                gameCard.addCounter(ct, counterAmount, placer, table)
+                    continue
+
+                if existingCounter:
+                    choices = []
+                    # get types of counters
+                    for ct in obj.getCounters().keySet():
+                        if obj.canReceiveCounters(ct) or putOnEachOther:
+                            choices.append(ct)
+
+                    if eachExistingCounter:
+                        for ct in choices:
+                            if isinstance(obj, Player):
+                                obj.addCounter(ct, counterAmount, placer, table)
+                            if isinstance(obj, Card):
+                                gameCard.addCounter(ct, counterAmount, placer, table)
+                        continue
+
+                    if len(choices) == 0:
+                        continue
+                    elif len(choices) == 1:
+                        counterType = choices[0]
+                    else:
+                        params = {}
+                        params["Target"] = obj
+                        sbsel = Localizer.getInstance().getMessage("lblSelectCounterTypeAddTo") + \
+                                " " + (Localizer.getInstance().getMessage("lblEachOther") if putOnEachOther else str(obj))
+                        counterType = pc.chooseCounterType(choices, sa, sbsel, params)
+                    if putOnEachOther:
+                        others = CardLists.getValidCards(game.getCardsIn(ZoneType.Battlefield),
+                                sa.getParam("PutOnEachOther"), activator, card, sa)
+                        for other in others:
+                            if other.equals(obj):
+                                continue
+                            otherGCard = game.getCardState(other, None)
+                            otherGCard.addCounter(counterType, counterAmount, placer, table)
+                        continue
+                    elif putOnDefined:
+                        defs = AbilityUtils.getDefinedCards(card, sa.getParam("PutOnDefined"), sa)
+                        for c in defs:
+                            gCard = game.getCardState(c, None)
+                            if not sa.hasParam("OnlyNewKind") or gCard.getCounters(counterType) < 1:
+                                gCard.addCounter(counterType, counterAmount, placer, table)
+                        continue
+
+                if sa.hasParam("EachFromSource"):
+                    for c in AbilityUtils.getDefinedCards(card, sa.getParam("EachFromSource"), sa):
+                        for cti in c.getCounters().entrySet():
+                            if gameCard is not None:
+                                if not sa.hasParam("CounterNum"):
+                                    # default is all
+                                    counterAmount = cti.getValue()
+                                if etbcounter:
+                                    etbTable = sa.getReplacingObject(AbilityKey.CounterTable)
+                                    etbTable.put(placer, gameCard, cti.getKey(), counterAmount)
+                                else:
+                                    gameCard.addCounter(cti.getKey(), counterAmount, placer, table)
+                    continue
+
+                if sa.hasParam("CounterTypePerDefined") or sa.hasParam("UniqueType"):
+                    counterType = self.chooseTypeFromList(sa, sa.getParam("CounterType"), obj, pc)
+                    if counterType is None:
+                        continue
+
+                if isinstance(obj, Card):
+                    if sa.hasParam("CounterNumPerDefined"):
+                        counterAmount = AbilityUtils.calculateAmount(gameCard, sa.getParam("CounterNumPerDefined"), sa)
+                    counterAmount = sa.getDividedValue(gameCard) if (sa.usesTargeting() and sa.isDividedAsYouChoose()) \
+                            else counterAmount
+                    if sa.hasParam("UpTo"):
+                        min = AbilityUtils.calculateAmount(card, sa.getParamOrDefault("UpToMin", "0"), sa)
+                        params = {}
+                        params["Target"] = obj
+                        params["CounterType"] = counterType
+                        counterAmount = pc.chooseNumber(sa,
+                                Localizer.getInstance().getMessage("lblHowManyCounters"), min, counterAmount, params)
+                    if sa.isDividedAsYouChoose() and not sa.usesTargeting():
+                        params = {}
+                        params["Target"] = obj
+                        params["CounterType"] = counterType
+                        divrem += 1
+                        if divrem == len(tgtObjects) or counterRemain == 1:
+                            counterAmount = counterRemain
+                        else:
+                            counterAmount = pc.chooseNumber(sa,
+                                    Localizer.getInstance().getMessage("lblHowManyCountersThis",
+                                            gameCard.getTranslatedName()),
+                                    1, counterRemain, params)
+
+                    if sa.hasParam("Adapt") and \
+                            not (gameCard.getCounters(CounterEnumType.P1P1) == 0 or StaticAbilityAdapt.anyWithAdapt(sa, gameCard)):
+                        continue
+                    if sa.hasParam("Monstrosity") and gameCard.isMonstrous():
+                        continue
+
+                    if sa.isKeyword(Keyword.TRIBUTE):
+                        # make a copy to check if it would be on the battlefield
+                        noTributeLKI = CardCopyService.getLKICopy(gameCard)
+                        # this check needs to check if this card would be on the battlefield
+                        noTributeLKI.setLastKnownZone(activator.getZone(ZoneType.Battlefield))
+
+                        # double freeze tracker, so it doesn't update view
+                        game.getTracker().freeze()
+
+                        preList = CardCollection(noTributeLKI)
+                        game.getAction().checkStaticAbilities(False, {noTributeLKI}, preList)
+
+                        abort = not noTributeLKI.canReceiveCounters(counterType)
+
+                        game.getAction().checkStaticAbilities(False)
+                        # clear delayed changes, this check should not have updated the view
+                        game.getTracker().clearDelayed()
+                        # need to unfreeze tracker
+                        game.getTracker().unfreeze()
+
+                        # check if it can receive the Tribute
+                        if abort:
+                            continue
+
+                        params = {}
+                        params["CounterType"] = counterType
+                        params["Amount"] = counterAmount
+                        params["Target"] = gameCard
+
+                        message = Localizer.getInstance().getMessage(
+                                "lblDoYouWantPutTargetP1P1CountersOnCard", str(counterAmount),
+                                gameCard.getTranslatedName())
+                        placer = pc.chooseSingleEntityForEffect(activator.getOpponents(), sa,
+                                Localizer.getInstance().getMessage("lblChooseAnOpponent"), params)
+
+                        if placer.getController().confirmAction(sa, PlayerActionConfirmMode.Tribute, message, None):
+                            gameCard.setTributed(True)
+                        else:
+                            continue
+
+                    if etbcounter:
+                        etbTable = sa.getReplacingObject(AbilityKey.CounterTable)
+                        etbTable.put(placer, gameCard, counterType, counterAmount)
+                    else:
+                        gameCard.addCounter(counterType, counterAmount, placer, table)
+
+                    if sa.hasParam("Monstrosity"):
+                        gameCard.setMonstrous(True)
+                        runParams = AbilityKey.mapFromCard(gameCard)
+                        # CR 701.37c
+                        runParams.put(AbilityKey.Amount, counterAmount)
+                        game.getTriggerHandler().runTrigger(TriggerType.BecomeMonstrous, runParams, False)
+                    if sa.hasParam("Adapt"):
+                        game.getTriggerHandler().runTrigger(TriggerType.Adapt, AbilityKey.mapFromCard(gameCard), False)
+                    if sa.isKeyword(Keyword.RENOWN):
+                        gameCard.setRenowned(True)
+                        game.getTriggerHandler().runTrigger(TriggerType.BecomeRenowned, AbilityKey.mapFromCard(gameCard), False)
+                    if sa.isKeyword(Keyword.MENTOR):
+                        runParams = AbilityKey.mapFromCard(gameCard)
+                        runParams.put(AbilityKey.Source, card)
+                        game.getTriggerHandler().runTrigger(TriggerType.Mentored, runParams, False)
+
+                    game.updateLastStateForCard(gameCard)
+                    if sa.isDividedAsYouChoose() and not sa.usesTargeting():
+                        counterRemain = counterRemain - counterAmount
+                elif isinstance(obj, Player):
+                    # Add Counters to players!
+                    obj.addCounter(counterType, counterAmount, placer, table)
+
+    def resolve(self, sa):
+        card = sa.getHostCard()
+        game = card.getGame()
+        activator = sa.getActivatingPlayer()
+        amount = sa.getParamOrDefault("CounterNum", "1")
+        counterAmount = AbilityUtils.calculateAmount(card, amount, sa)
+
+        placer = activator
+        if sa.hasParam("Placer"):
+            placer = AbilityUtils.getDefinedPlayers(card, sa.getParam("Placer"), sa).get(0)
+
+        cause = sa
+        if sa.isReplacementAbility():
+            cause = sa.getReplacingObject(AbilityKey.Cause)
+
+        table = GameEntityCounterTable()
+
+        if sa.hasParam("TriggeredCounterMap"):
+            counterMapValue = None
+            if sa.hasParam("CounterMapValues"):
+                counterMapValue = int(sa.getParam("CounterMapValues"))
+            counterMap = sa.getTriggeringObject(AbilityKey.CounterMap)
+            for e in counterMap.entrySet():
+                self.resolvePerType(sa, placer, e.getKey(),
+                        e.getValue() if counterMapValue is None else counterMapValue, table, False)
+        elif sa.hasParam("SharedKeywords"):
+            keywords = sa.getParam("SharedKeywords").split(" & ")
+            if sa.hasParam("SharedKeywordsDefined"):
+                def_ = self.getDefinedCardsOrTargeted(sa, "SharedKeywordsDefined")
+                keywords = CardFactoryUtil.getSharedKeywords(keywords, def_)
+            else:
+                zones = ZoneType.listValueOf(sa.getParam("SharedKeywordsZone"))
+                restrictions = sa.getParam("SharedRestrictions").split(",") if sa.hasParam("SharedRestrictions") \
+                        else ["Card"]
+                keywords = CardFactoryUtil.sharedKeywords(keywords, restrictions, zones, card, sa)
+            for k in keywords:
+                self.resolvePerType(sa, placer, CounterType.getType(k), counterAmount, table, False)
+        else:
+            counterType = None
+            if (not sa.hasParam("EachExistingCounter") and not sa.hasParam("EachFromSource")
+                    and not sa.hasParam("UniqueType") and not sa.hasParam("CounterTypePerDefined")
+                    and not sa.hasParam("CounterTypes") and not sa.hasParam("ChooseDifferent")
+                    and not sa.hasParam("PutOnEachOther") and not sa.hasParam("PutOnDefined")):
+                try:
+                    counterType = self.chooseTypeFromList(sa, sa.getParam("CounterType"), None, placer.getController())
+                except Exception as e:
+                    print("Counter type doesn't match, nor does an SVar exist with the type name.")
+                    return
+            if sa.hasParam("ForColor"):
+                oldColors = card.getChosenColors()
+                for color in MagicColor.Constant.ONLY_COLORS:
+                    card.setChosenColors([color])
+                    if sa.getOriginalParam("ChoiceTitle") is not None:
+                        sa.getMapParams().put("ChoiceTitle", sa.getOriginalParam("ChoiceTitle").replace("chosenColor", color))
+                    self.resolvePerType(sa, placer, counterType, counterAmount, table, True)
+                card.setChosenColors(list(oldColors))
+            else:
+                self.resolvePerType(sa, placer, counterType, counterAmount, table, True)
+
+        table.replaceCounterEffect(game, cause)
+
+        if sa.hasParam("RemovePhase"):
+            for e in table.row(Optional.of(placer)).entrySet():
+                for ce in e.getValue().entrySet():
+                    self.addRemovePhaseTrigger(card, sa, sa.getParam("RemovePhase"), e.getKey(), ce.getKey(), ce.getValue())
+        # for cards like Agitator Ant/Spectacular Showdown that care if counters were actually put on,
+        # instead use "RememberPut" ?????????????????? this checks after replacement
+        if sa.hasParam("RememberCards"):  # remembers whether counters actually placed or not
+            card.addRemembered(table.columnKeySet())
+
+    def addRemovePhaseTrigger(self, host, sa, phase, tgt, ct, added):
+        intrinsic = sa.isIntrinsic()
+
+        delTrig = []
+        delTrig.append("Mode$ Phase | Phase$ ")
+        delTrig.append(phase)
+        delTrig.append(" | TriggerDescription$ For each ")
+        delTrig.append(ct.getName())
+        delTrig.append(" counter you put on a creature this way, remove a ")
+        delTrig.append(ct.getName())
+        delTrig.append(" counter from that creature at the beginning of the next")
+        if phase == "Cleanup":
+            delTrig.append("cleanup step")
+        elif phase == "End of Turn":
+            delTrig.append("next end step")
+
+        trigSA = "DB$ RemoveCounter | Defined$ DelayTriggerRemembered | CounterNum$ 1 | CounterType$ " + str(ct)
+
+        # these trigger are one per counter
+        for i in range(added):
+            trig = TriggerHandler.parseTrigger("".join(delTrig), host, intrinsic)
+            trig.addRemembered(tgt)
+
+            newSa = AbilityFactory.getAbility(trigSA, host)
+            newSa.setIntrinsic(intrinsic)
+            trig.setOverridingAbility(newSa)
+            trig.setSpawningAbility(sa.copy(host, True))
+            sa.getActivatingPlayer().getGame().getTriggerHandler().registerDelayedTrigger(trig)
+
+    def chooseTypeFromList(self, sa, list, obj, pc):
+        choices = []
+        for s in list.split(","):
+            if s != "" and (not sa.hasParam("UniqueType") or obj.getCounters(CounterType.getType(s)) == 0):
+                type = CounterType.getType(s)
+                if type not in choices:
+                    choices.append(type)
+        if sa.hasParam("RandomType"):
+            return Aggregates.random(choices)
+        params = {}
+        params["Target"] = obj
+        sb = []
+        if obj is not None:
+            sb.append(Localizer.getInstance().getMessage("lblSelectCounterTypeAddTo"))
+            sb.append(" ")
+            sb.append(str(obj))
+        else:
+            sb.append(Localizer.getInstance().getMessage("lblSelectCounterType"))
+        return pc.chooseCounterType(choices, sa, "".join(sb), params)
+
+    def logOutput(self, randomMap, card):
+        randomLog = []
+        randomLog.append(card.getDisplayName())
+        randomLog.append(" randomly distributed ")
+        if len(randomMap) == 0:
+            randomLog.append("no counters.")
+        else:
+            randomLog.append("counters: ")
+            count = 0
+            size = len(randomMap)
+            for key, value in randomMap.items():
+                count += 1
+                randomLog.append(str(key))
+                randomLog.append(" (")
+                randomLog.append(str(value))
+                randomLog.append(" counter")
+                randomLog.append("s" if value != 1 else "")
+                randomLog.append(")")
+                randomLog.append("" if count == size else ", ")
+        return "".join(randomLog)
+
+    def buildSpellAbility(self, sa):
+        super().buildSpellAbility(sa)
+        if sa.hasParam("Adapt"):
+            n = sa.getParam("Adapt")
+            sa.putParam("CounterType", "P1P1")
+            sa.putParam("CounterNum", n)
+            if not sa.hasParam("StackDescription"):
+                sa.putParam("StackDescription", "SpellDescription")
+            if not sa.hasParam("SpellDescription"):
+                sa.putParam("SpellDescription", "Adapt " + n)
+        elif sa.hasParam("Bolster"):
+            n = sa.getParam("Bolster")
+            sa.putParam("CounterType", "P1P1")
+            sa.putParam("CounterNum", n)
+            sa.putParam("Choices", "Creature.leastToughnessControlledByYou")
+            sa.putParam("ChoiceTitle", Localizer.getInstance().getMessage("lblChooseACreatureWithLeastToughness"))
+            sa.putParam("SkipReceiveCounters", "True")
+            if not sa.hasParam("SpellDescription"):
+                sb = []
+                sb.append("Bolster")
+                sb.append(" ")
+                sb.append(n)
+                desc = Lang.nounWithNumeralExceptOne(n, "+1/+1 counter")
+                sb.append(" (Choose a creature with the least toughness among creatures you control and put ")
+                sb.append(desc)
+                sb.append(" on it.)")
+                sa.putParam("SpellDescription", "".join(sb))
+        elif sa.hasParam("Monstrosity"):
+            n = sa.getParam("Monstrosity")
+            sa.putParam("CounterType", "P1P1")
+            sa.putParam("CounterNum", n)
+            if not sa.hasParam("StackDescription"):
+                sa.putParam("StackDescription", "SpellDescription")
+            if not sa.hasParam("SpellDescription"):
+                sa.putParam("SpellDescription", "Monstrosity " + n)
+                sb = []
+                sb.append("Monstrosity")
+                sb.append(" ")
+                sb.append(n)
+                desc = Lang.nounWithNumeralExceptOne(n, "+1/+1 counter")
+                sb.append(" (If this creature isn??????????????????t monstrous, put ")
+                sb.append(desc)
+                sb.append(" on it and it becomes monstrous.)")
+                sa.putParam("SpellDescription", "".join(sb))
+        elif sa.hasParam("Support"):
+            n = sa.getParam("Support")
+            sa.putParam("TargetMin", "0")
+            sa.putParam("TargetMax", n)
+            sa.putParam("CounterType", "P1P1")
+            sa.putParam("CounterNum", "1")
+            # CR 701.41a
+            if sa.getHostCard().isPermanent():
+                sa.putParam("ValidTgts", "Creature.Other")
+                sa.putParam("ValidTgtsDesc", "other creature")
+                desc = "other target creature"
+            else:
+                sa.putParam("ValidTgts", "Creature")
+                desc = "target creature"
+            sa.setTargetRestrictions(TargetRestrictions(sa.getMapParams()))
+            if not sa.hasParam("SpellDescription"):
+                sb = []
+                sb.append("Support")
+                sb.append(" ")
+                sb.append(n)
+                desc = Lang.nounWithNumeralExceptOne(n, desc)
+                sb.append(" (Put a +1/+1 counter on each of up to ")
+                sb.append(desc)
+                sb.append(".)")
+                sa.putParam("SpellDescription", "".join(sb))
 ```

@@ -88,3 +88,26 @@ public final class GameObjectPredicates {
 
 }
 ```
+
+## Python
+`forge/game/GameObjectPredicates.py`
+
+```python
+from forge.game.CardTraitBase import CardTraitBase
+from forge.game.GameObject import GameObject
+from forge.game.card.Card import Card
+from forge.game.player.Player import Player
+
+from typing import Callable
+
+
+class GameObjectPredicates:
+
+    @staticmethod
+    def restriction(restrictions: list[str], sourceController: Player, source: Card, spellAbility: CardTraitBase) -> Callable[[GameObject], bool]:
+        return lambda c: c is not None and c.isValid(restrictions, sourceController, source, spellAbility)
+
+    @staticmethod
+    def matchesValidParam(ctb: CardTraitBase, param: str) -> Callable[[GameObject], bool]:
+        return lambda c: ctb.matchesValidParam(param, c)
+```

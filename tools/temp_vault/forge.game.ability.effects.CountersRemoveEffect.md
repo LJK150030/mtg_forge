@@ -343,3 +343,248 @@ public class CountersRemoveEffect extends SpellAbilityEffect {
     }
 }
 ```
+
+## Python
+`forge/game/ability/effects/CountersRemoveEffect.py`
+
+```python
+from typing import Any
+
+from forge.game.Game import Game
+from forge.game.GameEntity import GameEntity
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CounterType import CounterType
+from forge.game.player.Player import Player
+from forge.game.player.PlayerController import PlayerController
+from forge.game.replacement.ReplacementType import ReplacementType
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.Zone import Zone
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.Aggregates import Aggregates
+from forge.util.Lang import Lang
+from forge.util.Localizer import Localizer
+
+
+class CountersRemoveEffect(SpellAbilityEffect):
+    def getStackDescription(self, sa: SpellAbility) -> str:
+        sb = []
+
+        counterName = sa.getParam("CounterType")
+        num = sa.getParamOrDefault("CounterNum", "1")
+
+        amount = 0
+        if num != "All" and num != "Any":
+            amount = AbilityUtils.calculateAmount(sa.getHostCard(), num, sa)
+
+        sb.append("Remove ")
+        if sa.hasParam("UpTo"):
+            sb.append("up to ")
+        if "All".matches(counterName):
+            sb.append("all counter")
+        elif "Any".matches(counterName):
+            if amount == 1:
+                sb.append("a counter")
+            else:
+                sb.append(str(amount))
+                sb.append(" ")
+                sb.append(" counter")
+        else:
+            sb.append(str(amount))
+            sb.append(" ")
+            sb.append(CounterType.getType(counterName).getName())
+            sb.append(" counter")
+        if amount != 1:
+            sb.append("s")
+        sb.append(" from")
+
+        sb.append(Lang.joinHomogenous(self.getTargetCards(sa)))
+
+        sb.append(Lang.joinHomogenous(self.getTargetPlayers(sa)))
+
+        sb.append(".")
+
+        return "".join(sb)
+
+    def resolve(self, sa: SpellAbility) -> None:
+        source = sa.getHostCard()
+        game = source.getGame()
+        activator = sa.getActivatingPlayer()
+
+        pc = activator.getController()
+        type = sa.getParam("CounterType")
+        num = sa.getParamOrDefault("CounterNum", "1")
+
+        cntToRemove = 0
+        if num != "All" and num != "Any":
+            cntToRemove = AbilityUtils.calculateAmount(source, num, sa)
+
+        if sa.hasParam("Optional"):
+            if cntToRemove > 1:
+                ctrs = Localizer.getInstance().getMessage("lblCounters")
+            elif num == "All":
+                ctrs = Localizer.getInstance().getMessage("lblAllCounters")
+            else:
+                ctrs = Localizer.getInstance().getMessage("lblACounters")
+            if not pc.confirmAction(sa, None, Localizer.getInstance().getMessage("lblRemove") + " " + ctrs + "?", None):
+                return
+
+        counterType = None
+
+        if type != "Any" and type != "All":
+            try:
+                counterType = CounterType.getType(type)
+            except Exception:
+                print("Counter type doesn't match, nor does an SVar exist with the type name.")
+                return
+
+        rememberRemoved = sa.hasParam("RememberRemoved")
+        rememberAmount = sa.hasParam("RememberAmount")
+
+        totalRemoved = 0
+        srcCards: CardCollectionView
+        if sa.hasParam("Choices"):
+            choiceZone = ZoneType.smartValueOf(sa.getParam("ChoiceZone")) if sa.hasParam("ChoiceZone") \
+                else ZoneType.Battlefield
+            srcCards = CardLists.getValidCards(game.getCardsIn(choiceZone), sa.getParam("Choices"), activator, source, sa)
+        else:
+            srcCards = self.getTargetCards(sa)
+        if sa.isReplacementAbility() and sa.getReplacementEffect().getMode() == ReplacementType.Moved:
+            srcCards = CardCollection(srcCards).filter(lambda c: not c.isInPlay() or sa.getLastStateBattlefield().contains(c))
+
+        if sa.hasParam("Choices"):
+            min = 1
+            max = 1
+            if sa.hasParam("ChoiceOptional"):
+                min = 0
+                max = srcCards.size()
+            if sa.hasParam("ChoiceNum"):
+                min = max = AbilityUtils.calculateAmount(source, sa.getParam("ChoiceNum"), sa)
+            if srcCards.size() < min:
+                return
+
+            typeforPrompt = "" if counterType is None else counterType.getName()
+            title = Localizer.getInstance().getMessage("lblChooseCardsToTakeTargetCounters", typeforPrompt)
+            title = title.replace("  ", " ")
+            params: dict[str, Any] = {}
+            params["CounterType"] = counterType
+            srcCards = pc.chooseCardsForEffect(srcCards, sa, title, min, max, min == 0, params)
+        else:
+            for tgtPlayer in self.getTargetPlayers(sa):
+                if not tgtPlayer.isInGame():
+                    continue
+                if type == "All":
+                    for e in list(tgtPlayer.getCounters().entrySet()):
+                        totalRemoved += tgtPlayer.subtractCounter(e.getKey(), e.getValue(), activator)
+                else:
+                    if num == "All":
+                        cntToRemove = tgtPlayer.getCounters(counterType)
+                    if type == "Any":
+                        totalRemoved += self.removeAnyType(tgtPlayer, cntToRemove, sa)
+                    else:
+                        totalRemoved += tgtPlayer.subtractCounter(counterType, cntToRemove, activator)
+
+        for tgtCard in srcCards:
+            gameCard = game.getCardState(tgtCard, None)
+            # gameCard is LKI in that case, the card is not in game anymore
+            # or the timestamp did change
+            # this should check Self too
+            if gameCard is None or not tgtCard.equalsWithGameTimestamp(gameCard):
+                continue
+
+            zone = game.getZoneOf(gameCard)
+            if type == "All":
+                for e in list(gameCard.getCounters().entrySet()):
+                    totalRemoved += gameCard.subtractCounter(e.getKey(), e.getValue(), activator)
+                game.updateLastStateForCard(gameCard)
+            elif type == "Any":
+                totalRemoved += self.removeAnyType(gameCard, cntToRemove, sa)
+            else:
+                if not gameCard.canRemoveCounters(counterType):
+                    continue
+
+                removeFromCard = cntToRemove
+                if num == "All" or num == "Any":
+                    removeFromCard = gameCard.getCounters(counterType)
+                else:
+                    if sa.hasParam("CounterNumShared"):
+                        removeFromCard -= totalRemoved
+                        if removeFromCard < 1:
+                            break
+                    removeFromCard = min(removeFromCard, gameCard.getCounters(counterType))
+
+                if (zone.is_(ZoneType.Battlefield) or zone.is_(ZoneType.Exile)) and \
+                        (sa.hasParam("UpTo") or num == "Any"):
+                    params = {}
+                    params["Target"] = gameCard
+                    params["CounterType"] = counterType
+                    removeFromCard = pc.chooseNumber(sa, Localizer.getInstance().getMessage("lblSelectRemoveCountersNumberOfTarget", type), 0, removeFromCard, params)
+                if removeFromCard > 0:
+                    gameCard.subtractCounter(counterType, removeFromCard, activator)
+                    if rememberRemoved:
+                        for i in range(removeFromCard):
+                            # TODO might need to be more specific
+                            source.addRemembered(Pair.of(counterType, i))
+                    game.updateLastStateForCard(gameCard)
+
+                    totalRemoved += removeFromCard
+
+        if totalRemoved > 0 and rememberAmount:
+            # TODO use SpellAbility Remember later
+            source.addRemembered(totalRemoved)
+
+    def removeAnyType(self, entity: GameEntity, cntToRemove: int, sa: SpellAbility) -> int:
+        rememberRemoved = sa.hasParam("RememberRemoved")
+        removed = 0
+        upTo = sa.hasParam("UpTo")
+        if "Any" == sa.getParam("CounterNum"):
+            cntToRemove = 2147483647
+            upTo = True
+
+        source = sa.getHostCard()
+        game = source.getGame()
+        activator = sa.getActivatingPlayer()
+        pc = activator.getController()
+        tgtCounters = dict(entity.getCounters())
+        for ct in list(tgtCounters.keys()):
+            if not entity.canRemoveCounters(ct):
+                del tgtCounters[ct]
+
+        while cntToRemove > 0 and len(tgtCounters) > 0:
+            params: dict[str, Any] = {}
+            params["Target"] = entity
+
+            prompt = Localizer.getInstance().getMessage("lblSelectCountersTypeToRemove")
+            chosenType = pc.chooseCounterType(list(tgtCounters.keys()), sa, prompt, params)
+
+            max = min(cntToRemove, tgtCounters[chosenType])
+            # remove selection so player can't cheat additional trigger by choosing the same type multiple times
+            del tgtCounters[chosenType]
+            remaining = Aggregates.sum(tgtCounters.values())
+            # player must choose enough so he can still reach the amount with other types
+            minVal = 0 if upTo else max(1, max - remaining)
+            prompt = Localizer.getInstance().getMessage("lblSelectRemoveCountersNumberOfTarget", chosenType.getName())
+            params = {}
+            params["Target"] = entity
+            params["CounterType"] = chosenType
+            chosenAmount = pc.chooseNumber(sa, prompt, minVal, max, params)
+
+            if chosenAmount > 0:
+                removed += chosenAmount
+                entity.subtractCounter(chosenType, chosenAmount, activator)
+                if isinstance(entity, Card):
+                    gameCard = entity
+                    game.updateLastStateForCard(gameCard)
+
+                if rememberRemoved:
+                    for i in range(chosenAmount):
+                        source.addRemembered(Pair.of(chosenType, i))
+                cntToRemove -= chosenAmount
+            elif upTo:
+                break
+        return removed
+```

@@ -40,6 +40,12 @@ classDiagram
 - [[forge.game.player.Player|Player]]
 - [[forge.game.spellability.SpellAbility|SpellAbility]]
 
+## Design Description
+
+TriggerLifeLostAll is a concrete trigger that fires in response to multiple players losing life simultaneously, extending the abstract `Trigger` base class within Forge's event-trigger framework. It overrides `performTest` to detect whether any qualifying life loss occurred and `setTriggeringObjects` to expose the affected players and their loss amounts to the resolving `SpellAbility` via `AbilityKey` keys, while `getImportantStackObjects` renders a human-readable per-player summary for the stack display.
+
+Its core design intent lives in the private `filteredMap` helper, which collaborates with `Player` and `Card` to apply the trigger's `ValidPlayer` and optional `ValidAmountEach` parametersâ€”using `AbilityUtils` and `Expressions` to compare each player's life loss against a computed threshold. As the source note candidly admits, the class was written narrowly for a single card (Ob Nixilis, Captive Kingpin), so it favors targeted correctness over general reuse.
+
 ## Source
 `forge-game/src/main/java/forge/game/trigger/TriggerLifeLostAll.java`
 
@@ -78,7 +84,7 @@ import java.util.Map;
  * Trigger_LifeLostAll class.
  * </p>
  *
- * 4/27/2023 - this trigger is written for only Ob Nixilis, Captive Kingpin – any future uses will probably need
+ * 4/27/2023 - this trigger is written for only Ob Nixilis, Captive Kingpin Ã¢â‚¬â€œ any future uses will probably need
  * additional logic
  *
  * @author Forge (Northmoc)
@@ -154,4 +160,68 @@ public class TriggerLifeLostAll extends Trigger {
         return passMap;
     }
 }
+```
+
+## Python
+`forge/game/trigger/TriggerLifeLostAll.py`
+
+```python
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.card.Card import Card
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.trigger.Trigger import Trigger
+from forge.util.Expressions import Expressions
+
+
+class TriggerLifeLostAll(Trigger):
+    """
+    Trigger_LifeLostAll class.
+
+    4/27/2023 - this trigger is written for only Ob Nixilis, Captive Kingpin - any future uses will probably need
+    additional logic
+
+    @author Forge (Northmoc)
+    """
+
+    def __init__(self, params: dict[str, str], host: Card, intrinsic: bool):
+        super().__init__(params, host, intrinsic)
+
+    def performTest(self, runParams: dict[AbilityKey, object]) -> bool:
+        testMap = self.filteredMap(runParams.get(AbilityKey.Map))
+        if not testMap:
+            return False
+        return True
+
+    def setTriggeringObjects(self, sa: SpellAbility, runParams: dict[AbilityKey, object]) -> None:
+        map = self.filteredMap(runParams.get(AbilityKey.Map))
+
+        sa.setTriggeringObject(AbilityKey.Map, map)
+        sa.setTriggeringObject(AbilityKey.Player, map.keys())
+
+    def getImportantStackObjects(self, sa: SpellAbility) -> str:
+        sb = []
+        map = sa.getTriggeringObject(AbilityKey.Map)
+        n = 0
+        for k, v in map.items():
+            sb.append(str(k))
+            sb.append(": ")
+            sb.append(str(v))
+            n += 1
+            if len(map) > n:
+                sb.append(", ")
+        return "".join(sb)
+
+    def filteredMap(self, map: dict[Player, int]) -> dict[Player, int]:
+        passMap = {}
+        for k, v in map.items():
+            if self.matchesValidParam("ValidPlayer", k):
+                if self.hasParam("ValidAmountEach"):
+                    comp = self.getParam("ValidAmountEach")
+                    value = AbilityUtils.calculateAmount(self.getHostCard(), comp[2:], self)
+                    if not Expressions.compare(v, comp[0:2], value):
+                        continue
+                passMap[k] = v
+        return passMap
 ```

@@ -157,3 +157,88 @@ public record CardChangedType(CardTypeView addType, CardTypeView removeType, boo
     }
 }
 ```
+
+## Python
+`forge/card/CardChangedType.py`
+
+```python
+from forge.card.ICardChangedType import ICardChangedType
+from forge.card.CardType import CardType
+from forge.card.CardTypeView import CardTypeView
+from forge.card.RemoveType import RemoveType
+
+
+class CardChangedType(ICardChangedType):
+    def __init__(self, addType: CardTypeView, removeType: CardTypeView, addAllCreatureTypes: bool, remove: set[RemoveType]):
+        self._addType = addType
+        self._removeType = removeType
+        self._addAllCreatureTypes = addAllCreatureTypes
+        self._remove = remove
+
+    def addType(self) -> CardTypeView:
+        return self._addType
+
+    def removeType(self) -> CardTypeView:
+        return self._removeType
+
+    def addAllCreatureTypes(self) -> bool:
+        return self._addAllCreatureTypes
+
+    def remove(self) -> set[RemoveType]:
+        return self._remove
+
+    def isRemoveSuperTypes(self) -> bool:
+        return RemoveType.SuperTypes in self._remove
+
+    def isRemoveCardTypes(self) -> bool:
+        return RemoveType.CardTypes in self._remove
+
+    def isRemoveSubTypes(self) -> bool:
+        return RemoveType.SubTypes in self._remove
+
+    def isRemoveLandTypes(self) -> bool:
+        return RemoveType.LandTypes in self._remove
+
+    def isRemoveCreatureTypes(self) -> bool:
+        return RemoveType.CreatureTypes in self._remove
+
+    def isRemoveArtifactTypes(self) -> bool:
+        return RemoveType.ArtifactTypes in self._remove
+
+    def isRemoveEnchantmentTypes(self) -> bool:
+        return RemoveType.EnchantmentTypes in self._remove
+
+    def applyChanges(self, newType: CardType) -> CardType:
+        if self.isRemoveCardTypes():
+            # 205.1a However, an object with either the instant or sorcery card type retains that type.
+            newType.coreTypes.intersection_update(CardType.CoreType.spellTypes)
+        if self.isRemoveSuperTypes():
+            newType.supertypes.clear()
+        if self.isRemoveSubTypes():
+            newType.subtypes.clear()
+        elif newType.subtypes:
+            if self.isRemoveLandTypes():
+                newType.subtypes.difference_update({s for s in newType.subtypes if CardType.isALandType(s)})
+            if self.isRemoveCreatureTypes():
+                newType.subtypes.difference_update({s for s in newType.subtypes if CardType.isACreatureType(s)})
+                # need to remove AllCreatureTypes too when removing creature Types
+                newType.allCreatureTypes = False
+            if self.isRemoveArtifactTypes():
+                newType.subtypes.difference_update({s for s in newType.subtypes if CardType.isAnArtifactType(s)})
+            if self.isRemoveEnchantmentTypes():
+                newType.subtypes.difference_update({s for s in newType.subtypes if CardType.isAnEnchantmentType(s)})
+        if self.removeType() is not None:
+            newType.removeAll(self.removeType())
+        if self.addType() is not None:
+            newType.addAll(self.addType())
+            if self.addType().hasAllCreatureTypes():
+                newType.allCreatureTypes = True
+        if self.addAllCreatureTypes():
+            newType.allCreatureTypes = True
+        # remove specific creature types from all creature types
+        if self.removeType() is not None and newType.allCreatureTypes:
+            newType.excludedCreatureSubtypes.update(
+                s for s in self.removeType().getSubtypes() if CardType.isACreatureType(s)
+            )
+        return newType
+```

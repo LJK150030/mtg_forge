@@ -53,6 +53,12 @@ classDiagram
 - [[forge.game.spellability.SpellAbility|SpellAbility]]
 - [[forge.trackable.Tracker|Tracker]]
 
+## Design Description
+
+SpellAbilityView is a read-only, client-facing snapshot of a `SpellAbility`, exposing display-oriented propertiesâ€”host card, description, playability, spell status, and the prompt-if-only-possible flagâ€”without leaking the underlying game-logic object to the UI. As a `TrackableObject` subclass, it stores these values through `TrackableProperty` keys so changes can be tracked and synchronized incrementally to remote views, and its paired getter/`update` methods let the engine refresh individual fields on demand. By implementing `IHasCardView`, it advertises an associated `CardView` (its host card) to view consumers.
+
+The class is constructed only from a `SpellAbility` and shares that ability's id and game `Tracker`, deriving its tracker defensively when the host card or game is absent. The static `get` and `getMap` helpers funnel access through `SpellAbility.getView()`, and a deliberate omission of `updateIsSpell` during constructionâ€”deferred to lazy initializationâ€”avoids touching not-yet-initialized subclasses such as `WrappedAbility`.
+
 ## Source
 `forge-game/src/main/java/forge/game/spellability/SpellAbilityView.java`
 
@@ -142,4 +148,78 @@ public class SpellAbilityView extends TrackableObject implements IHasCardView {
         return getHostCard();
     }
 }
+```
+
+## Python
+`forge/game/spellability/SpellAbilityView.py`
+
+```python
+from forge.game.card.CardView import CardView
+from forge.game.card.IHasCardView import IHasCardView
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.trackable.TrackableObject import TrackableObject
+from forge.trackable.TrackableProperty import TrackableProperty
+from forge.trackable.Tracker import Tracker
+
+
+class SpellAbilityView(TrackableObject, IHasCardView):
+    serialVersionUID = 2514234930798754769
+
+    @staticmethod
+    def get(spab):
+        return None if spab is None else spab.getView()
+
+    @staticmethod
+    def getMap(spabs):
+        spellViewCache = {}
+        for spellAbility in spabs:
+            spellViewCache[spellAbility.getView()] = spellAbility
+        return spellViewCache
+
+    def __init__(self, sa, tracker=...):
+        if tracker is ...:
+            tracker = None if sa.getHostCard() is None or sa.getHostCard().getGame() is None else sa.getHostCard().getGame().getTracker()
+        super().__init__(sa.getId(), tracker)
+        self.updateHostCard(sa)
+        self.updateDescription(sa)
+        self.updatePromptIfOnlyPossibleAbility(sa)
+        # Note: updateIsSpell NOT called
+        # here because subclasses (e.g. WrappedAbility) may not be fully initialized yet
+        # during super() construction. These are updated lazily in SpellAbility.getView().
+
+    def toString(self):
+        return self.getDescription()
+
+    def getHostCard(self):
+        return self.get(TrackableProperty.HostCard)
+
+    def updateHostCard(self, sa):
+        self.set(TrackableProperty.HostCard, CardView.get(sa.getHostCard()))
+
+    def getDescription(self):
+        return self.get(TrackableProperty.Description)
+
+    def updateDescription(self, sa):
+        self.set(TrackableProperty.Description, sa.toUnsuppressedString())
+
+    def canPlay(self):
+        return self.get(TrackableProperty.CanPlay)
+
+    def updateCanPlay(self, sa):
+        self.set(TrackableProperty.CanPlay, sa.canPlay(True))
+
+    def promptIfOnlyPossibleAbility(self):
+        return self.get(TrackableProperty.PromptIfOnlyPossibleAbility)
+
+    def updatePromptIfOnlyPossibleAbility(self, sa):
+        self.set(TrackableProperty.PromptIfOnlyPossibleAbility, sa.promptIfOnlyPossibleAbility())
+
+    def isSpell(self):
+        return self.get(TrackableProperty.SA_IsSpell)
+
+    def updateIsSpell(self, sa):
+        self.set(TrackableProperty.SA_IsSpell, sa.isSpell())
+
+    def getCardView(self):
+        return self.getHostCard()
 ```

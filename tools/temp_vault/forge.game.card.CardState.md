@@ -252,7 +252,7 @@ classDiagram
 
 ## Design Description
 
-CardState models a single face or mode of a Magic card—its name, type, mana cost, color, base power/toughness, loyalty, keywords, and the spell abilities, triggers, replacement effects, and static abilities printed on that face. A `Card` owns one or more named CardStates (Original, split halves, transformed backsides, specialize modes), and each delegates display concerns to its paired `CardStateView`, calling back to the view on every mutation so the UI stays synchronized.
+CardState models a single face or mode of a Magic cardâ€”its name, type, mana cost, color, base power/toughness, loyalty, keywords, and the spell abilities, triggers, replacement effects, and static abilities printed on that face. A `Card` owns one or more named CardStates (Original, split halves, transformed backsides, specialize modes), and each delegates display concerns to its paired `CardStateView`, calling back to the view on every mutation so the UI stays synchronized.
 
 Implementing `GameObject`, `IHasSVars`, and `ITranslatable`, the class concentrates the intrinsic, printed characteristics of a card while leaving runtime modifications to the owning `Card`. Notable design intent: type-dependent abilities (land mana, aura attach, permanent spell, planeswalker/saga/battle ETB counters) are lazily synthesized on demand rather than stored; accessor methods fold in split-card and continuous-effect changes via the host `Card`; and `copyFrom`/`copy` produce deep, intrinsic-only duplicates for last-known-information snapshots and card-copy effects, guarding against self-copy loops per the comprehensive rules.
 
@@ -1378,4 +1378,909 @@ public class CardState implements GameObject, IHasSVars, ITranslatable {
         return CardTranslation.getTranslatedName(this);
     }
 }
+```
+
+## Python
+`forge/game/card/CardState.py`
+
+```python
+from forge.card.CardEdition import CardEdition
+from forge.card.CardRarity import CardRarity
+from forge.card.CardStateName import CardStateName
+from forge.card.CardType import CardType
+from forge.card.CardType.Supertype import Supertype
+from forge.card.CardTypeView import CardTypeView
+from forge.card.ColorSet import ColorSet
+from forge.card.MagicColor import MagicColor
+from forge.card.MagicColor.Color import Color
+from forge.card.mana.ManaCost import ManaCost
+from forge.card.mana.ManaCostShard import ManaCostShard
+from forge.game.CardTraitBase import CardTraitBase
+from forge.game.ForgeScript import ForgeScript
+from forge.game.GameObject import GameObject
+from forge.game.IHasSVars import IHasSVars
+from forge.game.ability.AbilityFactory import AbilityFactory
+from forge.game.ability.ApiType import ApiType
+from forge.game.card.Card import Card
+from forge.game.card.CardFactoryUtil import CardFactoryUtil
+from forge.game.card.CardView.CardStateView import CardStateView
+from forge.game.card.ICardTraitChanges import ICardTraitChanges
+from forge.game.cost.Cost import Cost
+from forge.game.keyword.IKeywordsChange import IKeywordsChange
+from forge.game.keyword.Keyword import Keyword
+from forge.game.keyword.KeywordCollection import KeywordCollection
+from forge.game.keyword.KeywordInterface import KeywordInterface
+from forge.game.keyword.KeywordWithType import KeywordWithType
+from forge.game.player.Player import Player
+from forge.game.replacement.ReplacementEffect import ReplacementEffect
+from forge.game.spellability.LandAbility import LandAbility
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.spellability.SpellPermanent import SpellPermanent
+from forge.game.staticability.StaticAbility import StaticAbility
+from forge.game.staticability.StaticAbilityMode import StaticAbilityMode
+from forge.game.trigger.Trigger import Trigger
+from forge.util.CardTranslation import CardTranslation
+from forge.util.ITranslatable import ITranslatable
+from forge.util.IterableUtil import IterableUtil
+from forge.util.collect.FCollection import FCollection
+from forge.util.collect.FCollectionView import FCollectionView
+
+from io.sentry.Breadcrumb import Breadcrumb
+from io.sentry.Sentry import Sentry
+
+
+def _getFirst(iterable, default):
+    for x in iterable:
+        return x
+    return default
+
+
+class CardState(GameObject, IHasSVars, ITranslatable):
+    def __init__(self, arg0, arg1):
+        self.name = ""
+        self.type = CardType(False)
+        self.changedType = None
+        self.manaCost = ManaCost.NO_COST
+        # Track mana cost after adjustments from perpetual cost-changing effects for display
+        self.perpetualAdjustedManaCost = None
+        self.color = ColorSet.C
+        self.oracleText = ""
+        self.functionalVariantName = None
+        self.flavorName = None
+        self.basePower = 0
+        self.baseToughness = 0
+        self.basePowerString = None
+        self.baseToughnessString = None
+        self.baseLoyalty = ""
+        self.baseDefense = ""
+        self.intrinsicKeywords = KeywordCollection()
+        self.attractionLights = None
+
+        self.abilities = FCollection()
+        self.triggers = FCollection()
+        self.replacementEffects = FCollection()
+        self.staticAbilities = FCollection()
+        self.imageKey = ""
+        self.sVars = {}
+        self.abilityForTrigger = {}
+
+        self.cachedKeywords = KeywordCollection()
+
+        self.rarity = CardRarity.Unknown
+        self.setCode = CardEdition.UNKNOWN_CODE
+
+        self.landAbility = None
+        self.auraAbility = None
+        self.permanentAbility = None
+
+        self.loyaltyRep = None
+        self.defenseRep = None
+        self.sagaRep = None
+        self.adventureRep = None
+        self.omenRep = None
+
+        self.manifestUp = None
+        self.cloakUp = None
+
+        self.landTraitChanges = CardState.LandTraitChanges(self)
+
+        if isinstance(arg0, Card):
+            # CardState(Card card, CardStateName name)
+            view0 = arg0.getView().createAlternateState(arg1)
+            card0 = arg0
+        else:
+            # CardState(CardStateView view0, Card card0)
+            view0 = arg0
+            card0 = arg1
+
+        self.view = view0
+        self.card = card0
+        self.view.updateRarity(self)
+        self.view.updateSetCode(self)
+
+    def getView(self):
+        return self.view
+
+    def getCard(self):
+        return self.card
+
+    def getName(self):
+        return self.name
+
+    def setName(self, name0):
+        self.name = name0
+        self.view.updateName(self)
+
+    def getStateName(self):
+        return self.getView().getState()
+
+    def __str__(self):
+        return self.name + " (" + str(self.view.getState()) + ")"
+
+    def getTypeWithChanges(self):
+        return self.changedType if self.changedType is not None else self.getType()
+
+    def updateTypes(self):
+        self.changedType = self.getType().getTypeWithChanges(self.card.getChangedCardTypes())
+
+    def updateTypesForView(self):
+        self.view.updateType(self)
+
+    def getType(self):
+        return self.type
+
+    def addType(self, type0):
+        if isinstance(type0, str):
+            if self.type.add(type0):
+                self.updateTypes()
+                self.updateTypesForView()
+        else:
+            if self.type.addAll(type0):
+                self.updateTypes()
+                self.updateTypesForView()
+
+    def setType(self, type0):
+        if type0 is self.type:
+            # Logic below would incorrectly clear the type if it's the same object.
+            return
+        if type0.isEmpty() and self.type.isEmpty():
+            return
+        self.type.clear()
+        self.type.addAll(type0)
+        self.updateTypes()
+        self.updateTypesForView()
+
+    def removeType(self, st):
+        if self.type.remove(st):
+            self.updateTypes()
+            self.updateTypesForView()
+
+    def removeCardTypes(self, sanisfy):
+        self.type.removeCardTypes()
+        if sanisfy:
+            self.type.sanisfySubtypes()
+
+        self.updateTypes()
+        self.updateTypesForView()
+
+    def setCreatureTypes(self, ctypes):
+        if self.type.setCreatureTypes(ctypes):
+            self.updateTypes()
+            self.updateTypesForView()
+
+    def getManaCost(self):
+        return self.manaCost
+
+    def setManaCost(self, manaCost0):
+        self.manaCost = manaCost0
+        self.view.updateManaCost(self)
+
+    def calculatePerpetualAdjustedManaCost(self):
+        """
+        Calculate and save the value of the mana cost adjusted by any perpetual raise/lower cost
+        effects for display.
+        """
+        # If the total amount reduced is more than the generic mana cost,
+        # keep track of the extra in case it could be applied to an X cost
+        if (self.getCard() is None or self.getCard().getGame() is None
+                or (self.manaCost.getGenericCost() == 0 and self.manaCost.getShardCount(ManaCostShard.X) == 0)):
+            return
+
+        genericCostAdjustment = 0
+        for stAb in self.getStaticAbilities():
+            # Only collect perpetual cost changes to this card (not cost changes that this card applies to other cards)
+            if "Card.Self" == stAb.getParam("ValidCard"):
+                reduceOrRaise = 0
+                if stAb.checkMode(StaticAbilityMode.ReduceCost):
+                    reduceOrRaise = 1
+                elif stAb.checkMode(StaticAbilityMode.RaiseCost):
+                    reduceOrRaise = -1
+                if reduceOrRaise != 0:
+                    try:
+                        genericCostAdjustment += int(stAb.getParamOrDefault("Amount", "1")) * reduceOrRaise
+                    except ValueError:
+                        # We only care about adjustments with a specific numeric value
+                        pass
+
+        if genericCostAdjustment == 0:
+            return
+
+        # This doesn't work on hybrid generic costs
+        newGeneric = self.manaCost.getGenericCost() - genericCostAdjustment
+        # Apply negative cost adjustments to cards with an X cost only.
+        # While this could be done for regular cards as well (to potentially offset other cost-increasing effects)
+        # it would rarely matter and would require changing the "no_cost" flag in ManaCost from -1
+        # otherwise a -1 generic adjustment will get interpreted as "no_cost"
+        if self.manaCost.getShardCount(ManaCostShard.X) == 0:
+            newGeneric = max(0, newGeneric)
+
+        # Replace the original generic mana cost with the adjusted value
+        self.perpetualAdjustedManaCost = ManaCost(
+            (str(newGeneric) + " " if newGeneric != 0 else "") +
+            self.manaCost.getShortString().replace(str(self.manaCost.getGenericCost()), "")
+        )
+        self.view.updateManaCost(self)
+
+    def getPerpetualAdjustedManaCost(self):
+        return self.getManaCost() if self.perpetualAdjustedManaCost is None else self.perpetualAdjustedManaCost
+
+    def getColor(self):
+        return self.color
+
+    def addColor(self, color):
+        self.color = ColorSet.combine(self.color, color)
+        self.view.updateColors(self.card)
+
+    def setColor(self, color):
+        self.color = color
+        self.view.updateColors(self.card)
+
+    def getOracleText(self):
+        return self.oracleText
+
+    def setOracleText(self, oracleText):
+        self.oracleText = oracleText
+        self.view.setOracleText(oracleText)
+
+    def getFunctionalVariantName(self):
+        return self.functionalVariantName
+
+    def setFunctionalVariantName(self, functionalVariantName):
+        if functionalVariantName is not None and functionalVariantName == "":
+            functionalVariantName = None
+        self.functionalVariantName = functionalVariantName
+        self.view.setFunctionalVariantName(functionalVariantName)
+
+    def getFlavorName(self):
+        return self.flavorName
+
+    def setFlavorName(self, flavorName):
+        self.flavorName = flavorName
+        self.view.updateName(self)
+
+    def getBasePower(self):
+        return self.basePower
+
+    def setBasePower(self, basePower0):
+        if self.basePower == basePower0:
+            return
+        self.basePower = basePower0
+        self.view.updatePower(self)
+
+    def getBaseToughness(self):
+        return self.baseToughness
+
+    def setBaseToughness(self, baseToughness0):
+        if self.baseToughness == baseToughness0:
+            return
+        self.baseToughness = baseToughness0
+        self.view.updateToughness(self)
+
+    # values that are printed on card
+    def getBasePowerString(self):
+        return self.basePowerString
+
+    def getBaseToughnessString(self):
+        return self.baseToughnessString
+
+    # values that are printed on card
+    def setBasePowerString(self, s):
+        self.basePowerString = s
+
+    def setBaseToughnessString(self, s):
+        self.baseToughnessString = s
+
+    def hasPrintedPT(self):
+        return bool(self.basePowerString) or bool(self.baseToughnessString)
+
+    def getBaseLoyalty(self):
+        return self.baseLoyalty
+
+    def setBaseLoyalty(self, string):
+        self.baseLoyalty = string
+        self.view.updateLoyalty(self)
+
+    def getBaseDefense(self):
+        return self.baseDefense
+
+    def setBaseDefense(self, string):
+        self.baseDefense = string
+        self.view.updateDefense(self)
+
+    def getAttractionLights(self):
+        return self.attractionLights
+
+    def setAttractionLights(self, attractionLights):
+        self.attractionLights = attractionLights
+        self.view.updateAttractionLights(self)
+
+    def getCachedKeywords(self):
+        return self.cachedKeywords
+
+    def getCachedKeyword(self, keyword):
+        return self.cachedKeywords.getValues(keyword)
+
+    def setCachedKeywords(self, col):
+        self.cachedKeywords = col
+
+    def hasKeyword(self, key):
+        return self.cachedKeywords.contains(key)
+
+    def getIntrinsicKeywords(self):
+        return self.intrinsicKeywords.getValues()
+
+    def hasIntrinsicKeyword(self, k):
+        return self.intrinsicKeywords.contains(k)
+
+    def setIntrinsicKeywords(self, intrinsicKeyword0, lki):
+        self.intrinsicKeywords.clear()
+        for k in intrinsicKeyword0:
+            self.intrinsicKeywords.insert(k.copy(self.card, lki))
+        self.updateKeywordsCache()
+
+    def updateKeywordsCache(self):
+        self.card.updateKeywordsCache(self)
+
+    def addIntrinsicKeyword(self, s, initTraits):
+        if len(s.strip()) == 0:
+            return None
+        inst = None
+        try:
+            inst = self.intrinsicKeywords.add(s)
+        except Exception as e:
+            msg = "CardState:addIntrinsicKeyword: failed to parse Keyword"
+
+            bread = Breadcrumb(msg)
+            bread.setData("Card", self.card.getName())
+            bread.setData("Keyword", s)
+            Sentry.addBreadcrumb(bread)
+
+            # rethrow
+            raise RuntimeError("Error in Keyword " + s + " for card " + self.card.getName()) from e
+        if inst is not None and initTraits:
+            inst.createTraits(self.card, True)
+        return inst
+
+    def addIntrinsicKeywords(self, keywords, initTraits=None):
+        if initTraits is not None:
+            # addIntrinsicKeywords(Iterable<String> keywords, boolean initTraits)
+            changed = False
+            for k in keywords:
+                if self.addIntrinsicKeyword(k, initTraits) is not None:
+                    changed = True
+            return changed
+        # single-arg overload: distinguish Iterable<String> from Collection<KeywordInterface>
+        items = list(keywords)
+        if items and not isinstance(items[0], str):
+            # addIntrinsicKeywords(Collection<KeywordInterface> intrinsicKeywords2)
+            for inst in items:
+                self.intrinsicKeywords.insert(inst)
+            return None
+        # addIntrinsicKeywords(Iterable<String> keywords)
+        return self.addIntrinsicKeywords(items, True)
+
+    def removeIntrinsicKeyword(self, s):
+        if isinstance(s, str):
+            return self.intrinsicKeywords.remove(s)
+        if isinstance(s, Keyword):
+            return self.intrinsicKeywords.removeAll(s)
+        return self.intrinsicKeywords.remove(s)
+
+    def getSpellAbilities(self):
+        newCol = FCollection()
+        self.updateSpellAbilities(newCol)
+        newCol.addAll(self.abilities)
+        self.card.updateSpellAbilities(newCol, self)
+        return newCol
+
+    def getManaAbilities(self):
+        newCol = FCollection()
+        self.updateSpellAbilities(newCol)
+        newCol.addAll(self.abilities)
+        self.card.updateSpellAbilities(newCol, self)
+        newCol.removeIf(lambda s: not s.isManaAbility())
+        return newCol
+
+    def getNonManaAbilities(self):
+        newCol = FCollection()
+        self.updateSpellAbilities(newCol)
+        newCol.addAll(self.abilities)
+        self.card.updateSpellAbilities(newCol, self)
+        newCol.removeIf(lambda s: s.isManaAbility())
+        return newCol
+
+    def updateSpellAbilities(self, newCol):
+        # add Split to Original
+        if self.getStateName() == CardStateName.Original:
+            if self.getCard().hasState(CardStateName.LeftSplit):
+                leftState = self.getCard().getState(CardStateName.LeftSplit)
+                newCol.addAll(leftState.abilities)
+                leftState.updateSpellAbilities(newCol)
+            if self.getCard().hasState(CardStateName.RightSplit):
+                rightState = self.getCard().getState(CardStateName.RightSplit)
+                newCol.addAll(rightState.abilities)
+                rightState.updateSpellAbilities(newCol)
+
+        # SpellPermanent only for Original State
+        stateName = self.getStateName()
+        if stateName == CardStateName.Backside:
+            if not self.getCard().isModal():
+                return
+        elif stateName in (CardStateName.Original, CardStateName.LeftSplit, CardStateName.RightSplit,
+                           CardStateName.SpecializeB, CardStateName.SpecializeG, CardStateName.SpecializeR,
+                           CardStateName.SpecializeU, CardStateName.SpecializeW):
+            pass
+        else:
+            return
+
+        # if card has left or right split, disable intrinsic Spell for original
+        if self.getStateName() == CardStateName.Original and (self.getCard().hasState(CardStateName.LeftSplit) or self.getCard().hasState(CardStateName.RightSplit)):
+            return
+
+        type = self.getTypeWithChanges()
+        if type.isLand():
+            if self.landAbility is None:
+                self.landAbility = LandAbility(self.card, self)
+            newCol.add(self.landAbility)
+        elif type.isAura():
+            newCol.add(self.getAuraSpell())
+        elif type.isPermanent():
+            if self.abilities.anyMatch(lambda s: (
+                    s.isBasicSpell() and s.getSubAbility() is None and (ApiType.PermanentCreature == s.getApi() or ApiType.PermanentNoncreature == s.getApi()))):
+                return
+
+            if self.permanentAbility is None:
+                self.permanentAbility = SpellPermanent(self.card, self)
+            newCol.add(self.permanentAbility)
+
+    def getLandTraitChanges(self):
+        return self.landTraitChanges
+
+    class LandTraitChanges(ICardTraitChanges, IKeywordsChange):
+        def __init__(self, state, map=None):
+            if map is None:
+                map = {}
+            self.state = state
+            self.map = map
+
+        def applySpellAbility(self, list):
+            if self.state.getCard().hasRemoveIntrinsic():
+                list.clear()
+            type = self.state.getTypeWithChanges()
+            if not type.isLand():
+                return list
+            for c in MagicColor.Color.values():
+                if c.getBasicLandType() is None:
+                    continue
+                if type.hasSubtype(c.getBasicLandType()):
+                    if c not in self.map:
+                        abString = "AB$ Mana | Cost$ T | Produced$ " + c.getShortName() + \
+                            " | Secondary$ True | SpellDescription$ Add " + c.getSymbol() + "."
+                        sa = AbilityFactory.getAbility(abString, self.state)
+                        sa.setIntrinsic(True)  # always intrinsic
+                        self.map[c] = sa
+                    list.add(self.map[c])
+            return list
+
+        def applyTrigger(self, list):
+            if self.state.getCard().hasRemoveIntrinsic():
+                list.clear()
+            return list
+
+        def applyReplacementEffect(self, list):
+            if self.state.getCard().hasRemoveIntrinsic():
+                list.clear()
+            return list
+
+        def applyStaticAbility(self, list):
+            if self.state.getCard().hasRemoveIntrinsic():
+                list.clear()
+            return list
+
+        def applyKeywords(self, list):
+            if self.state.getCard().hasRemoveIntrinsic():
+                list.clear()
+
+        def copy(self, host, lki):
+            return self
+
+    def getIntrinsicSpellAbilities(self):
+        return IterableUtil.filter(self.getSpellAbilities(), lambda ctb: ctb.isIntrinsic())
+
+    def getFirstAbility(self):
+        return _getFirst(self.getIntrinsicSpellAbilities(), None)
+
+    def getFirstSpellAbility(self):
+        if self.card.getCastSA() is not None:
+            return self.card.getCastSA()
+        return _getFirst(self.getNonManaAbilities(), None)
+
+    def getFirstSpellAbilityWithFallback(self):
+        sa = self.getFirstSpellAbility()
+        type = self.getTypeWithChanges()
+        if sa is not None or type.isLand():
+            return sa
+        # this happens if it's transformed backside (e.g. Disturbed)
+        if type.isAura():
+            return self.getAuraSpell()
+        if self.permanentAbility is None:
+            self.permanentAbility = SpellPermanent(self.card, self)
+        return self.permanentAbility
+
+    def getAuraSpell(self):
+        type = self.getTypeWithChanges()
+        if not type.isAura():
+            return None
+        if self.auraAbility is None:
+            desc = ""
+            extra = ""
+            for ki in self.getCachedKeyword(Keyword.ENCHANT):
+                if isinstance(ki, KeywordWithType):
+                    desc = ki.getTypeDescription()
+                break
+            if self.hasSVar("AttachAITgts"):
+                extra += " | AITgts$ " + self.getSVar("AttachAITgts")
+            if self.hasSVar("AttachAILogic"):
+                extra += " | AILogic$ " + self.getSVar("AttachAILogic")
+            if self.hasSVar("AttachAIValid"):  # TODO combine with AttachAITgts
+                extra += " | AIValid$ " + self.getSVar("AttachAIValid")
+            st = "SP$ Attach | ValidTgts$ Card.CanBeEnchantedBy,Player.CanBeEnchantedBy | TgtZone$ Battlefield,Graveyard | ValidTgtsDesc$ " + desc + extra
+            self.auraAbility = AbilityFactory.getAbility(st, self)
+            self.auraAbility.setIntrinsic(True)
+        return self.auraAbility
+
+    def hasSpellAbility(self, sa):
+        if isinstance(sa, int):
+            for s in self.getSpellAbilities():
+                if sa == s.getId():
+                    return True
+            return False
+        return self.getSpellAbilities().contains(sa)
+
+    def addSpellAbility(self, a):
+        return self.abilities.add(a)
+
+    def getTriggers(self):
+        result = FCollection(self.triggers)
+        if self.getStateName() == CardStateName.Original:
+            if self.getCard().hasState(CardStateName.LeftSplit):
+                result.addAll(self.getCard().getState(CardStateName.LeftSplit).triggers)
+            if self.getCard().hasState(CardStateName.RightSplit):
+                result.addAll(self.getCard().getState(CardStateName.RightSplit).triggers)
+        self.card.updateTriggers(result, self)
+        return result
+
+    def hasTrigger(self, t):
+        if isinstance(t, int):
+            for tr in self.getTriggers():
+                if t == tr.getId():
+                    return True
+            return False
+        return self.getTriggers().contains(t)
+
+    def addTrigger(self, t):
+        return self.triggers.add(t)
+
+    def getStaticAbilities(self):
+        result = FCollection(self.staticAbilities)
+        if self.getStateName() == CardStateName.Original:
+            if self.getCard().hasState(CardStateName.LeftSplit):
+                result.addAll(self.getCard().getState(CardStateName.LeftSplit).staticAbilities)
+            if self.getCard().hasState(CardStateName.RightSplit):
+                result.addAll(self.getCard().getState(CardStateName.RightSplit).staticAbilities)
+        self.card.updateStaticAbilities(result, self)
+        return result
+
+    def addStaticAbility(self, stab):
+        return self.staticAbilities.add(stab)
+
+    def removeStaticAbility(self, stab):
+        return self.staticAbilities.remove(stab)
+
+    def getReplacementEffects(self, rulesHost=True):
+        result = FCollection(self.replacementEffects)
+        # add Split to Original
+        if self.getStateName() == CardStateName.Original:
+            if self.getCard().hasState(CardStateName.LeftSplit):
+                result.addAll(self.getCard().getState(CardStateName.LeftSplit).replacementEffects)
+            if self.getCard().hasState(CardStateName.RightSplit):
+                result.addAll(self.getCard().getState(CardStateName.RightSplit).replacementEffects)
+        type = self.getTypeWithChanges()
+        if type.isPlaneswalker():
+            if self.loyaltyRep is None:
+                self.loyaltyRep = CardFactoryUtil.makeEtbCounter("etbCounter:LOYALTY:" + self.baseLoyalty, self, True)
+            result.add(self.loyaltyRep)
+        if type.isBattle():
+            if self.defenseRep is None:
+                self.defenseRep = CardFactoryUtil.makeEtbCounter("etbCounter:DEFENSE:" + self.baseDefense, self, True)
+            result.add(self.defenseRep)
+        if type.isSaga() and not self.hasKeyword(Keyword.READ_AHEAD):
+            if self.sagaRep is None:
+                self.sagaRep = CardFactoryUtil.makeEtbCounter("etbCounter:LORE:1", self, True)
+            result.add(self.sagaRep)
+
+        self.card.updateReplacementEffects(result, self, rulesHost)
+
+        if not rulesHost:
+            return result
+
+        # below are global rules
+        if type.hasSubtype("Adventure"):
+            if self.adventureRep is None:
+                self.adventureRep = CardFactoryUtil.setupAdventureAbility(self)
+            result.add(self.adventureRep)
+        if type.hasSubtype("Omen"):
+            if self.omenRep is None:
+                self.omenRep = CardFactoryUtil.setupOmenAbility(self)
+            result.add(self.omenRep)
+
+        return result
+
+    def addReplacementEffect(self, replacementEffect):
+        return self.replacementEffects.add(replacementEffect)
+
+    def hasReplacementEffect(self, re):
+        if isinstance(re, int):
+            return self.getReplacementEffect(re) is not None
+        return self.getReplacementEffects().contains(re)
+
+    def getReplacementEffect(self, id):
+        for r in self.getReplacementEffects():
+            if id == r.getId():
+                return r
+        return None
+
+    def getSVars(self):
+        return self.sVars
+
+    def getSVar(self, var):
+        if var in self.sVars:
+            return self.sVars[var]
+        return ""
+
+    def hasSVar(self, var):
+        if var is None:
+            return False
+        return var in self.sVars
+
+    def setSVar(self, var, str):
+        self.sVars[var] = str
+        self.view.updateFoilIndex(self.card.getState(CardStateName.Original))
+
+    def setSVars(self, newSVars):
+        self.sVars = {}
+        self.sVars.update(newSVars)
+        self.view.updateFoilIndex(self.card.getState(CardStateName.Original))
+
+    def removeSVar(self, var):
+        self.sVars.pop(var, None)
+
+    def getFoil(self):
+        foil = self.getSVar("Foil")
+        if foil != "":
+            return int(foil)
+        return 0
+
+    def copyFrom(self, source, lki, ctb=None):
+        # Makes a "deeper" copy of a CardState object
+        self.setName(source.getName())
+        self.setType(source.type)
+        self.setManaCost(source.getManaCost())
+        self.setColor(source.getColor())
+        self.setOracleText(source.getOracleText())
+        self.setFunctionalVariantName(source.getFunctionalVariantName())
+        self.setBasePower(source.getBasePower())
+        self.setBaseToughness(source.getBaseToughness())
+        self.setBaseLoyalty(source.getBaseLoyalty())
+        self.setBaseDefense(source.getBaseDefense())
+        self.setAttractionLights(source.getAttractionLights())
+        self.setFlavorName(source.getFlavorName())
+        self.setSVars(source.getSVars())
+
+        self.abilityForTrigger.clear()
+        for k, v in source.abilityForTrigger.items():
+            self.abilityForTrigger[k] = v.copy(self.card, lki)
+
+        self.abilities.clear()
+        for sa in source.abilities:
+            if sa.isIntrinsic():
+                self.abilities.add(sa.copy(self.card, lki))
+
+        self.setIntrinsicKeywords(source.intrinsicKeywords.getValues(), lki)
+        self.setImageKey(source.getImageKey())
+        self.setRarity(source.rarity)
+        self.setSetCode(source.setCode)
+
+        dontCopyTr = None
+        if ctb is not None and ctb.hasParam("DoesntHaveThisAbility"):
+            root = ctb.getRootAbility()
+            if root.isTrigger():
+                dontCopyTr = root.getTrigger()
+
+        self.triggers.clear()
+        for tr in source.triggers:
+            if tr.equals(dontCopyTr):
+                continue
+            if tr.isIntrinsic():
+                execAbility = self.abilityForTrigger.get(tr.getParam("Execute")) if tr.hasParam("Execute") else None
+                self.triggers.add(tr.copy(self.card, lki, False, execAbility))
+        runRE = None
+        if isinstance(ctb, SpellAbility) and ctb.isReplacementAbility() \
+                and source.getCard().equals(ctb.getHostCard()):
+            runRE = ctb.getReplacementEffect()
+
+        self.replacementEffects.clear()
+        for re in source.replacementEffects:
+            if re.isIntrinsic():
+                reCopy = re.copy(self.card, lki)
+                if re.equals(runRE) and runRE.hasRun():
+                    # CR 208.2b prevent loop from card copying itself
+                    reCopy.setHasRun(True)
+                self.replacementEffects.add(reCopy)
+
+        self.staticAbilities.clear()
+        for sa in source.staticAbilities:
+            if sa.isIntrinsic():
+                self.staticAbilities.add(sa.copy(self.card, lki))
+        if lki:
+            self.changedType = source.changedType
+            if source.landAbility is not None:
+                self.landAbility = source.landAbility.copy(self.card, True)
+            if source.auraAbility is not None:
+                self.auraAbility = source.auraAbility.copy(self.card, True)
+            if source.permanentAbility is not None:
+                self.permanentAbility = source.permanentAbility.copy(self.card, True)
+            if source.loyaltyRep is not None:
+                self.loyaltyRep = source.loyaltyRep.copy(self.card, True)
+            if source.defenseRep is not None:
+                self.defenseRep = source.defenseRep.copy(self.card, True)
+            if source.sagaRep is not None:
+                self.sagaRep = source.sagaRep.copy(self.card, True)
+            if source.adventureRep is not None:
+                self.adventureRep = source.adventureRep.copy(self.card, True)
+            if source.omenRep is not None:
+                self.omenRep = source.omenRep.copy(self.card, True)
+
+    def addAbilitiesFrom(self, source, lki):
+        for sa in source.abilities:
+            if sa.isIntrinsic() and sa.getApi() != ApiType.PermanentCreature and sa.getApi() != ApiType.PermanentNoncreature:
+                self.abilities.add(sa.copy(self.card, lki))
+
+        for k in source.intrinsicKeywords:
+            self.intrinsicKeywords.insert(k.copy(self.card, lki))
+
+        for tr in source.triggers:
+            if tr.isIntrinsic():
+                self.triggers.add(tr.copy(self.card, lki))
+
+        for re in source.replacementEffects:
+            if re.isIntrinsic():
+                self.replacementEffects.add(re.copy(self.card, lki))
+
+        for sa in source.staticAbilities:
+            if sa.isIntrinsic():
+                self.staticAbilities.add(sa.copy(self.card, lki))
+
+    def copy(self, host, *args):
+        if len(args) == 1:
+            # copy(Card host, CardTraitBase ctb)
+            ctb = args[0]
+            return self.copy(host, self.getStateName(), False, ctb)
+        if len(args) == 2:
+            name = args[0]
+            if isinstance(args[1], bool):
+                # copy(Card host, CardStateName name, boolean lki)
+                return self.copy(host, name, args[1], None)
+            # copy(Card host, CardStateName name, CardTraitBase ctb)
+            return self.copy(host, name, False, args[1])
+        # copy(Card host, CardStateName name, boolean lki, CardTraitBase ctb)
+        name, lki, ctb = args
+        result = CardState(host, name)
+        result.copyFrom(self, lki, ctb)
+        return result
+
+    def getRarity(self):
+        return self.rarity
+
+    def setRarity(self, rarity0):
+        self.rarity = rarity0
+        self.view.updateRarity(self)
+
+    def getSetCode(self):
+        return self.setCode
+
+    def setSetCode(self, setCode0):
+        self.setCode = setCode0
+        self.view.updateSetCode(self)
+
+    def getImageKey(self):
+        return self.imageKey
+
+    def setImageKey(self, imageFilename0):
+        self.imageKey = imageFilename0
+        self.view.updateImageKey(self)
+
+    def hasProperty(self, property, sourceController, source, spellAbility):
+        return ForgeScript.cardStateHasProperty(self, property, sourceController, source, spellAbility)
+
+    def getTraits(self):
+        result = []
+        result.extend(self.abilities)
+        result.extend(self.triggers)
+        result.extend(self.replacementEffects)
+        result.extend(self.staticAbilities)
+        return result
+
+    def resetOriginalHost(self, oldHost):
+        for ctb in self.getTraits():
+            if ctb.isIntrinsic() and oldHost.equals(ctb.getOriginalHost()):
+                # only update traits with undesired host or SVar lookup would fail
+                ctb.setCardState(self)
+
+    def updateChangedText(self):
+        for ctb in self.getTraits():
+            if ctb.isIntrinsic():
+                ctb.changeText()
+
+    def changeTextIntrinsic(self, colorMap, typeMap):
+        for ctb in self.getTraits():
+            if ctb.isIntrinsic():
+                ctb.changeTextIntrinsic(colorMap, typeMap)
+
+    def hasChapter(self):
+        return self.getTriggers().anyMatch(lambda t: t.isChapter())
+
+    def getFinalChapterNr(self):
+        n = 0
+        for t in self.getTriggers():
+            if t.isChapter():
+                n = max(n, t.getChapter())
+        return n
+
+    def getManifestUp(self):
+        if self.manifestUp is None:
+            self.manifestUp = CardFactoryUtil.abilityTurnFaceUp(self, Cost(self.getManaCost(), True), "ManifestUp", "Unmanifest", "manacost")
+        return self.manifestUp
+
+    def getCloakUp(self):
+        if self.cloakUp is None:
+            self.cloakUp = CardFactoryUtil.abilityTurnFaceUp(self, Cost(self.getManaCost(), True), "CloakUp", "Uncloak", "manacost")
+        return self.cloakUp
+
+    def getAbilityForTrigger(self, svar):
+        if svar not in self.abilityForTrigger:
+            self.abilityForTrigger[svar] = AbilityFactory.getAbility(self.getCard(), svar, self)
+        return self.abilityForTrigger[svar]
+
+    def getTranslationKey(self):
+        displayName = self.name if self.flavorName is None else self.flavorName
+        if self.functionalVariantName:
+            return displayName + " $" + self.functionalVariantName
+        return displayName
+
+    def getUntranslatedType(self):
+        return str(self.getType())
+
+    def getTranslatedName(self):
+        return CardTranslation.getTranslatedName(self)
 ```

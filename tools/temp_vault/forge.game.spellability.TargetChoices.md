@@ -67,6 +67,10 @@ classDiagram
 - [[forge.game.spellability.SpellAbility|SpellAbility]]
 - [[forge.util.collect.FCollection|FCollection]]
 
+## Design Description
+
+Targeting choices: GameObjects (Cards, Players, SpellAbilities) selected as targets for a spell or ability, plus per-target divided allocations and controller snapshots.
+
 ## Source
 `forge-game/src/main/java/forge/game/spellability/TargetChoices.java`
 
@@ -243,4 +247,118 @@ public class TargetChoices extends ForwardingList<GameObject> implements Cloneab
         return result;
     }
 }
+```
+
+## Python
+`forge/game/spellability/TargetChoices.py`
+
+```python
+from typing import List
+from collections.abc import Collection, Iterable
+
+from forge.game.GameEntity import GameEntity
+from forge.game.GameObject import GameObject
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.IterableUtil import IterableUtil
+from forge.util.collect.FCollection import FCollection
+
+
+class TargetChoices(ForwardingList):
+    def __init__(self):
+        self.targets: FCollection[GameObject] = FCollection()
+        self.cardControllers: dict[Card, Player] = {}
+        self.dividedMap: dict[GameObject, int] = {}
+
+    def forEachControllerChanged(self, c: Card) -> bool:
+        return c.getController() != self.cardControllers.get(c)
+
+    def add(self, o: GameObject) -> bool:
+        if isinstance(o, Player) or isinstance(o, Card) or isinstance(o, SpellAbility):
+            if isinstance(o, Card):
+                self.cardControllers[o] = o.getController()
+            return super().add(o)
+        return False
+
+    def removeAll(self, collection: Collection) -> bool:
+        result = super().removeAll(collection)
+        for e in collection:
+            self.dividedMap.pop(e, None)
+        for e in collection:
+            self.cardControllers.pop(e, None)
+        return result
+
+    def remove(self, object) -> bool:
+        result = super().remove(object)
+        self.dividedMap.pop(object, None)
+        self.cardControllers.pop(object, None)
+        return result
+
+    def getTargetCards(self) -> CardCollectionView:
+        return CardCollection(IterableUtil.filter(self.targets, Card))
+
+    def getTargetPlayers(self) -> Iterable[Player]:
+        return IterableUtil.filter(self.targets, Player)
+
+    def getTargetSpells(self) -> Iterable[SpellAbility]:
+        return IterableUtil.filter(self.targets, SpellAbility)
+
+    def getTargetEntities(self) -> Iterable[GameEntity]:
+        return IterableUtil.filter(self.targets, GameEntity)
+
+    def isTargetingAnyCard(self) -> bool:
+        return any(isinstance(t, Card) for t in self.targets)
+
+    def isTargetingAnyPlayer(self) -> bool:
+        return any(isinstance(t, Player) for t in self.targets)
+
+    def isTargetingAnySpell(self) -> bool:
+        return any(isinstance(t, SpellAbility) for t in self.targets)
+
+    def getFirstTargetedCard(self) -> Card:
+        return next(iter(self.getTargetCards()), None)
+
+    def getFirstTargetedPlayer(self) -> Player:
+        return next(iter(self.getTargetPlayers()), None)
+
+    def getFirstTargetedSpell(self) -> SpellAbility:
+        return next(iter(self.getTargetSpells()), None)
+
+    def replaceTargetCard(self, old: Card, replace: CardCollectionView) -> None:
+        self.targets.remove(old)
+        self.targets.addAll(replace)
+
+    def clone(self) -> "TargetChoices":
+        tc = TargetChoices()
+        tc.targets.addAll(self.targets)
+        tc.dividedMap.update(self.dividedMap)
+        tc.cardControllers.update(self.cardControllers)
+        return tc
+
+    def delegate(self) -> List[GameObject]:
+        return self.targets
+
+    def contains(self, o) -> bool:
+        if isinstance(o, Card):
+            return IterableUtil.any(IterableUtil.filter(self.targets, Card), lambda c: c.equalsWithGameTimestamp(o))
+        return super().contains(o)
+
+    def addDividedAllocation(self, tgt: GameObject, portionAllocated: int) -> None:
+        self.dividedMap[tgt] = portionAllocated
+
+    def getDividedValue(self, c: GameObject) -> int:
+        return self.dividedMap.get(c)
+
+    def getDividedValues(self) -> Collection:
+        return self.dividedMap.values()
+
+    def getTotalDividedValue(self) -> int:
+        result = 0
+        for i in self.getDividedValues():
+            if i is not None:
+                result += i
+        return result
 ```

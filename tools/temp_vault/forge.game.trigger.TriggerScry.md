@@ -37,6 +37,10 @@ classDiagram
 - [[forge.game.card.Card|Card]]
 - [[forge.game.spellability.SpellAbility|SpellAbility]]
 
+## Design Description
+
+Forge's TriggerScry implements the Magic "scry" triggered ability, extending the abstract Trigger base class to model events that fire when a player scries. It overrides performTest to gate firing on trigger conditionsâ€”validating the scrying player against the ValidPlayer parameter and, when ToBottom is set, requiring that at least one card was put on the bottomâ€”and setTriggeringObjects to expose the player, scry count, and bottom count through AbilityKey lookups for the resulting SpellAbility. getImportantStackObjects builds a localized stack description naming the scryer and scry amount. Collaborating with Card (its host) and SpellAbility (the ability it parameterizes), the class follows the engine's convention of one lightweight Trigger subclass per ability type, keyed off AbilityKey-mapped run parameters and using Localizer for player-facing text.
+
 ## Source
 `forge-game/src/main/java/forge/game/trigger/TriggerScry.java`
 
@@ -126,4 +130,46 @@ public class TriggerScry extends Trigger {
         return sb.toString();
     }
 }
+```
+
+## Python
+`forge/game/trigger/TriggerScry.py`
+
+```python
+from typing import Map  # placeholder
+
+from forge.game.trigger.Trigger import Trigger
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Localizer import Localizer
+
+
+class TriggerScry(Trigger):
+
+    def __init__(self, params: dict[str, str], host: Card, intrinsic: bool):
+        super().__init__(params, host, intrinsic)
+
+    def performTest(self, runParams: dict[AbilityKey, object]) -> bool:
+        if not self.matchesValidParam("ValidPlayer", runParams.get(AbilityKey.Player)):
+            return False
+
+        if self.hasParam("ToBottom"):
+            numBottom = runParams.get(AbilityKey.ScryBottom)
+            if numBottom <= 0:
+                return False
+
+        return True
+
+    def setTriggeringObjects(self, sa: SpellAbility, runParams: dict[AbilityKey, object]) -> None:
+        sa.setTriggeringObjectsFrom(runParams, AbilityKey.Player, AbilityKey.ScryNum, AbilityKey.ScryBottom)
+
+    def getImportantStackObjects(self, sa: SpellAbility) -> str:
+        sb = []
+        sb.append(Localizer.getInstance().getMessage("lblScryer"))
+        sb.append(": ")
+        sb.append(str(sa.getTriggeringObject(AbilityKey.Player)))
+        sb.append(", ")
+        sb.append(str(sa.getTriggeringObject(AbilityKey.ScryNum)))
+        return "".join(sb)
 ```

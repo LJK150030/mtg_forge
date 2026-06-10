@@ -85,3 +85,36 @@ public class RollPlanarDiceEffect extends SpellAbilityEffect {
     }
 }
 ```
+
+## Python
+`forge/game/ability/effects/RollPlanarDiceEffect.py`
+
+```python
+from forge.game.Game import Game
+from forge.game.PlanarDice import PlanarDice
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.event.GameEventRollDie import GameEventRollDie
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Localizer import Localizer
+
+
+# TODO: Write javadoc for this type.
+class RollPlanarDiceEffect(SpellAbilityEffect):
+
+    # (non-Javadoc)
+    # @see forge.card.abilityfactory.SpellEffect#resolve(forge.card.spellability.SpellAbility)
+    def resolve(self, sa: SpellAbility) -> None:
+        activator = sa.getActivatingPlayer()
+        game = activator.getGame()
+
+        if game.getActivePlanes() is None:  # not a planechase game, nothing happens
+            return
+        if sa.hasParam("SpecialAction"):
+            game.getPhaseHandler().incPlanarDiceSpecialActionThisTurn()
+        # Play the die roll sound
+        game.fireEvent(GameEventRollDie())
+        result = PlanarDice.roll(activator, None)
+        message = Localizer.getInstance().getMessage("lblPlanarDiceResult", result.toString())
+        game.getAction().notifyOfValue(sa, activator, message, None)
+```

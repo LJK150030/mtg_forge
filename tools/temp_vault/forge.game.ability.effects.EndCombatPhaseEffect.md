@@ -44,7 +44,7 @@ classDiagram
 
 EndCombatPhaseEffect is a concrete SpellAbilityEffect that implements Magic's "end the combat phase" action (CR 723.2g, 721.2a). It overrides `resolve` to perform the work and `getStackDescription` to return the player-facing text "End the combat phase," conforming to the engine's data-driven ability framework in which each effect type is a distinct handler invoked at resolution.
 
-The class is a stateless orchestrator. It obtains the active Game from the resolving SpellAbility, returns harmlessly if no combat is in progress, then clears waiting triggers, exiles everything on the stack, clears the stack, checks state-based actions without granting priority, and finally calls the phase handler to jump to the postcombat main phase. It collaborates with AbilityKey and CardZoneTable to build zone-change parameters and fire batched zone-change triggers, and with CardCollection to bundle the stack's cards for exile—routing all mutation through central Game subsystems rather than handling it locally.
+The class is a stateless orchestrator. It obtains the active Game from the resolving SpellAbility, returns harmlessly if no combat is in progress, then clears waiting triggers, exiles everything on the stack, clears the stack, checks state-based actions without granting priority, and finally calls the phase handler to jump to the postcombat main phase. It collaborates with AbilityKey and CardZoneTable to build zone-change parameters and fire batched zone-change triggers, and with CardCollection to bundle the stack's cards for exileâ€”routing all mutation through central Game subsystems rather than handling it locally.
 
 ## Source
 `forge-game/src/main/java/forge/game/ability/effects/EndCombatPhaseEffect.java`
@@ -71,7 +71,7 @@ public class EndCombatPhaseEffect extends SpellAbilityEffect {
     public void resolve(SpellAbility sa) {
         final Game game = sa.getActivatingPlayer().getGame();
 
-        // CR 723.2g If an effect attempts to end the combat phase at any time thatÃ¢â‚¬â„¢s not a combat phase, nothing happens
+        // CR 723.2g If an effect attempts to end the combat phase at any time thatÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢s not a combat phase, nothing happens
         if (game.getCombat() == null) {
             return;
         }
@@ -95,7 +95,7 @@ public class EndCombatPhaseEffect extends SpellAbilityEffect {
         game.getAction().checkStateEffects(true);
 
         // 3) The current phase and step ends. The game skips straight to the postcombat main phase. As this happens,
-        // all attacking and blocking creatures are removed from combat and effects that last Ã¢â‚¬Å“until end of combatÃ¢â‚¬Â expire.
+        // all attacking and blocking creatures are removed from combat and effects that last ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œuntil end of combatÃƒÂ¢Ã¢â€šÂ¬Ã‚Â expire.
         game.getPhaseHandler().endCombatPhaseByEffect();
     }
 
@@ -109,4 +109,61 @@ public class EndCombatPhaseEffect extends SpellAbilityEffect {
     }
 
 }
+```
+
+## Python
+`forge/game/ability/effects/EndCombatPhaseEffect.py`
+
+```python
+package forge.game.ability.effects
+
+from forge.game.Game import Game
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardZoneTable import CardZoneTable
+from forge.game.spellability.SpellAbility import SpellAbility
+
+
+class EndCombatPhaseEffect(SpellAbilityEffect):
+
+    #
+    # (non-Javadoc)
+    # @see forge.game.ability.SpellAbilityEffect#resolve(forge.game.spellability.SpellAbility)
+    #
+    def resolve(self, sa: SpellAbility) -> None:
+        game = sa.getActivatingPlayer().getGame()
+
+        # CR 723.2g If an effect attempts to end the combat phase at any time that's not a combat phase, nothing happens
+        if game.getCombat() is None:
+            return
+
+        # CR 721.2a
+        game.getTriggerHandler().clearWaitingTriggers()
+
+        # 1) All spells and abilities on the stack are exiled.
+        moveParams: dict[AbilityKey, object] = AbilityKey.newMap()
+        zoneMovements: CardZoneTable = AbilityKey.addCardZoneTableParams(moveParams, sa)
+
+        game.getAction().exile(CardCollection(game.getStackZone().getCards()), sa, moveParams)
+
+        zoneMovements.triggerChangesZoneAll(game, sa)
+
+        game.getStack().clear()
+        game.getStack().clearSimultaneousStack()
+
+        # 2) State-based actions are checked. No player gets priority, and no
+        # triggered abilities are put onto the stack.
+        game.getAction().checkStateEffects(True)
+
+        # 3) The current phase and step ends. The game skips straight to the postcombat main phase. As this happens,
+        # all attacking and blocking creatures are removed from combat and effects that last "until end of combat" expire.
+        game.getPhaseHandler().endCombatPhaseByEffect()
+
+    #
+    # (non-Javadoc)
+    # @see forge.game.ability.SpellAbilityEffect#getStackDescription(forge.game.spellability.SpellAbility)
+    #
+    def getStackDescription(self, sa: SpellAbility) -> str:
+        return "End the combat phase."
 ```

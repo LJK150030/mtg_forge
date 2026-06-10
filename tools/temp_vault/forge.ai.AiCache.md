@@ -30,7 +30,7 @@ classDiagram
 
 AiCache is a static utility class that memoizes expensive AI computations whose results can be safely shared across multiple games in the Forge engine. It maintains a single thread-safe `Multimap<String, List<Object>>`, storing each cached result together with the argument vector that produced it under a caller-supplied string key. Its generic `getCached` method scans the entries for a matching key, confirms that the stored arguments match the current call, and only invokes the supplied `Supplier` to compute and store a fresh value on a miss.
 
-Because the cache is process-global, the design explicitly addresses unwanted collisions: callers may pass a list of `BiFunction` comparators to control how individual arguments are matched, defaulting to `equals`, with the static `identity` helper offering reference equality. It collaborates with Guava's `Multimap`/`Multimaps` and Java functional interfaces, and exposes `clear` to flush state between contexts. The class is never instantiated — a purely static API holder.
+Because the cache is process-global, the design explicitly addresses unwanted collisions: callers may pass a list of `BiFunction` comparators to control how individual arguments are matched, defaulting to `equals`, with the static `identity` helper offering reference equality. It collaborates with Guava's `Multimap`/`Multimaps` and Java functional interfaces, and exposes `clear` to flush state between contexts. The class is never instantiated â€” a purely static API holder.
 
 ## Source
 `forge-ai/src/main/java/forge/ai/AiCache.java`
@@ -87,4 +87,55 @@ public class AiCache {
     }
 
 }
+```
+
+## Python
+`forge/ai/AiCache.py`
+
+```python
+from forge.ai.AiCache import AiCache
+from com.google.common.collect.HashMultimap import HashMultimap
+from com.google.common.collect.Lists import Lists
+from com.google.common.collect.Multimap import Multimap
+from com.google.common.collect.Multimaps import Multimaps
+
+import typing
+from typing import Callable, Optional, TypeVar
+
+T = TypeVar("T")
+
+
+class AiCache:
+
+    # stores result + args as vector
+    dataMap: Multimap = Multimaps.synchronizedMultimap(HashMultimap.create())
+
+    @staticmethod
+    def identity(a: object, b: object) -> bool:
+        return a is b
+
+    # the cache is global for calculations that can be shared between games
+    # but that also means unwanted collisions need to be considered:
+    # for that you can pass Functions that compare the args
+    @staticmethod
+    def getCached(key: str, func: Callable[[], T], argsCheck: Optional[list[Callable[[object, object], bool]]], *args: object) -> T:
+        # TODO would like a good strategy to derive default key, but there's no clean way to obtain the method name
+        for cached in AiCache.dataMap.get(key):
+            hit = True
+            for i in range(len(args)):
+                checker = (lambda a, b: a == b) if argsCheck is None else argsCheck[i]
+                if not checker(args[i], cached[i + 1]):
+                    hit = False
+                    break
+            if hit:
+                return cached[0]
+        result = func()
+        cached = Lists.newArrayList(result)
+        cached.addAll(list(args))
+        AiCache.dataMap.put(key, cached)
+        return result
+
+    @staticmethod
+    def clear() -> None:
+        AiCache.dataMap.clear()
 ```

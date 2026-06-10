@@ -45,6 +45,12 @@ classDiagram
 - [[forge.game.cost.Cost|Cost]]
 - [[forge.game.spellability.SpellAbilityView|SpellAbilityView]]
 
+## Design Description
+
+Ability is an abstract specialization of SpellAbility representing activated abilities of a card. It supplies a family of protected constructors that adapt the various ways an ability can be definedâ€”from a raw ManaCost (wrapped into a Cost) or an explicit Cost, optionally with an associated CardState or a SpellAbilityViewâ€”delegating each to the canonical SpellAbility constructor so subclasses need not duplicate this setup.
+
+Its primary behavioral contribution is overriding canPlay() to enforce timing legality: it consults the activating player's Game to reject activation while a split-second effect is on the stack (unless the ability is a mana ability), and otherwise permits play only when the host Card is in play and not face-down. The class thus centralizes the common construction and playability rules shared by concrete ability types.
+
 ## Source
 `forge-game/src/main/java/forge/game/spellability/Ability.java`
 
@@ -112,4 +118,51 @@ public abstract class Ability extends SpellAbility {
     }
 
 }
+```
+
+## Python
+`forge/game/spellability/Ability.py`
+
+```python
+package forge.game.spellability
+
+from forge.card.mana.ManaCost import ManaCost
+from forge.game.Game import Game
+from forge.game.card.Card import Card
+from forge.game.card.CardState import CardState
+from forge.game.cost.Cost import Cost
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.spellability.SpellAbilityView import SpellAbilityView
+
+
+class Ability(SpellAbility):
+
+    def __init__(self, sourceCard: Card, *args):
+        if len(args) == 1 and isinstance(args[0], ManaCost):
+            manaCost = args[0]
+            self.__init__(sourceCard, Cost(manaCost, True), None)
+        elif len(args) == 2 and isinstance(args[0], ManaCost) and isinstance(args[1], CardState):
+            manaCost = args[0]
+            state = args[1]
+            super().__init__(sourceCard, Cost(manaCost, True), None, state)
+        elif len(args) == 2 and isinstance(args[0], ManaCost):
+            manaCost = args[0]
+            view0 = args[1]
+            self.__init__(sourceCard, Cost(manaCost, True), view0)
+        elif len(args) == 1 and isinstance(args[0], Cost):
+            cost = args[0]
+            self.__init__(sourceCard, cost, None)
+        elif len(args) == 2 and isinstance(args[0], Cost):
+            cost = args[0]
+            view0 = args[1]
+            super().__init__(sourceCard, cost, view0)
+        else:
+            raise TypeError("Invalid arguments to Ability constructor")
+
+    def canPlay(self) -> bool:
+        game = self.getActivatingPlayer().getGame()
+        if game.getStack().isSplitSecondOnStack() and not self.isManaAbility():
+            return False
+
+        return self.getHostCard().isInPlay() and not self.getHostCard().isFaceDown()
 ```

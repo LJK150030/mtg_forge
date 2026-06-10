@@ -95,3 +95,46 @@ public class ManifestDreadEffect extends ManifestEffect {
     }
 }
 ```
+
+## Python
+`forge/game/ability/effects/ManifestDreadEffect.py`
+
+```python
+package forge.game.ability.effects ΓåÆ module path forge/game/ability/effects/ManifestDreadEffect.py
+
+from typing import Map... let me just produce the port.
+
+from forge.game.Game import Game
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardZoneTable import CardZoneTable
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.trigger.TriggerType import TriggerType
+from forge.game.ability.effects.ManifestEffect import ManifestEffect
+
+
+class ManifestDreadEffect(ManifestEffect):
+    def manifestLoop(self, sa: SpellAbility, p: Player, amount: int) -> None:
+        game = p.getGame()
+        for i in range(amount):
+            tgtCards = p.getTopXCardsFromLibrary(2)
+            toGrave = CardCollection()
+            if not tgtCards.isEmpty():
+                manifest = p.getController().chooseSingleEntityForEffect(tgtCards, sa, self.getDefaultMessage(), None)
+                tgtCards.remove(manifest)
+
+                moveParams = AbilityKey.newMap()
+                triggerList = AbilityKey.addCardZoneTableParams(moveParams, sa)
+                manifest = self.internalEffect(manifest, p, sa, moveParams)
+                # CR 701.60a
+                if not manifest.isManifested():
+                    tgtCards.add(manifest)
+                for c in tgtCards:
+                    toGrave.add(game.getAction().moveToGraveyard(c, sa, moveParams))
+                triggerList.triggerChangesZoneAll(game, sa)
+            runParams = AbilityKey.mapFromPlayer(p)
+            runParams[AbilityKey.Cards] = toGrave
+            game.getTriggerHandler().runTrigger(TriggerType.ManifestDread, runParams, True)
+```

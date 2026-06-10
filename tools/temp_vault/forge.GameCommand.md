@@ -25,6 +25,10 @@ classDiagram
     GameCommand --|> Runnable : extends
 ```
 
+## Design Description
+
+Serves as Forge's general-purpose deferred action interface, representing a parameterless unit of game logic that can be scheduled and executed at a later point during play. By extending `Runnable`, it exposes a single `run()` method as its execution contract, while extending `Serializable` allows commands to be persisted alongside game state for save/load and network synchronization. The interface defines a shared `BLANK` constantâ€”an anonymous no-op implementationâ€”providing a reusable null-object instance that lets callers avoid null checks when no action is required. Its minimal, functional-interface shape reflects an intent to let cards and game systems register lightweight callbacks (triggers, cleanup hooks, state-change responses) without coupling to concrete command classes.
+
 ## Source
 `forge-game/src/main/java/forge/GameCommand.java`
 
@@ -68,4 +72,36 @@ public interface GameCommand extends java.io.Serializable, Runnable {
 
     };
 }
+```
+
+## Python
+`forge/GameCommand.py`
+
+```python
+from forge.GameCommand import GameCommand
+
+
+class _BlankGameCommand(GameCommand):
+
+    serialVersionUID = 2689172297036001710
+
+    def run(self):
+        pass
+
+
+class GameCommand:
+    """
+    Command interface.
+
+    @author Forge
+    @version $Id$
+    """
+
+    BLANK: "GameCommand" = None
+
+    def run(self):
+        raise NotImplementedError
+
+
+GameCommand.BLANK = _BlankGameCommand()
 ```

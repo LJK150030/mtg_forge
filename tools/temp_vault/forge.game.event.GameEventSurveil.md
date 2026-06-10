@@ -64,3 +64,27 @@ public record GameEventSurveil(PlayerView player, int toLibrary, int toGraveyard
     }
 }
 ```
+
+## Python
+`forge/game/event/GameEventSurveil.py`
+
+```python
+from forge.game.event.GameEvent import GameEvent
+from forge.game.event.IGameEventVisitor import IGameEventVisitor
+from forge.game.player.PlayerView import PlayerView
+
+
+class GameEventSurveil(GameEvent):
+    def __init__(self, player: PlayerView, toLibrary: int, toGraveyard: int):
+        self.player = player
+        self.toLibrary = toLibrary
+        self.toGraveyard = toGraveyard
+
+    def visit(self, visitor: IGameEventVisitor):
+        return visitor.visit(self)
+
+    # (non-Javadoc)
+    # @see java.lang.Object#toString()
+    def __str__(self) -> str:
+        return "" + str(self.player) + " surveilled " + str(self.toLibrary) + " to library, " + str(self.toGraveyard) + " to graveyard"
+```

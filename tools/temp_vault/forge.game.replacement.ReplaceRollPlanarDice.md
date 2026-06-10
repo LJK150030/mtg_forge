@@ -36,6 +36,10 @@ classDiagram
 - [[forge.game.card.Card|Card]]
 - [[forge.game.spellability.SpellAbility|SpellAbility]]
 
+## Design Description
+
+ReplaceRollPlanarDice is a replacement effect that intercepts and substitutes the rolling of the planar die in Planechase games, allowing cards to alter how many times the die is rolled or to ignore the roll. Extending ReplacementEffect, it overrides `canReplace` to gate activation on a `ValidPlayer` match against the affected player, and `setReplacingObjects` to expose the relevant roll parameters (the Number of rolls and an Ignore flag) to the triggered SpellAbility. It collaborates with AbilityKey to key into the run-parameter map, Card as its host, and SpellAbility as the carrier of replacing objects. The design is deliberately thin: it holds no state of its own, delegating construction to its superclass and serving purely as a typed, declarative hook that wires runtime planar-dice data into Forge's generic replacement framework.
+
 ## Source
 `forge-game/src/main/java/forge/game/replacement/ReplaceRollPlanarDice.java`
 
@@ -97,4 +101,37 @@ public class ReplaceRollPlanarDice extends ReplacementEffect {
         sa.setReplacingObject(AbilityKey.Ignore, runParams.get(AbilityKey.Ignore));
     }
 }
+```
+
+## Python
+`forge/game/replacement/ReplaceRollPlanarDice.py`
+
+```python
+from forge.game.replacement.ReplacementEffect import ReplacementEffect
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.spellability.SpellAbility import SpellAbility
+
+import typing
+
+
+class ReplaceRollPlanarDice(ReplacementEffect):
+
+    def __init__(self, params: dict[str, str], host: Card, intrinsic: bool):
+        """
+        Instantiates a new replace roll planar dice.
+
+        :param params: the params
+        :param host:   the host
+        """
+        super().__init__(params, host, intrinsic)
+
+    def canReplace(self, runParams: dict[AbilityKey, object]) -> bool:
+        if not self.matchesValidParam("ValidPlayer", runParams.get(AbilityKey.Affected)):
+            return False
+        return True
+
+    def setReplacingObjects(self, runParams: dict[AbilityKey, object], sa: SpellAbility) -> None:
+        sa.setReplacingObject(AbilityKey.Number, runParams.get(AbilityKey.Number))
+        sa.setReplacingObject(AbilityKey.Ignore, runParams.get(AbilityKey.Ignore))
 ```

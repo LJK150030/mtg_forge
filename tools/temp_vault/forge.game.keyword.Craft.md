@@ -35,6 +35,12 @@ classDiagram
 **Uses:**
 - [[forge.game.cost.CostExile|CostExile]]
 
+## Design Description
+
+Craft is a Magic: The Gathering keyword-ability model representing the "Craft with â€¦" mechanic, extending KeywordWithCost to inherit the mana/exile cost-parsing infrastructure while specializing the human-readable presentation of that ability. It overrides getTitle and getTitleWithoutCost to render the ability label ("Craft with <desc>" followed by the mana cost), and overrides formatReminderText to inject the computed cost and reminder text into the keyword's template.
+
+Its central responsibility is parse, which interprets a colon-delimited keyword string into a descriptive phrase and reminder text. It delegates base cost parsing to the superclass, then collaborates with CostExile to derive what must be exiled â€” handling explicit descriptions, X-based minimums, pluralization, and the special-cased "permanent" type. This concentrates Craft's domain knowledge in localized string generation, keeping cost mechanics in the inherited base class.
+
 ## Source
 `forge-game/src/main/java/forge/game/keyword/Craft.java`
 
@@ -112,4 +118,72 @@ public class Craft extends KeywordWithCost {
         return String.format(reminderText, cost.getCostMana(), reminder);
     }
 }
+```
+
+## Python
+`forge/game/keyword/Craft.py`
+
+```python
+from forge.card.CardType import CardType
+from forge.game.cost.CostExile import CostExile
+from forge.util.Lang import Lang
+from forge.game.keyword.KeywordWithCost import KeywordWithCost
+
+
+class Craft(KeywordWithCost):
+
+    desc: str
+    reminder: str
+
+    def getTitle(self) -> str:
+        sb = []
+        sb.append(self.getTitleWithoutCost())
+        sb.append(" ")
+        sb.append(str(self.cost.getCostMana()))
+        return "".join(sb)
+
+    def getTitleWithoutCost(self) -> str:
+        return "Craft with " + self.desc
+
+    def parse(self, details: str) -> None:
+        k = details.split(":")
+        super().parse(k[0])
+
+        if len(k) > 2:
+            self.desc = k[1]
+            sb = []
+            sb.append("Exile ")
+            sb.append(k[2])
+            sb.append(" from among permanents you control and/or cards in your graveyard")
+            self.reminder = "".join(sb)
+        else:
+            exile = self.cost.getCostPartByType(CostExile)
+            sb = []
+            xmin = self.cost.getCostMana().getXMin()
+            if xmin > 0:
+                sb.append(Lang.getNumeral(xmin))
+                sb.append(" or more")
+            elif "1" != exile.getAmount():
+                sb.append(Lang.getNumeral(int(exile.getAmount())))
+            if exile.getTypeDescription() is not None:
+                # permanent are skipped in desc
+                if "permanent" != exile.getTypeDescription():
+                    sb.append(" ")
+                    sb.append(exile.getTypeDescription())
+            else:
+                sb.append(" ")
+                partType = exile.getType()
+                # consume .Other from most partTypes
+                if ".Other" in partType:
+                    partType = partType.replace(".Other", "")
+                # try to guess plural
+                if xmin > 0 or "1" != exile.getAmount():
+                    sb.append(CardType.getPluralType(partType))
+                else:
+                    sb.append(Lang.getInstance().formatValidDesc(partType))
+            self.desc = "".join(sb)
+            self.reminder = exile.exileMultiZoneCostString(True, xmin)
+
+    def formatReminderText(self, reminderText: str) -> str:
+        return reminderText % (self.cost.getCostMana(), self.reminder)
 ```

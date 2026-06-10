@@ -80,9 +80,9 @@ classDiagram
 
 ## Design Description
 
-ManaCost is an immutable, `final` value object modeling a Magic card's mana cost as an unmodifiable list of `ManaCostShard` symbols plus a separate generic-mana count, with a `hasNoCost` flag that distinguishes truly costless cards (e.g. lands, stored as `-1`) from an explicit `{0}`. Instances are built from an `IParserManaCost` (typically `ManaCostParser`), and frequently used small costs are cached as static constants (`ZERO`–`FOUR`, `NO_COST`) and dispensed via `get` to limit allocation.
+ManaCost is an immutable, `final` value object modeling a Magic card's mana cost as an unmodifiable list of `ManaCostShard` symbols plus a separate generic-mana count, with a `hasNoCost` flag that distinguishes truly costless cards (e.g. lands, stored as `-1`) from an explicit `{0}`. Instances are built from an `IParserManaCost` (typically `ManaCostParser`), and frequently used small costs are cached as static constants (`ZERO`â€“`FOUR`, `NO_COST`) and dispensed via `get` to limit allocation.
 
-Implementing `Comparable`, `Iterable<ManaCostShard>`, `Serializable`, and `Cloneable`, it supports sorting through a lazily computed compare weight, shard iteration, and its own delimiter-based `serialize`/`deserialize`. The string form is precomputed at construction, and derived queries—CMC, color profile, shard counts, Phyrexian/multicolor/X detection, and payability—delegate per-symbol semantics to `ManaCostShard`, keeping ManaCost a self-contained, side-effect-free aggregate.
+Implementing `Comparable`, `Iterable<ManaCostShard>`, `Serializable`, and `Cloneable`, it supports sorting through a lazily computed compare weight, shard iteration, and its own delimiter-based `serialize`/`deserialize`. The string form is precomputed at construction, and derived queriesâ€”CMC, color profile, shard counts, Phyrexian/multicolor/X detection, and payabilityâ€”delegate per-symbol semantics to `ManaCostShard`, keeping ManaCost a self-contained, side-effect-free aggregate.
 
 ## Source
 `forge-core/src/main/java/forge/card/mana/ManaCost.java`
@@ -505,4 +505,269 @@ public final class ManaCost implements Comparable<ManaCost>, Iterable<ManaCostSh
         return width;
     }
 }
+```
+
+## Python
+`forge/card/mana/ManaCost.py`
+
+```python
+from forge.card.mana.IParserManaCost import IParserManaCost
+from forge.card.mana.ManaCostParser import ManaCostParser
+from forge.card.mana.ManaCostShard import ManaCostShard
+from forge.card.mana.ManaAtom import ManaAtom
+
+from typing import Iterator, List, Optional
+
+
+class ManaCost:
+    serialVersionUID = -2477430496624149226
+
+    DELIM = chr(6)
+
+    NO_COST = None
+    ZERO = None
+    ONE = None
+    TWO = None
+    THREE = None
+    FOUR = None
+
+    @staticmethod
+    def get(cntGeneric: int) -> "ManaCost":
+        if cntGeneric == 0:
+            return ManaCost.ZERO
+        if cntGeneric == 1:
+            return ManaCost.ONE
+        if cntGeneric == 2:
+            return ManaCost.TWO
+        if cntGeneric == 3:
+            return ManaCost.THREE
+        if cntGeneric == 4:
+            return ManaCost.FOUR
+        return ManaCost(cntGeneric) if cntGeneric > 0 else ManaCost.NO_COST
+
+    def __init__(self, arg, shards0: Optional[List[ManaCostShard]] = None):
+        self.shards: List[ManaCostShard] = []
+        self.genericCost: int = 0
+        self.hasNoCost: bool = False
+        self.stringValue: str = ""
+        self.compareWeight: Optional[float] = None
+
+        if isinstance(arg, str):
+            # public ctor from string
+            self._init_from_parser(ManaCostParser(arg))
+        elif isinstance(arg, int):
+            cmc = arg
+            self.hasNoCost = cmc < 0
+            self.genericCost = 0 if cmc < 0 else cmc
+            self.sealClass(shards0 if shards0 is not None else [])
+        else:
+            # IParserManaCost
+            self._init_from_parser(arg)
+
+    def _init_from_parser(self, parser: IParserManaCost) -> None:
+        shardsTemp: List[ManaCostShard] = []
+        xMana = False
+        while parser.hasNext():
+            shard = parser.next()
+            if shard is not None and shard != ManaCostShard.GENERIC:
+                if shard == ManaCostShard.X:
+                    xMana = True
+                shardsTemp.append(shard)
+            # null is OK - that was generic mana
+        generic = parser.getTotalGenericCost()  # collect generic mana here
+        self.hasNoCost = not xMana and generic == -1
+        self.genericCost = 0 if self.hasNoCost else generic
+        self.sealClass(shardsTemp)
+
+    def sealClass(self, shards0: List[ManaCostShard]) -> None:
+        self.shards = list(shards0)
+        self.stringValue = self.getSimpleString()
+
+    def getSimpleString(self) -> str:
+        if self.hasNoCost:
+            return "no cost"
+        if len(self.shards) == 0:
+            return "{" + str(self.genericCost) + "}"
+
+        sb = []
+        if self.genericCost > 0:
+            sb.append("{" + str(self.genericCost) + "}")
+        for s in self.shards:
+            if s == ManaCostShard.X:
+                sb.insert(0, str(s))
+            else:
+                sb.append(s.toString())
+        # If the generic cost has been reduced below 0, display the reduction. (Only set for X cost spells)
+        if self.genericCost < 0:
+            sb.append(' ' + str(self.genericCost))
+        return "".join(sb)
+
+    def getCMC(self) -> int:
+        sum = 0
+        for s in self.shards:
+            sum += s.getCmc()
+        return sum + self.genericCost
+
+    def getColorProfile(self) -> int:
+        result = 0
+        for s in self.shards:
+            result |= s.getColorMask()
+        return result
+
+    def getShardCount(self, which: ManaCostShard) -> int:
+        if which == ManaCostShard.GENERIC:
+            return self.genericCost
+
+        res = 0
+        for shard in self.shards:
+            if shard == which:
+                res += 1
+        return res
+
+    def getColorShardCounts(self) -> List[int]:
+        counts = [0] * 6  # in WUBRGC order
+
+        for i in range(len(self.stringValue)):
+            symbol = self.stringValue[i]
+            if symbol in ('W', 'U', 'B', 'R', 'G', 'C'):
+                counts[ManaAtom.getIndexOfFirstManaType(ManaAtom.fromName(symbol))] += 1
+
+        return counts
+
+    def getGenericCost(self) -> int:
+        return self.genericCost
+
+    def isNoCost(self) -> bool:
+        return self.hasNoCost
+
+    def isPureGeneric(self) -> bool:
+        return len(self.shards) == 0 and not self.isNoCost()
+
+    def isZero(self) -> bool:
+        return self.genericCost == 0 and self.isPureGeneric()
+
+    def compareTo(self, o: "ManaCost") -> int:
+        a = self.getCompareWeight()
+        b = o.getCompareWeight()
+        return (a > b) - (a < b)
+
+    def getCompareWeight(self) -> float:
+        if self.compareWeight is None:
+            weight = float(self.genericCost)
+            for s in self.shards:
+                weight += s.getCmpc()
+            if self.hasNoCost:
+                weight = -1  # for those who doesn't even have a 0 sign on card
+            self.compareWeight = weight
+        return self.compareWeight
+
+    @staticmethod
+    def serialize(mc: "ManaCost") -> str:
+        builder = []
+        builder.append(str(-1 if mc.hasNoCost else mc.genericCost))
+        for shard in mc.shards:
+            builder.append(ManaCost.DELIM + shard.name())
+        return "".join(builder)
+
+    @staticmethod
+    def deserialize(value: str) -> "ManaCost":
+        pieces = [p for p in value.split(ManaCost.DELIM) if p]
+        mc = ManaCost(int(pieces[0]))
+        sh: List[ManaCostShard] = []
+        for i in range(1, len(pieces)):
+            sh.append(ManaCostShard.valueOf(pieces[i]))
+        mc.sealClass(sh)
+        return mc
+
+    def toString(self) -> str:
+        return self.stringValue
+
+    def __str__(self) -> str:
+        return self.stringValue
+
+    def getShortString(self) -> str:
+        if self.isNoCost():
+            return "-1"
+        sb = []
+        generic = self.getGenericCost()
+        if self.isZero():
+            sb.append('0')
+        if generic > 0:
+            sb.append(str(generic))
+        for s in self.shards:
+            sb.append(' ')
+            sb.append(str(s))
+        # If the generic cost has been reduced below 0, display the reduction. (Only set for X cost spells)
+        if generic < 0:
+            sb.append(' ' + str(generic))
+        return "".join(sb).strip()
+
+    def hasPhyrexian(self) -> bool:
+        for shard in self.shards:
+            if shard.isPhyrexian():
+                return True
+        return False
+
+    def getPhyrexianCount(self) -> int:
+        i = 0
+        for shard in self.shards:
+            if shard.isPhyrexian():
+                i += 1
+        return i
+
+    def hasMultiColor(self) -> bool:
+        for shard in self.shards:
+            if shard.isMultiColor():
+                return True
+        return False
+
+    def getNormalizedMana(self) -> "ManaCost":
+        list_: List[ManaCostShard] = []
+        for shard in self.shards:
+            list_.append(ManaCostShard.valueOf(shard.getColorMask()))
+
+        return ManaCost(self.genericCost, list_)
+
+    def countX(self) -> int:
+        return self.getShardCount(ManaCostShard.X)
+
+    def canBePaidWithAvailable(self, colorCode: int) -> bool:
+        for shard in self.shards:
+            if not shard.isPhyrexian() and not shard.canBePaidWithManaOfColor(colorCode):
+                return False
+        return True
+
+    @staticmethod
+    def combine(a: "ManaCost", b: "ManaCost") -> "ManaCost":
+        res = ManaCost(a.genericCost + b.genericCost)
+        sh: List[ManaCostShard] = []
+        sh.extend(a.shards)
+        sh.extend(b.shards)
+        res.sealClass(sh)
+        return res
+
+    def iterator(self) -> Iterator[ManaCostShard]:
+        return iter(self.shards)
+
+    def __iter__(self) -> Iterator[ManaCostShard]:
+        return iter(self.shards)
+
+    def getGlyphCount(self) -> int:  # counts all colored shards or 1 for {0} costs
+        width = len(self.shards)
+        if self.genericCost > 0 or (self.genericCost == 0 and width == 0):
+            width += 1
+        # If the generic cost has been reduced below 0 (due to perpetual cost decrease effects)
+        # and there is an X cost (so the below 0 generic cost actually does something) then
+        # add space for an additional symbol to display the extra cost reduction.
+        if self.genericCost < 0 and self.countX() > 0:
+            width += 1
+        return width
+
+
+ManaCost.NO_COST = ManaCost(-1)
+ManaCost.ZERO = ManaCost(0)
+ManaCost.ONE = ManaCost(1)
+ManaCost.TWO = ManaCost(2)
+ManaCost.THREE = ManaCost(3)
+ManaCost.FOUR = ManaCost(4)
 ```

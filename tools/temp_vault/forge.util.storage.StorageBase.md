@@ -51,6 +51,12 @@ classDiagram
 **Uses:**
 - [[forge.util.IItemReader|IItemReader]]
 
+## Design Description
+
+StorageBase is a generic, read-only implementation of the `IStorage<T>` interface, providing in-memory access to a named collection of items keyed by string. It backs its contents with a `Map<String, T>` that is either supplied directly or populated by reading from an `IItemReader<T>` at construction. It exposes lookup, iteration, streaming, containment, sizing, and predicate-based search, while deliberately rejecting all mutating operations (`add`, `delete`) with `UnsupportedOperationException` to enforce immutability.
+
+By design it represents a flat storage with no nested folders: `getFolders` returns a shared empty singleton and the subfolder methods throw, leaving hierarchical behavior to derived classes that override them. The shared `emptyMap` constant and the recursive static `getAllFilesList` utility round out a lightweight, reusable base intended as the foundation for Forge's concrete storage variants.
+
 ## Source
 `forge-core/src/main/java/forge/util/storage/StorageBase.java`
 
@@ -212,4 +218,102 @@ public class StorageBase<T> implements IStorage<T> {
         return allFilesList;
     }
 }
+```
+
+## Python
+`forge/util/storage/StorageBase.py`
+
+```python
+from forge.util.storage.IStorage import IStorage
+from forge.util.IItemReader import IItemReader
+from forge.util.IterableUtil import IterableUtil
+
+import os
+from typing import Callable, Collection, Iterator, List, Optional, TypeVar
+
+T = TypeVar("T")
+
+
+class StorageBase(IStorage[T]):
+    emptyMap: "StorageBase" = None  # assigned after class definition
+
+    def __init__(self, name0, arg1, map0=None):
+        if map0 is None:
+            # StorageBase(name0, io): io is an IItemReader<T>
+            io = arg1
+            self._init_from_map(name0, io.getFullPath(), io.readAll())
+        else:
+            # StorageBase(name0, fullPath0, map0)
+            self._init_from_map(name0, arg1, map0)
+
+    def _init_from_map(self, name0, fullPath0, map0):
+        self.name = name0
+        self.fullPath = fullPath0
+        self.map = map0
+
+    def get(self, name: str) -> T:
+        return self.map.get(name)
+
+    def getItemNames(self) -> Collection[str]:
+        return list(self.map.keys())
+
+    def __iter__(self) -> Iterator[T]:
+        return iter(self.map.values())
+
+    def stream(self):
+        return iter(self.map.values())
+
+    def contains(self, name: str) -> bool:
+        return name is not None and name in self.map
+
+    def size(self) -> int:
+        return len(self.map)
+
+    def find(self, condition: Callable[[T], bool]) -> Optional[T]:
+        return IterableUtil.tryFind(self.map.values(), condition).orElse(None)
+
+    def add(self, name, item=None):
+        raise NotImplementedError("This is a read-only storage")
+
+    def delete(self, itemName: str):
+        raise NotImplementedError("This is a read-only storage")
+
+    # we don't have nested folders unless that's overridden in a derived class
+    def getFolders(self) -> "IStorage[IStorage[T]]":
+        return StorageBase.emptyMap
+
+    def getName(self) -> str:
+        return self.name
+
+    def getFullPath(self) -> str:
+        if self.fullPath is None:
+            return self.name
+        return self.fullPath
+
+    def tryGetFolder(self, path: str) -> "IStorage[T]":
+        raise NotImplementedError("This storage does not support subfolders")
+
+    def getFolderOrCreate(self, path: str) -> "IStorage[T]":
+        raise NotImplementedError("This storage does not support subfolders")
+
+    @staticmethod
+    def getAllFilesList(downloadDir, filenameFilter) -> List[str]:
+        allFilesList = []
+        try:
+            entries = os.listdir(downloadDir)
+        except OSError:
+            entries = None
+        if entries is not None:
+            for entry in entries:
+                fullName = os.path.join(downloadDir, entry)
+                if not os.path.isdir(fullName) and filenameFilter(downloadDir, entry):
+                    allFilesList.append(fullName)
+            for entry in entries:
+                fullName = os.path.join(downloadDir, entry)
+                if os.path.isdir(fullName):
+                    allFilesList.extend(StorageBase.getAllFilesList(fullName, filenameFilter))
+        return allFilesList
+
+
+StorageBase.emptyMap = StorageBase("Empty", None, {})
 ```

@@ -46,7 +46,7 @@ classDiagram
 
 ## Design Description
 
-AirbendAi provides the AI decision logic for the "Airbend" bounce ability. As a concrete subclass of `SpellAbilityAi`, it overrides `canPlay` and `doTriggerNoCost` to return an `AiAbilityDecision` signaling whether and how strongly the computer should activate the ability. Its central job is target selection: it first scans the AI's own non-token, higher-CMC creatures that are threatened—via `ComputerUtil.predictThreatenedObjects` or imminent combat loss (`ComputerUtilCombat`)—and bounces the most valuable one to save it; otherwise, during its own main phase one or the opponent's end step, it bounces the opponent's best blocker via `ComputerUtilCard.getBestAI`.
+AirbendAi provides the AI decision logic for the "Airbend" bounce ability. As a concrete subclass of `SpellAbilityAi`, it overrides `canPlay` and `doTriggerNoCost` to return an `AiAbilityDecision` signaling whether and how strongly the computer should activate the ability. Its central job is target selection: it first scans the AI's own non-token, higher-CMC creatures that are threatenedâ€”via `ComputerUtil.predictThreatenedObjects` or imminent combat loss (`ComputerUtilCombat`)â€”and bounces the most valuable one to save it; otherwise, during its own main phase one or the opponent's end step, it bounces the opponent's best blocker via `ComputerUtilCard.getBestAI`.
 
 Following Forge's ability-AI pattern, it reads game state through `Combat`, `PhaseHandler`/`PhaseType`, `Player`, and `CardCollection` while delegating valuation to shared `ComputerUtil*` helpers. `doTriggerNoCost` reuses `canPlay`'s analysis but respects a `mandatory` flag, and a TODO marks unimplemented spell-targeting logic.
 
@@ -109,4 +109,59 @@ public class AirbendAi extends SpellAbilityAi {
     }
 
 }
+```
+
+## Python
+`forge/ai/ability/AirbendAi.py`
+
+```python
+from forge.ai.SpellAbilityAi import SpellAbilityAi
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.ai.ComputerUtil import ComputerUtil
+from forge.ai.ComputerUtilCard import ComputerUtilCard
+from forge.ai.ComputerUtilCombat import ComputerUtilCombat
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardLists import CardLists
+from forge.game.combat.Combat import Combat
+from forge.game.phase.PhaseHandler import PhaseHandler
+from forge.game.phase.PhaseType import PhaseType
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+
+
+class AirbendAi(SpellAbilityAi):
+    def canPlay(self, aiPlayer: Player, sa: SpellAbility) -> AiAbilityDecision:
+        # Check own cards that need saving, non-token, above CMC 2 so that it's hopefully worth saving this one
+        combat = aiPlayer.getGame().getCombat()
+        threatenedTgts = CardLists.filter(CardLists.getTargetableCards(aiPlayer.getCreaturesInPlay(), sa),
+                lambda card: not card.isToken() and card.getCMC() > 2 and
+                        (card in ComputerUtil.predictThreatenedObjects(aiPlayer, None, True)
+                        or (combat is not None and ComputerUtilCombat.combatantWouldBeDestroyed(aiPlayer, card, combat))))
+        if not threatenedTgts.isEmpty():
+            bestSaved = ComputerUtilCard.getBestAI(threatenedTgts)
+            sa.resetTargets()
+            sa.getTargets().add(bestSaved)
+            return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+        # Check opponent's cards that need bouncing (only in the AI's own turn, main phase 1, or at the end of opponent's
+        # turn, to get rid of potential blockers)
+        ph = aiPlayer.getGame().getPhaseHandler()
+        if ph.is_(PhaseType.MAIN1, aiPlayer) or (ph.is_(PhaseType.END_OF_TURN) and ph.getNextTurn() == aiPlayer):
+            opposingThreats = CardLists.getTargetableCards(aiPlayer.getOpponents().getCreaturesInPlay(), sa)
+            if not opposingThreats.isEmpty():
+                sa.resetTargets()
+                sa.getTargets().add(ComputerUtilCard.getBestAI(opposingThreats))
+                return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+        # TODO: add logic to use it to remove threatening spells when the ability allows to target spells?
+
+        return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+    def doTriggerNoCost(self, aiPlayer: Player, sa: SpellAbility, mandatory: bool) -> AiAbilityDecision:
+        decision = self.canPlay(aiPlayer, sa)
+        if decision.willingToPlay() or mandatory:
+            return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+        return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
 ```

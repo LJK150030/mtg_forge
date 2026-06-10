@@ -44,7 +44,7 @@ classDiagram
 
 ## Design Description
 
-CounterKeywordType is an immutable record that models a Magic keyword existing as a counter on a card (per rule 122.1b, e.g. Flying, Indestructible, Decayed), wrapping a single `KeywordView`. It implements the `CounterType` interface, supplying keyword-counter–specific behavior: display names derived from the keyword's title, a constant `true` for `isKeywordCounter()`, and AI valuation via `getAiCategory()` (negative only for Decayed, positive otherwise).
+CounterKeywordType is an immutable record that models a Magic keyword existing as a counter on a card (per rule 122.1b, e.g. Flying, Indestructible, Decayed), wrapping a single `KeywordView`. It implements the `CounterType` interface, supplying keyword-counterâ€“specific behavior: display names derived from the keyword's title, a constant `true` for `isKeywordCounter()`, and AI valuation via `getAiCategory()` (negative only for Decayed, positive otherwise).
 
 A static factory `get(String)` interns instances in a shared map so each keyword counter is created once and reused, and `getValues()` enumerates the fixed rules-defined set ahead of any dynamically registered variants. The static `isKeywordCounter(String)` recognizes both the canonical list and parameterized forms like `Hexproof:`/`Trample:`. The design favors flyweight-style caching and delegation to `KeywordView`, keeping each counter a thin, value-based adapter between the keyword system and the `CounterType` abstraction.
 
@@ -125,4 +125,67 @@ public record CounterKeywordType(KeywordView keyword) implements CounterType {
         return CounterAiCategory.Positive;
     }
 }
+```
+
+## Python
+`forge/game/card/CounterKeywordType.py`
+
+```python
+from typing import Set
+
+from forge.game.card.CounterType import CounterType
+from forge.game.card.CounterAiCategory import CounterAiCategory
+from forge.game.keyword.Keyword import Keyword
+from forge.game.keyword.KeywordView import KeywordView
+
+
+class CounterKeywordType(CounterType):
+
+    # Rule 122.1b
+    keywordCounter = [
+        "Flying", "First Strike", "Double Strike", "Deathtouch", "Decayed", "Exalted", "Haste", "Hexproof",
+        "Indestructible", "Lifelink", "Menace", "Reach", "Shadow", "Trample", "Vigilance"]
+    sMap: dict[str, "CounterKeywordType"] = {}
+
+    def __init__(self, keyword: KeywordView):
+        self.keyword = keyword
+
+    @staticmethod
+    def get(s: str) -> "CounterKeywordType":
+        if s not in CounterKeywordType.sMap:
+            CounterKeywordType.sMap[s] = CounterKeywordType(Keyword.getInstance(s).getView())
+        return CounterKeywordType.sMap[s]
+
+    @staticmethod
+    def getValues() -> Set[CounterType]:
+        # add fixed first
+        result = set(CounterKeywordType.get(s) for s in CounterKeywordType.keywordCounter)
+        # add variable ones later
+        result.update(CounterKeywordType.sMap.values())
+        return result
+
+    def toString(self) -> str:
+        return self.keyword.original()
+
+    def getName(self) -> str:
+        return self.keyword.title()
+
+    def getCounterOnCardDisplayName(self) -> str:
+        return self.keyword.title()
+
+    def isKeywordCounter(self) -> bool:
+        return True
+
+    @staticmethod
+    def isKeywordCounter(keyword: str) -> bool:
+        if keyword.startswith("Hexproof:"):
+            return True
+        if keyword.startswith("Trample:"):
+            return True
+        return keyword in CounterKeywordType.keywordCounter
+
+    def getAiCategory(self) -> CounterAiCategory:
+        if Keyword.DECAYED == self.keyword.keyword():
+            return CounterAiCategory.Negative
+        return CounterAiCategory.Positive
 ```

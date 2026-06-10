@@ -48,7 +48,7 @@ classDiagram
 
 DiscoverAi implements the AI decision-making for cards with the "Discover" mechanic, slotting into the engine's ability-handler hierarchy by extending `SpellAbilityAi`. Like its siblings in `forge.ai.ability`, it overrides the framework's hook methods so the engine can consult it whenever a Discover ability is evaluated. It declines to initiate the effect on its own (`checkApiLogic` always returns `CantPlayAi`) but will resolve it when forced, reflecting that Discover is a triggered/mandatory outcome rather than a proactively cast spell.
 
-Its substantive logic lives in `confirmAction`, where it inspects the discovered card's basic spells via `AbilityUtils` and delegates the actual playability judgment to the controlling `PlayerControllerAi`'s evaluator. The code guards two concrete failure modes—land-backed MDFCs that would trigger a `ClassCastException`, and spells with invalid target counts that would corrupt the stack—showing design intent focused on defensive correctness over aggressive value extraction.
+Its substantive logic lives in `confirmAction`, where it inspects the discovered card's basic spells via `AbilityUtils` and delegates the actual playability judgment to the controlling `PlayerControllerAi`'s evaluator. The code guards two concrete failure modesâ€”land-backed MDFCs that would trigger a `ClassCastException`, and spells with invalid target counts that would corrupt the stackâ€”showing design intent focused on defensive correctness over aggressive value extraction.
 
 ## Source
 `forge-ai/src/main/java/forge/ai/ability/DiscoverAi.java`
@@ -116,4 +116,51 @@ public class DiscoverAi extends SpellAbilityAi {
         return false;
     }
 }
+```
+
+## Python
+`forge/ai/ability/DiscoverAi.py`
+
+```python
+from forge.ai.SpellAbilityAi import SpellAbilityAi
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.ai.PlayerControllerAi import PlayerControllerAi
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.card.Card import Card
+from forge.game.player.Player import Player
+from forge.game.player.PlayerActionConfirmMode import PlayerActionConfirmMode
+from forge.game.spellability.Spell import Spell
+from forge.game.spellability.SpellAbility import SpellAbility
+
+from typing import Map
+
+
+class DiscoverAi(SpellAbilityAi):
+
+    def checkApiLogic(self, ai: Player, sa: SpellAbility) -> AiAbilityDecision:
+        return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+    def doTriggerNoCost(self, ai: Player, sa: SpellAbility, mandatory: bool) -> AiAbilityDecision:
+        if mandatory:
+            return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+        return self.checkApiLogic(ai, sa)
+
+    def confirmAction(self, ai: Player, sa: SpellAbility, mode: PlayerActionConfirmMode, message: str, params: dict[str, object]) -> bool:
+        c = params.get("Card")
+        for s in AbilityUtils.getBasicSpellsFromPlayEffect(c, ai):
+            if s.isLandAbility():
+                # return false or we get a ClassCastException later if the AI encounters MDFC with land backside
+                return False
+            spell = s
+            if AiPlayDecision.WillPlay == ai.getController().getAi().canPlayFromEffectAI(spell, False, True):
+                # Before accepting, see if the spell has a valid number of targets (it should at this point).
+                # Proceeding past this point if the spell is not correctly targeted will result
+                # in "Failed to add to stack" error and the card disappearing from the game completely.
+                if not spell.isTargetNumberValid():
+                    # if we won't be able to pay the cost, don't choose the card
+                    return False
+                return True
+        return False
 ```

@@ -62,6 +62,10 @@ classDiagram
 - [[forge.game.staticability.StaticAbility|StaticAbility]]
 - [[forge.game.staticability.StaticAbilityLayer|StaticAbilityLayer]]
 
+## Design Description
+
+StaticEffect records the runtime consequences of a single resolved static ability so they can later be undone. It holds the source Card and originating StaticAbility, the timestamp identifying this application, the CardCollectionView of affected cards and List of affected Players, and a parameter map describing what the ability changed. Its central responsibility is the layered remove() method, which walks the affected entities and reverses each modification per StaticAbilityLayer (control, text, type, color, abilities, P/T, rules), guided by the parameter keys, recording touched cards by layer for clean reapplication. Designed as a package-private collaborator of the static-ability subsystem, it offers makeMappedCopy/removeMapped to project effects through an IEntityMap onto a parallel game state, keeping continuous effects consistent across game copies used for simulation.
+
 ## Source
 `forge-game/src/main/java/forge/game/StaticEffect.java`
 
@@ -412,4 +416,270 @@ public class StaticEffect {
     }
 
 }
+```
+
+## Python
+`forge/game/StaticEffect.py`
+
+```python
+from typing import List, Map
+
+from forge.game.IEntityMap import IEntityMap
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.player.Player import Player
+from forge.game.staticability.StaticAbility import StaticAbility
+from forge.game.staticability.StaticAbilityLayer import StaticAbilityLayer
+
+
+class StaticEffect:
+    """
+    StaticEffect class.
+
+    @author Forge
+    @version $Id$
+    """
+
+    def __init__(self, sourceOrAbility):
+        # Java has two package-private constructors:
+        #   StaticEffect(Card source)
+        #   StaticEffect(StaticAbility ability)
+        self.affectedCards: CardCollectionView = CardCollection()
+        self.affectedPlayers: list[Player] = []
+        self.timestamp: int = -1
+        self.mapParams: dict[str, str] = {}
+        self.ability: StaticAbility = None
+
+        if isinstance(sourceOrAbility, StaticAbility):
+            ability = sourceOrAbility
+            self.source: Card = ability.getHostCard()
+            self.ability = ability
+        else:
+            self.source: Card = sourceOrAbility
+
+    def makeMappedCopy(self, map: IEntityMap) -> "StaticEffect":
+        copy = StaticEffect(map.map(self.source))
+        copy.ability = self.ability
+        copy.affectedCards = map.mapCollection(self.affectedCards)
+        copy.affectedPlayers = map.mapList(self.affectedPlayers)
+        copy.timestamp = self.timestamp
+        copy.mapParams = self.mapParams
+        return copy
+
+    def setTimestamp(self, t: int) -> None:
+        """
+        setTimestamp TODO Write javadoc for this method.
+
+        @param t a long
+        """
+        self.timestamp = t
+
+    def getTimestamp(self) -> int:
+        """
+        getTimestamp. TODO Write javadoc for this method.
+
+        @return a long
+        """
+        return self.timestamp
+
+    def getSource(self) -> Card:
+        """
+        Getter for the field source.
+
+        @return a forge.game.card.Card object.
+        """
+        return self.source
+
+    def getAffectedCards(self) -> CardCollectionView:
+        """
+        Getter for the field affectedCards.
+
+        @return a CardCollectionView object.
+        """
+        return self.affectedCards
+
+    def setAffectedCards(self, list: CardCollectionView) -> None:
+        """
+        Setter for the field affectedCards.
+
+        @param list a CardCollectionView object.
+        """
+        self.affectedCards = list
+
+    def getAffectedPlayers(self) -> List[Player]:
+        """
+        Gets the affected players.
+
+        @return the affected players
+        """
+        return self.affectedPlayers
+
+    def setAffectedPlayers(self, list: List[Player]) -> None:
+        """
+        Sets the affected players.
+
+        @param list the new affected players
+        """
+        self.affectedPlayers = list
+
+    def setParams(self, params: Map[str, str]) -> None:
+        """
+        setParams. TODO Write javadoc for this method.
+
+        @param params a HashMap
+        """
+        self.mapParams = params
+
+    def getParams(self) -> Map[str, str]:
+        """
+        Gets the params.
+
+        @return the params
+        """
+        return self.mapParams
+
+    def hasParam(self, key: str) -> bool:
+        return key in self.mapParams
+
+    def getParam(self, key: str) -> str:
+        return self.mapParams.get(key)
+
+    def remove(self, affectedPerLayer, layers=None) -> CardCollectionView:
+        """
+        Undo everything that was changed by this effect.
+
+        @return a CardCollectionView of all affected cards.
+        """
+        if layers is None:
+            return self.remove(affectedPerLayer, StaticAbilityLayer.CONTINUOUS_LAYERS)
+
+        affectedCards = self.getAffectedCards()
+        affectedPlayers = self.getAffectedPlayers()
+
+        if StaticAbilityLayer.RULES in layers:
+            if self.hasParam("IgnoreEffectCost"):
+                self.getSource().removeChangedCardTraits(self.getTimestamp(), self.ability.getId())
+
+        # modify players
+        for p in affectedPlayers:
+            if StaticAbilityLayer.RULES in layers:
+                p.setUnlimitedHandSize(False)
+                p.setMaxHandSize(p.getStartingHandSize())
+
+                p.removeMaxLandPlays(self.getTimestamp())
+                p.removeMaxLandPlaysInfinite(self.getTimestamp())
+
+                p.removeControlledWhileSearching(self.getTimestamp())
+                p.removeControlVote(self.getTimestamp())
+                p.removeAdditionalVote(self.getTimestamp())
+                p.removeAdditionalOptionalVote(self.getTimestamp())
+                p.removeAdditionalVillainousChoices(self.getTimestamp())
+
+                p.removeDeclaresAttackers(self.getTimestamp())
+                p.removeDeclaresBlockers(self.getTimestamp())
+
+            if StaticAbilityLayer.ABILITIES in layers:
+                p.removeChangedKeywords(self.getTimestamp(), self.ability.getId())
+
+        # modify the affected card
+        for affectedCard in affectedCards:
+            if StaticAbilityLayer.CONTROL in layers:
+                if self.hasParam("GainControl"):
+                    affectedCard.removeTempController(self.getTimestamp())
+
+            if StaticAbilityLayer.TEXT in layers:
+                # Revert changed color words
+                if self.hasParam("ChangeColorWordsTo"):
+                    affectedCard.removeChangedTextColorWord(self.getTimestamp(), self.ability.getId())
+                    self.addCard(affectedPerLayer, StaticAbilityLayer.TEXT, affectedCard)
+
+                # remove changed name
+                if self.hasParam("SetName") or self.hasParam("AddNames"):
+                    if affectedCard.removeChangedName(self.timestamp, self.ability.getId(), False):
+                        self.addCard(affectedPerLayer, StaticAbilityLayer.TEXT, affectedCard)
+
+                if self.hasParam("GainTextOf"):
+                    affectedCard.removeChangedName(self.getTimestamp(), self.ability.getId(), False)
+                    affectedCard.removeChangedManaCost(self.getTimestamp(), self.ability.getId())
+                    affectedCard.removeColorByText(self.getTimestamp(), self.ability.getId())
+                    affectedCard.removeChangedCardTypesByText(self.getTimestamp(), self.ability.getId())
+                    affectedCard.removeChangedCardTraitsByText(self.getTimestamp(), self.ability.getId())
+                    affectedCard.removeChangedCardKeywordsByText(self.getTimestamp(), self.ability.getId())
+                    affectedCard.removeNewPTbyText(self.getTimestamp(), self.ability.getId())
+
+                    affectedCard.updateChangedText()
+                    self.addCard(affectedPerLayer, StaticAbilityLayer.TEXT, affectedCard)
+
+            if StaticAbilityLayer.TYPE in layers:
+                # remove Types
+                if self.hasParam("AddType") or self.hasParam("AddAllCreatureTypes") or self.hasParam("RemoveType") or self.hasParam("RemoveLandTypes"):
+                    # the view is updated in GameAction#checkStaticAbilities to avoid flickering
+                    if affectedCard.removeChangedCardTypes(self.getTimestamp(), self.ability.getId(), False):
+                        self.addCard(affectedPerLayer, StaticAbilityLayer.TYPE, affectedCard)
+
+            if StaticAbilityLayer.COLOR in layers:
+                # remove colors
+                if self.hasParam("AddColor") or self.hasParam("SetColor"):
+                    affectedCard.removeColor(self.getTimestamp(), self.ability.getId())
+
+            if StaticAbilityLayer.ABILITIES in layers:
+                # remove keywords
+                abilitiesChanged = False
+                if self.hasParam("AddKeyword") or self.hasParam("RemoveKeyword") \
+                        or self.hasParam("ShareRememberedKeywords") or self.hasParam("RemoveAllAbilities") or self.hasParam("RemoveNonManaAbilities"):
+                    abilitiesChanged |= affectedCard.removeChangedCardKeywords(self.getTimestamp(), self.ability.getId(), False)
+
+                # remove abilities
+                if self.hasParam("AddAbility") or self.hasParam("GainsAbilitiesOf") \
+                        or self.hasParam("GainsAbilitiesOfDefined") or self.hasParam("GainsTriggerAbsOf") \
+                        or self.hasParam("AddTrigger") or self.hasParam("AddStaticAbility") \
+                        or self.hasParam("AddReplacementEffect") or self.hasParam("RemoveAllAbilities") or self.hasParam("RemoveNonManaAbilities"):
+                    abilitiesChanged |= affectedCard.removeChangedCardTraits(self.getTimestamp(), self.ability.getId())
+
+                if self.hasParam("CantHaveKeyword"):
+                    abilitiesChanged |= affectedCard.removeCantHaveKeyword(self.getTimestamp())
+
+                affectedCard.removeChangedSVars(self.getTimestamp(), self.ability.getId())
+
+                # need update for clean reapply
+                if abilitiesChanged:
+                    self.addCard(affectedPerLayer, StaticAbilityLayer.ABILITIES, affectedCard)
+
+            if StaticAbilityLayer.CHARACTERISTIC in layers or StaticAbilityLayer.SETPT in layers:
+                if self.hasParam("SetPower") or self.hasParam("SetToughness"):
+                    if affectedCard.removeNewPT(self.getTimestamp(), self.ability.getId(), False):
+                        self.addCard(affectedPerLayer, StaticAbilityLayer.CHARACTERISTIC if self.ability.isCharacteristicDefining() else StaticAbilityLayer.SETPT, affectedCard)
+
+            if StaticAbilityLayer.MODIFYPT in layers:
+                if affectedCard.removePTBoost(self.getTimestamp(), self.ability.getId()):
+                    self.addCard(affectedPerLayer, StaticAbilityLayer.MODIFYPT, affectedCard)
+
+            if StaticAbilityLayer.RULES in layers:
+                if self.hasParam("AddHiddenKeyword"):
+                    affectedCard.removeHiddenExtrinsicKeywords(self.timestamp, self.ability.getId())
+
+                # remove may look at
+                if self.hasParam("MayLookAt"):
+                    affectedCard.removeMayLookAt(self.getTimestamp())
+                if self.hasParam("MayPlay"):
+                    affectedCard.removeMayPlay(self.ability)
+
+                if self.hasParam("Goad"):
+                    affectedCard.removeGoad(self.getTimestamp())
+
+                if self.hasParam("CanBlockAny"):
+                    affectedCard.removeCanBlockAny(self.getTimestamp())
+                if self.hasParam("CanBlockAmount"):
+                    affectedCard.removeCanBlockAdditional(self.getTimestamp())
+                self.addCard(affectedPerLayer, StaticAbilityLayer.RULES, affectedCard)
+
+        return affectedCards
+
+    @staticmethod
+    def addCard(affectedByLayer, layer: StaticAbilityLayer, affectedCard: Card) -> None:
+        affectedByLayer.setdefault(layer, set()).add(affectedCard)
+
+    def removeMapped(self, map: IEntityMap) -> None:
+        self.makeMappedCopy(map).remove({})
 ```

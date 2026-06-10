@@ -37,6 +37,12 @@ classDiagram
 - [[forge.game.card.Card|Card]]
 - [[forge.game.spellability.SpellAbility|SpellAbility]]
 
+## Design Description
+
+Output one note's worth of work â€” here's the design description.
+
+The `TriggerAlways` class is a concrete trigger type that fires unconditionally, modeling Magic effects whose triggered ability has no gating condition. Extending the abstract `Trigger` base class, it supplies the minimal behavior required of the hierarchy: `performTest` always returns `true`, so the trigger's condition is perpetually satisfied, while `setTriggeringObjects` is a deliberate no-op since no contextual objects need recording. Its constructor simply forwards the parameter map, host `Card`, and intrinsic flag to the superclass. Collaborating with `AbilityKey`-keyed run-parameter maps and `SpellAbility` during evaluation, it returns an empty string from `getImportantStackObjects`, reflecting that it contributes nothing distinctive to stack identity. The design intent is a lightweight, always-on specialization that lets the trigger framework treat "fires whenever" cases through the same polymorphic interface as conditional triggers.
+
 ## Source
 `forge-game/src/main/java/forge/game/trigger/TriggerAlways.java`
 
@@ -108,4 +114,29 @@ public class TriggerAlways extends Trigger {
         return "";
     }
 }
+```
+
+## Python
+`forge/game/trigger/TriggerAlways.py`
+
+```python
+from forge.game.trigger.Trigger import Trigger
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.spellability.SpellAbility import SpellAbility
+
+
+class TriggerAlways(Trigger):
+
+    def __init__(self, params: dict[str, str], host: Card, intrinsic: bool):
+        super().__init__(params, host, intrinsic)
+
+    def performTest(self, runParams: dict[AbilityKey, object]) -> bool:
+        return True
+
+    def setTriggeringObjects(self, sa: SpellAbility, runParams: dict[AbilityKey, object]) -> None:
+        pass
+
+    def getImportantStackObjects(self, sa: SpellAbility) -> str:
+        return ""
 ```

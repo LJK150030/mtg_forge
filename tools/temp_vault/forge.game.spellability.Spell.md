@@ -56,6 +56,10 @@ classDiagram
 - [[forge.game.cost.Cost|Cost]]
 - [[forge.game.player.Player|Player]]
 
+## Design Description
+
+Spell is an abstract specialization of `SpellAbility` representing a castable spell rather than an activated ability, fixing its origin to the Hand zone and overriding `isSpell()`/`isAbility()` to identify itself accordingly. Its core responsibility is determining castability: `canPlay()` delegates to `canPlayFromHost()`, which enforces comprehensive-rules constraints (unpayable costs, split-second on the stack, restrictions, and additional cost payment) against the host `Card`, activating `Player`, and `Game` state. It implements `Serializable` and `Cloneable`, providing a defensive `clone()` and a static `performanceMode` flag that toggles last-known-information copying when controller and activator differ. The notable design intent is heavy reliance on `CardCopyService` LKI copies in `getAlternateHost()` to evaluate alternative cast modesâ€”bestow, face-down, double-faced states, and prototypeâ€”without mutating or triggering effects on the real card. `isCounterableBy()` routes counterability through the replacement handler.
+
 ## Source
 `forge-game/src/main/java/forge/game/spellability/Spell.java`
 
@@ -278,4 +282,171 @@ public abstract class Spell extends SpellAbility implements java.io.Serializable
         return !getHostCard().getGame().getReplacementHandler().cantHappenCheck(ReplacementType.Counter, repParams);
     }
 }
+```
+
+## Python
+`forge/game/spellability/Spell.py`
+
+```python
+from __future__ import annotations
+
+from typing import Map, Object  # noqa
+import typing
+
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.card.CardStateName import CardStateName
+from forge.game.Game import Game
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.cost.Cost import Cost
+from forge.game.player.Player import Player
+
+from forge.game.card.CardCopyService import CardCopyService
+from forge.game.card.CardFactory import CardFactory
+from forge.game.cost.CostPayment import CostPayment
+from forge.game.player.PlayerController import FullControlFlag
+from forge.game.replacement.ReplacementType import ReplacementType
+from forge.game.staticability.StaticAbilityCantBeCast import StaticAbilityCantBeCast
+from forge.game.zone.ZoneType import ZoneType
+
+
+class Spell(SpellAbility):
+    """
+    Abstract Spell class.
+
+    @author Forge
+    """
+
+    serialVersionUID = -7930920571482203460
+
+    performanceMode = False
+
+    @staticmethod
+    def setPerformanceMode(performanceMode: bool) -> None:
+        Spell.performanceMode = performanceMode
+
+    def __init__(self, sourceCard: Card, abCost: Cost):
+        super().__init__(sourceCard, abCost)
+
+        self.castFaceDown = False
+
+        self.setStackDescription(sourceCard.getSpellText())
+        self.getRestrictions().setZone(ZoneType.Hand)
+
+    def canPlay(self) -> bool:
+        return self.canPlayFromHost() is not None
+
+    def canPlayFromHost(self) -> Card:
+        card = self.getHostCard()
+        if card.isInPlay():
+            return None
+
+        # CR 118.6 cost is unpayable
+        if (not self.isCastFromPlayEffect() and self.getPayCosts().hasManaCost()
+                and self.getPayCosts().getCostMana().getMana().isNoCost()):
+            return None
+
+        activator = self.getActivatingPlayer()
+        if activator is None:
+            activator = card.getController()
+            if activator is None:
+                return None
+
+        game = activator.getGame()
+        if game.getStack().isSplitSecondOnStack():
+            return None
+
+        # do performanceMode only for cases where the activator is different than controller
+        if not Spell.performanceMode and not card.getController().equals(activator):
+            # always make a lki copy in this case?
+            card = CardCopyService.getLKICopy(card)
+            card.setController(activator, 0)
+
+        alternateHost = self.getAlternateHost(card)
+        card = alternateHost if alternateHost is not None else card
+
+        if not self.getRestrictions().canPlay(card, self):
+            return None
+
+        if (not activator.getController().isFullControl(FullControlFlag.AllowPaymentStartWithMissingResources)
+                and not CostPayment.canPayAdditionalCosts(self.getPayCosts(), self, False)):
+            return None
+
+        return card
+
+    def checkRestrictions(self, host: Card, activator: Player) -> bool:
+        return not StaticAbilityCantBeCast.cantBeCastAbility(self, host, activator)
+
+    def clone(self) -> object:
+        try:
+            return super().clone()
+        except Exception as ex:
+            raise RuntimeError("Spell : clone() error, " + str(ex))
+
+    def isSpell(self) -> bool:
+        return True
+
+    def isAbility(self) -> bool:
+        return False
+
+    def isCastFaceDown(self) -> bool:
+        return self.castFaceDown
+
+    def setCastFaceDown(self, faceDown: bool) -> None:
+        self.castFaceDown = faceDown
+
+    def getAlternateHost(self, source: Card) -> Card:
+        lkicheck = False
+
+        # need to be done before so it works with Vivien and Zoetic Cavern
+        if source.isFaceDown() and source.isInZone(ZoneType.Exile):
+            if not source.isLKI():
+                source = CardCopyService.getLKICopy(source)
+
+            source.forceTurnFaceUp()
+            lkicheck = True
+
+        if self.isBestow() and not source.isBestowed():
+            if not source.isLKI():
+                source = CardCopyService.getLKICopy(source)
+
+            source.animateBestow()
+            lkicheck = True
+        elif self.isCastFaceDown():
+            # need a copy of the card to turn facedown without trigger anything
+            if not source.isLKI():
+                source = CardCopyService.getLKICopy(source)
+            source.turnFaceDownNoUpdate()
+            lkicheck = True
+        elif (self.getCardState() is not None and source.getCurrentStateName() != self.getCardStateName()
+                and self.getHostCard().getState(self.getCardStateName()) is not None):
+            if not source.isLKI():
+                source = CardCopyService.getLKICopy(source)
+            stateName = self.getCardStateName()
+            if not source.hasState(stateName):
+                source.addAlternateState(stateName, False)
+                source.getState(stateName).copyFrom(self.getHostCard().getState(stateName), True)
+
+            source.setState(stateName, False)
+            if self.getHostCard().isDoubleFaced():
+                source.setBackSide(self.getHostCard().getRules().getSplitType().getChangedStateName().equals(stateName))
+
+            # need to reset CMC
+            source.setLKICMC(-1)
+            source.setLKICMC(source.getCMC())
+            lkicheck = True
+        elif self.hasParam("Prototype") and source.getPrototypeTimestamp() == -1:
+            if not source.isLKI():
+                source = CardCopyService.getLKICopy(source)
+            next = source.getGame().getNextTimestamp()
+            source.addCloneState(CardFactory.getCloneStates(source, source, self), next)
+            lkicheck = True
+
+        return source if lkicheck else None
+
+    def isCounterableBy(self, sa: SpellAbility) -> bool:
+        repParams: dict[AbilityKey, object] = AbilityKey.mapFromAffected(self.getHostCard())
+        repParams[AbilityKey.SpellAbility] = self
+        repParams[AbilityKey.Cause] = sa
+        return not self.getHostCard().getGame().getReplacementHandler().cantHappenCheck(ReplacementType.Counter, repParams)
 ```

@@ -37,6 +37,12 @@ classDiagram
 - [[forge.game.card.Card|Card]]
 - [[forge.game.spellability.SpellAbility|SpellAbility]]
 
+## Design Description
+
+TriggerDiscover is a concrete trigger that fires in response to a "discover" event, matching when a player performs a discover action. As a subclass of Trigger, it implements the engine's standard trigger contract: performTest filters the event against the trigger's optional ValidPlayer restriction, setTriggeringObjects captures the relevant Player and Amount from the run parameters into the firing SpellAbility, and getImportantStackObjects produces a localized, human-readable summary of those objects for display on the stack.
+
+The class collaborates with AbilityKey to address run parameters and triggering objects by well-known key, with Card as its host permanent, and with SpellAbility as the ability the trigger executes. Its design follows the data-driven pattern shared across Forge triggers â€” minimal per-trigger logic, configuration supplied through the params map passed to the constructor, and localization via Localizer to keep displayed text language-independent.
+
 ## Source
 `forge-game/src/main/java/forge/game/trigger/TriggerDiscover.java`
 
@@ -79,4 +85,41 @@ public class TriggerDiscover extends Trigger {
     }
 
 }
+```
+
+## Python
+`forge/game/trigger/TriggerDiscover.py`
+
+```python
+from forge.game.trigger.Trigger import Trigger
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Localizer import Localizer
+
+from typing import Map
+
+
+class TriggerDiscover(Trigger):
+    def __init__(self, params: dict[str, str], host: Card, intrinsic: bool):
+        super().__init__(params, host, intrinsic)
+
+    def performTest(self, runParams: dict[AbilityKey, object]) -> bool:
+        if not self.matchesValidParam("ValidPlayer", runParams.get(AbilityKey.Player)):
+            return False
+        return True
+
+    def setTriggeringObjects(self, sa: SpellAbility, runParams: dict[AbilityKey, object]) -> None:
+        sa.setTriggeringObjectsFrom(runParams, AbilityKey.Player, AbilityKey.Amount)
+
+    def getImportantStackObjects(self, sa: SpellAbility) -> str:
+        sb = []
+        sb.append(Localizer.getInstance().getMessage("lblPlayer"))
+        sb.append(": ")
+        sb.append(str(sa.getTriggeringObject(AbilityKey.Player)))
+        sb.append(", ")
+        sb.append(Localizer.getInstance().getMessage("lblAmount"))
+        sb.append(": ")
+        sb.append(str(sa.getTriggeringObject(AbilityKey.Amount)))
+        return "".join(sb)
 ```

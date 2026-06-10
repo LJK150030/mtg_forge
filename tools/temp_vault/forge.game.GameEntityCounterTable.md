@@ -57,7 +57,7 @@ classDiagram
 
 ## Design Description
 
-`GameEntityCounterTable` accumulates pending counter placements during a single game action, keyed by the placing player (optional), the target `GameEntity`, and `CounterType`. It extends Guava's `ForwardingTable`, wrapping a `HashBasedTable` so the class behaves as a standard table while adding domain-specific convenience methods—merging summed values via `put`, computing totals, and filtering removable or rules-text-valid counters through `filterToRemove` and `filterTable`.
+`GameEntityCounterTable` accumulates pending counter placements during a single game action, keyed by the placing player (optional), the target `GameEntity`, and `CounterType`. It extends Guava's `ForwardingTable`, wrapping a `HashBasedTable` so the class behaves as a standard table while adding domain-specific convenience methodsâ€”merging summed values via `put`, computing totals, and filtering removable or rules-text-valid counters through `filterToRemove` and `filterTable`.
 
 Its central responsibility is staging counter changes so they pass through Forge's rules engine before taking effect: `replaceCounterEffect` runs each entry through the replacement handler (`ReplacementType.AddCounter`), respects parameters like `MaxFromEffect` and `RememberPut`, applies the surviving counters via `addCounterInternal`, and fires `CounterAddedAll`/`CounterTypeAddedAll` triggers. It collaborates closely with `Game`, `SpellAbility`/`AbilityStatic`, and `AbilityKey` to thread replacement and trigger context, deferring batched counter events so they resolve atomically rather than per-counter.
 
@@ -262,4 +262,165 @@ public class GameEntityCounterTable extends ForwardingTable<Optional<Player>, Ga
         return !result.isEmpty();
     }
 }
+```
+
+## Python
+`forge/game/GameEntityCounterTable.py`
+
+```python
+from forge.game.GameEntity import GameEntity
+from forge.game.CardTraitBase import CardTraitBase
+from forge.game.Game import Game
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.card.CounterType import CounterType
+from forge.game.player.Player import Player
+from forge.game.replacement.ReplacementType import ReplacementType
+from forge.game.spellability.AbilityStatic import AbilityStatic
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.trigger.TriggerType import TriggerType
+from com.google.common.collect.ForwardingTable import ForwardingTable
+from com.google.common.collect.HashBasedTable import HashBasedTable
+
+
+class GameEntityCounterTable(ForwardingTable):
+
+    def __init__(self, counterTable=None):
+        self.dataMap = HashBasedTable.create()
+        if counterTable is not None:
+            self.putAll(counterTable)
+
+    # (non-Javadoc)
+    # @see com.google.common.collect.ForwardingTable#delegate()
+    def delegate(self):
+        return self.dataMap
+
+    def put(self, putter, object, type, value):
+        o = putter  # Optional.ofNullable(putter)
+        map = self.get(o, object)
+        if map is None:
+            map = {}
+            self.put(o, object, map)
+        if type in map:
+            map[type] = map[type] + value
+        else:
+            map[type] = value
+        return map[type]
+
+    def get(self, putter, object, type):
+        o = putter  # Optional.ofNullable(putter)
+        map = self.get(o, object)
+        if map is None or type not in map:
+            return 0
+        return map.get(type, 0)
+
+    def totalValues(self):
+        result = 0
+        for m in self.values():
+            for i in m.values():
+                result += i
+        return result
+
+    # returns the counters that can still be removed from game entity
+    def filterToRemove(self, ge):
+        result = {}
+        if not self.containsColumn(ge):
+            result.update(ge.getCounters())
+            return result
+        alreadyRemoved = self.column(ge).get(None)
+        for key, val in ge.getCounters().items():
+            rest = val - (alreadyRemoved.get(key, 0))
+            if rest > 0:
+                result[key] = rest
+        return result
+
+    def filterTable(self, type, valid, host, sa):
+        result = {}
+        for ge, value in self.columnMap().items():
+            if not ge.isValid(valid, host.getController(), host, sa):
+                continue
+            total = 0
+            for m in value.values():
+                total += m.get(type, 0)
+            result[ge] = result.get(ge, 0) + total
+        return result
+
+    def triggerCountersPutAll(self, game):
+        if self.isEmpty():
+            return
+        for c in self.cellSet():
+            if len(c.getValue()) == 0:
+                continue
+            runParams = AbilityKey.newMap()
+            runParams[AbilityKey.Source] = c.getRowKey().get()
+            runParams[AbilityKey.Object] = c.getColumnKey()
+            runParams[AbilityKey.CounterMap] = c.getValue()
+            game.getTriggerHandler().runTrigger(TriggerType.CounterPlayerAddedAll, runParams, False)
+        runParams = AbilityKey.newMap()
+        runParams[AbilityKey.Objects] = self
+        game.getTriggerHandler().runTrigger(TriggerType.CounterAddedAll, runParams, False)
+
+    def replaceCounterEffect(self, game, cause, effect=None, etb=False, params=None):
+        if effect is None:
+            effect = cause is not None and not isinstance(cause, AbilityStatic)
+            etb = False
+            params = None
+        if self.isEmpty():
+            return False
+        result = GameEntityCounterTable()
+        for ge, values in self.columnMap().items():
+
+            # ETB Counters are already handled in the Move Event
+            if not etb:
+                repParams = AbilityKey.mapFromAffected(ge)
+                repParams[AbilityKey.Cause] = cause
+                repParams[AbilityKey.EffectOnly] = effect
+                repParams[AbilityKey.CounterMap] = values
+                repParams[AbilityKey.ETB] = etb
+                if params is not None:
+                    repParams.update(params)
+
+                outcome = game.getReplacementHandler().run(ReplacementType.AddCounter, repParams)
+                if outcome == "NotReplaced":
+                    pass
+                elif outcome == "Updated":
+                    values = repParams.get(AbilityKey.CounterMap)
+                else:
+                    continue
+
+            # Add ETB flag
+            runParams = AbilityKey.newMap()
+            runParams[AbilityKey.Cause] = cause
+            if params is not None:
+                runParams.update(params)
+
+            firstTime = False
+            if isinstance(ge, Card):
+                firstTime = game.getCounterAddedThisTurn(None, ge) == 0
+
+            # Apply counter after replacement effect
+            for o, counterMap in values.items():
+                remember = cause is not None and cause.hasParam("RememberPut")
+                for ec_key, ec_value in counterMap.items():
+                    value = ec_value
+                    if value is None:
+                        continue
+                    if cause is not None and cause.hasParam("MaxFromEffect"):
+                        value = min(value, int(cause.getParam("MaxFromEffect")) - ge.getCounters(ec_key))
+                    ge.addCounterInternal(ec_key, value, o.orElse(None) if o is not None else None, True, result, runParams)
+                    if remember and ec_value > 0:
+                        cause.getHostCard().addRemembered(ge)
+
+            if result.containsColumn(ge):
+                runParams = AbilityKey.newMap()
+                runParams[AbilityKey.Object] = ge
+                runParams[AbilityKey.FirstTime] = firstTime
+                game.getTriggerHandler().runTrigger(TriggerType.CounterTypeAddedAll, runParams, False)
+
+        totalAdded = self.totalValues()
+        if totalAdded > 0 and cause is not None and cause.hasParam("RememberAmount"):
+            cause.getHostCard().addRemembered(totalAdded)
+
+        result.triggerCountersPutAll(game)
+        return not result.isEmpty()
 ```

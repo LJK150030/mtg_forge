@@ -59,3 +59,27 @@ public interface IDeckGenPool {
     boolean contains(String name);
 }
 ```
+
+## Python
+`forge/deck/generation/IDeckGenPool.py`
+
+```python
+from abc import ABC, abstractmethod
+from typing import Iterable, Optional, Callable
+
+from forge.item.PaperCard import PaperCard
+
+
+class IDeckGenPool(ABC):
+    @abstractmethod
+    def getCard(self, name: str, edition: Optional[str] = None, artIndex: Optional[int] = None) -> PaperCard:
+        ...
+
+    @abstractmethod
+    def getAllCards(self, filter: Optional[Callable[[PaperCard], bool]] = None) -> Iterable[PaperCard]:
+        ...
+
+    @abstractmethod
+    def contains(self, name: str) -> bool:
+        ...
+```

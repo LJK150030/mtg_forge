@@ -33,6 +33,10 @@ classDiagram
     }
 ```
 
+## Design Description
+
+IterableUtil is a stateless utility class providing static helper methods for working with `Iterable`s and `Predicate`s, deliberately mirroring Google Guava's `Iterables`/`Predicates` API while relying on Java 8's `java.util.function.Predicate` and `Function` rather than Guava's own functional types. It offers predicate composition (`and`, `or`), lazy `filter` and `transform` views, search operations (`find`, `tryFind`, `indexOf`, `any`, `all`), and type-based filtering. Most methods collaborate with the standard library by adapting `spliterator()` into a `Stream` via `StreamSupport`, returning lazily-evaluated `Iterable` lambdas so traversal is deferred until iteration. The `and`/`or` methods short-circuit a single-element `List` to its sole predicate, and bounded wildcards (`? super T`) throughout maximize caller flexibility. As a final, instance-free helper, it centralizes functional iteration idioms for reuse across the forge-core module.
+
 ## Source
 `forge-core/src/main/java/forge/util/IterableUtil.java`
 
@@ -124,4 +128,88 @@ public class IterableUtil {
         return () -> StreamSupport.stream(iterable.spliterator(), false).map(function).iterator();
     }
 }
+```
+
+## Python
+`forge/util/IterableUtil.py`
+
+```python
+from typing import Callable, Iterable, List, Optional, Type, TypeVar
+
+T = TypeVar("T")
+F = TypeVar("F")
+
+
+class IterableUtil:
+    """
+    Provides helper methods for Iterables and Predicates similar
+    to the Guava library, but supporting Java 8's implementation
+    of Predicates instead.
+    """
+
+    @staticmethod
+    def and_(components: Iterable[Callable[[T], bool]]) -> Callable[[T], bool]:
+        """
+        Merges a collection of predicates into a single predicate,
+        which requires the subject to match each of the component predicates.
+        """
+        if isinstance(components, list) and len(components) == 1:
+            return components[0]
+        return lambda x: IterableUtil.all(components, lambda i: i(x))
+
+    @staticmethod
+    def or_(components: Iterable[Callable[[T], bool]]) -> Callable[[T], bool]:
+        """
+        Merges a collection of predicates into a single predicate,
+        which requires the subject to match at least one of the component predicates.
+        """
+        if isinstance(components, list) and len(components) == 1:
+            return components[0]
+        return lambda x: IterableUtil.any(components, lambda i: i(x))
+
+    @staticmethod
+    def filter(iterable: Iterable[T], filter: Callable[[T], bool]) -> Iterable[T]:
+        return (x for x in iterable if filter(x))
+
+    @staticmethod
+    def filter_by_type(iterable: Iterable[object], desiredType: Type[T]) -> Iterable[T]:
+        return (x for x in iterable if isinstance(x, desiredType))
+
+    @staticmethod
+    def any(iterable: Iterable[T], test: Callable[[T], bool]) -> bool:
+        return any(test(x) for x in iterable)
+
+    @staticmethod
+    def all(iterable: Iterable[T], test: Callable[[T], bool]) -> bool:
+        return all(test(x) for x in iterable)
+
+    @staticmethod
+    def find(iterable: Iterable[T], predicate: Callable[[T], bool], defaultValue=...):
+        for i in iterable:
+            if predicate(i):
+                return i
+        if defaultValue is ...:
+            raise StopIteration()
+        return defaultValue
+
+    @staticmethod
+    def tryFind(iterable: Iterable[T], predicate: Callable[[T], bool]) -> Optional[T]:
+        for i in iterable:
+            if predicate(i):
+                return i
+        return None
+
+    @staticmethod
+    def indexOf(iterable: Iterable[T], predicate: Callable[[T], bool]) -> int:
+        index = 0
+        for i in iterable:
+            if predicate(i):
+                return index
+            index += 1
+        return -1
+
+    @staticmethod
+    def transform(iterable: Iterable[F], function: Callable[[F], T]) -> Iterable[T]:
+        # Should probably also be ? extends T in the function type
+        return (function(x) for x in iterable)
 ```

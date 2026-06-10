@@ -37,6 +37,10 @@ classDiagram
 - [[forge.game.card.Card|Card]]
 - [[forge.game.spellability.SpellAbility|SpellAbility]]
 
+## Design Description
+
+The class TriggerAttackerBlockedOnce models the Magic: The Gathering trigger condition that fires when an attacking creature becomes blocked. It extends the abstract Trigger base class, supplying concrete implementations of the trigger lifecycle: performTest evaluates whether the event's attacking creatures satisfy the card-script's ValidCard filter, while setTriggeringObjects exposes the matched attackers to the resolving SpellAbility under the AbilityKey.Attackers key. As a leaf in the Trigger hierarchy, it is data-drivenâ€”configured at construction from a card-script parameter map plus its host Cardâ€”and collaborates with AbilityKey to address run-time event parameters. getImportantStackObjects produces a localized, human-readable summary of the attackers for stack display, reflecting an intent to keep trigger feedback presentation-aware while delegating shared mechanics to the superclass.
+
 ## Source
 `forge-game/src/main/java/forge/game/trigger/TriggerAttackerBlockedOnce.java`
 
@@ -80,4 +84,37 @@ public class TriggerAttackerBlockedOnce extends Trigger {
         return sb.toString();
     }
 }
+```
+
+## Python
+`forge/game/trigger/TriggerAttackerBlockedOnce.py`
+
+```python
+from forge.game.trigger.Trigger import Trigger
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Localizer import Localizer
+
+
+class TriggerAttackerBlockedOnce(Trigger):
+
+    def __init__(self, params: dict[str, str], host: Card, intrinsic: bool):
+        super().__init__(params, host, intrinsic)
+
+    def performTest(self, runParams: dict[AbilityKey, object]) -> bool:
+        if not self.matchesValidParam("ValidCard", runParams.get(AbilityKey.Attackers)):
+            return False
+
+        return True
+
+    def setTriggeringObjects(self, sa: SpellAbility, runParams: dict[AbilityKey, object]) -> None:
+        sa.setTriggeringObjectsFrom(runParams, AbilityKey.Attackers)
+
+    def getImportantStackObjects(self, sa: SpellAbility) -> str:
+        sb = []
+        sb.append(Localizer.getInstance().getMessage("lblAttackers"))
+        sb.append(": ")
+        sb.append(str(sa.getTriggeringObject(AbilityKey.Attackers)))
+        return "".join(sb)
 ```

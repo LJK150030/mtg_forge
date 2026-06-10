@@ -37,6 +37,10 @@ classDiagram
 - [[forge.game.card.Card|Card]]
 - [[forge.game.spellability.SpellAbility|SpellAbility]]
 
+## Design Description
+
+TriggerBecomesTargetOnce is a concrete trigger that fires when a spell or ability targets an object matching its configured criteria. Extending the abstract Trigger base class, it implements the standard trigger contract: performTest gates activation by matching the ValidSource, ValidTarget, and ValidCause parameters against the corresponding AbilityKey entries in the runtime parameter map, while setTriggeringObjects records the source spell ability, its targets, and the originating host Card so dependent abilities can reference them. It collaborates closely with SpellAbility and AbilityKey to interpret and propagate triggering context, and overrides getImportantStackObjects to build a localized, human-readable summary of the source and targets for stack display. The design reflects Forge's data-driven trigger model, where behavior is governed by string parameters supplied at construction rather than hard-coded logic.
+
 ## Source
 `forge-game/src/main/java/forge/game/trigger/TriggerBecomesTargetOnce.java`
 
@@ -125,4 +129,45 @@ public class TriggerBecomesTargetOnce extends Trigger {
         return sb.toString();
     }
 }
+```
+
+## Python
+`forge/game/trigger/TriggerBecomesTargetOnce.py`
+
+```python
+from forge.game.trigger.Trigger import Trigger
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Localizer import Localizer
+
+
+class TriggerBecomesTargetOnce(Trigger):
+
+    def __init__(self, params: dict[str, str], host: Card, intrinsic: bool):
+        super().__init__(params, host, intrinsic)
+
+    def performTest(self, runParams: dict[AbilityKey, object]) -> bool:
+        if not self.matchesValidParam("ValidSource", runParams.get(AbilityKey.SourceSA)):
+            return False
+        if not self.matchesValidParam("ValidTarget", runParams.get(AbilityKey.Targets)):
+            return False
+        if not self.matchesValidParam("ValidCause", runParams.get(AbilityKey.Cause)):
+            return False
+        return True
+
+    def setTriggeringObjects(self, sa: SpellAbility, runParams: dict[AbilityKey, object]) -> None:
+        sa.setTriggeringObjectsFrom(runParams, AbilityKey.SourceSA, AbilityKey.Targets)
+        sa.setTriggeringObject(AbilityKey.Source, runParams.get(AbilityKey.SourceSA).getHostCard())
+
+    def getImportantStackObjects(self, sa: SpellAbility) -> str:
+        sb = []
+        sb.append(Localizer.getInstance().getMessage("lblSource"))
+        sb.append(": ")
+        sb.append(str(sa.getTriggeringObject(AbilityKey.SourceSA).getHostCard()))
+        sb.append(", ")
+        sb.append(Localizer.getInstance().getMessage("lblTargets"))
+        sb.append(": ")
+        sb.append(str(sa.getTriggeringObject(AbilityKey.Targets)))
+        return "".join(sb)
 ```

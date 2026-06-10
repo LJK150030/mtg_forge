@@ -44,7 +44,7 @@ classDiagram
 
 ## Design Description
 
-SpellApiBased represents a castable spell whose behavior is driven entirely by Forge's data-driven ability API. Extending `Spell` (and thus the broader `SpellAbility` hierarchy), it is constructed from an `ApiType` that supplies a matching `SpellAbilityEffect`, along with the source `Card`, mana/`Cost`, optional `TargetRestrictions`, and a parameter map parsed from the card script. The constructor wires these together—copying parameters, marking the spell intrinsic, and delegating to `effect.buildSpellAbility` to configure itself—so that a single class can implement any scripted spell rather than requiring a bespoke subclass per card.
+SpellApiBased represents a castable spell whose behavior is driven entirely by Forge's data-driven ability API. Extending `Spell` (and thus the broader `SpellAbility` hierarchy), it is constructed from an `ApiType` that supplies a matching `SpellAbilityEffect`, along with the source `Card`, mana/`Cost`, optional `TargetRestrictions`, and a parameter map parsed from the card script. The constructor wires these togetherâ€”copying parameters, marking the spell intrinsic, and delegating to `effect.buildSpellAbility` to configure itselfâ€”so that a single class can implement any scripted spell rather than requiring a bespoke subclass per card.
 
 At runtime it forwards the core `SpellAbility` contract to its effect: `resolve()` invokes `effect.resolve` and notifies the activating player's achievement tracker, while `getStackDescription()` prefers an explicitly set description and otherwise falls back to the effect's generated text. This delegation-to-effect design keeps spell-casting mechanics generic and centralizes per-API behavior in reusable `SpellAbilityEffect` implementations.
 
@@ -99,4 +99,49 @@ public class SpellApiBased extends Spell {
         getActivatingPlayer().getAchievementTracker().onSpellResolve(this);
     }
 }
+```
+
+## Python
+`forge/game/ability/SpellApiBased.py`
+
+```python
+from typing import Dict
+
+from forge.game.spellability.Spell import Spell
+from forge.game.ability.ApiType import ApiType
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.cost.Cost import Cost
+from forge.game.spellability.TargetRestrictions import TargetRestrictions
+
+
+class SpellApiBased(Spell):
+    serialVersionUID = -6741797239508483250
+
+    def __init__(self, api0: ApiType, sourceCard: Card, abCost: Cost, tgt: TargetRestrictions, params0: Dict[str, str]):
+        super().__init__(sourceCard, abCost)
+        self.setTargetRestrictions(tgt)
+
+        self.mapParams.update(params0)
+        self.api = api0
+        self.effect = self.api.getSpellEffect()
+
+        # A spell is always intrinsic
+        self.setIntrinsic(True)
+
+        self.effect.buildSpellAbility(self)
+        self.originalMapParams.update(self.mapParams)
+
+    def getStackDescription(self) -> str:
+        # prefer set stack Description if able
+        result = super().getStackDescription()
+        if result == "":
+            return self.effect.getStackDescriptionWithSubs(self.mapParams, self)
+        return result
+
+    # (non-Javadoc)
+    # @see forge.card.spellability.SpellAbility#resolve()
+    def resolve(self) -> None:
+        self.effect.resolve(self)
+        self.getActivatingPlayer().getAchievementTracker().onSpellResolve(self)
 ```

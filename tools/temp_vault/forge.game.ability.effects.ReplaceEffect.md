@@ -115,3 +115,60 @@ public class ReplaceEffect extends SpellAbilityEffect {
 
 }
 ```
+
+## Python
+`forge/game/ability/effects/ReplaceEffect.py`
+
+```python
+from typing import List, Map
+
+from forge.game.GameObject import GameObject
+from forge.game.PlanarDice import PlanarDice
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.player.Player import Player
+from forge.game.replacement.ReplacementResult import ReplacementResult
+from forge.game.spellability.SpellAbility import SpellAbility
+
+
+class ReplaceEffect(SpellAbilityEffect):
+
+    def resolve(self, sa: SpellAbility) -> None:
+        card = sa.getHostCard()
+
+        varName = AbilityKey.fromString(sa.getParam("VarName"))
+        varValue = sa.getParam("VarValue")
+        type = sa.getParamOrDefault("VarType", "amount")
+
+        params: dict[AbilityKey, object] = sa.getReplacingObject(AbilityKey.OriginalParams)
+
+        if "Card" == type:
+            list = AbilityUtils.getDefinedCards(card, varValue, sa)
+            if len(list) > 0:
+                params[varName] = list[0]
+        elif "Player" == type:
+            list = AbilityUtils.getDefinedPlayers(card, varValue, sa)
+            if len(list) > 0:
+                params[varName] = list[0]
+        elif "GameEntity" == type:
+            list = AbilityUtils.getDefinedObjects(card, varValue, sa)
+            if len(list) > 0:
+                params[varName] = list[0]
+        elif "PlanarDice" == type:
+            params[varName] = PlanarDice.smartValueOf(varValue)
+        elif "Map" == type:
+            m: dict[Player, int] = sa.getReplacingObject(varName)
+            for key in AbilityUtils.getDefinedPlayers(card, sa.getParam("VarKey"), sa):
+                m[key] = m.get(key, 0) + AbilityUtils.calculateAmount(card, varValue, sa)
+        elif "CardSet" == type:
+            cards: set[Card] = params.get(varName)
+            list = AbilityUtils.getDefinedCards(card, varValue, sa)
+            if list:
+                cards.add(list[0])
+        elif varName is not None:
+            params[varName] = AbilityUtils.calculateAmount(card, varValue, sa)
+
+        params[AbilityKey.ReplacementResult] = ReplacementResult.Updated
+```

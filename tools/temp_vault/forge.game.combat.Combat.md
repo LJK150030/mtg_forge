@@ -134,7 +134,7 @@ classDiagram
 
 ## Design Description
 
-The Combat class models the complete combat phase of a Magic: the Gathering game for a single attacking player, serving as the authoritative record of which creatures attack which defenders (players, planeswalkers, or battles), how attackers are grouped into AttackingBands, and which blockers oppose them. It owns the full combat lifecycle—declaring attackers and blockers, ordering combatants for damage assignment, computing and applying first-strike and regular combat damage, and tearing down state at end of combat.
+The Combat class models the complete combat phase of a Magic: the Gathering game for a single attacking player, serving as the authoritative record of which creatures attack which defenders (players, planeswalkers, or battles), how attackers are grouped into AttackingBands, and which blockers oppose them. It owns the full combat lifecycleâ€”declaring attackers and blockers, ordering combatants for damage assignment, computing and applying first-strike and regular combat damage, and tearing down state at end of combat.
 
 Notably, its mutable collections are wrapped in memoized Guava Suppliers for lazy, thread-safe initialization, and a copy constructor remaps every reference through an IEntityMap to support game-state cloning. It delegates constraint validation to AttackConstraints, preserves last-known-information via CombatLki and an lkiCache so removed combatants are still queryable, and collaborates with Card, Player, Game, and the trigger/replacement systems to enforce rules like banding, trample, double strike, and unblocked-attacker triggers.
 
@@ -1171,3 +1171,930 @@ public class Combat {
     }
 }
 ```
+
+## Python
+`forge/game/combat/Combat.py`
+
+````python
+forge/game/combat/Combat.py
+
+```python
+import sys
+
+from forge.game.Game import Game
+from forge.game.GameEntity import GameEntity
+from forge.game.GameEntityCounterTable import GameEntityCounterTable
+from forge.game.GameLogEntryType import GameLogEntryType
+from forge.game.IEntityMap import IEntityMap
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.ability.ApiType import ApiType
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardCopyService import CardCopyService
+from forge.game.card.CardDamageMap import CardDamageMap
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CardPredicates import CardPredicates
+from forge.game.combat.AttackConstraints import AttackConstraints
+from forge.game.combat.AttackingBand import AttackingBand
+from forge.game.combat.CombatLki import CombatLki
+from forge.game.combat.CombatUtil import CombatUtil
+from forge.game.event.GameEventAddLog import GameEventAddLog
+from forge.game.keyword.Keyword import Keyword
+from forge.game.player.Player import Player
+from forge.game.player.PlayerActionConfirmMode import PlayerActionConfirmMode
+from forge.game.replacement.ReplacementType import ReplacementType
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.spellability.SpellAbility.EmptySa import EmptySa
+from forge.game.spellability.SpellAbilityStackInstance import SpellAbilityStackInstance
+from forge.game.staticability.StaticAbilityAssignCombatDamageAsUnblocked import StaticAbilityAssignCombatDamageAsUnblocked
+from forge.game.trigger.TriggerType import TriggerType
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.IterableUtil import IterableUtil
+from forge.util.Localizer import Localizer
+from forge.util.collect.FCollection import FCollection
+from forge.util.collect.FCollectionView import FCollectionView
+
+
+_UNSET = object()
+
+
+class _ListMultimapKeyView:
+    def __init__(self, owner, key):
+        self._owner = owner
+        self._key = key
+
+    def add(self, value):
+        self._owner._map.setdefault(self._key, []).append(value)
+        return True
+
+    def remove(self, value):
+        values = self._owner._map.get(self._key)
+        if values is not None and value in values:
+            values.remove(value)
+            if not values:
+                del self._owner._map[self._key]
+            return True
+        return False
+
+    def clear(self):
+        if self._key in self._owner._map:
+            del self._owner._map[self._key]
+
+    def contains(self, value):
+        values = self._owner._map.get(self._key)
+        return values is not None and value in values
+
+    def __contains__(self, value):
+        return self.contains(value)
+
+    def __iter__(self):
+        values = self._owner._map.get(self._key)
+        return iter(list(values)) if values is not None else iter(())
+
+    def __len__(self):
+        values = self._owner._map.get(self._key)
+        return len(values) if values is not None else 0
+
+
+class _ListMultimapValuesView:
+    def __init__(self, owner):
+        self._owner = owner
+
+    def __iter__(self):
+        result = []
+        for values in self._owner._map.values():
+            result.extend(values)
+        return iter(result)
+
+    def __contains__(self, value):
+        return self._owner.containsValue(value)
+
+    def remove(self, value):
+        for key, values in list(self._owner._map.items()):
+            if value in values:
+                values.remove(value)
+                if not values:
+                    del self._owner._map[key]
+                return True
+        return False
+
+    def removeAll(self, collection):
+        changed = False
+        targets = list(collection)
+        for key, values in list(self._owner._map.items()):
+            new_values = [v for v in values if v not in targets]
+            if len(new_values) != len(values):
+                changed = True
+                if new_values:
+                    self._owner._map[key] = new_values
+                else:
+                    del self._owner._map[key]
+        return changed
+
+
+class _ListMultimap:
+    def __init__(self):
+        self._map = {}
+
+    def get(self, key):
+        return _ListMultimapKeyView(self, key)
+
+    def put(self, key, value):
+        self._map.setdefault(key, []).append(value)
+        return True
+
+    def putAll(self, other):
+        for key, value in other.entries():
+            self.put(key, value)
+        return True
+
+    def entries(self):
+        result = []
+        for key, values in self._map.items():
+            for value in list(values):
+                result.append((key, value))
+        return result
+
+    def values(self):
+        return _ListMultimapValuesView(self)
+
+    def keySet(self):
+        return [key for key, values in self._map.items() if values]
+
+    def containsKey(self, key):
+        values = self._map.get(key)
+        return values is not None and len(values) > 0
+
+    def containsValue(self, value):
+        for values in self._map.values():
+            if value in values:
+                return True
+        return False
+
+    def clear(self):
+        self._map.clear()
+
+
+class Combat:
+    def __init__(self, *args):
+        self.playerWhoAttacks = None
+        self.legacyOrderCombatants = False
+        self.attackConstraints = None
+        # Defenders, as they are attacked by hostile forces
+        self.attackableEntries = FCollection()
+        # Keyed by attackable defender (player or planeswalker or battle)
+        self.attackedByBands = _ListMultimap()
+        self.blockedBands = _ListMultimap()
+        self.attackersOrderedForDamageAssignment = {}
+        self.blockersOrderedForDamageAssignment = {}
+        self.lkiCache = CardCollection()
+        self.damageMap = CardDamageMap()
+        # List holds creatures who have dealt 1st strike damage to disallow them deal damage on regular basis (unless they have double-strike KW)
+        self.combatantsThatDealtFirstStrikeDamage = CardCollection()
+
+        if len(args) == 2:
+            self._init_from_combat(args[0], args[1])
+        else:
+            self._init_from_attacker(args[0])
+
+    def _init_from_attacker(self, attacker):
+        self.playerWhoAttacks = attacker
+        self.legacyOrderCombatants = self.playerWhoAttacks.getGame().getRules().hasOrderCombatants()
+        self.initConstraints()
+
+    def _init_from_combat(self, combat, map):
+        self.playerWhoAttacks = map.map(combat.playerWhoAttacks)
+        for entry in combat.attackableEntries:
+            self.attackableEntries.add(map.map(entry))
+
+        bandsMap = {}
+        for key, value in combat.attackedByBands.entries():
+            origBand = value
+            attackers = []
+            for c in origBand.getAttackers():
+                attackers.append(map.map(c))
+            newBand = AttackingBand(attackers)
+            blocked = value.isBlocked()
+            if blocked is not None:
+                newBand.setBlocked(blocked)
+            bandsMap[origBand] = newBand
+            self.attackedByBands.put(map.map(key), newBand)
+        for key, value in combat.blockedBands.entries():
+            self.blockedBands.put(bandsMap[key], map.map(value))
+
+        for key, value in combat.attackersOrderedForDamageAssignment.items():
+            self.attackersOrderedForDamageAssignment[map.map(key)] = map.mapCollection(value)
+        for key, value in combat.blockersOrderedForDamageAssignment.items():
+            self.blockersOrderedForDamageAssignment[map.map(key)] = map.mapCollection(value)
+        # Note: Doesn't currently set up lkiCache, since it's just a cache and not strictly needed...
+        for entry in combat.damageMap.cellSet():
+            self.damageMap.put(map.map(entry.getRowKey()), map.map(entry.getColumnKey()), entry.getValue())
+
+        self.attackConstraints = AttackConstraints(self)
+
+    def initConstraints(self):
+        self.attackableEntries.clear()
+        # Create keys for all possible attack targets
+        self.attackableEntries.addAll(CombatUtil.getAllPossibleDefenders(self.playerWhoAttacks))
+        self.attackConstraints = AttackConstraints(self)
+
+    def __str__(self):
+        sb = []
+        for defender in self.attackableEntries:
+            attackers = self.getAttackersOf(defender)
+            if attackers.isEmpty():
+                continue
+            sb.append(str(defender))
+            sb.append(" is being attacked by:\n")
+            for attacker in attackers:
+                sb.append("  ")
+                sb.append(str(attacker))
+                sb.append("\n")
+                for blocker in self.getBlockers(attacker):
+                    sb.append("  ... blocked by: ")
+                    sb.append(str(blocker))
+                    sb.append("\n")
+        if len("".join(sb)) == 0:
+            return "<no attacks>"
+        return "".join(sb)
+
+    def endCombat(self):
+        # backup attackers and blockers
+        attackers = self.getAttackers()
+        blockers = self.getAllBlockers()
+
+        # clear all combat-related collections
+        self.attackableEntries.clear()
+        self.attackedByBands.clear()
+        self.blockedBands.clear()
+        self.attackersOrderedForDamageAssignment.clear()
+        self.blockersOrderedForDamageAssignment.clear()
+        self.lkiCache.clear()
+        self.combatantsThatDealtFirstStrikeDamage.clear()
+
+        # clear tracking for cards that care about "this combat"
+        game = self.playerWhoAttacks.getGame()
+        for c in game.getCardsIncludePhasingIn(ZoneType.Battlefield):
+            c.getDamageHistory().endCombat()
+        self.playerWhoAttacks.clearAttackedPlayersMyCombat()
+
+        # update view for all attackers and blockers
+        for c in attackers:
+            c.updateAttackingForView()
+        for c in blockers:
+            c.updateBlockingForView()
+
+    def clearAttackers(self):
+        for attacker in self.getAttackers():
+            self.removeFromCombat(attacker)
+
+    def getAttackingPlayer(self):
+        return self.playerWhoAttacks
+
+    def getAttackConstraints(self):
+        return self.attackConstraints
+
+    def getDefenders(self):
+        return self.attackableEntries
+
+    # gets attacked player opponents (ignores planeswalkers)
+    def getAttackedOpponents(self, atk):
+        attackedOpps = FCollection()
+        if atk is self.playerWhoAttacks:
+            for defender in self.getDefendingPlayers():
+                if not self.getAttackersOf(defender).isEmpty():
+                    attackedOpps.add(defender)
+        return attackedOpps
+
+    def getDefendersControlledBy(self, who):
+        res = FCollection()
+        for ge in self.attackableEntries:
+            # if defender is the player himself or his cards
+            if ge is who or (isinstance(ge, Card) and ge.getController() is who):
+                res.add(ge)
+        return res
+
+    def getDefendingPlayers(self):
+        return FCollection(IterableUtil.filter(self.attackableEntries, Player))
+
+    def getDefendingPlaneswalkers(self):
+        return CardLists.filter(IterableUtil.filter(self.attackableEntries, Card), CardPredicates.PLANESWALKERS)
+
+    def getDefendingBattles(self):
+        return CardLists.filter(IterableUtil.filter(self.attackableEntries, Card), CardPredicates.BATTLES)
+
+    def getAttackersAndDefenders(self):
+        return {c: self.getDefenderByAttacker(c) for c in self.getAttackers().asSet()}
+
+    def getAttackingBandsOf(self, defender):
+        return list(self.attackedByBands.get(defender))
+
+    def getAttackersOf(self, defender):
+        result = CardCollection()
+        if not self.attackedByBands.containsKey(defender):
+            return result
+        for v in self.attackedByBands.get(defender):
+            result.addAll(v.getAttackers())
+        return result
+
+    def addAttacker(self, c, defender, band=None):
+        attackersOfDefender = self.attackedByBands.get(defender)
+        if attackersOfDefender is None:
+            print("Trying to add Attacker " + str(c) + " to missing defender " + str(defender))
+            return
+
+        # This is trying to fix the issue of an attacker existing in two bands at once
+        existingBand = self.getBandOfAttacker(c)
+        if existingBand is not None:
+            existingBand.removeAttacker(c)
+
+        if band is None or band not in attackersOfDefender:
+            band = AttackingBand(c)
+            attackersOfDefender.add(band)
+        else:
+            band.addAttacker(c)
+        c.updateAttackingForView()
+
+    def getDefenderByAttacker(self, c):
+        if isinstance(c, Card):
+            return self.getDefenderByAttacker(self.getBandOfAttacker(c))
+        for key, value in self.attackedByBands.entries():
+            if value is c:
+                return key
+        return None
+
+    def getDefenderPlayerByAttacker(self, c):
+        defender = self.getDefenderByAttacker(c)
+
+        if isinstance(defender, Player):
+            return defender
+
+        # maybe attack on a controlled planeswalker?
+        if isinstance(defender, Card):
+            if defender.isBattle():
+                return defender.getProtectingPlayer()
+            else:
+                return defender.getController()
+
+        return None
+
+    # takes LKI into consideration, should use it at all times (though a single iteration over multimap seems faster)
+    def getBandOfAttacker(self, c):
+        if c is None:
+            return None
+        for ab in self.attackedByBands.values():
+            if ab.contains(c):
+                return ab
+        lki = self.lkiCache.get(c).getCombatLKI()
+        return None if (lki is None or not lki.isAttacker) else lki.getFirstBand()
+
+    def getBandOfAttackerNotNull(self, c):
+        band = self.getBandOfAttacker(c)
+        if band is None:
+            raise Exception("No band for attacker " + str(c))
+        return band
+
+    def getAttackingBands(self):
+        return list(self.attackedByBands.values())
+
+    def isAttacking(self, card, defender=_UNSET):
+        if defender is _UNSET:
+            for ab in self.attackedByBands.values():
+                if ab.contains(card):
+                    return True
+            return False
+        ab = self.getBandOfAttacker(card)
+        for key, value in self.attackedByBands.entries():
+            if value is ab:
+                return key is defender
+        return False
+
+    def getAttackers(self):
+        result = CardCollection()
+        for ab in self.attackedByBands.values():
+            result.addAll(ab.getAttackers())
+        return result
+
+    def isBlocked(self, attacker):
+        band = self.getBandOfAttacker(attacker)
+        return band is not None and band.isBlocked() is True
+
+    # Some cards in Alpha may UNBLOCK an attacker, so second parameter is not always-true
+    def setBlocked(self, attacker, value):
+        self.getBandOfAttackerNotNull(attacker).setBlocked(value)  # called by Curtain of Light, Dazzling Beauty, Trap Runner
+
+    def addBlocker(self, attacker, blocker):
+        band = self.getBandOfAttackerNotNull(attacker)
+        self.blockedBands.put(band, blocker)
+        # If damage is already assigned, add this blocker as a "late entry"
+        if attacker in self.blockersOrderedForDamageAssignment:
+            self.addBlockerToDamageAssignmentOrder(attacker, blocker)
+        blocker.updateBlockingForView()
+
+    # remove blocker from specific attacker
+    def removeBlockAssignment(self, attacker, blocker):
+        band = self.getBandOfAttackerNotNull(attacker)
+        cc = self.blockedBands.get(band)
+        if cc is not None:
+            cc.remove(blocker)
+        blocker.updateBlockingForView()
+
+    # remove blocker from everywhere
+    def undoBlockingAssignment(self, blocker):
+        toRemove = CardCollection(blocker)
+        self.blockedBands.values().removeAll(toRemove)
+        blocker.updateBlockingForView()
+
+    def getAllBlockers(self):
+        result = CardCollection()
+        for blocker in self.blockedBands.values():
+            if not result.contains(blocker):
+                result.add(blocker)
+        return result
+
+    def getDefendersCreatures(self):
+        result = CardCollection()
+        for attacker in self.getAttackers():
+            defender = self.getDefenderPlayerByAttacker(attacker)
+            if defender is not None:
+                cc = defender.getCreaturesInPlay()
+                result.addAll(cc)
+        return result
+
+    def getBlockers(self, card):
+        # If requesting the ordered blocking list pass true, directly.
+        if isinstance(card, Card):
+            return self.getBlockers(self.getBandOfAttacker(card))
+        band = card
+        blockers = self.blockedBands.get(band)
+        return CardCollection() if blockers is None else CardCollection(blockers)
+
+    def getAttackersBlockedBy(self, blocker):
+        blocked = CardCollection()
+        for key, value in self.blockedBands.entries():
+            if value == blocker:
+                blocked.addAll(key.getAttackers())
+        return blocked
+
+    def getAttackingBandsBlockedBy(self, blocker):
+        bands = FCollection()
+        for key, value in self.blockedBands.entries():
+            if value == blocker:
+                bands.add(key)
+        return bands
+
+    def getDefendingPlayerRelatedTo(self, source):
+        attacker = source
+        if source.isAura() or source.isFortification():
+            attacker = source.getEnchantingCard()
+        elif source.isEquipment():
+            attacker = source.getEquipping()
+
+        # return the corresponding defender
+        return self.getDefenderPlayerByAttacker(attacker)
+
+    # If there are multiple blockers, the Attacker declares the Assignment Order
+    def orderBlockersForDamageAssignment(self, attacker=_UNSET, blockers=_UNSET):  # this method performs controller's role
+        if attacker is _UNSET:
+            blockersNeedManualOrdering = []
+            for band in self.attackedByBands.values():
+                if band.isEmpty():
+                    continue
+
+                blk = self.blockedBands.get(band)
+                if blk is None or len(blk) == 0:
+                    continue
+
+                for atk in band.getAttackers():
+                    if len(blk) <= 1:
+                        self.orderBlockersForDamageAssignment(atk, CardCollection(blk))
+                    else:  # process it a bit later
+                        blockersNeedManualOrdering.append((atk, CardCollection(blk)))  # we know there's a list
+
+            # brought this out of iteration on bands to avoid concurrency problems
+            for pair in blockersNeedManualOrdering:
+                self.orderBlockersForDamageAssignment(pair[0], pair[1])
+            return
+
+        if blockers.size() <= 1 or not self.legacyOrderCombatants:
+            self.blockersOrderedForDamageAssignment[attacker] = CardCollection(blockers)
+            return
+
+        # Damage Ordering needs to take cards like Melee into account, is that happening?
+        orderedBlockers = self.playerWhoAttacks.getController().orderBlockers(attacker, blockers)  # we know there's a list
+        self.blockersOrderedForDamageAssignment[attacker] = orderedBlockers
+
+        # Display the chosen order of blockers in the log
+        # TODO: this is best done via a combat panel update
+        sb = []
+        sb.append(self.playerWhoAttacks.getName())
+        sb.append(" has ordered blockers for ")
+        sb.append(str(attacker))
+        sb.append(": ")
+        for i in range(orderedBlockers.size()):
+            sb.append(str(orderedBlockers.get(i)))
+            if i != orderedBlockers.size() - 1:
+                sb.append(", ")
+        self.playerWhoAttacks.getGame().fireEvent(GameEventAddLog(GameLogEntryType.COMBAT, "".join(sb)))
+
+    def addBlockerToDamageAssignmentOrder(self, attacker, blocker):
+        oldBlockers = self.blockersOrderedForDamageAssignment.get(attacker)
+        if oldBlockers is None or oldBlockers.isEmpty():
+            self.blockersOrderedForDamageAssignment[attacker] = CardCollection(blocker)
+        elif self.legacyOrderCombatants:
+            orderedBlockers = self.playerWhoAttacks.getController().orderBlocker(attacker, blocker, oldBlockers)
+            self.blockersOrderedForDamageAssignment[attacker] = orderedBlockers
+        else:
+            oldBlockers.add(blocker)
+            self.blockersOrderedForDamageAssignment[attacker] = oldBlockers
+
+    def orderAttackersForDamageAssignment(self, blocker=_UNSET):  # this method performs controller's role
+        if blocker is _UNSET:
+            # If there are multiple blockers, the Attacker declares the Assignment Order
+            for b in self.getAllBlockers():
+                self.orderAttackersForDamageAssignment(b)
+            return
+
+        attackers = self.getAttackersBlockedBy(blocker)
+        # They need a reverse map here: Blocker => List<Attacker>
+
+        blockerCtrl = blocker.getController()
+        orderedAttacker = attackers if (attackers.size() <= 1 or not self.legacyOrderCombatants) else blockerCtrl.getController().orderAttackers(blocker, attackers)
+
+        # Damage Ordering needs to take cards like Melee into account, is that happening?
+        self.attackersOrderedForDamageAssignment[blocker] = orderedAttacker
+
+    # removes references to this attacker from all indices and orders
+    def unregisterAttacker(self, c, ab):
+        self.blockersOrderedForDamageAssignment.pop(c, None)
+
+        blockers = self.blockedBands.get(ab)
+        if blockers is not None:
+            for b in blockers:
+                # Clear removed attacker from assignment order
+                if b in self.attackersOrderedForDamageAssignment:
+                    self.attackersOrderedForDamageAssignment[b].remove(c)
+
+        # restore the original defender in case it was changed before the creature was
+        # removed from combat but before the trigger resolved (e.g. Ulamog, the Ceaseless
+        # Hunger + Portal Mage + Unsummon)
+        game = c.getGame()
+        for si in game.getStack():
+            if si.isTrigger() and c == si.getSourceCard():
+                origDefender = si.getTriggeringObject(AbilityKey.OriginalDefender)
+                if origDefender is not None:
+                    si.updateTriggeringObject(AbilityKey.Defender, origDefender)
+                    if isinstance(origDefender, Player):
+                        si.updateTriggeringObject(AbilityKey.DefendingPlayer, origDefender)
+                    elif isinstance(origDefender, Card):
+                        si.updateTriggeringObject(AbilityKey.DefendingPlayer, origDefender.getController())
+
+    # removes references to this defender from all indices and orders
+    def unregisterDefender(self, c, bandBeingBlocked):
+        self.attackersOrderedForDamageAssignment.pop(c, None)
+        for atk in bandBeingBlocked.getAttackers():
+            if atk in self.blockersOrderedForDamageAssignment:
+                self.blockersOrderedForDamageAssignment[atk].remove(c)
+
+    # remove a combatant whose side is unknown
+    def removeFromCombat(self, c):
+        ab = self.getBandOfAttacker(c)
+        if ab is not None:
+            self.unregisterAttacker(c, ab)
+            ab.removeAttacker(c)
+            c.updateAttackingForView()
+            return
+
+        # if not found in attackers, look for this card in blockers
+        for key, value in self.blockedBands.entries():
+            if value == c:
+                self.unregisterDefender(c, key)
+
+        for battleOrPW in IterableUtil.filter(self.attackableEntries, Card):
+            if battleOrPW == c:
+                attackerBuffer = _ListMultimap()
+                bands = self.attackedByBands.get(c)
+                for abDef in bands:
+                    self.unregisterDefender(c, abDef)
+                    # Rule 506.4c workaround to keep creatures in combat
+                    fake = Card(-1, c.getGame())
+                    fake.setName("<Nothing>")
+                    fake.setController(c.getController(), 0)
+                    attackerBuffer.put(fake, abDef)
+                bands.clear()
+                self.attackedByBands.putAll(attackerBuffer)
+                break
+
+        # remove card from map
+        while self.blockedBands.values().remove(c):
+            pass
+        c.updateBlockingForView()
+
+    def removeAbsentCombatants(self):
+        # CR 506.4 iterate all attackers and remove illegal declarations
+        missingCombatants = CardCollection()
+        for key, value in self.attackedByBands.entries():
+            for c in value.getAttackers():
+                if not c.isInPlay() or not c.isCreature():
+                    missingCombatants.add(c)
+            if isinstance(key, Card):
+                if not key.isBattle() and not key.isPlaneswalker():
+                    missingCombatants.add(key)
+
+        for key, value in self.blockedBands.entries():
+            blocker = value
+            if not blocker.isInPlay() or not blocker.isCreature():
+                missingCombatants.add(blocker)
+
+        if missingCombatants.isEmpty():
+            return False
+
+        for c in missingCombatants:
+            self.removeFromCombat(c)
+        return True
+
+    # Call this method right after turn-based action of declare blockers has been performed
+    def fireTriggersForUnblockedAttackers(self, game):
+        bFlag = False
+        defenders = []
+        for ab in self.attackedByBands.values():
+            blockers = self.blockedBands.get(ab)
+            isBlocked = blockers is not None and len(blockers) > 0
+            ab.setBlocked(isBlocked)
+
+            if not isBlocked:
+                bFlag = True
+                defenders.append(self.getDefenderByAttacker(ab))
+                for attacker in ab.getAttackers():
+                    # Run Unblocked Trigger
+                    runParams = AbilityKey.newMap()
+                    runParams[AbilityKey.Attacker] = attacker
+                    runParams[AbilityKey.Defender] = self.getDefenderByAttacker(attacker)
+                    runParams[AbilityKey.DefendingPlayer] = self.getDefenderPlayerByAttacker(attacker)
+                    game.getTriggerHandler().runTrigger(TriggerType.AttackerUnblocked, runParams, False)
+        if bFlag:
+            # triggers for Coveted Jewel
+            # currently there is only one attacking player
+            # should be updated when two-headed-giant is done
+            runParams = AbilityKey.newMap()
+            runParams[AbilityKey.AttackingPlayer] = self.getAttackingPlayer()
+            runParams[AbilityKey.Defenders] = defenders
+            game.getTriggerHandler().runTrigger(TriggerType.AttackerUnblockedOnce, runParams, False)
+
+    def assignBlockersDamage(self, firstStrikeDamage):
+        # Assign damage by Blockers
+        blockers = self.getAllBlockers()
+        assignedDamage = False
+
+        for blocker in blockers:
+            if not self.dealDamageThisPhase(blocker, firstStrikeDamage):
+                continue
+
+            if firstStrikeDamage:
+                self.combatantsThatDealtFirstStrikeDamage.add(blocker)
+
+            # Run replacement effects
+            blocker.getGame().getReplacementHandler().run(ReplacementType.AssignDealDamage, AbilityKey.mapFromAffected(blocker))
+
+            attackers = self.attackersOrderedForDamageAssignment.get(blocker)
+
+            damage = blocker.getNetCombatDamage()
+
+            if attackers is not None and not attackers.isEmpty():
+                attackingPlayer = self.getAttackingPlayer()
+                assigningPlayer = blocker.getController()
+
+                defender = None
+                divideCombatDamageAsChoose = blocker.hasKeyword("You may assign CARDNAME's combat damage divided as you choose among defending player and/or any number of creatures they control.") \
+                    and blocker.getController().getController().confirmStaticApplication(blocker, PlayerActionConfirmMode.AlternativeDamageAssignment,
+                        Localizer.getInstance().getMessage("lblAssignCombatDamageAsChoose", blocker.getTranslatedName()), None)
+                # choose defending player
+                if divideCombatDamageAsChoose:
+                    defender = blocker.getController().getController().chooseSingleEntityForEffect(attackingPlayer.getOpponents(), None, Localizer.getInstance().getMessage("lblChoosePlayer"), None)
+                    attackers = defender.getCreaturesInPlay()
+
+                if AttackingBand.isValidBand(attackers, True):
+                    assigningPlayer = attackingPlayer
+
+                assignedDamage = True
+                map = assigningPlayer.getController().assignCombatDamage(blocker, attackers, None, damage, defender, divideCombatDamageAsChoose or assigningPlayer is not blocker.getController() or not self.legacyOrderCombatants)
+                for k, v in map.items():
+                    # Butcher Orgg
+                    if k is None and v > 0:
+                        self.damageMap.put(blocker, defender, v)
+                    else:
+                        k.addAssignedDamage(v, blocker)
+                        self.damageMap.put(blocker, k, v)
+        return assignedDamage
+
+    def assignAttackersDamage(self, firstStrikeDamage):
+        # Assign damage by Attackers
+        orderedBlockers = None
+        attackers = self.getAttackers()
+        assignedDamage = False
+        while not attackers.isEmpty():
+            attacker = attackers.getFirst()
+            if not self.dealDamageThisPhase(attacker, firstStrikeDamage):
+                attackers.remove(attacker)
+                continue
+
+            if firstStrikeDamage:
+                self.combatantsThatDealtFirstStrikeDamage.add(attacker)
+
+            # Run replacement effects
+            attacker.getGame().getReplacementHandler().run(ReplacementType.AssignDealDamage, AbilityKey.mapFromAffected(attacker))
+
+            # If potential damage is 0, continue along
+            damageDealt = attacker.getNetCombatDamage()
+            if damageDealt <= 0:
+                attackers.remove(attacker)
+                continue
+
+            band = self.getBandOfAttacker(attacker)
+            if band is None:
+                attackers.remove(attacker)
+                continue
+
+            defender = self.getDefenderByAttacker(band)
+            assigningPlayer = self.getAttackingPlayer()
+            orderedBlockers = self.blockersOrderedForDamageAssignment.get(attacker)
+            # Defensive Formation is very similar to Banding with Blockers
+            # It allows the defending player to assign damage instead of the attacking player
+            if isinstance(defender, Player) and defender.hasKeyword("You assign combat damage of each creature attacking you."):
+                assigningPlayer = defender
+            elif orderedBlockers is not None and AttackingBand.isValidBand(orderedBlockers, True):
+                assigningPlayer = orderedBlockers.get(0).getController()
+
+            assignToPlayer = False
+            if StaticAbilityAssignCombatDamageAsUnblocked.assignCombatDamageAsUnblocked(attacker, False):
+                assignToPlayer = True
+            if not assignToPlayer and attacker.getGame().getCombat().isBlocked(attacker) \
+                    and StaticAbilityAssignCombatDamageAsUnblocked.assignCombatDamageAsUnblocked(attacker):
+                assignToPlayer = assigningPlayer.getController().confirmStaticApplication(attacker, PlayerActionConfirmMode.AlternativeDamageAssignment,
+                    Localizer.getInstance().getMessage("lblAssignCombatDamageWerentBlocked", attacker.getTranslatedName()), None)
+
+            divideCombatDamageAsChoose = False
+            assignCombatDamageToCreature = False
+            trampler = attacker.hasKeyword(Keyword.TRAMPLE)
+            if not assignToPlayer:
+                divideCombatDamageAsChoose = self.getDefendersCreatures().size() > 0 and \
+                    attacker.hasKeyword("You may assign CARDNAME's combat damage divided as you choose among defending player and/or any number of creatures they control.") \
+                    and assigningPlayer.getController().confirmStaticApplication(attacker, PlayerActionConfirmMode.AlternativeDamageAssignment,
+                        Localizer.getInstance().getMessage("lblAssignCombatDamageAsChoose", attacker.getTranslatedName()), None)
+                if isinstance(defender, Card) and divideCombatDamageAsChoose:
+                    defender = self.getDefenderPlayerByAttacker(attacker)
+
+                assignCombatDamageToCreature = (not attacker.getGame().getCombat().isBlocked(attacker)) and self.getDefendersCreatures().size() > 0 and \
+                    attacker.hasKeyword("If CARDNAME is unblocked, you may have it assign its combat damage to a creature defending player controls.") and \
+                    assigningPlayer.getController().confirmStaticApplication(attacker, PlayerActionConfirmMode.AlternativeDamageAssignment,
+                        Localizer.getInstance().getMessage("lblAssignCombatDamageToCreature", attacker.getTranslatedName()), None)
+                if divideCombatDamageAsChoose:
+                    if orderedBlockers is None or orderedBlockers.isEmpty():
+                        orderedBlockers = self.getDefendersCreatures()
+                    else:
+                        for c in self.getDefendersCreatures():
+                            if not orderedBlockers.contains(c):
+                                orderedBlockers.add(c)
+
+            assignedDamage = True
+            # If the Attacker is unblocked, or it's a trampler and has 0 blockers, deal damage to defender
+            if isinstance(defender, Card) and not defender.isBattle() and attacker.hasKeyword("Trample:Planeswalker"):
+                if orderedBlockers is None or orderedBlockers.isEmpty():
+                    orderedBlockers = CardCollection(defender)
+                else:
+                    orderedBlockers.add(defender)
+                defender = self.getDefenderPlayerByAttacker(attacker)
+            if assignToPlayer:
+                attackers.remove(attacker)
+                self.damageMap.put(attacker, defender, damageDealt)
+            elif orderedBlockers is None or orderedBlockers.isEmpty():
+                attackers.remove(attacker)
+                if assignCombatDamageToCreature:
+                    emptySA = EmptySa(ApiType.Cleanup, attacker)
+                    chosen = attacker.getController().getController().chooseCardsForEffect(self.getDefendersCreatures(),
+                        emptySA, Localizer.getInstance().getMessage("lblChooseCreature"), 1, 1, False, None).get(0)
+                    self.damageMap.put(attacker, chosen, damageDealt)
+                elif trampler or not band.isBlocked():  # this is called after declare blockers, no worries 'bout nulls in isBlocked
+                    if defender is None:
+                        defender = self.getDefenderPlayerByAttacker(attacker)
+                        print("[COMBAT] defender is null, getDefenderPlayerByAttacker(attacker) result: " + str(defender), file=sys.stderr)
+                    # this will fail if defender is null, and it doesn't allow null values..
+                    self.damageMap.put(attacker, defender, damageDealt)
+                # No damage happens if blocked but no blockers left
+            else:
+                map = assigningPlayer.getController().assignCombatDamage(attacker, orderedBlockers, attackers,
+                    damageDealt, defender, divideCombatDamageAsChoose or self.getAttackingPlayer() is not assigningPlayer or not self.legacyOrderCombatants)
+
+                attackers.remove(attacker)
+                # player wants to assign another first
+                if map is None:
+                    # add to end
+                    attackers.add(attacker)
+                    continue
+
+                for k, v in map.items():
+                    if k is None:
+                        if v > 0:
+                            if isinstance(defender, Card):
+                                defender.addAssignedDamage(v, attacker)
+                            self.damageMap.put(attacker, defender, v)
+                    else:
+                        k.addAssignedDamage(v, attacker)
+                        self.damageMap.put(attacker, k, v)
+        return assignedDamage
+
+    def dealDamageThisPhase(self, combatant, firstStrikeDamage):
+        # During first strike damage, double strike and first strike deal damage
+        # During regular strike damage, double strike and anyone who hasn't dealt damage deal damage
+        if combatant.hasDoubleStrike():
+            return True
+        if firstStrikeDamage and combatant.hasFirstStrike():
+            return True
+        return not firstStrikeDamage and not self.combatantsThatDealtFirstStrikeDamage.contains(combatant)
+
+    def assignCombatDamage(self, firstStrikeDamage):
+        assignedDamage = self.assignAttackersDamage(firstStrikeDamage)
+        assignedDamage |= self.assignBlockersDamage(firstStrikeDamage)
+        if not firstStrikeDamage:
+            # Clear first strike damage list since it doesn't matter anymore
+            self.combatantsThatDealtFirstStrikeDamage.clear()
+        return assignedDamage
+
+    def dealAssignedDamage(self):
+        game = self.playerWhoAttacks.getGame()
+        game.copyLastState()
+
+        preventMap = CardDamageMap()
+        counterTable = GameEntityCounterTable()
+
+        game.getAction().dealDamage(True, self.damageMap, preventMap, counterTable, None)
+
+        # copy last state again for dying replacement effects
+        game.copyLastState()
+
+    def isUnblocked(self, att):
+        band = self.getBandOfAttacker(att)
+        return band is not None and band.isBlocked() is False
+
+    def getUnblockedAttackers(self):
+        unblocked = CardCollection()
+        for ab in self.attackedByBands.values():
+            if ab.isBlocked() is False:
+                unblocked.addAll(ab.getAttackers())
+        return unblocked
+
+    def isPlayerAttacked(self, who):
+        for defender in self.attackedByBands.keySet():
+            defenderAsCard = defender if isinstance(defender, Card) else None
+            if (defenderAsCard is not None and (defenderAsCard.getController() is not who and defenderAsCard.getProtectingPlayer() is not who)) or \
+                    (defenderAsCard is None and defender is not who):
+                continue  # defender is not related to player 'who'
+            for ab in self.attackedByBands.get(defender):
+                if not ab.isEmpty():
+                    return True
+        return False
+
+    def isBlocking(self, blocker, attacker=_UNSET):
+        if attacker is _UNSET:
+            if self.blockedBands.containsValue(blocker):
+                return True  # is blocking something at the moment
+
+            if not blocker.isLKI():
+                return False
+
+            lki = self.lkiCache.get(blocker).getCombatLKI()
+            return lki is not None and not lki.isAttacker  # was blocking something anyway
+
+        ab = self.getBandOfAttacker(attacker)
+        blockers = self.blockedBands.get(ab)
+        if blockers is not None and blocker in blockers:
+            return True  # is blocking the attacker's band at the moment
+
+        if not blocker.isLKI():
+            return False
+
+        lki = self.lkiCache.get(blocker).getCombatLKI()
+        return lki is not None and not lki.isAttacker and lki.relatedBands.contains(ab)  # was blocking that very band
+
+    def saveLKI(self, lki):
+        if not lki.isLKI():
+            lki = CardCopyService.getLKICopy(lki)
+        attackersBlocked = None
+        attackingBand = self.getBandOfAttacker(lki)
+        isAttacker = attackingBand is not None
+        if isAttacker:
+            found = False
+            for ab in self.attackedByBands.values():
+                if ab.contains(lki):
+                    found = True
+                    break
+            if not found:
+                return None
+        else:
+            attackersBlocked = self.getAttackingBandsBlockedBy(lki)
+            if attackersBlocked.isEmpty():
+                return None  # card was not even in combat
+        self.lkiCache.add(lki)
+        relatedBands = FCollection(attackingBand) if isAttacker else attackersBlocked
+        return CombatLki(isAttacker, relatedBands)
+````

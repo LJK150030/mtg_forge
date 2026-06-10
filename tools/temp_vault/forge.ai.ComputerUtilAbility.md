@@ -77,9 +77,9 @@ classDiagram
 
 ## Design Description
 
-ComputerUtilAbility is a stateless, all-static utility class in the `forge.ai` package that centralizes the AI's reasoning about which spells and abilities are playable and in what order to attempt them. It gathers castable cards and playable lands across the relevant zones (`getAvailableCards`, `getAvailableLandsToPlay`), expands each `SpellAbility` into its alternative, additional, and optional-cost variants—consulting the player's controller for optional-cost choices—and offers targeting helpers such as `getCardsTargetedWithApi` and `isFullyTargetable`.
+ComputerUtilAbility is a stateless, all-static utility class in the `forge.ai` package that centralizes the AI's reasoning about which spells and abilities are playable and in what order to attempt them. It gathers castable cards and playable lands across the relevant zones (`getAvailableCards`, `getAvailableLandsToPlay`), expands each `SpellAbility` into its alternative, additional, and optional-cost variantsâ€”consulting the player's controller for optional-cost choicesâ€”and offers targeting helpers such as `getCardsTargetedWithApi` and `isFullyTargetable`.
 
-Rather than a controller, it acts as shared decision-support collaborating with core game types (`Game`, `Player`, `Card`, `SpellAbility`) and cost classes. Its key design intent lives in the nested `saComparator`, exposed as the singleton `saEvaluator`, which ranks abilities by a heuristic blend of converted mana cost and a hand-tuned priority score—favoring boardwipes, free, zero-cost, and snap-cast spells, surge/prowl costs, and creatures, while deferring mana, equipment, and storm effects.
+Rather than a controller, it acts as shared decision-support collaborating with core game types (`Game`, `Player`, `Card`, `SpellAbility`) and cost classes. Its key design intent lives in the nested `saComparator`, exposed as the singleton `saEvaluator`, which ranks abilities by a heuristic blend of converted mana cost and a hand-tuned priority scoreâ€”favoring boardwipes, free, zero-cost, and snap-cast spells, surge/prowl costs, and creatures, while deferring mana, equipment, and storm effects.
 
 ## Source
 `forge-ai/src/main/java/forge/ai/ComputerUtilAbility.java`
@@ -544,4 +544,391 @@ public class ComputerUtilAbility {
         return all;
     }
 }
+```
+
+## Python
+`forge/ai/ComputerUtilAbility.py`
+
+```python
+from forge.card.CardStateName import CardStateName
+from forge.game.Game import Game
+from forge.game.GameActionUtil import GameActionUtil
+from forge.game.ability.ApiType import ApiType
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.card.CardLists import CardLists
+from forge.game.cost.CostPart import CostPart
+from forge.game.cost.CostPayEnergy import CostPayEnergy
+from forge.game.cost.CostPutCounter import CostPutCounter
+from forge.game.cost.CostRemoveCounter import CostRemoveCounter
+from forge.game.keyword.Keyword import Keyword
+from forge.game.phase.PhaseType import PhaseType
+from forge.game.player.Player import Player
+from forge.game.spellability.OptionalCost import OptionalCost
+from forge.game.spellability.OptionalCostValue import OptionalCostValue
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.spellability.SpellAbilityStackInstance import SpellAbilityStackInstance
+from forge.game.staticability.StaticAbility import StaticAbility
+from forge.game.staticability.StaticAbilityMode import StaticAbilityMode
+from forge.game.trigger.Trigger import Trigger
+from forge.game.trigger.TriggerType import TriggerType
+from forge.game.zone.ZoneType import ZoneType
+from forge.ai.ComputerUtilCard import ComputerUtilCard
+from forge.ai.AiController import AiController
+from forge.ai.AiProps import AiProps
+from forge.ai.PlayerControllerAi import PlayerControllerAi
+
+import collections
+import functools
+import re
+import sys
+
+
+class ComputerUtilAbility:
+    @staticmethod
+    def getAvailableLandsToPlay(game, player):
+        if not game.getStack().isEmpty() or not game.getPhaseHandler().getPhase().isMain():
+            return None
+
+        # filter out cards that can't be played
+        def _landFilter(c):
+            if not c.hasPlayableLandFace():
+                return False
+            return player.canPlayLand(c, False, c.getFirstSpellAbility())
+
+        landList = CardLists.filter(player.getCardsIn(ZoneType.Hand), _landFilter)
+
+        landsNotInHand = CardCollection(player.getCardsIn(ZoneType.Graveyard))
+        landsNotInHand.addAll(game.getCardsIn(ZoneType.Exile))
+        if not player.getCardsIn(ZoneType.Library).isEmpty():
+            landsNotInHand.add(player.getCardsIn(ZoneType.Library).get(0))
+        for crd in landsNotInHand:
+            if not (crd.hasPlayableLandFace() or (crd.isFaceDown() and crd.getState(CardStateName.Original).getType().isLand())):
+                continue
+            if not crd.mayPlay(player).isEmpty():
+                landList.add(crd)
+        return landList
+
+    @staticmethod
+    def getAvailableCards(game, player):
+        all = CardCollection(player.getCardsIn(ZoneType.Hand))
+
+        all.addAll(player.getCardsIn(ZoneType.Graveyard))
+        for p in game.getPlayers():
+            if not p.getCardsIn(ZoneType.Library).isEmpty():
+                all.add(p.getCardsIn(ZoneType.Library).get(0))
+        all.addAll(game.getCardsIn(ZoneType.Command))
+        all.addAll(game.getCardsIn(ZoneType.Exile))
+        all.addAll(game.getCardsIn(ZoneType.Battlefield))
+        return all
+
+    @staticmethod
+    def getSpellAbilities(all, activator):
+        spellAbilities = []
+        for c in all:
+            unhiddenAltCost = collections.defaultdict(list)
+            possible = c.getAllPossibleAbilities(activator, False, unhiddenAltCost)
+            for sa in list(unhiddenAltCost.keys()):
+                if sa in possible:
+                    # when SA can also be played as basic exclude its AltCost to prevent redundant check later
+                    for toRemove in unhiddenAltCost[sa]:
+                        while toRemove in possible:
+                            possible.remove(toRemove)
+            spellAbilities.extend(possible)
+        return spellAbilities
+
+    @staticmethod
+    def getOriginalAndAltCostAbilities(originList, activator):
+        originListWithAddCosts = []
+        for sa in originList:
+            # If this spell has alternative additional costs, add them instead of the unmodified SA itself
+            sa.setActivatingPlayer(activator)
+            originListWithAddCosts.extend(GameActionUtil.getAdditionalCostSpell(sa))
+
+        newAbilities = []
+        for sa in originListWithAddCosts:
+            # determine which alternative costs are cheaper than the original and prioritize them
+            saAltCosts = GameActionUtil.getAlternativeCosts(sa, activator, False)
+            priorityAltSa = []
+            otherAltSa = []
+            for altSa in saAltCosts:
+                if sa.getPayCosts().isOnlyManaCost() \
+                        and altSa.getPayCosts().isOnlyManaCost() and sa.getPayCosts().getTotalMana().compareTo(altSa.getPayCosts().getTotalMana()) == 1:
+                    # the alternative cost is strictly cheaper, so why not? (e.g. Omniscience etc.)
+                    priorityAltSa.append(altSa)
+                else:
+                    otherAltSa.append(altSa)
+
+            # add alternative costs as additional spell abilities
+            newAbilities.extend(priorityAltSa)
+            newAbilities.append(sa)
+            newAbilities.extend(otherAltSa)
+
+        result = []
+        for sa in newAbilities:
+            sa.setActivatingPlayer(activator)
+
+            # Optional cost selection through the AI controller
+            choseOptCost = False
+            list_ = GameActionUtil.getOptionalCostValues(sa)
+            if list_:
+                list_ = activator.getController().chooseOptionalCosts(sa, list_)
+                if list_:
+                    # still check base spell first in case of Promise Gift
+                    if any(ocv.getType() == OptionalCost.PromiseGift for ocv in list_):
+                        result.append(sa)
+                    result.append(GameActionUtil.addOptionalCosts(sa, list_))
+                    choseOptCost = True
+
+            # Add only one ability: either the one with preferred optional costs, or the original one if there are none
+            if not choseOptCost:
+                result.append(sa)
+
+        return result
+
+    @staticmethod
+    def getTopSpellAbilityOnStack(game, sa):
+        it = iter(game.getStack())
+
+        first = next(it, None)
+        if first is None:
+            return None
+
+        tgtSA = first.getSpellAbility()
+        # Grab the topmost spellability that isn't this SA and use that for comparisons
+        if sa.equals(tgtSA) and game.getStack().size() > 1:
+            nxt = next(it, None)
+            if nxt is None:
+                return None
+            tgtSA = nxt.getSpellAbility()
+        return tgtSA
+
+    @staticmethod
+    def getFirstCopySASpell(spells):
+        sa = None
+        for spell in spells:
+            if spell.getApi() == ApiType.CopySpellAbility:
+                sa = spell
+                break
+        return sa
+
+    @staticmethod
+    def getAbilitySource(sa):
+        return sa.getOriginalHost() if sa.getOriginalHost() is not None else sa.getHostCard()
+
+    @staticmethod
+    def getAbilitySourceName(sa):
+        c = ComputerUtilAbility.getAbilitySource(sa)
+        return c.getName() if c is not None else ""
+
+    @staticmethod
+    def getCardsTargetedWithApi(ai, cardList, sa, api):
+        # Returns a collection of cards which have already been targeted with the given API either in the parent ability,
+        # in the sub ability, or by something on stack. If "sa" is specified, the parent and sub abilities of this SA will
+        # be checked for targets. If "sa" is null, only the stack instances will be checked.
+        targeted = CardCollection()
+        if sa is not None:
+            saSub = sa.getRootAbility()
+            while saSub is not None:
+                if saSub.getApi() == api and saSub.getTargets() is not None:
+                    for c in cardList:
+                        if saSub.getTargets().getTargetCards().contains(c):
+                            # Was already targeted with this API in a parent or sub SA
+                            targeted.add(c)
+                saSub = saSub.getSubAbility()
+        for si in ai.getGame().getStack():
+            ab = si.getSpellAbility()
+            if ab is not None and ab.getApi() == api and si.getTargetChoices() is not None:
+                for c in cardList:
+                    # TODO: somehow ensure that the detected SA won't be countered
+                    if si.getTargetChoices().getTargetCards().contains(c):
+                        # Was already targeted by a spell ability instance on stack
+                        targeted.add(c)
+
+        return targeted
+
+    @staticmethod
+    def isFullyTargetable(sa):
+        sub = sa
+        while sub is not None:
+            if sub.usesTargeting() and sub.getTargetRestrictions().getNumCandidates(sub, True) < sub.getMinTargets():
+                return False
+            sub = sub.getSubAbility()
+        return True
+
+    # not sure "playing biggest spell" matters?
+    class saComparator:
+        def compare(self, a, b):
+            return self.compareEvaluator(a, b, False)
+
+        def compareEvaluator(self, a, b, safeToEvaluateCreatures):
+            # sort from highest cost to lowest
+            # we want the highest costs first
+            a1 = a.getPayCosts().getTotalMana().getCMC()
+            b1 = b.getPayCosts().getTotalMana().getCMC()
+
+            # deprioritize SAs explicitly marked as preferred to be activated last compared to all other SAs
+            if a.hasParam("AIActivateLast") and not b.hasParam("AIActivateLast"):
+                return 1
+            elif b.hasParam("AIActivateLast") and not a.hasParam("AIActivateLast"):
+                return -1
+
+            # deprioritize planar die roll marked with AIRollPlanarDieParams:LowPriority$ True
+            if ApiType.RollPlanarDice == a.getApi() or ApiType.RollPlanarDice == b.getApi():
+                hostCardForGame = a.getHostCard()
+                if hostCardForGame is None:
+                    if b.getHostCard() is not None:
+                        hostCardForGame = b.getHostCard()
+                    else:
+                        return 0  # fallback if neither SA have a host card somehow
+                game = hostCardForGame.getGame()
+                if game.getActivePlanes() is not None:
+                    for c in game.getActivePlanes():
+                        if c.hasSVar("AIRollPlanarDieParams") and re.fullmatch(r".*lowpriority\$\s*true.*", c.getSVar("AIRollPlanarDieParams").lower(), re.DOTALL):
+                            if ApiType.RollPlanarDice == a.getApi():
+                                return 1
+                            else:
+                                return -1
+
+            # deprioritize pump spells with pure energy cost (can be activated last,
+            # since energy is generally scarce, plus can benefit e.g. Electrostatic Pummeler)
+            a2 = 0
+            b2 = 0
+            if a.getApi() == ApiType.Pump and a.getPayCosts().getCostEnergy() is not None:
+                if a.getPayCosts().hasOnlySpecificCostType(CostPayEnergy):
+                    a2 = a.getPayCosts().getCostEnergy().convertAmount()
+            if b.getApi() == ApiType.Pump and b.getPayCosts().getCostEnergy() is not None:
+                if b.getPayCosts().hasOnlySpecificCostType(CostPayEnergy):
+                    b2 = b.getPayCosts().getCostEnergy().convertAmount()
+            if a2 == 0 and b2 > 0:
+                return -1
+            elif b2 == 0 and a2 > 0:
+                return 1
+
+            # cast 0 mana cost spells first (might be a Mox)
+            if a1 == 0 and b1 > 0 and ApiType.Mana != a.getApi():
+                return -1
+            elif a1 > 0 and b1 == 0 and ApiType.Mana != b.getApi():
+                return 1
+
+            if a.getHostCard() is not None and a.getHostCard().hasSVar("FreeSpellAI"):
+                return -1
+            elif b.getHostCard() is not None and b.getHostCard().hasSVar("FreeSpellAI"):
+                return 1
+
+            if a.getHostCard().equals(b.getHostCard()) and a.getApi() == b.getApi():
+                # Cheaper Spectacle costs should be preferred
+                # FIXME: Any better way to identify that these are the same ability, one with Spectacle and one not?
+                # (looks like it's not a full-fledged alternative cost as such, and is not processed with other alt costs)
+                if a.isSpectacle() and not b.isSpectacle() and a1 < b1:
+                    return 1
+                elif b.isSpectacle() and not a.isSpectacle() and b1 < a1:
+                    return 1
+
+            a1 += self.getSpellAbilityPriority(a)
+            b1 += self.getSpellAbilityPriority(b)
+
+            # if both are creature spells sort them after
+            if safeToEvaluateCreatures:
+                # try to align the scales: if priority swings in either direction extra evaluation matters less
+                a1 += round(ComputerUtilCard.evaluateCreature(a) / (10.5 + abs(a1)))
+                b1 += round(ComputerUtilCard.evaluateCreature(b) / (10.5 + abs(b1)))
+
+            return b1 - a1
+
+        @staticmethod
+        def getSpellAbilityPriority(sa):
+            p = 0
+            source = sa.getHostCard()
+            ai = sa.getActivatingPlayer() if source is None else source.getController()
+            if ai is None:
+                print("Error: couldn't figure out the activating player and host card for SA: " + str(sa), file=sys.stderr)
+                return 0
+            noCreatures = ai.getCreaturesInPlay().isEmpty()
+
+            if source is not None:
+                # puts creatures in front of spells
+                if source.isCreature():
+                    p += 1
+                if source.hasSVar("AIPriorityModifier"):
+                    p += int(source.getSVar("AIPriorityModifier"))
+                # try to use it before it's gone
+                if source.isInPlay() and source.hasSVar("EndOfTurnLeavePlay"):
+                    p += 1
+                if ComputerUtilCard.isCardRemAIDeck(sa.getOriginalHost() if sa.getOriginalHost() is not None else source):
+                    p -= 10
+                # don't play equipment before having any creatures
+                if source.isEquipment() and noCreatures:
+                    p -= 9
+                # don't equip stuff in main 2 if there's more stuff to cast at the moment
+                if sa.getApi() == ApiType.Attach and not sa.isCurse() and source.getGame().getPhaseHandler().getPhase().isAfter(PhaseType.COMBAT_DECLARE_BLOCKERS):
+                    p -= 1
+                # 1. increase chance of using Surge effects
+                # 2. non-surged versions are usually inefficient
+                if source.hasKeyword(Keyword.SURGE) and not sa.isSurged():
+                    p -= 9
+                # move snap-casted spells to front
+                if source.isInZone(ZoneType.Graveyard) and source.mayPlay(sa.getMayPlay()) is not None:
+                    p += 50
+                # if the profile specifies it, deprioritize Storm spells in an attempt to build up storm count
+                if source.hasKeyword(Keyword.STORM) and isinstance(ai.getController(), PlayerControllerAi):
+                    p -= ai.getController().getAi().getIntProperty(AiProps.PRIORITY_REDUCTION_FOR_STORM_SPELLS)
+
+                for trig in source.getTriggers():
+                    if "Battlefield" != trig.getParam("TriggerZones"):
+                        continue
+                    mode = trig.getMode()
+                    # benefit from Magecraft abilities
+                    if (mode == TriggerType.SpellCast or mode == TriggerType.SpellCastOrCopy) and "You" == sa.getParam("ValidActivatingPlayer"):
+                        p += 1
+
+                for sta in source.getStaticAbilities():
+                    mode = sta.getMode()
+                    # reduce cost to enable more plays
+                    if StaticAbilityMode.ReduceCost in mode and "You" == sta.getParam("Activator"):
+                        p += 1
+
+            # use Surge and Prowl costs when able to
+            if sa.isSurged() or sa.isProwl():
+                p += 9
+            # sort planeswalker abilities with most costly first
+            if sa.isPwAbility():
+                cost = sa.getPayCosts().getCostParts().get(0)
+                if isinstance(cost, CostRemoveCounter):
+                    p += 1 if cost.convertAmount() is None else cost.convertAmount()
+                elif isinstance(cost, CostPutCounter):
+                    p -= cost.convertAmount()
+                if sa.hasParam("Ultimate"):
+                    p += 9
+
+            if ApiType.DestroyAll == sa.getApi():
+                # check boardwipe earlier
+                p += 4
+            elif ApiType.Mana == sa.getApi():
+                # keep mana abilities for paying
+                p -= 9
+
+            # try to cast mana ritual spells before casting spells to maximize potential mana
+            if "ManaRitual" == sa.getParam("AILogic"):
+                p += 9
+
+            return p
+
+    saEvaluator = saComparator()
+
+    @staticmethod
+    def sortCreatureSpells(all):
+        # try to smoothen power creep by making CMC less of a factor
+        creatures = AiController.filterListByApi(list(all), ApiType.PermanentCreature)
+        if len(creatures) <= 1:
+            return all
+        # TODO this doesn't account for nearly identical creatures where one is a newer but more cost efficient variant
+        creatures.sort(key=functools.cmp_to_key(ComputerUtilCard.EvaluateCreatureSpellComparator.compare))
+        idx = 0
+        for i in range(len(all)):
+            if all[i].getApi() == ApiType.PermanentCreature:
+                all[i] = creatures[idx]
+                idx += 1
+        return all
 ```

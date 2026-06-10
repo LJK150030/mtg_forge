@@ -88,3 +88,53 @@ public record CardFaceView(String name, String displayName) implements Serializa
     }
 }
 ```
+
+## Python
+`forge/game/card/CardFaceView.py`
+
+```python
+from functools import total_ordering
+
+from forge.card.ICardFace import ICardFace
+from forge.util.CardTranslation import CardTranslation
+from forge.util.ITranslatable import ITranslatable
+
+
+@total_ordering
+class CardFaceView(ITranslatable):
+    serialVersionUID = 1874016432028306386
+
+    def __init__(self, name, displayName=None):
+        if isinstance(name, ICardFace) and displayName is None:
+            face = name
+            self.name = face.getName()
+            self.displayName = face.getDisplayName()
+        else:
+            self.name = name
+            self.displayName = displayName
+
+    def getName(self):
+        return self.name
+
+    def getTranslatedName(self):
+        return CardTranslation.getTranslatedName(self.displayName)
+
+    def __str__(self):
+        return self.name
+
+    def compareTo(self, o):
+        a = self.getName()
+        b = o.getName()
+        return (a > b) - (a < b)
+
+    def __lt__(self, o):
+        return self.compareTo(o) < 0
+
+    def __eq__(self, o):
+        if not isinstance(o, CardFaceView):
+            return NotImplemented
+        return self.name == o.name and self.displayName == o.displayName
+
+    def __hash__(self):
+        return hash(self.name)
+```

@@ -38,7 +38,7 @@ classDiagram
 
 ## Design Description
 
-RemoveFromCombatAi supplies the AI decision logic for the RemoveFromCombat spell ability, determining whether and how the computer player should employ effects that pull creatures out of combat. As a concrete subclass of `SpellAbilityAi`, it overrides the framework's evaluation hooks—`canPlay`, `chkDrawback`, and `doTriggerNoCost`—each returning an `AiAbilityDecision` that pairs a confidence score with an `AiPlayDecision` verdict, evaluated against a given `Player` and `SpellAbility`.
+RemoveFromCombatAi supplies the AI decision logic for the RemoveFromCombat spell ability, determining whether and how the computer player should employ effects that pull creatures out of combat. As a concrete subclass of `SpellAbilityAi`, it overrides the framework's evaluation hooksâ€”`canPlay`, `chkDrawback`, and `doTriggerNoCost`â€”each returning an `AiAbilityDecision` that pairs a confidence score with an `AiPlayDecision` verdict, evaluated against a given `Player` and `SpellAbility`.
 
 The implementation is largely a deliberate stub: `canPlay` is hard-disabled (reserved for Gideon Jura), and the trigger path is unimplemented pending future work. The one active branch handles the `RemoveBestAttacker` AILogic parameter as a drawback, committing to play. This reflects a data-driven design where card-specific behavior is selected via string parameters on the SpellAbility rather than dedicated subclasses, with conservative defaults that decline to act until proper heuristics are written.
 
@@ -85,4 +85,39 @@ public class RemoveFromCombatAi extends SpellAbilityAi {
         return chance ? new AiAbilityDecision(100, AiPlayDecision.WillPlay) : new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
     }
 }
+```
+
+## Python
+`forge/ai/ability/RemoveFromCombatAi.py`
+
+```python
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.ai.SpellAbilityAi import SpellAbilityAi
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+
+
+class RemoveFromCombatAi(SpellAbilityAi):
+
+    def canPlay(self, aiPlayer: Player, sa: SpellAbility) -> AiAbilityDecision:
+        # disabled for the AI for now. Only for Gideon Jura at this time.
+        return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+    def chkDrawback(self, aiPlayer: Player, sa: SpellAbility) -> AiAbilityDecision:
+        if "RemoveBestAttacker" == sa.getParam("AILogic"):
+            return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+        # TODO - implement AI
+        return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+    # (non-Javadoc)
+    # @see forge.card.abilityfactory.SpellAiLogic#doTriggerAINoCost(forge.game.player.Player, java.util.Map, forge.card.spellability.SpellAbility, boolean)
+    def doTriggerNoCost(self, aiPlayer: Player, sa: SpellAbility, mandatory: bool) -> AiAbilityDecision:
+        chance: bool
+
+        # TODO - implement AI
+        chance = False
+
+        return AiAbilityDecision(100, AiPlayDecision.WillPlay) if chance else AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
 ```

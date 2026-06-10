@@ -37,6 +37,12 @@ classDiagram
 - [[forge.game.card.Card|Card]]
 - [[forge.game.spellability.SpellAbility|SpellAbility]]
 
+## Design Description
+
+Trigger that fires when a scheme is "set in motion," extending the abstract `Trigger` base class within Forge's trigger subsystem. It specializes the trigger framework for scheme cards by checking, in `performTest`, that the activating scheme matches the trigger's `ValidCard` parameter (keyed off `AbilityKey.Scheme`), and by exposing the triggering scheme to the resulting `SpellAbility` in `setTriggeringObjects`.
+
+The class follows the standard concrete-trigger contract: a constructor delegating to `super` and overrides of the framework's template methods. It collaborates with `AbilityKey` to address run parameters, `Card` as its host, and `SpellAbility` for the spell it puts on the stack. Its empty `getImportantStackObjects` signals that no stack-object description is needed, reflecting the minimal, single-condition nature of this trigger.
+
 ## Source
 `forge-game/src/main/java/forge/game/trigger/TriggerSetInMotion.java`
 
@@ -114,4 +120,32 @@ public class TriggerSetInMotion extends Trigger {
         return "";
     }
 }
+```
+
+## Python
+`forge/game/trigger/TriggerSetInMotion.py`
+
+```python
+from forge.game.trigger.Trigger import Trigger
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.spellability.SpellAbility import SpellAbility
+
+
+class TriggerSetInMotion(Trigger):
+
+    def __init__(self, params: dict[str, str], host: Card, intrinsic: bool):
+        super().__init__(params, host, intrinsic)
+
+    def performTest(self, runParams: dict[AbilityKey, object]) -> bool:
+        if not self.matchesValidParam("ValidCard", runParams.get(AbilityKey.Scheme)):
+            return False
+
+        return True
+
+    def setTriggeringObjects(self, sa: SpellAbility, runParams: dict[AbilityKey, object]) -> None:
+        sa.setTriggeringObjectsFrom(runParams, AbilityKey.Scheme)
+
+    def getImportantStackObjects(self, sa: SpellAbility) -> str:
+        return ""
 ```

@@ -50,6 +50,14 @@ classDiagram
 - [[forge.game.card.Card|Card]]
 - [[forge.game.spellability.TargetRestrictions|TargetRestrictions]]
 
+## Design Description
+
+Forge MTG: Java/PowerShell.
+
+`AbilitySub` is a final subclass of `SpellAbility` representing a sub-ability â€” a follow-on effect chained to a parent ability rather than an independently playable spell. It holds a back-reference to its `parent` and an immutable `SpellAbilityEffect` resolved from an `ApiType`, which it builds against itself at construction and delegates to for both stack description (`getStackDescriptionWithSubs`) and resolution. Overriding `canPlay()` to always return `false` enforces that it can never sit on the stack on its own.
+
+As a `SpellAbility` it collaborates with `Card`, `TargetRestrictions`, and `ApiType` during construction, and implements `Serializable` and `Cloneable` for state persistence and copying. The `getSVarFallback` override reflects deliberate handling of fused or spliced spells, redirecting SVar lookups to the current card state when it diverges from the root ability's, while `clone()` wraps failures as runtime exceptions to satisfy the `Cloneable` contract.
+
 ## Source
 `forge-game/src/main/java/forge/game/spellability/AbilitySub.java`
 
@@ -174,4 +182,65 @@ public final class AbilitySub extends SpellAbility implements java.io.Serializab
         }
     }
 }
+```
+
+## Python
+`forge/game/spellability/AbilitySub.py`
+
+```python
+from typing import List, Optional, Dict
+
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.IHasSVars import IHasSVars
+from forge.game.ability.ApiType import ApiType
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.spellability.TargetRestrictions import TargetRestrictions
+from forge.game.cost.Cost import Cost
+
+
+class AbilitySub(SpellAbility):
+    serialVersionUID = 4650634415821733134
+
+    def __init__(self, api0: ApiType, ca: Card, tgt: TargetRestrictions, params0: Dict[str, str]):
+        super().__init__(ca, Cost.Zero)
+        self.parent: Optional[SpellAbility] = None
+        self.setTargetRestrictions(tgt)
+
+        self.api = api0
+        if params0 is not None:
+            self.mapParams.update(params0)
+
+        self.effect: SpellAbilityEffect = self.api.getSpellEffect()
+
+        self.effect.buildSpellAbility(self)
+        self.originalMapParams.update(self.mapParams)
+
+    def setParent(self, parent: SpellAbility) -> None:
+        self.parent = parent
+
+    def getParent(self) -> SpellAbility:
+        return self.parent
+
+    def canPlay(self) -> bool:
+        # this should never be on the Stack by itself
+        return False
+
+    def getStackDescription(self) -> str:
+        return self.effect.getStackDescriptionWithSubs(self.mapParams, self)
+
+    def resolve(self) -> None:
+        self.effect.resolve(self)
+
+    def getSVarFallback(self, name: str) -> List[IHasSVars]:
+        # fused or spliced
+        if self.getRootAbility().getCardState() != self.getCardState():
+            return [self.getCardState()]
+        return super().getSVarFallback(name)
+
+    def clone(self) -> object:
+        try:
+            return super().clone()
+        except Exception as ex:
+            raise RuntimeError("AbilitySub : clone() error, " + str(ex))
 ```

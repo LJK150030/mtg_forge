@@ -36,6 +36,10 @@ classDiagram
 - [[forge.game.card.Card|Card]]
 - [[forge.game.spellability.SpellAbility|SpellAbility]]
 
+## Design Description
+
+ReplaceUntap is a concrete replacement effect that intercepts untap events, deciding whether the engine should substitute its scripted behavior when a permanent would untap. Extending ReplacementEffect, it overrides `canReplace` to gate the effect on the affected Card matching the `ValidCard` filter and, optionally, a `ValidStepTurnToController` constraint that compares against the active player during the untap stepâ€”a check deliberately framed so the AI can predict the outcome ahead of time. Its `setReplacingObjects` override exposes the affected permanent back to the triggered SpellAbility under the `Card` key. Collaborating with AbilityKey for typed run-parameter lookups, Card for the affected permanent, and SpellAbility for the replacing ability, the class keeps untap-replacement logic data-driven through inherited parameter-matching helpers rather than hardcoded rules.
+
 ## Source
 `forge-game/src/main/java/forge/game/replacement/ReplaceUntap.java`
 
@@ -110,4 +114,45 @@ public class ReplaceUntap extends ReplacementEffect {
     }
 
 }
+```
+
+## Python
+`forge/game/replacement/ReplaceUntap.py`
+
+```python
+from forge.game.replacement.ReplacementEffect import ReplacementEffect
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.spellability.SpellAbility import SpellAbility
+
+
+class ReplaceUntap(ReplacementEffect):
+    """
+    TODO: Write javadoc for this type.
+    """
+
+    def __init__(self, params: dict[str, str], host: Card, intrinsic: bool):
+        """
+        Instantiates a new replace discard.
+
+        :param params: the params
+        :param host: the host
+        """
+        super().__init__(params, host, intrinsic)
+
+    def canReplace(self, runParams: dict[AbilityKey, object]) -> bool:
+        c = runParams.get(AbilityKey.Affected)
+        if not self.matchesValidParam("ValidCard", c):
+            return False
+
+        # compares based on AP in Unstap step:
+        # this allows AI to predict ahead of time
+        if self.hasParam("ValidStepTurnToController") and \
+                not self.matchesValid(runParams.get(AbilityKey.Player), self.getParam("ValidStepTurnToController").split(","), self.getHostCard(), c.getController()):
+            return False
+
+        return True
+
+    def setReplacingObjects(self, runParams: dict[AbilityKey, object], sa: SpellAbility) -> None:
+        sa.setReplacingObject(AbilityKey.Card, runParams.get(AbilityKey.Affected))
 ```

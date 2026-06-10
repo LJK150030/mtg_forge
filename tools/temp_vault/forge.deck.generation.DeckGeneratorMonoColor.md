@@ -48,9 +48,9 @@ classDiagram
 
 ## Design Description
 
-Generates single-color ("mono-color") Magic decks on demand. As a concrete subclass of `DeckGeneratorBase`, it supplies the abstract land/creature/spell ratio hooks—fixed at 40%/35%/25%—and defines `cmcLevels`, a weighted list of `FilterCMC` bands that shapes a low-cost-skewed mana curve, then defers actual card selection to the inherited `addCreaturesAndSpells`, `addBasicLand`, and `adjustDeckSize` routines.
+Generates single-color ("mono-color") Magic decks on demand. As a concrete subclass of `DeckGeneratorBase`, it supplies the abstract land/creature/spell ratio hooksâ€”fixed at 40%/35%/25%â€”and defines `cmcLevels`, a weighted list of `FilterCMC` bands that shapes a low-cost-skewed mana curve, then defers actual card selection to the inherited `addCreaturesAndSpells`, `addBasicLand`, and `adjustDeckSize` routines.
 
-Constructors accept an `IDeckGenPool` card source, a `DeckFormat`, an optional `PaperCard` format filter, and a color name. `initialize` resolves that name to a `ColorSet` via `MagicColor`, falling back to a randomly chosen color when the name is unrecognized. `getDeck` orchestrates creature/spell population, land addition, and final size adjustment, returning the assembled `CardPool`. The design isolates only mono-color policy—ratios, curve, and color choice—keeping all reusable deck-building mechanics in the base type.
+Constructors accept an `IDeckGenPool` card source, a `DeckFormat`, an optional `PaperCard` format filter, and a color name. `initialize` resolves that name to a `ColorSet` via `MagicColor`, falling back to a randomly chosen color when the name is unrecognized. `getDeck` orchestrates creature/spell population, land addition, and final size adjustment, returning the assembled `CardPool`. The design isolates only mono-color policyâ€”ratios, curve, and color choiceâ€”keeping all reusable deck-building mechanics in the base type.
 
 ## Source
 `forge-core/src/main/java/forge/deck/generation/DeckGeneratorMonoColor.java`
@@ -160,4 +160,77 @@ public class DeckGeneratorMonoColor extends DeckGeneratorBase {
         return tDeck;
     }
 }
+```
+
+## Python
+`forge/deck/generation/DeckGeneratorMonoColor.py`
+
+```python
+from forge.deck.generation.DeckGeneratorBase import DeckGeneratorBase
+from forge.card.ColorSet import ColorSet
+from forge.card.MagicColor import MagicColor
+from forge.deck.CardPool import CardPool
+from forge.deck.DeckFormat import DeckFormat
+from forge.item.PaperCard import PaperCard
+from forge.util.MyRandom import MyRandom
+from forge.deck.generation.DeckGeneratorBase.FilterCMC import FilterCMC
+from forge.deck.generation.IDeckGenPool import IDeckGenPool
+
+from typing import Callable, List, Tuple
+
+
+class DeckGeneratorMonoColor(DeckGeneratorBase):
+    def getLandPercentage(self) -> float:
+        return 0.4
+
+    def getCreaturePercentage(self) -> float:
+        return 0.35
+
+    def getSpellPercentage(self) -> float:
+        return 0.25
+
+    def __init__(self, pool0: IDeckGenPool, format0: DeckFormat, *args):
+        # mana curve of the card pool
+        # 20x 0 - 2
+        # 16x 3 - 4
+        # 12x 5 - 6
+        # 4x 7 - 20
+        # = 52x - card pool (before further random filtering)
+        self.cmcLevels: List[Tuple[FilterCMC, int]] = [
+            (FilterCMC(0, 2), 10),
+            (FilterCMC(3, 4), 8),
+            (FilterCMC(5, 6), 5),
+            (FilterCMC(7, 20), 3),
+        ]
+
+        if len(args) == 2:
+            formatFilter0, clr1 = args
+            super().__init__(pool0, format0, formatFilter0)
+            self.initialize(clr1)
+        else:
+            (clr1,) = args
+            super().__init__(pool0, format0)
+            self.initialize(clr1)
+
+    def initialize(self, clr1: str) -> None:
+        if MagicColor.fromName(clr1) == 0:
+            color1 = MyRandom.getRandom().nextInt(5)
+            self.colors = ColorSet.fromMask(MagicColor.WHITE << color1)
+        else:
+            self.colors = ColorSet.fromNames(clr1)
+
+    def getDeck(self, size: int, forAi: bool) -> CardPool:
+        self.addCreaturesAndSpells(size, self.cmcLevels, forAi)
+
+        # Add lands
+        numLands = round(size * self.getLandPercentage())
+
+        self.trace.append("numLands:").append(numLands).append("\n")
+
+        self.addBasicLand(numLands)
+        self.trace.append("DeckSize:").append(self.tDeck.countAll()).append("\n")
+
+        self.adjustDeckSize(size)
+        self.trace.append("DeckSize:").append(self.tDeck.countAll()).append("\n")
+        return self.tDeck
 ```

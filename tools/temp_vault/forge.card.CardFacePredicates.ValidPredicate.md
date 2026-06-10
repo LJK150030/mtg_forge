@@ -37,12 +37,12 @@ classDiagram
 
 ## Design Description
 
-The `ValidPredicate` class is a private static inner class of `CardFacePredicates` that implements `Predicate<ICardFace>`, encapsulating the logic for matching a card face against a string-encoded validity expression. Its responsibility is to parse a `valid` specification—split on a dot into a type clause (e.g. `Card`, `Permanent`, or a concrete card type) and an optional `+`-delimited list of property constraints—and report via `test` whether a given `ICardFace` satisfies it.
+The `ValidPredicate` class is a private static inner class of `CardFacePredicates` that implements `Predicate<ICardFace>`, encapsulating the logic for matching a card face against a string-encoded validity expression. Its responsibility is to parse a `valid` specificationâ€”split on a dot into a type clause (e.g. `Card`, `Permanent`, or a concrete card type) and an optional `+`-delimited list of property constraintsâ€”and report via `test` whether a given `ICardFace` satisfies it.
 
 It collaborates with `ICardFace` to inspect type, mana cost, and string properties, and with `ManaCost` to compare short-string mana costs and converted mana cost. Protected static helpers (`hasProperty`, `hasManaCost`, `hasCMC`) decompose the predicate's sub-checks, with `hasProperty` recursively handling `non`-prefixed negation. The design reflects a lightweight domain-specific query language for card faces, keeping parsing and matching self-contained behind the standard `Predicate` interface so instances compose cleanly with filtering pipelines.
 
 ## Source
-`forge-core/src/main/java/forge/card/CardFacePredicates.java` â€” declaration excerpt
+`forge-core/src/main/java/forge/card/CardFacePredicates.java` Ã¢â‚¬â€ declaration excerpt
 
 ```java
     static class ValidPredicate implements Predicate<ICardFace> {
@@ -100,4 +100,60 @@ It collaborates with `ICardFace` to inspect type, mana cost, and string properti
         }
 
     }
+```
+
+## Python
+`forge/card/CardFacePredicates/ValidPredicate.py`
+
+```python
+from forge.card.ICardFace import ICardFace
+from forge.card.mana.ManaCost import ManaCost
+from forge.util.Predicate import Predicate
+
+
+class ValidPredicate(Predicate):
+    def __init__(self, valid: str):
+        self.valid = valid
+
+    def test(self, input: ICardFace) -> bool:
+        k = self.valid.split(".", 1)
+
+        if "Card" == k[0]:
+            # okay
+            pass
+        elif "Permanent" == k[0]:
+            if input.getType().isInstant() or input.getType().isSorcery():
+                return False
+        elif not input.getType().hasStringType(k[0]):
+            return False
+        if len(k) > 1:
+            for m in k[1].split("+"):
+                if "ManaCost" in m:
+                    manaCost = m[8:]
+                    if not self.hasManaCost(input, manaCost):
+                        return False
+                elif "cmcEQ" in m:
+                    i = int(m[5:])
+                    if not self.hasCMC(input, i):
+                        return False
+                elif not self.hasProperty(input, m):
+                    return False
+
+        return True
+
+    @staticmethod
+    def hasProperty(input: ICardFace, v: str) -> bool:
+        if v.startswith("non"):
+            return not ValidPredicate.hasProperty(input, v[3:])
+        else:
+            return input.getType().hasStringType(v)
+
+    @staticmethod
+    def hasManaCost(input: ICardFace, mC: str) -> bool:
+        return mC == input.getManaCost().getShortString()
+
+    @staticmethod
+    def hasCMC(input: ICardFace, value: int) -> bool:
+        cost = input.getManaCost()
+        return cost is not None and cost.getCMC() == value
 ```

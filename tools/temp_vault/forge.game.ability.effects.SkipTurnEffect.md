@@ -110,3 +110,64 @@ public class SkipTurnEffect extends SpellAbilityEffect {
     }
 }
 ```
+
+## Python
+`forge/game/ability/effects/SkipTurnEffect.py`
+
+```python
+from forge.game.Game import Game
+from forge.game.ability.AbilityFactory import AbilityFactory
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.player.Player import Player
+from forge.game.replacement.ReplacementEffect import ReplacementEffect
+from forge.game.replacement.ReplacementHandler import ReplacementHandler
+from forge.game.replacement.ReplacementLayer import ReplacementLayer
+from forge.game.spellability.AbilitySub import AbilitySub
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Lang import Lang
+
+
+class SkipTurnEffect(SpellAbilityEffect):
+
+    def getStackDescription(self, sa: SpellAbility) -> str:
+        sb = []
+        numTurns = AbilityUtils.calculateAmount(sa.getHostCard(), sa.getParam("NumTurns"), sa)
+
+        for player in self.getTargetPlayers(sa):
+            sb.append(str(player))
+            sb.append(" ")
+
+        sb.append("skips his/her next ")
+        sb.append(str(numTurns))
+        sb.append(" turn(s).")
+        return "".join(sb)
+
+    def resolve(self, sa: SpellAbility) -> None:
+        hostCard = sa.getHostCard()
+        game = hostCard.getGame()
+        name = str(hostCard) + "'s Effect"
+        image = hostCard.getImageKey()
+        numTurns = AbilityUtils.calculateAmount(hostCard, sa.getParam("NumTurns"), sa)
+        repeffstr = "Event$ BeginTurn | ActiveZones$ Command | ValidPlayer$ You " \
+            "| Description$ Skip your next " + (Lang.getNumeral(numTurns) + " turns." if numTurns > 1 else "turn.")
+        effect = "DB$ StoreSVar | SVar$ NumTurns | Type$ CountSVar | Expression$ NumTurns/Minus.1"
+        exile = "DB$ ChangeZone | Defined$ Self | Origin$ Command | Destination$ Exile " \
+            "| ConditionCheckSVar$ NumTurns | ConditionSVarCompare$ EQ0"
+
+        for player in self.getTargetPlayers(sa):
+            eff = self.createEffect(sa, player, name, image)
+            eff.setSVar("NumTurns", "Number$" + str(numTurns))
+            calcTurn = AbilityFactory.getAbility(effect, eff)
+            calcTurn.setSubAbility(AbilityFactory.getAbility(exile, eff))
+
+            re = ReplacementHandler.parseReplacement(repeffstr, eff, True)
+            # Set to layer to Control so it will be applied before "would begin your turn" replacement effects
+            # (Any layer before Other is OK, since default layer is Other.)
+            re.setLayer(ReplacementLayer.Control)
+            re.setOverridingAbility(calcTurn)
+            eff.addReplacementEffect(re)
+
+            game.getAction().moveToCommand(eff, sa)
+```

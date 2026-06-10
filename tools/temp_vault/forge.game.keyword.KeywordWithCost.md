@@ -40,6 +40,12 @@ classDiagram
 **Uses:**
 - [[forge.game.cost.Cost|Cost]]
 
+## Design Description
+
+KeywordWithCost represents a Magic keyword whose activation or effect carries an associated cost, such as a mana payment or alternative resource expenditure. As a concrete extension of the generic `KeywordInstance` (self-typed via the curiously recurring pattern) and an implementation of `KeywordWithCostInterface`, it specializes keyword behavior by parsing a cost from its detail string and exposing it through `getCost`/`getCostString`. It collaborates closely with `Cost`, deferring to the host card's mana cost when the special `"ManaCost"` marker is present and otherwise building a `Cost` from the parsed string.
+
+The design intent is to weave cost information into the keyword's presentation: `getTitle` formats the keyword name with its cost using an em-dash or space depending on whether only mana is involved, while `formatReminderText` injects the cost into reminder text via placeholder substitution, handling grammatical edge cases for "pays", "Pay", and "Discard" phrasing.
+
 ## Source
 `forge-game/src/main/java/forge/game/keyword/KeywordWithCost.java`
 
@@ -68,7 +74,7 @@ public class KeywordWithCost extends KeywordInstance<KeywordWithCost> implements
         sb.append(getTitleWithoutCost());
         Cost cost = getCost();
         if (!cost.isOnlyManaCost()) {
-            sb.append("—");
+            sb.append("Ã¢â‚¬â€");
         } else {
             sb.append(" ");
         }
@@ -110,4 +116,61 @@ public class KeywordWithCost extends KeywordInstance<KeywordWithCost> implements
         }
     }
 }
+```
+
+## Python
+`forge/game/keyword/KeywordWithCost.py`
+
+```python
+from forge.game.keyword.KeywordInstance import KeywordInstance
+from forge.game.keyword.KeywordWithCostInterface import KeywordWithCostInterface
+from forge.game.cost.Cost import Cost
+
+
+class KeywordWithCost(KeywordInstance[KeywordWithCost], KeywordWithCostInterface):
+    cost: Cost
+    costString: str
+
+    def getCost(self) -> Cost:
+        if "ManaCost" == self.costString:
+            return Cost(self.getHostCard().getManaCost(), False)
+        return self.cost
+
+    def getCostString(self) -> str:
+        return self.costString
+
+    def getTitle(self) -> str:
+        sb = []
+        sb.append(self.getTitleWithoutCost())
+        cost = self.getCost()
+        if not cost.isOnlyManaCost():
+            sb.append("\u2014")
+        else:
+            sb.append(" ")
+        sb.append(cost.toSimpleString())
+        return "".join(sb)
+
+    def getTitleWithoutCost(self) -> str:
+        return str(self.getKeyword())
+
+    def parse(self, details: str) -> None:
+        allDetails = details.split(":")
+        self.costString = allDetails[0].split("|", 1)[0].strip()
+        if "ManaCost" != self.costString:
+            self.cost = Cost(self.costString, True)
+
+    def formatReminderText(self, reminderText: str) -> str:
+        # some reminder does not contain cost
+        if "%" in reminderText:
+            cost = self.getCost()
+            costString = cost.toSimpleString()
+            if "pays %" in reminderText:
+                if costString.startswith("Pay "):
+                    costString = costString[4:]
+                elif costString.startswith("Discard "):
+                    reminderText = reminderText.replace("pays", "")
+                    costString = costString.replace("Discard", "discards")
+            return reminderText % costString
+        else:
+            return reminderText
 ```

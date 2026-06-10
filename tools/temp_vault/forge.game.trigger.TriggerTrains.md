@@ -37,6 +37,10 @@ classDiagram
 - [[forge.game.card.Card|Card]]
 - [[forge.game.spellability.SpellAbility|SpellAbility]]
 
+## Design Description
+
+TriggerTrains implements the "trains" triggered-ability handler, modeling the Magic mechanic that fires off a designated card event. As a concrete subclass of Trigger, it supplies the three hooks the trigger framework requires: performTest gates firing through the standard ValidCard match against the run parameters, setTriggeringObjects records the relevant Card so the resolving ability can reference it, and getImportantStackObjects produces a localized stack-description string. It collaborates with AbilityKey to key into the run-parameter map, Card as the host and triggering object, and SpellAbility as the ability being populated. The design keeps the class deliberately thinâ€”delegating construction and shared behavior to the Trigger superclass and reusing inherited helpers like matchesValidParamâ€”so each trigger type only declares its distinguishing validation and binding logic.
+
 ## Source
 `forge-game/src/main/java/forge/game/trigger/TriggerTrains.java`
 
@@ -116,4 +120,41 @@ public class TriggerTrains extends Trigger {
         return sb.toString();
     }
 }
+```
+
+## Python
+`forge/game/trigger/TriggerTrains.py`
+
+```python
+from forge.game.trigger.Trigger import Trigger
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Localizer import Localizer
+
+
+class TriggerTrains(Trigger):
+    """
+    Trigger_Trains class.
+
+    @author Forge
+    """
+
+    def __init__(self, params: dict[str, str], host: Card, intrinsic: bool):
+        super().__init__(params, host, intrinsic)
+
+    def performTest(self, runParams: dict[AbilityKey, object]) -> bool:
+        if not self.matchesValidParam("ValidCard", runParams.get(AbilityKey.Card)):
+            return False
+        return True
+
+    def setTriggeringObjects(self, sa: SpellAbility, runParams: dict[AbilityKey, object]) -> None:
+        sa.setTriggeringObjectsFrom(runParams, AbilityKey.Card)
+
+    def getImportantStackObjects(self, sa: SpellAbility) -> str:
+        sb = []
+        sb.append(Localizer.getInstance().getMessage("lblTrains"))
+        sb.append(": ")
+        sb.append(str(sa.getTriggeringObject(AbilityKey.Card)))
+        return "".join(sb)
 ```

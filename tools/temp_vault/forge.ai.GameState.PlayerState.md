@@ -44,7 +44,7 @@ classDiagram
 As a passive struct, it owns no behavior and depends only on `ZoneType`, which keys its `cardTexts` map associating each game zone with a textual representation of the cards it contains. The use of an `EnumMap` over `ZoneType` reflects deliberate efficiency for a fixed enum key set, while sentinel defaults (`life = -1`, null strings) signal "unset" fields, supporting partial state definitions when scripting or restoring scenarios.
 
 ## Source
-`forge-ai/src/main/java/forge/ai/GameState.java` â€” declaration excerpt
+`forge-ai/src/main/java/forge/ai/GameState.java` Ã¢â‚¬â€ declaration excerpt
 
 ```java
     static class PlayerState {
@@ -60,4 +60,26 @@ As a passive struct, it owns no behavior and depends only on `ZoneType`, which k
         private String putOnStack = null;
         private final Map<ZoneType, String> cardTexts = new EnumMap<>(ZoneType.class);
     }
+```
+
+## Python
+`forge/ai/GameState/PlayerState.py`
+
+```python
+from forge.game.zone.ZoneType import ZoneType
+
+
+class PlayerState:
+    def __init__(self):
+        self.life = -1
+        self.counters = ""
+        self.manaPool = ""
+        self.persistentMana = ""
+        self.landsPlayed = 0
+        self.landsPlayedLastTurn = 0
+        self.numRingTemptedYou = 0
+        self.speed = 0
+        self.precast = None
+        self.putOnStack = None
+        self.cardTexts: dict[ZoneType, str] = {}
 ```

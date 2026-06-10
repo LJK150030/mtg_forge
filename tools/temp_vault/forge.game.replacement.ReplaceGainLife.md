@@ -36,6 +36,10 @@ classDiagram
 - [[forge.game.card.Card|Card]]
 - [[forge.game.spellability.SpellAbility|SpellAbility]]
 
+## Design Description
+
+ReplaceGainLife is a concrete replacement effect that intercepts life-gain events, allowing card behavior to modify or prevent a player from gaining life under specified conditions. As a subclass of ReplacementEffect, it overrides `canReplace` to gate activationâ€”requiring a positive LifeGained amount and validating the affected player and source spell against the effect's `ValidPlayer`, `ValidSource`, and `SourceController` parametersâ€”and overrides `setReplacingObjects` to expose the gained amount and affected player back to the responding SpellAbility. It collaborates with AbilityKey to read and write typed entries in the runtime parameter map, with Card as its host, and with SpellAbility to resolve the triggering source and publish replacement objects. The design follows the engine's template-method pattern, keeping matching logic declarative and data-driven through inherited parameter helpers.
+
 ## Source
 `forge-game/src/main/java/forge/game/replacement/ReplaceGainLife.java`
 
@@ -114,4 +118,38 @@ public class ReplaceGainLife extends ReplacementEffect {
     }
 
 }
+```
+
+## Python
+`forge/game/replacement/ReplaceGainLife.py`
+
+```python
+from forge.game.replacement.ReplacementEffect import ReplacementEffect
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.spellability.SpellAbility import SpellAbility
+
+
+# TODO: Write javadoc for this type.
+class ReplaceGainLife(ReplacementEffect):
+
+    def __init__(self, map: dict[str, str], host: Card, intrinsic: bool):
+        super().__init__(map, host, intrinsic)
+
+    def canReplace(self, runParams: dict[AbilityKey, object]) -> bool:
+        if int(runParams.get(AbilityKey.LifeGained)) <= 0:
+            return False
+        if not self.matchesValidParam("ValidPlayer", runParams.get(AbilityKey.Affected)):
+            return False
+        if not self.matchesValidParam("ValidSource", runParams.get(AbilityKey.SourceSA)):
+            return False
+        if "True" == self.getParam("SourceController"):
+            if runParams.get(AbilityKey.SourceSA) is None or runParams.get(AbilityKey.Affected) != runParams.get(AbilityKey.SourceSA).getActivatingPlayer():
+                return False
+
+        return True
+
+    def setReplacingObjects(self, runParams: dict[AbilityKey, object], sa: SpellAbility) -> None:
+        sa.setReplacingObject(AbilityKey.LifeGained, runParams.get(AbilityKey.LifeGained))
+        sa.setReplacingObject(AbilityKey.Player, runParams.get(AbilityKey.Affected))
 ```

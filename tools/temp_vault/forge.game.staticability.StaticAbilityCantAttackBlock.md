@@ -58,6 +58,12 @@ classDiagram
 - [[forge.game.player.Player|Player]]
 - [[forge.game.staticability.StaticAbility|StaticAbility]]
 
+## Design Description
+
+StaticAbilityCantAttackBlock is a stateless utility class that centralizes the evaluation of combat-related static abilitiesâ€”restrictions and permissions governing whether creatures may attack or block. Rather than holding state, it exposes paired static methods: public query methods (cantAttack, cantBlock, cantBlockBy, canBlockIfReach, canAttackHaste, getMinMaxBlocker, attackVigilance, getAttackCost) that sweep every StaticAbility on cards in the relevant zones, and corresponding applyXxxAbility helpers that test a single StaticAbility's validity parameters against the candidate Card, GameEntity, or Player.
+
+It collaborates closely with StaticAbility (the rule source it interprets), Card and GameEntity (attackers, blockers, and defenders), Game (to enumerate ability sources), and Cost (for attack/block taxes). The design intent is a single dispatch point that combat code consults, keeping creature combat legality and keyword interactions (Defender, Menace, Landwalk, Reach) data-driven and decoupled from individual card implementations.
+
 ## Source
 `forge-game/src/main/java/forge/game/staticability/StaticAbilityCantAttackBlock.java`
 
@@ -526,4 +532,363 @@ public class StaticAbilityCantAttackBlock {
         return true;
     }
 }
+```
+
+## Python
+`forge/game/staticability/StaticAbilityCantAttackBlock.py`
+
+```python
+from org.apache.commons.lang3.tuple.MutablePair import MutablePair
+from org.apache.commons.lang3.tuple.Pair import Pair
+
+from forge.game.Game import Game
+from forge.game.GameEntity import GameEntity
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.cost.Cost import Cost
+from forge.game.keyword.Keyword import Keyword
+from forge.game.player.Player import Player
+from forge.game.zone.ZoneType import ZoneType
+from forge.game.staticability.StaticAbility import StaticAbility
+from forge.game.staticability.StaticAbilityMode import StaticAbilityMode
+from forge.game.staticability.StaticAbilityIgnoreLandwalk import StaticAbilityIgnoreLandwalk
+
+import sys
+
+
+class StaticAbilityCantAttackBlock:
+    """The Class StaticAbility_CantBeCast."""
+
+    @staticmethod
+    def cantAttack(attacker: Card, defender: GameEntity) -> bool:
+        # Keywords
+        # replace with Static Ability if able
+        if attacker.hasKeyword("CARDNAME can't attack.") or attacker.hasKeyword("CARDNAME can't attack or block."):
+            return True
+
+        if attacker.isDetained():
+            return True
+
+        for ca in attacker.getGame().getCardsIn(ZoneType.STATIC_ABILITIES_SOURCE_ZONES):
+            for stAb in ca.getStaticAbilities():
+                if not stAb.checkConditions(StaticAbilityMode.CantAttack):
+                    continue
+
+                if StaticAbilityCantAttackBlock.applyCantAttackAbility(stAb, attacker, defender):
+                    return True
+        return False
+
+    @staticmethod
+    def applyCantAttackAbility(stAb: StaticAbility, card: Card, target: GameEntity) -> bool:
+        """
+        TODO Write javadoc for this method.
+
+        @param stAb a StaticAbility
+        @param card the card
+        @return a Cost
+        """
+        hostCard = stAb.getHostCard()
+        game = hostCard.getGame()
+
+        if not stAb.matchesValidParam("ValidCard", card):
+            return False
+        if card in stAb.getIgnoreEffectCards():
+            return False
+
+        if not stAb.matchesValidParam("Target", target):
+            return False
+
+        # check for "can attack as if didn't have defender" static
+        if stAb.isKeyword(Keyword.DEFENDER) and StaticAbilityCantAttackBlock.canAttackDefender(card, target):
+            return False
+
+        if isinstance(target, Player):
+            defender = target
+        else:
+            c = target
+            if c.isBattle():
+                defender = c.getProtectingPlayer()
+            else:
+                defender = c.getController()
+
+        if stAb.hasParam("DefenderNotNearestToYouInChosenDirection"):
+            if hostCard.getChosenDirection() is None:
+                return False
+            if isinstance(target, Card) and target.isBattle():
+                return False
+            next = card.getController()
+            while not next.isOpponentOf(card.getController()):
+                next = game.getNextPlayerAfter(next, hostCard.getChosenDirection())
+            if defender.equals(next):
+                return False
+        if stAb.hasParam("UnlessDefender"):
+            type = stAb.getParam("UnlessDefender")
+            if defender.hasProperty(type, hostCard.getController(), hostCard, stAb):
+                return False
+
+        return True
+
+    @staticmethod
+    def canAttackDefender(card: Card, target: GameEntity) -> bool:
+        for ca in card.getGame().getCardsIn(ZoneType.STATIC_ABILITIES_SOURCE_ZONES):
+            for stAb in ca.getStaticAbilities():
+                if not stAb.checkConditions(StaticAbilityMode.CanAttackDefender):
+                    continue
+
+                if StaticAbilityCantAttackBlock.applyCanAttackDefenderAbility(stAb, card, target):
+                    return True
+        return False
+
+    @staticmethod
+    def applyCanAttackDefenderAbility(stAb: StaticAbility, card: Card, target: GameEntity) -> bool:
+        if not stAb.matchesValidParam("ValidCard", card):
+            return False
+
+        if not stAb.matchesValidParam("ValidAttacked", target):
+            return False
+
+        return True
+
+    @staticmethod
+    def cantBlock(blocker: Card) -> bool:
+        if blocker.isDetained():
+            return True
+
+        list = CardCollection(blocker)
+        list.addAll(blocker.getGame().getCardsIn(ZoneType.STATIC_ABILITIES_SOURCE_ZONES))
+        for ca in list:
+            for stAb in ca.getStaticAbilities():
+                if not stAb.checkConditions(StaticAbilityMode.CantBlock):
+                    continue
+                if StaticAbilityCantAttackBlock.applyCantBlockAbility(stAb, blocker):
+                    return True
+        return False
+
+    @staticmethod
+    def applyCantBlockAbility(stAb: StaticAbility, blocker: Card) -> bool:
+        if not stAb.matchesValidParam("ValidCard", blocker):
+            return False
+        if blocker in stAb.getIgnoreEffectCards():
+            return False
+        return True
+
+    @staticmethod
+    def canBlockTapped(card: Card) -> bool:
+        game = card.getGame()
+        for ca in game.getCardsIn(ZoneType.STATIC_ABILITIES_SOURCE_ZONES):
+            for stAb in ca.getStaticAbilities():
+                if not stAb.checkConditions(StaticAbilityMode.BlockTapped):
+                    continue
+
+                if StaticAbilityCantAttackBlock.applyBlockTapped(stAb, card):
+                    return True
+        return False
+
+    @staticmethod
+    def applyBlockTapped(stAb: StaticAbility, card: Card) -> bool:
+        if not stAb.matchesValidParam("ValidCard", card):
+            return False
+        return True
+
+    @staticmethod
+    def cantBlockBy(attacker: Card, blocker: Card) -> bool:
+        # add attacker and blocker first in case of LKI
+        list = CardCollection(attacker)
+        if blocker is not None:
+            list.add(blocker)
+        list.addAll(attacker.getGame().getCardsIn(ZoneType.STATIC_ABILITIES_SOURCE_ZONES))
+        for ca in list:
+            for stAb in ca.getStaticAbilities():
+                if not stAb.checkConditions(StaticAbilityMode.CantBlockBy):
+                    continue
+                if StaticAbilityCantAttackBlock.applyCantBlockByAbility(stAb, attacker, blocker):
+                    return True
+        return False
+
+    @staticmethod
+    def applyCantBlockByAbility(stAb: StaticAbility, attacker: Card, blocker: Card) -> bool:
+        """
+        returns true if attacker can't be blocked by blocker
+
+        @param stAb
+        @param attacker
+        @param blocker
+        @return boolean
+        """
+        host = stAb.getHostCard()
+        if not stAb.matchesValidParam("ValidAttacker", attacker):
+            return False
+        if stAb.hasParam("ValidBlocker"):
+            stillblock = True
+            for v in stAb.getParam("ValidBlocker").split(","):
+                if blocker is not None and blocker.isValid(v, host.getController(), host, stAb):
+                    stillblock = False
+                    # Dragon Hunter check
+                    if "withoutReach" in v and StaticAbilityCantAttackBlock.canBlockIfReach(attacker, blocker):
+                        stillblock = True
+                    if not stillblock:
+                        break
+            if stillblock:
+                return False
+        # relative valid relative to each other
+        if not stAb.matchesValidParam("ValidAttackerRelative", attacker, blocker):
+            return False
+        if not stAb.matchesValidParam("ValidBlockerRelative", blocker, attacker):
+            return False
+        if blocker is None or not stAb.matchesValidParam("ValidDefender", blocker.getController()):
+            return False
+        if stAb.isKeyword(Keyword.LANDWALK):
+            if StaticAbilityIgnoreLandwalk.ignoreLandWalk(attacker, blocker, stAb.getKeyword()):
+                return False
+        return True
+
+    @staticmethod
+    def canBlockIfReach(attacker: Card, blocker: Card) -> bool:
+        for ca in attacker.getGame().getCardsIn(ZoneType.STATIC_ABILITIES_SOURCE_ZONES):
+            for stAb in ca.getStaticAbilities():
+                if not stAb.checkConditions(StaticAbilityMode.CanBlockIfReach):
+                    continue
+                if StaticAbilityCantAttackBlock.applyCanBlockIfReachAbility(stAb, attacker, blocker):
+                    return True
+        return False
+
+    @staticmethod
+    def applyCanBlockIfReachAbility(stAb: StaticAbility, attacker: Card, blocker: Card) -> bool:
+        if not stAb.matchesValidParam("ValidAttacker", attacker):
+            return False
+        if not stAb.matchesValidParam("ValidBlocker", blocker):
+            return False
+        return True
+
+    @staticmethod
+    def getAttackCost(stAb: StaticAbility, attacker: Card, target: GameEntity) -> Cost:
+        """
+        TODO Write javadoc for this method.
+
+        @param stAb     a StaticAbility
+        @param attacker the card
+        @return a Cost
+        """
+        hostCard = stAb.getHostCard()
+
+        if not stAb.matchesValidParam("ValidCard", attacker):
+            return None
+
+        if not stAb.matchesValidParam("Target", target):
+            return None
+        costString = stAb.getParam("Cost")
+        if stAb.hasSVar(costString):
+            remember = stAb.hasParam("RememberingAttacker")
+            if remember:
+                hostCard.addRemembered(attacker)
+            # keep X shards
+            addX = costString.startswith("X")
+            costString = str(AbilityUtils.calculateAmount(hostCard, stAb.getSVar(costString), stAb))
+            if addX:
+                costString += " X"
+            if remember:
+                hostCard.removeRemembered(attacker)
+
+        cost = Cost(costString, True)
+
+        if stAb.hasParam("Trigger"):
+            cost.getCostParts().get(0).setTrigger(stAb.getPayingTrigSA())
+
+        return cost
+
+    @staticmethod
+    def getBlockCost(stAb: StaticAbility, blocker: Card, attacker: GameEntity) -> Cost:
+        """
+        TODO Write javadoc for this method.
+
+        @param stAb    a StaticAbility
+        @param blocker the card
+        @return a Cost
+        """
+        hostCard = stAb.getHostCard()
+
+        if not stAb.matchesValidParam("ValidCard", blocker):
+            return None
+
+        if not stAb.matchesValidParam("Attacker", attacker):
+            return None
+        costString = stAb.getParam("Cost")
+        if stAb.hasSVar(costString):
+            addX = costString.startswith("X")
+            costString = str(AbilityUtils.calculateAmount(hostCard, stAb.getSVar(costString), stAb))
+            if addX:
+                costString += " X"
+
+        return Cost(costString, True)
+
+    @staticmethod
+    def canAttackHaste(attacker: Card, defender: GameEntity) -> bool:
+        game = attacker.getGame()
+        if not attacker.isSick():
+            return True
+        for ca in game.getCardsIn(ZoneType.STATIC_ABILITIES_SOURCE_ZONES):
+            for stAb in ca.getStaticAbilities():
+                if not stAb.checkConditions(StaticAbilityMode.CanAttackIfHaste):
+                    continue
+                if StaticAbilityCantAttackBlock.applyCanAttackHasteAbility(stAb, attacker, defender):
+                    return True
+        return False
+
+    @staticmethod
+    def applyCanAttackHasteAbility(stAb: StaticAbility, card: Card, target: GameEntity) -> bool:
+        if not stAb.matchesValidParam("ValidCard", card):
+            return False
+
+        if not stAb.matchesValidParam("ValidTarget", target):
+            return False
+        return True
+
+    @staticmethod
+    def getMinMaxBlocker(attacker: Card, defender: Player) -> Pair:
+        result = MutablePair.of(1, sys.maxsize)
+
+        if attacker.hasKeyword(Keyword.MENACE):
+            result.setLeft(2)
+
+        game = attacker.getGame()
+        for ca in game.getCardsIn(ZoneType.STATIC_ABILITIES_SOURCE_ZONES):
+            for stAb in ca.getStaticAbilities():
+                if not stAb.checkConditions(StaticAbilityMode.MinMaxBlocker):
+                    continue
+                StaticAbilityCantAttackBlock.applyMinMaxBlockerAbility(stAb, attacker, defender, result)
+        return result
+
+    @staticmethod
+    def applyMinMaxBlockerAbility(stAb: StaticAbility, attacker: Card, defender: Player, result: MutablePair) -> None:
+        if not stAb.matchesValidParam("ValidCard", attacker):
+            return
+
+        if stAb.hasParam("Min"):
+            if "All" == stAb.getParam("Min"):
+                if defender is not None:
+                    result.setLeft(defender.getCreaturesInPlay().size())
+            else:
+                result.setLeft(AbilityUtils.calculateAmount(stAb.getHostCard(), stAb.getParam("Min"), stAb))
+
+        if stAb.hasParam("Max"):
+            result.setRight(AbilityUtils.calculateAmount(stAb.getHostCard(), stAb.getParam("Max"), stAb))
+
+    @staticmethod
+    def attackVigilance(card: Card) -> bool:
+        game = card.getGame()
+        for ca in game.getCardsIn(ZoneType.STATIC_ABILITIES_SOURCE_ZONES):
+            for stAb in ca.getStaticAbilities():
+                if not stAb.checkConditions(StaticAbilityMode.AttackVigilance):
+                    continue
+
+                if StaticAbilityCantAttackBlock.applyAttackVigilanceAbility(stAb, card):
+                    return True
+        return False
+
+    @staticmethod
+    def applyAttackVigilanceAbility(stAb: StaticAbility, card: Card) -> bool:
+        if not stAb.matchesValidParam("ValidCard", card):
+            return False
+        return True
 ```

@@ -40,7 +40,7 @@ PriceOfProgress is a static, stateless helper nested within `SpecialCardAi` that
 As a member of the engine's special-case AI dispatch, it collaborates with `Player` and `Card` to inspect battlefield and hand zones and with `SpellAbility` for cast context. The design intent is heuristic risk assessment: it defers in the early game, computes lethal thresholds for the AI and each opponent, exploits cards like Ensnaring Bridge that reward emptying the hand, and declines plays where the AI would proportionally lose more life than its opponents. Inline TODOs note that damage is approximated rather than precisely calculated.
 
 ## Source
-`forge-ai/src/main/java/forge/ai/SpecialCardAi.java` â€” declaration excerpt
+`forge-ai/src/main/java/forge/ai/SpecialCardAi.java` Ã¢â‚¬â€ declaration excerpt
 
 ```java
     // Price of Progress
@@ -110,4 +110,74 @@ As a member of the engine's special-case AI dispatch, it collaborates with `Play
             return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
         }
     }
+```
+
+## Python
+`forge/ai/SpecialCardAi/PriceOfProgress.py`
+
+```python
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.ai.ComputerUtil import ComputerUtil
+from forge.game.card.Card import Card
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CardPredicates import CardPredicates
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+
+
+class PriceOfProgress:
+    @staticmethod
+    def consider(ai: Player, sa: SpellAbility) -> AiAbilityDecision:
+        # Don't play in early game - opponent likely still has lands to play
+        if ai.getGame().getPhaseHandler().getTurn() < 10:
+            return AiAbilityDecision(0, AiPlayDecision.AnotherTime)
+
+        aiLands = len(CardLists.filter(ai.getCardsIn(ZoneType.Battlefield), CardPredicates.NONBASIC_LANDS))
+        # TODO Better if we actually calculate the true damage
+        willDieToPCasting = (ai.getLife() <= aiLands * 2)
+        if not willDieToPCasting:
+            hasBridge = False
+            for c in ai.getCardsIn(ZoneType.Battlefield):
+                # Do we have a card in play that makes us want to empty out hand?
+                if c.hasSVar("PreferredHandSize") and len(ai.getCardsIn(ZoneType.Hand)) > int(c.getSVar("PreferredHandSize")):
+                    hasBridge = True
+                    break
+
+            # Do if we need to lose cards to activate Ensnaring Bridge or Cursed Scroll
+            # even if suboptimal play, but don't waste the card too early even then!
+            if hasBridge:
+                return AiAbilityDecision(100, AiPlayDecision.PlayToEmptyHand)
+
+        willPlay = True
+        for opp in ai.getOpponents():
+            oppLands = len(CardLists.filter(opp.getCardsIn(ZoneType.Battlefield), CardPredicates.NONBASIC_LANDS))
+            # Don't if no enemy nonbasic lands
+            if oppLands == 0:
+                willPlay = False
+                continue
+
+            # Always if enemy would die and we don't!
+            # TODO : predict actual damage instead of assuming it'll be 2*lands
+            # Don't if we lose, unless we lose anyway to unblocked creatures next turn
+            if willDieToPCasting and \
+                    (not (ComputerUtil.aiLifeInDanger(ai, True, 0)) and (ai.getOpponentsSmallestLifeTotal() <= oppLands * 2)):
+                willPlay = False
+            # Do if we can win
+            if opp.getLife() <= oppLands * 2:
+                return AiAbilityDecision(1000, AiPlayDecision.WillPlay)
+            # Don't if we'd lose a larger percentage of our remaining life than enemy
+            if (aiLands / float(ai.getLife())) > \
+                    (oppLands / float(ai.getOpponentsSmallestLifeTotal())):
+                willPlay = False
+
+            # Don't if loss is equal in percentage but we lose more points
+            if ((aiLands / float(ai.getLife())) == (oppLands / float(ai.getOpponentsSmallestLifeTotal()))) \
+                    and (aiLands > oppLands):
+                willPlay = False
+
+        if willPlay:
+            return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+        return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
 ```

@@ -125,6 +125,12 @@ classDiagram
 - [[forge.util.CardTranslation|CardTranslation]]
 - [[forge.util.Localizer|Localizer]]
 
+## Design Description
+
+PaperCard is a lightweight, immutable representation of a real-world Magic card identity used outside active gamesâ€”in inventories, decks, and tradesâ€”deliberately delegating the full gameplay ruleset to its referenced CardRules. As a concrete implementation of IPaperCard and InventoryItemFromSet, it keys a card by name, edition, collector number, art index, foil status, and an immutable PaperCardFlags bundle, defining equals/hashCode and compareTo over these so instances serve as stable map keys and sort deterministically.
+
+Its design intent centers on cheap, shareable variants: foil, no-sell, marked-color, and flagless copies are produced through copy constructors and cached transient fields rather than mutation. It collaborates with CardRarity, CardSplitType, ColorSet, and ICardFace to expose face and image data, and with CardTranslation/Localizer for localized display and searchable names. Custom serialization (readObject/readResolve) re-resolves the canonical card from StaticData and back-fills defaults for legacy saves.
+
 ## Source
 `forge-core/src/main/java/forge/item/PaperCard.java`
 
@@ -779,4 +785,537 @@ public class PaperCard implements Comparable<IPaperCard>, InventoryItemFromSet, 
         }
     }
 }
+```
+
+## Python
+`forge/item/PaperCard.py`
+
+```python
+from forge.ImageKeys import ImageKeys
+from forge.StaticData import StaticData
+from forge.card.CardRarity import CardRarity
+from forge.card.CardRules import CardRules
+from forge.card.CardSplitType import CardSplitType
+from forge.card.ColorSet import ColorSet
+from forge.card.ICardFace import ICardFace
+from forge.card.PrintSheet import PrintSheet
+from forge.card.CardEdition import CardEdition
+from forge.card.CardDb import CardDb
+from forge.item.IPaperCard import IPaperCard
+from forge.item.InventoryItemFromSet import InventoryItemFromSet
+from forge.item.PaperCardPredicates import PaperCardPredicates
+from forge.util.CardTranslation import CardTranslation
+from forge.util.Localizer import Localizer
+from forge.util.TextUtil import TextUtil
+from forge.util.ImageUtil import ImageUtil
+
+import sys
+import unicodedata
+
+
+def _stripAccents(s):
+    # Equivalent of org.apache.commons.lang3.StringUtils.stripAccents
+    if s is None:
+        return None
+    normalized = unicodedata.normalize("NFD", s)
+    return "".join(c for c in normalized if unicodedata.category(c) != "Mn")
+
+
+def _compareTo(a, b):
+    if a == b:
+        return 0
+    return -1 if a < b else 1
+
+
+def _compareToIgnoreCase(a, b):
+    al, bl = a.lower(), b.lower()
+    if al == bl:
+        return 0
+    return -1 if al < bl else 1
+
+
+def _intCompare(a, b):
+    return (a > b) - (a < b)
+
+
+class PaperCard(InventoryItemFromSet, IPaperCard):
+    serialVersionUID = 2942081982620691205
+
+    class PaperCardFlags:
+        """
+        Contains properties of a card which distinguish it from an otherwise identical copy of the card with the same
+        name, edition, and collector number. Examples include permanent markings on the card, and flags for Adventure
+        mode.
+        """
+        serialVersionUID = -3924720485840169336
+
+        def __init__(self, *args):
+            if len(args) == 1:
+                flags = args[0]
+                if "markedColors" in flags:
+                    self.markedColors = ColorSet.fromNames(list(flags.get("markedColors")))
+                else:
+                    self.markedColors = None
+                self.noSellValue = "noSellValue" in flags
+            else:
+                # Copy constructor. There are some better ways to do this, and they should be explored once we have more
+                # than 4 or 5 fields here. Just need to ensure it's impossible to accidentally change a field while the
+                # PaperCardFlags object is in use.
+                copyFrom, markedColors, noSellValue = args
+                if markedColors is None:
+                    markedColors = copyFrom.markedColors
+                elif markedColors.isColorless():
+                    markedColors = None
+                self.markedColors = markedColors
+                self.noSellValue = noSellValue if noSellValue is not None else copyFrom.noSellValue
+            self.asMap = None
+
+        def withMarkedColors(self, markedColors):
+            if markedColors is None:
+                markedColors = ColorSet.C
+            return PaperCard.PaperCardFlags(self, markedColors, None)
+
+        def withNoSellValueFlag(self, noSellValue):
+            return PaperCard.PaperCardFlags(self, None, noSellValue)
+
+        def toMap(self):
+            if self.asMap is not None:
+                return self.asMap
+            out = {}
+            if self.markedColors is not None and not self.markedColors.isColorless():
+                out["markedColors"] = str(self.markedColors)
+            if self.noSellValue:
+                out["noSellValue"] = "true"
+            self.asMap = out
+            return out
+
+        def __str__(self):
+            return "\t".join(k + "=" + v for k, v in self.toMap().items())
+
+        def toString(self):
+            return self.__str__()
+
+        def equals(self, o):
+            if not isinstance(o, PaperCard.PaperCardFlags):
+                return False
+            return self.noSellValue == o.noSellValue and self.markedColors == o.markedColors
+
+        def __eq__(self, o):
+            return self.equals(o)
+
+        def hashCode(self):
+            return hash((self.markedColors, self.noSellValue))
+
+        def __hash__(self):
+            return self.hashCode()
+
+    def __init__(self, *args):
+        if len(args) == 3:
+            rules0, edition0, rarity0 = args
+            self._init(rules0, edition0, rarity0, IPaperCard.DEFAULT_ART_INDEX, False,
+                       IPaperCard.NO_COLLECTOR_NUMBER, IPaperCard.NO_ARTIST_NAME, IPaperCard.NO_FUNCTIONAL_VARIANT, None)
+        elif len(args) == 2:
+            copyFrom, flags = args
+            self._init(copyFrom.rules, copyFrom.edition, copyFrom.rarity, copyFrom.artIndex, copyFrom.foil,
+                       copyFrom.collectorNumber, copyFrom.artist, copyFrom.functionalVariant, flags)
+            self.flaglessVersion = copyFrom.flaglessVersion
+        elif len(args) == 8:
+            rules0, edition0, rarity0, artIndex0, foil0, collectorNumber0, artist0, functionalVariant = args
+            self._init(rules0, edition0, rarity0, artIndex0, foil0, collectorNumber0, artist0, functionalVariant, None)
+        elif len(args) == 9:
+            self._init(*args)
+        else:
+            raise TypeError("Invalid arguments for PaperCard constructor")
+
+    def _init(self, rules, edition, rarity, artIndex, foil, collectorNumber, artist, functionalVariant, flags):
+        if rules is None or edition is None or rarity is None:
+            raise ValueError("Cannot create card without rules, edition or rarity")
+        self.rules = rules
+        self.name = rules.getName()
+        self.edition = edition
+        self.artIndex = max(artIndex, IPaperCard.DEFAULT_ART_INDEX)
+        self.foil = foil
+        self.rarity = rarity
+        self.artist = artist
+        self.collectorNumber = collectorNumber if (collectorNumber is not None and collectorNumber != "") else IPaperCard.NO_COLLECTOR_NUMBER
+        self.functionalVariant = functionalVariant if functionalVariant is not None else IPaperCard.NO_FUNCTIONAL_VARIANT
+        self.displayName = rules.getDisplayNameForVariant(functionalVariant)
+        self.hasFlavorName = not (self.name == self.displayName)
+        # If the user changes the language this will make cards sort by the old language until they restart the game.
+        # This is a good tradeoff
+        self.sortableName = TextUtil.toSortableName(CardTranslation.getTranslatedName(self.displayName))
+
+        if flags is None or flags == PaperCard.PaperCardFlags.IDENTITY_FLAGS:
+            self.flags = PaperCard.PaperCardFlags.IDENTITY_FLAGS
+        else:
+            self.flags = flags
+
+        # transient / calculated fields
+        self.foiledVersion = None
+        self.noSellVersion = None
+        self.flaglessVersion = None
+        self.hasImage = None
+        self.searchableNames = None
+        self.searchableNameLang = None
+        self.sortableCNKey = None
+        self.cardImageKey = None
+        self.cardAltImageKey = None
+
+    def getName(self):
+        return self.name
+
+    def getEdition(self):
+        return self.edition
+
+    def getCollectorNumber(self):
+        if self.collectorNumber is None:
+            self.collectorNumber = IPaperCard.NO_COLLECTOR_NUMBER
+        return self.collectorNumber
+
+    def getFunctionalVariant(self):
+        return self.functionalVariant
+
+    def getMarkedColors(self):
+        return self.flags.markedColors
+
+    def getArtIndex(self):
+        return self.artIndex
+
+    def isFoil(self):
+        return self.foil
+
+    def isToken(self):
+        return False
+
+    def getRules(self):
+        return self.rules
+
+    def getRarity(self):
+        return self.rarity
+
+    def getArtist(self):
+        if self.artist is None:
+            self.artist = IPaperCard.NO_ARTIST_NAME
+        return self.artist
+
+    # FIXME: At the moment, every card can get Foiled, with no restriction on the
+    # corresponding Edition - so we could Foil even Alpha cards.
+    def getFoiled(self):
+        if self.foil:
+            return self
+
+        if self.foiledVersion is None:
+            self.foiledVersion = PaperCard(self.rules, self.edition, self.rarity,
+                                           self.artIndex, True, str(self.collectorNumber), self.artist, self.functionalVariant)
+        return self.foiledVersion
+
+    def getUnFoiled(self):
+        if not self.foil:
+            return self
+
+        unFoiledVersion = PaperCard(self.rules, self.edition, self.rarity,
+                                    self.artIndex, False, str(self.collectorNumber), self.artist, self.functionalVariant)
+        return unFoiledVersion
+
+    def getNoSellVersion(self):
+        if self.flags.noSellValue:
+            return self
+
+        if self.noSellVersion is None:
+            self.noSellVersion = PaperCard(self, self.flags.withNoSellValueFlag(True))
+        return self.noSellVersion
+
+    def getMeldBaseCard(self):
+        if self.getRules().getSplitType() != CardSplitType.Meld:
+            return None
+
+        # This is the base part of the meld duo
+        if self.getRules().getOtherPart() is None:
+            return self
+
+        meldWith = self.getRules().getMeldWith()
+        if meldWith is None:
+            return None
+
+        sheets = StaticData.instance().getCardEdition(self.edition).getPrintSheetsBySection()
+        for sheet in sheets:
+            if sheet.contains(self):
+                return sheet.find(PaperCardPredicates.name(meldWith))
+
+        return None
+
+    def copyWithoutFlags(self):
+        if self.flaglessVersion is None:
+            if self.flags == PaperCard.PaperCardFlags.IDENTITY_FLAGS:
+                self.flaglessVersion = self
+            else:
+                self.flaglessVersion = PaperCard(self, None)
+        return self.flaglessVersion
+
+    def copyWithFlags(self, flags):
+        if flags is None or len(flags) == 0:
+            return self.copyWithoutFlags()
+        return PaperCard(self, PaperCard.PaperCardFlags(flags))
+
+    def copyWithMarkedColors(self, colors):
+        if colors == self.flags.markedColors:
+            return self
+        return PaperCard(self, self.flags.withMarkedColors(colors))
+
+    def getItemType(self):
+        localizer = Localizer.getInstance()
+        return localizer.getMessage("lblCard")
+
+    def getMarkedFlags(self):
+        return self.flags
+
+    def hasNoSellValue(self):
+        return self.flags.noSellValue
+
+    def hasImage(self, update=False):
+        if self.hasImage is None or update:  # cache value since it's not free to calculate
+            self.hasImage = ImageKeys.hasImage(self, update)
+        return self.hasImage
+
+    FAKE_CARD = None
+
+    # Want this class to be a key for HashTable
+    def equals(self, obj):
+        if self is obj:
+            return True
+        if obj is None:
+            return False
+        if type(self) != type(obj):
+            return False
+
+        other = obj
+        if self.name != other.name:
+            return False
+        if self.edition != other.edition:
+            return False
+        if self.getCollectorNumber() != other.getCollectorNumber():
+            return False
+        if self.flags != other.flags:
+            return False
+        return (other.foil == self.foil) and (other.artIndex == self.artIndex)
+
+    def __eq__(self, obj):
+        return self.equals(obj)
+
+    def hashCode(self):
+        return hash((self.name, self.edition, self.collectorNumber, self.artIndex, self.foil, self.flags))
+
+    def __hash__(self):
+        return self.hashCode()
+
+    # FIXME: Check
+    def toString(self):
+        return CardTranslation.getTranslatedName(self.name)
+        # cannot still decide, if this "name|set" format is needed anymore
+        # return String.format("%s|%s", name, cardSet);
+
+    def __str__(self):
+        return self.toString()
+
+    def getCardName(self):
+        return self.name
+
+    def getDisplayName(self):
+        return self.displayName
+
+    def hasFlavorName(self):
+        return self.hasFlavorName
+
+    def getAllSearchableNames(self):
+        if self.searchableNames is not None and CardTranslation.getLanguageSelected() == self.searchableNameLang:
+            return self.searchableNames
+        if self.searchableNameLang is not None:  # Changed the language. May as well update this.
+            self.sortableName = TextUtil.toSortableName(CardTranslation.getTranslatedName(self.displayName))
+        self.searchableNameLang = CardTranslation.getLanguageSelected()
+        self.searchableNames = self.computeSearchableNames(self.searchableNameLang)
+        return self.searchableNames
+
+    def computeSearchableNames(self, language):
+        otherFace = self.getOtherFace()
+        if otherFace is None and IPaperCard.NO_FUNCTIONAL_VARIANT == self.functionalVariant:
+            # 99% of cases will land here. This could possibly be optimized further by computing and storing this on
+            # the CardRules instead, but flavor names will still need to work per-print, or at least per-variant.
+            if language == "en-US":
+                return {self.name}
+            else:
+                translatedName = CardTranslation.getTranslatedName(self.name)
+                return {n for n in (self.name, translatedName, _stripAccents(translatedName)) if n is not None}
+        names = set()
+        mainFace = self.getMainFace()
+        names.add(mainFace.getName())
+        mainFlavor = mainFace.getFlavorName()
+        if mainFlavor is not None:
+            names.add(mainFlavor)
+        if otherFace is not None:
+            names.add(otherFace.getName())
+            otherFlavor = otherFace.getFlavorName()
+            if otherFlavor is not None:
+                names.add(otherFlavor)
+
+            names.add(mainFace.getName() + " // " + otherFace.getName())
+            if mainFlavor is not None and otherFlavor is not None:
+                names.add(mainFlavor + " // " + otherFlavor)
+        if language != "en-US":
+            translated = {t for t in (CardTranslation.getTranslatedName(n) for n in names) if t is not None}
+            names.update(translated)
+        noAccents = {_stripAccents(n) for n in names}
+        names.update(noAccents)
+        return names
+
+    # This (utility) method transform a collectorNumber String into a key string for sorting.
+    # This method proxies the same strategy implemented in CardEdition.CardInSet class from which the
+    # collectorNumber of PaperCard instances are originally retrieved.
+    # This is also to centralise the criterion, whilst avoiding code duplication.
+    #
+    # Note: The method has been made private as this is for internal API use **only**, to allow
+    # for generalised comparison with IPaperCard instances (see compareTo)
+    #
+    # The public API of PaperCard includes a method (i.e. getCollectorNumberSortingKey) which applies
+    # this method on instance's own collector number.
+    #
+    # @return a zero-padded 5-digits String + any non-numerical content in the input String, properly attached.
+    @staticmethod
+    def makeCollectorNumberSortingKey(collectorNumber0):
+        collectorNumber = collectorNumber0
+        if collectorNumber == IPaperCard.NO_COLLECTOR_NUMBER:
+            collectorNumber = None
+        return CardEdition.getSortableCollectorNumber(collectorNumber)
+
+    def getCollectorNumberSortingKey(self):
+        if self.sortableCNKey is None:
+            # Hardly the case, but just invoke getter rather than direct
+            # attribute to be sure that collectorNumber has been retrieved already!
+            self.sortableCNKey = PaperCard.makeCollectorNumberSortingKey(self.getCollectorNumber())
+        return self.sortableCNKey
+
+    def compareTo(self, o):
+        nameCmp = _compareToIgnoreCase(self.name, o.getName())
+        if 0 != nameCmp:
+            return nameCmp
+        # FIXME: compare sets properly
+        setDiff = _compareTo(self.edition, o.getEdition())
+        if 0 != setDiff:
+            return setDiff
+        thisCollNrKey = self.getCollectorNumberSortingKey()
+        othrCollNrKey = PaperCard.makeCollectorNumberSortingKey(o.getCollectorNumber())
+        collNrCmp = _compareTo(thisCollNrKey, othrCollNrKey)
+        if 0 != collNrCmp:
+            return collNrCmp
+        return _intCompare(self.artIndex, o.getArtIndex())
+
+    def __lt__(self, o):
+        return self.compareTo(o) < 0
+
+    def readObject(self, ois):
+        # default deserialization
+        ois.defaultReadObject()
+
+        pc = StaticData.instance().getCommonCards().getCard(self.name, self.edition, self.artIndex)
+        if pc is None:
+            pc = StaticData.instance().getVariantCards().getCard(self.name, self.edition, self.artIndex)
+            if pc is None:
+                print("PaperCard: " + self.name + " not found with set and index " + self.edition + ", " + str(self.artIndex))
+                pc = self.readObjectAlternate(self.name, self.edition)
+                if pc is None:
+                    pc = StaticData.instance().getCommonCards().createUnsupportedCard(self.name)
+                    # raise IOException(TextUtil.concatWithSpace("Card", name, "not found with set and index", edition, Integer.toString(artIndex)))
+                print("Alternate object found: " + pc.getName() + ", " + pc.getEdition() + ", " + str(pc.getArtIndex()))
+        self.rules = pc.getRules()
+        self.rarity = pc.getRarity()
+        self.displayName = pc.getDisplayName()
+        self.hasFlavorName = pc.hasFlavorName()
+        self.sortableName = TextUtil.toSortableName(CardTranslation.getTranslatedName(self.displayName))
+
+    def readObjectAlternate(self, name, edition):
+        pc = StaticData.instance().getCommonCards().getCard(name, edition)
+        if pc is None:
+            pc = StaticData.instance().getVariantCards().getCard(name, edition)
+
+        if pc is None:
+            pc = StaticData.instance().getCommonCards().getCard(name)
+            if pc is None:
+                pc = StaticData.instance().getVariantCards().getCard(name)
+
+        return pc
+
+    def readResolve(self):
+        # If we deserialize an old PaperCard with no flags, reinitialize as a fresh copy to set default flags.
+        if self.flags is None:
+            return PaperCard(self, None)
+        return self
+
+    def getImageKey(self, altState):
+        normalizedName = _stripAccents(self.name)
+        imageKey = ImageKeys.CARD_PREFIX + normalizedName + CardDb.NameSetSeparator \
+            + self.edition + CardDb.NameSetSeparator + str(self.artIndex)
+        if altState:
+            imageKey += ImageKeys.BACKFACE_POSTFIX
+        return imageKey
+
+    def getCardImageKey(self):
+        if self.cardImageKey is None:
+            self.cardImageKey = ImageUtil.getImageKey(self, "", True)
+        return self.cardImageKey
+
+    def getCardAltImageKey(self):
+        if self.cardAltImageKey is None:
+            if self.hasBackFace():
+                self.cardAltImageKey = ImageUtil.getImageKey(self, "back", True)
+            else:  # altImageKey will be the same as cardImageKey
+                self.cardAltImageKey = ImageUtil.getImageKey(self, "", True)
+        return self.cardAltImageKey
+
+    def hasBackFace(self):
+        cst = self.rules.getSplitType()
+        return cst == CardSplitType.Transform or cst == CardSplitType.Flip or cst == CardSplitType.Meld \
+            or cst == CardSplitType.Modal
+
+    def getMainFace(self):
+        face = self.rules.getMainPart()
+        return self.getVariantForFace(face)
+
+    def getOtherFace(self):
+        face = self.rules.getOtherPart()
+        if face is None:
+            return None
+        return self.getVariantForFace(face)
+
+    def getAllFaces(self):
+        return [self.getVariantForFace(face) for face in self.rules.getAllFaces()]
+
+    def getVariantForFace(self, face):
+        if not face.hasFunctionalVariants() or self.functionalVariant == IPaperCard.NO_FUNCTIONAL_VARIANT:
+            return face
+        variant = face.getFunctionalVariant(self.functionalVariant)
+        if variant is None:
+            print("Tried to apply unknown or unsupported variant - Card: \"%s\"; Variant: %s" % (face.getName(), self.functionalVariant), file=sys.stderr)
+            return face
+        return variant
+
+    # Return true if card is one of the five basic lands that can be added for free
+    def isVeryBasicLand(self):
+        return (self.getName() == "Swamp") \
+            or (self.getName() == "Plains") \
+            or (self.getName() == "Island") \
+            or (self.getName() == "Forest") \
+            or (self.getName() == "Mountain")
+
+    def getSortableName(self):
+        return self.sortableName
+
+    def isUnRebalanced(self):
+        return StaticData.instance().isRebalanced("A-" + self.name)
+
+    def isRebalanced(self):
+        return StaticData.instance().isRebalanced(self.name)
+
+
+PaperCard.PaperCardFlags.IDENTITY_FLAGS = PaperCard.PaperCardFlags({})
+
+PaperCard.FAKE_CARD = PaperCard(CardRules.getUnsupportedCardNamed("Fake Card"), "Fake Edition", CardRarity.Common)
 ```

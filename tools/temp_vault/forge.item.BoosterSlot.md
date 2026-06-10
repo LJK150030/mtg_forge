@@ -30,6 +30,12 @@ classDiagram
     }
 ```
 
+## Design Description
+
+Booster packs in Magic: The Gathering contain card slots whose rarities can sometimes be upgraded; `BoosterSlot` models one such slot and the probability table that governs whether its base rarity is replaced. As a plain data-and-behavior class in `forge.item`, it parses a list of configuration linesâ€”a `Base` rarity and any number of weighted `Replace` entriesâ€”accumulating the weights into a `TreeMap<Float,String>` keyed by cumulative probability thresholds.
+
+The static `parseSlot` factory mirrors the constructor, offering a named entry point for building instances from raw config contents. At pack-generation time, `replaceSlot` draws a random float and walks the sorted threshold map to pick a replacement rarity, falling back to the base rarity when no threshold is met. The `final` slot name and immutable map reflect intent that a slot's identity and probability distribution stay fixed after construction, while the cumulative-range design keeps the random lookup simple and ordered.
+
 ## Source
 `forge-core/src/main/java/forge/item/BoosterSlot.java`
 
@@ -94,4 +100,56 @@ public class BoosterSlot {
         return baseRarity;
     }
 }
+```
+
+## Python
+`forge/item/BoosterSlot.py`
+
+```python
+from forge.item.BoosterSlot import BoosterSlot
+import random
+
+
+class BoosterSlot:
+    def __init__(self, slotName: str, contents: list[str]):
+        self.slotName = slotName
+        self.baseRarity = None
+        self.startRange = 0.0
+        self.slotPercentages: dict[float, str] = {}
+        self.parseContents(contents)
+
+    def getSlotName(self) -> str:
+        return self.slotName
+
+    @staticmethod
+    def parseSlot(slotName: str, contents: list[str]) -> "BoosterSlot":
+        return BoosterSlot(slotName, contents)
+
+    def parseContents(self, contents: list[str]) -> None:
+        for content in contents:
+            if content.startswith("#"):
+                continue
+            parts = content.split("=", 1)
+            key = parts[0]
+            value = parts[1]
+
+            if key.lower() == "base":
+                self.baseRarity = value
+            elif key.lower() == "replace":
+                # Are there other things?
+                replaceParts = value.split(" ", 1)
+                pct = float(replaceParts[0])
+                self.startRange += pct
+                self.slotPercentages[self.startRange] = replaceParts[1]
+
+    def replaceSlot(self) -> str:
+        rand = random.random()
+        for key in sorted(self.slotPercentages.keys()):
+            if rand < key:
+                print("Replaced a base slot! " + self.slotName + " -> " + self.slotPercentages[key])
+
+                return self.slotPercentages[key]
+
+        # If we didn't find a key, return the base rarity from that edition
+        return self.baseRarity
 ```

@@ -49,3 +49,23 @@ public interface GameEvent extends Event, Serializable {
     <T> T visit(IGameEventVisitor<T> visitor);
 }
 ```
+
+## Python
+`forge/game/event/GameEvent.py`
+
+```python
+from forge.game.event.Event import Event
+from forge.game.event.IGameEventVisitor import IGameEventVisitor
+
+from abc import ABC, abstractmethod
+from typing import TypeVar
+
+T = TypeVar("T")
+
+
+class GameEvent(Event, ABC):
+
+    @abstractmethod
+    def visit(self, visitor: IGameEventVisitor[T]) -> T:
+        ...
+```

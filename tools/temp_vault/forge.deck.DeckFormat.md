@@ -726,11 +726,477 @@ public enum DeckFormat {
         Predicate<CardRules> predicate = CardRulesPredicates.hasColorIdentity(cmdCI);
         if (commanders.size() == 1 && commanders.get(0).getRules().canBePartnerCommander()) {
             // Also show available partners a commander can have a partner.
-            // 702.124g If a legendary card has more than one partner ability, you may choose which one to use when designating your commander, but you canÃ¢â‚¬â„¢t use both.
+            // 702.124g If a legendary card has more than one partner ability, you may choose which one to use when designating your commander, but you canÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢t use both.
             // Notably, no partner ability or combination of partner abilities can ever let a player have more than two commanders.
             predicate = predicate.or(CardRulesPredicates.canBePartnerCommanderWith(commanders.get(0).getRules()));
         }
         return PaperCardPredicates.fromRules(predicate);
     }
 }
+```
+
+## Python
+`forge/deck/DeckFormat.py`
+
+```python
+from enum import Enum
+import sys
+
+from forge.StaticData import StaticData
+from forge.card.CardRules import CardRules
+from forge.card.CardRulesPredicates import CardRulesPredicates
+from forge.card.CardType import CardType
+from forge.card.ColorSet import ColorSet
+from forge.card.ICardFace import ICardFace
+from forge.card.MagicColor import MagicColor
+from forge.deck.CardPool import CardPool
+from forge.deck.Deck import Deck
+from forge.deck.DeckSection import DeckSection
+from forge.deck.generation.DeckGenPool import DeckGenPool
+from forge.deck.generation.DeckGeneratorBase.FilterCMC import FilterCMC
+from forge.deck.generation.IDeckGenPool import IDeckGenPool
+from forge.item.IPaperCard import IPaperCard
+from forge.item.PaperCard import PaperCard
+from forge.item.PaperCardPredicates import PaperCardPredicates
+from forge.util.Aggregates import Aggregates
+from forge.util.TextUtil import TextUtil
+
+INT_MAX = 2147483647
+ADVPROCLAMATION = "Advantageous Proclamation"
+# SOVREALM = "Sovereign's Realm"
+
+_TINYLEADERS_BANNED_CARDS = ImmutableSet.of(
+    "Ancestral Recall", "Balance", "Black Lotus", "Black Vise", "Channel", "Chaos Orb", "Contract From Below", "Counterbalance", "Darkpact", "Demonic Attorney", "Demonic Tutor", "Earthcraft", "Edric, Spymaster of Trest", "Falling Star",
+    "Fastbond", "Flash", "Goblin Recruiter", "Grindstone", "Hermit Druid", "Imperial Seal", "Jeweled Bird", "Karakas", "Library of Alexandria", "Mana Crypt", "Mana Drain", "Mana Vault", "Metalworker", "Mind Twist", "Mishra's Workshop",
+    "Mox Emerald", "Mox Jet", "Mox Pearl", "Mox Ruby", "Mox Sapphire", "Najeela, the Blade Blossom", "Necropotence", "Shahrazad", "Skullclamp", "Sol Ring", "Strip Mine", "Survival of the Fittest", "Sword of Body and Mind", "Time Vault", "Time Walk", "Timetwister",
+    "Timmerian Fiends", "Tolarian Academy", "Umezawa's Jitte", "Vampiric Tutor", "Wheel of Fortune", "Yawgmoth's Will")
+
+_TINYLEADERS_BANNED_COMMANDERS = ImmutableSet.of("Derevi, Empyrial Tactician", "Erayo, Soratami Ascendant", "Rofellos, Llanowar Emissary")
+
+
+def _TinyLeaders_cardPoolFilter(rules):
+    # Check for split cards explicitly, as using rules.getManaCost().getCMC()
+    # will return the sum of the costs, which is not what we want.
+    if rules.getMainPart().getManaCost().getCMC() > 3:
+        return False  # Only cards with CMC less than 3 are allowed
+    otherPart = rules.getOtherPart()
+    if otherPart is not None and otherPart.getManaCost().getCMC() > 3:
+        return False  # Only cards with CMC less than 3 are allowed
+    return rules.getName() not in _TINYLEADERS_BANNED_CARDS
+
+
+class DeckFormat(Enum):
+    #               Main board: allowed size         SB: restriction  Max distinct non-basic cards
+    Constructed    = (Range.of(60, INT_MAX), Range.of(0, 15), 4)
+    QuestDeck      = (Range.of(40, INT_MAX), Range.of(0, 15), 4)
+    Limited        = (Range.of(40, INT_MAX), None, INT_MAX)
+    Commander      = (getattr(Range, "is")(99), Range.of(0, 10), 1, None,
+                      lambda card: StaticData.instance().getCommanderPredicate().test(card))
+    Oathbreaker    = (getattr(Range, "is")(58), Range.of(0, 10), 1, None,
+                      lambda card: StaticData.instance().getOathbreakerPredicate().test(card))
+    Pauper         = (getattr(Range, "is")(60), Range.of(0, 10), 1)
+    Brawl          = (getattr(Range, "is")(59), Range.of(0, 15), 1, None,
+                      lambda card: StaticData.instance().getBrawlPredicate().test(card))
+    TinyLeaders    = (getattr(Range, "is")(49), Range.of(0, 10), 1, _TinyLeaders_cardPoolFilter)
+    PlanarConquest = (Range.of(40, INT_MAX), getattr(Range, "is")(0), 1)
+    Adventure      = (Range.of(40, INT_MAX), Range.of(0, INT_MAX), 4)
+    Vanguard       = (Range.of(60, INT_MAX), getattr(Range, "is")(0), 4)
+    Planechase     = (Range.of(60, INT_MAX), getattr(Range, "is")(0), 4)
+    Archenemy      = (Range.of(60, INT_MAX), getattr(Range, "is")(0), 4)
+    Puzzle         = (Range.of(0, INT_MAX), getattr(Range, "is")(0), 4)
+
+    def __new__(cls, *args):
+        obj = object.__new__(cls)
+        obj._value_ = len(cls.__members__) + 1
+        return obj
+
+    def __init__(self, mainRange0, sideRange0, maxCardCopies0, cardPoolFilter0=None, paperCardPoolFilter0=None):
+        self.mainRange = mainRange0
+        self.sideRange = sideRange0  # null => no check
+        self.maxCardCopies = maxCardCopies0
+        self.cardPoolFilter = cardPoolFilter0
+        self.paperCardPoolFilter = paperCardPoolFilter0
+
+    def hasCommander(self):
+        return self is DeckFormat.Commander or self is DeckFormat.Oathbreaker or self is DeckFormat.TinyLeaders or self is DeckFormat.Brawl
+
+    def hasSignatureSpell(self):
+        return self is DeckFormat.Oathbreaker
+
+    @staticmethod
+    def smartValueOf(value, defaultValue):
+        if value is None:
+            return defaultValue
+
+        valToCompate = value.strip()
+        for v in DeckFormat.values():
+            if v.name.lower() == valToCompate.lower():
+                return v
+
+        raise ValueError("No element named " + value + " in enum GameType")
+
+    @staticmethod
+    def values():
+        return list(DeckFormat)
+
+    def getSideRange(self):
+        return self.sideRange
+
+    def getMainRange(self):
+        return self.mainRange
+
+    def getMaxCardCopies(self, card=None):
+        if card is None:
+            return self.maxCardCopies
+        if DeckFormat.canHaveSpecificNumberInDeck(card) is not None:
+            return DeckFormat.canHaveSpecificNumberInDeck(card)
+        elif DeckFormat.canHaveAnyNumberOf(card):
+            return INT_MAX
+        elif card.getRules().isVariant():
+            section = DeckSection.matchingSection(card)
+            if section is DeckSection.Planes and card.getRules().getType().isPhenomenon():
+                return 2  # These are two-of.
+            return self.getExtraSectionMaxCopies(section)
+        else:
+            return self.getMaxCardCopies()
+
+    def getExtraSectionMaxCopies(self, section):
+        if self is DeckFormat.Limited:
+            if section is DeckSection.Attractions or section is DeckSection.Contraptions:
+                return INT_MAX
+            # fall through to default behavior
+        if section in (DeckSection.Avatar, DeckSection.Commander, DeckSection.Planes, DeckSection.Dungeon, DeckSection.Attractions, DeckSection.Contraptions):
+            return 1
+        if section is DeckSection.Schemes:
+            return 2
+        if section is DeckSection.Conspiracy:
+            return INT_MAX
+        return self.maxCardCopies
+
+    def getPrimaryDeckSections(self):
+        if self is DeckFormat.Planechase:
+            return {DeckSection.Planes}
+        if self is DeckFormat.Archenemy:
+            return {DeckSection.Schemes}
+        if self is DeckFormat.Vanguard:
+            return {DeckSection.Avatar}
+        out = {DeckSection.Main}
+        if self.sideRange is None or self.sideRange.getMaximum() > 0:
+            out.add(DeckSection.Sideboard)
+        if self.hasCommander():
+            out.add(DeckSection.Commander)
+        return out
+
+    def getDeckConformanceProblem(self, deck):
+        if deck is None:
+            return "is not selected"
+
+        deckSize = deck.getMain().countAll()
+
+        min = self.getMainRange().getMinimum()
+        max = self.getMainRange().getMaximum()
+        # noBasicLands = False
+
+        # Adjust minimum base on number of Advantageous Proclamation or similar cards
+        conspiracies = deck.get(DeckSection.Conspiracy)
+        if conspiracies is not None:
+            min -= (5 * conspiracies.countByName(ADVPROCLAMATION))
+            # Commented out to remove warnings from the code.
+            # noBasicLands = conspiracies.countByName(SOVREALM) > 0
+
+        if self.hasCommander():
+            cmdCI = 0
+            wildColors = 0
+            if self == DeckFormat.Oathbreaker:  # 1 Oathbreaker and 1 Signature Spell
+                oathbreaker = deck.getOathbreaker()
+                if oathbreaker is None:
+                    return "is missing an oathbreaker"
+                if deck.getSignatureSpell() is None:
+                    return "is missing a signature spell"
+                if len(deck.getCommanders()) > 2:
+                    return "has too many commanders"
+                cmdCI = oathbreaker.getRules().getColorIdentity().getColor()
+            else:  # 1 Commander or 2 Partner Commanders
+                commanders = deck.getCommanders()
+
+                if len(commanders) == 0:
+                    return "is missing a commander"
+
+                if len(commanders) > 2:
+                    return "has too many commanders"
+
+                for pc in commanders:
+                    if not self.isLegalCommander(pc.getRules()):
+                        return "has an illegal commander"
+                    cmdCI |= pc.getRules().getColorIdentity().getColor()
+                    wildColors += 1 if pc.getRules().getAddsWildCardColor() else 0
+
+                # Special check for Partner
+                if len(commanders) == 2:
+                    # Two commander = 98 cards
+                    min -= 1
+                    max -= 1
+
+                    a = commanders[0]
+                    b = commanders[1]
+
+                    if not a.getRules().canBePartnerCommanders(b.getRules()):
+                        return "has an illegal commander partnership"
+
+            erroneousCI = []
+
+            basicLandNames = set()
+            for cp in deck.get(DeckSection.Main):
+                # If colourless commander allow one type of basic land
+                if cmdCI == 0 and cp.getKey().getRules().getType().isBasicLand():
+                    basicLandNames.add(cp.getKey().getName())
+                    if len(basicLandNames) < 2:
+                        continue
+                missingColors = cp.getKey().getRules().getColorIdentity().getMissingColors(cmdCI)
+                if missingColors.countColors() > 0:
+                    if missingColors.countColors() <= wildColors:
+                        wildColors -= missingColors.countColors()
+                        cmdCI |= missingColors.getColor()
+                    else:
+                        erroneousCI.append(cp.getKey())
+            if deck.has(DeckSection.Sideboard):
+                for cp in deck.get(DeckSection.Sideboard):
+                    if not cp.getKey().getRules().getColorIdentity().hasNoColorsExcept(cmdCI):
+                        erroneousCI.append(cp.getKey())
+
+            if len(erroneousCI) != 0:
+                sb = "contains one or more cards that do not match the commanders color identity:"
+
+                for cp in erroneousCI:
+                    sb += "\n" + cp.getName()
+
+                return sb
+
+        if deckSize < min:
+            return TextUtil.concatWithSpace("should have at least", str(min), "cards")
+
+        if deckSize > max:
+            return TextUtil.concatWithSpace("should have no more than", str(max), "cards")
+
+        if self.cardPoolFilter is not None:
+            erroneousCI = []
+            for cp in deck.getAllCardsInASinglePool():
+                if not self.cardPoolFilter(cp.getKey().getRules()):
+                    erroneousCI.append(cp.getKey())
+            if len(erroneousCI) != 0:
+                sb = "contains the following illegal cards:\n"
+
+                for cp in erroneousCI:
+                    sb += "\n" + cp.getName()
+
+                return sb
+
+        if deck.has(DeckSection.Attractions):
+            attractionError = self.getAttractionDeckConformanceProblem(deck)
+            if attractionError is not None:
+                return attractionError
+
+        if deck.has(DeckSection.Contraptions):
+            contraptionError = self.getContraptionDeckConformanceProblem(deck)
+            if contraptionError is not None:
+                return contraptionError
+
+        maxCopies = self.getMaxCardCopies()
+        # Must contain no more than 4 of the same card shared among the main deck and sideboard, except
+        # basic lands, Shadowborn Apostle, Relentless Rats and Rat Colony.
+        # Seven Dwarves can have 7 in the deck. More than 7 in deck + sb is ok in Limited
+
+        allCards = deck.getAllCardsInASinglePool(self.hasCommander(), False)
+
+        # Should group all cards by name, so that different editions of same card are really counted as the same card
+        for cp in Aggregates.groupSumBy(allCards, lambda pc: StaticData.instance().getCommonCards().getNormalizedName(pc.getName())):
+            simpleCard = StaticData.instance().getCommonCards().getCard(cp.getKey())
+            if simpleCard is not None and simpleCard.getRules().isCustom() and not self.allowCustomCards():
+                return TextUtil.concatWithSpace("contains a Custom Card:", cp.getKey(), "\nPlease Enable Custom Cards in Forge Preferences to use this deck.")
+            # Might cause issues since it ignores "Special" Cards
+            if simpleCard is None:
+                simpleCard = StaticData.instance().getVariantCards().getCard(cp.getKey())
+                if simpleCard is None:
+                    return TextUtil.concatWithSpace("contains the nonexisting card", cp.getKey())
+
+            if DeckFormat.canHaveAnyNumberOf(simpleCard):
+                continue
+
+            cardCopies = DeckFormat.canHaveSpecificNumberInDeck(simpleCard)
+            if cardCopies is not None and deck.getMain().countByName(cp.getKey()) > cardCopies:
+                return TextUtil.concatWithSpace("must not contain more than", str(cardCopies), "copies of the card", cp.getKey())
+
+            if cardCopies is None and cp.getValue() > maxCopies:
+                return TextUtil.concatWithSpace("must not contain more than", str(maxCopies), "copies of the card", cp.getKey())
+
+        # The sideboard must contain either 0 or 15 cards
+        sideboardSize = deck.get(DeckSection.Sideboard).countAll() if deck.has(DeckSection.Sideboard) else 0
+        sbRange = self.getSideRange()
+        if sbRange is not None and sideboardSize > 0 and not sbRange.contains(sideboardSize):
+            return (TextUtil.concatWithSpace("must have a sideboard of", str(sbRange.getMinimum()), "cards or no sideboard at all")
+                    if sbRange.getMinimum() == sbRange.getMaximum()
+                    else TextUtil.concatWithSpace("must have a sideboard of", str(sbRange.getMinimum()), "to", str(sbRange.getMaximum()), "cards or no sideboard at all"))
+
+        return None
+
+    def getAttractionDeckConformanceProblem(self, deck):
+        if self is DeckFormat.Limited:
+            # Limited attraction decks have a minimum size of 3 and no singleton restriction.
+            if deck.get(DeckSection.Attractions).countAll() < 3:
+                return "must contain at least 3 attractions, or none at all"
+            return None
+        attractionDeck = deck.get(DeckSection.Attractions)
+        if attractionDeck.countAll() < 10:
+            return "must contain at least 10 attractions, or none at all"
+        for cp in attractionDeck:
+            # Constructed Attraction deck must be singleton
+            if attractionDeck.countByName(cp.getKey()) > 1:
+                return TextUtil.concatWithSpace("contains more than 1 copy of the attraction", cp.getKey().getName())
+        return None
+
+    def getContraptionDeckConformanceProblem(self, deck):
+        if self is DeckFormat.Limited:
+            # Limited contraption decks have no restrictions.
+            return None
+        contraptionDeck = deck.get(DeckSection.Contraptions)
+        if contraptionDeck.countAll() < 15:
+            return "must contain at least 15 contraptions, or none at all"
+        for cp in contraptionDeck:
+            # Constructed Contraption deck must be singleton
+            if contraptionDeck.countByName(cp.getKey()) > 1:
+                return TextUtil.concatWithSpace("contains more than 1 copy of the contraption", cp.getKey().getName())
+        return None
+
+    @staticmethod
+    def canHaveAnyNumberOf(iCard):
+        return iCard.getRules().getType().isBasicLand() \
+            or Iterables.contains(iCard.getRules().getMainPart().getKeywords(),
+                                   "A deck can have any number of cards named CARDNAME.")
+
+    @staticmethod
+    def canHaveSpecificNumberInDeck(card):
+        # Ideally, this would be parsed during card parsing and set this value
+        return card.getRules().getKeywordMagnitude("DeckLimit")
+
+    @staticmethod
+    def getPlaneSectionConformanceProblem(planes):
+        # Must contain at least 10 planes/phenomenons, but max 2 phenomenons. Singleton.
+        if planes is None or planes.countAll() < 10:
+            return "should have at least 10 planes"
+        phenoms = 0
+        for cp in planes:
+            if cp.getKey().getRules().getType().hasType(CardType.CoreType.Phenomenon):
+                phenoms += 1
+            if cp.getValue() > 1:
+                return "must not contain multiple copies of any Plane or Phenomena"
+        if phenoms > 2:
+            return "must not contain more than 2 Phenomena"
+        return None
+
+    @staticmethod
+    def getSchemeSectionConformanceProblem(schemes):
+        # Must contain at least 20 schemes, max 2 of each.
+        if schemes is None or schemes.countAll() < 20:
+            return "must contain at least 20 schemes"
+
+        for cp in schemes:
+            if cp.getValue() > 2:
+                return TextUtil.concatWithSpace("must not contain more than 2 copies of any Scheme, but has", str(cp.getValue()), "of", TextUtil.enclosedSingleQuote(cp.getKey().getName()))
+        return None
+
+    def getCardPool(self, basePool):
+        if self.cardPoolFilter is None:
+            if self.paperCardPoolFilter is None:
+                return basePool
+            filteredPool = DeckGenPool()
+            for pc in basePool.getAllCards():
+                if self.paperCardPoolFilter(pc):
+                    filteredPool.add(pc)
+            return filteredPool
+        filteredPool = DeckGenPool()
+        for pc in basePool.getAllCards():
+            if self.cardPoolFilter(pc.getRules()):
+                filteredPool.add(pc)
+        return filteredPool
+
+    def adjustCMCLevels(self, cmcLevels):
+        if self is DeckFormat.TinyLeaders:
+            cmcLevels.clear()
+            cmcLevels.append(ImmutablePair.of(FilterCMC(0, 1), 3))
+            cmcLevels.append(ImmutablePair.of(FilterCMC(2, 2), 3))
+            cmcLevels.append(ImmutablePair.of(FilterCMC(3, 3), 3))
+            return
+        # Not needed by default
+
+    def allowCustomCards(self):
+        if self is DeckFormat.Adventure:
+            # If the player has them, may as well allow them.
+            return True
+        return StaticData.instance().allowCustomCardsInDecksConformance()
+
+    def isLegalCard(self, pc):
+        if self.cardPoolFilter is None:
+            if self.paperCardPoolFilter is None:
+                return True
+            return self.paperCardPoolFilter(pc)
+        return self.cardPoolFilter(pc.getRules())
+
+    def isLegalCommander(self, rules):
+        if self.cardPoolFilter is not None and not self.cardPoolFilter(rules):
+            return False
+        result = None
+        if self is DeckFormat.Oathbreaker:
+            result = rules.canBeOathbreaker()
+        elif self is DeckFormat.Brawl:
+            result = rules.canBeBrawlCommander()
+        elif self is DeckFormat.TinyLeaders:
+            result = rules.canBeTinyLeadersCommander()
+        else:
+            result = rules.canBeCommander()
+        if self is DeckFormat.TinyLeaders:
+            return result and rules.getName() not in _TINYLEADERS_BANNED_COMMANDERS
+        return result
+
+    def isLegalDeckPredicate(self):
+        return lambda deck: self.getDeckConformanceProblem(deck) is None
+
+    def hasLegalCardsPredicate(self, enforceDeckLegality):
+        def predicate(deck):
+            if not enforceDeckLegality:
+                return True
+            if self.cardPoolFilter is not None:
+                for cp in deck.getAllCardsInASinglePool():
+                    if not self.cardPoolFilter(cp.getKey().getRules()):
+                        return False
+            if self.paperCardPoolFilter is not None:
+                for cp in deck.getAllCardsInASinglePool():
+                    if not self.paperCardPoolFilter(cp.getKey()):
+                        print(
+                            "Excluding deck: '" + str(deck) +
+                            "' Reason: '" + str(cp.getKey()) + "' is not legal.",
+                            file=sys.stderr
+                        )
+                        return False
+            return True
+        return predicate
+
+    def isLegalCardPredicate(self):
+        return self.isLegalCard
+
+    def isLegalCommanderPredicate(self):
+        return lambda card: self.isLegalCommander(card.getRules())
+
+    def isLegalCardForCommanderPredicate(self, commanders):
+        cmdCI = 0
+        for p in commanders:
+            cmdCI |= p.getRules().getColorIdentity().getColor()
+        if cmdCI == MagicColor.ALL_COLORS:
+            return lambda x: True
+        predicate = CardRulesPredicates.hasColorIdentity(cmdCI)
+        if len(commanders) == 1 and commanders[0].getRules().canBePartnerCommander():
+            # Also show available partners a commander can have a partner.
+            # 702.124g If a legendary card has more than one partner ability, you may choose which one to use when designating your commander, but you can??????????????????t use both.
+            # Notably, no partner ability or combination of partner abilities can ever let a player have more than two commanders.
+            predicate = getattr(predicate, "or")(CardRulesPredicates.canBePartnerCommanderWith(commanders[0].getRules()))
+        return PaperCardPredicates.fromRules(predicate)
 ```

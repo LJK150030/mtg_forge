@@ -37,6 +37,10 @@ classDiagram
 - [[forge.game.card.Card|Card]]
 - [[forge.game.spellability.SpellAbility|SpellAbility]]
 
+## Design Description
+
+TriggerNewGame is a concrete Trigger subclass representing the trigger event fired at the start of a new game. As a leaf in the trigger hierarchy, it specializes the abstract Trigger base by supplying the minimal behavior required for an always-firing, stateless event: performTest unconditionally returns true, setTriggeringObjects records no context, and getImportantStackObjects yields an empty string. It collaborates with AbilityKey-keyed runtime parameter maps, the host Card and SpellAbility passed through the standard trigger lifecycle, delegating construction to its superclass. The design intent is deliberate simplicityâ€”the class carries no per-game state and exists mainly to slot a "new game" event into Forge's uniform trigger dispatch framework, letting card abilities subscribe to game initialization without special-casing.
+
 ## Source
 `forge-game/src/main/java/forge/game/trigger/TriggerNewGame.java`
 
@@ -109,4 +113,28 @@ public class TriggerNewGame extends Trigger {
         return "";
     }
 }
+```
+
+## Python
+`forge/game/trigger/TriggerNewGame.py`
+
+```python
+from forge.game.trigger.Trigger import Trigger
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.spellability.SpellAbility import SpellAbility
+
+
+class TriggerNewGame(Trigger):
+    def __init__(self, params: dict[str, str], host: Card, intrinsic: bool):
+        super().__init__(params, host, intrinsic)
+
+    def performTest(self, runParams: dict[AbilityKey, object]) -> bool:
+        return True
+
+    def setTriggeringObjects(self, sa: SpellAbility, runParams: dict[AbilityKey, object]) -> None:
+        pass
+
+    def getImportantStackObjects(self, sa: SpellAbility) -> str:
+        return ""
 ```

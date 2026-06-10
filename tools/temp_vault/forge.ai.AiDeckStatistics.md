@@ -53,9 +53,9 @@ classDiagram
 
 ## Design Description
 
-`AiDeckStatistics` is a small, immutable value object that summarizes the mana profile of an AI player's deck—average converted mana cost, standard deviation, maximum total and colored costs, peak colored-pip requirements per color (in WUBRGC order, from `ManaCost.getColorShardCounts()`), and land count. It exposes public fields and a single all-args constructor, holding no behavior of its own; it serves as a compact input for AI deck-building and casting heuristics.
+`AiDeckStatistics` is a small, immutable value object that summarizes the mana profile of an AI player's deckâ€”average converted mana cost, standard deviation, maximum total and colored costs, peak colored-pip requirements per color (in WUBRGC order, from `ManaCost.getColorShardCounts()`), and land count. It exposes public fields and a single all-args constructor, holding no behavior of its own; it serves as a compact input for AI deck-building and casting heuristics.
 
-Construction is delegated to three layered static factories. `fromCards` performs the core aggregation over an `Iterable<Card>`, consulting each card's `CardRules` and `CardType` to separate lands from spells and tally costs and pips. `fromDeck` flattens a `Deck`'s Main and Commander `CardPool` sections into `Card` instances via `PaperCard`, then defers to `fromCards`. `fromPlayer` resolves a `Player`'s registered deck, falling back to scanning the player's live cards when no decklist exists (tests or atypical matches). TODO markers indicate the type is intentionally incomplete—standard-deviation and mana-source counting remain stubbed pending numerically stable implementations.
+Construction is delegated to three layered static factories. `fromCards` performs the core aggregation over an `Iterable<Card>`, consulting each card's `CardRules` and `CardType` to separate lands from spells and tally costs and pips. `fromDeck` flattens a `Deck`'s Main and Commander `CardPool` sections into `Card` instances via `PaperCard`, then defers to `fromCards`. `fromPlayer` resolves a `Player`'s registered deck, falling back to scanning the player's live cards when no decklist exists (tests or atypical matches). TODO markers indicate the type is intentionally incompleteâ€”standard-deviation and mana-source counting remain stubbed pending numerically stable implementations.
 
 ## Source
 `forge-ai/src/main/java/forge/ai/AiDeckStatistics.java`
@@ -184,4 +184,107 @@ public class AiDeckStatistics {
     }
 
 }
+```
+
+## Python
+`forge/ai/AiDeckStatistics.py`
+
+```python
+from forge.card.CardRules import CardRules
+from forge.card.CardType import CardType
+from forge.deck.CardPool import CardPool
+from forge.deck.Deck import Deck
+from forge.deck.DeckSection import DeckSection
+from forge.game.card.Card import Card
+from forge.game.player.Player import Player
+from forge.item.PaperCard import PaperCard
+
+import sys
+
+
+class AiDeckStatistics:
+
+    def __init__(self, averageCMC: float, stddevCMC: float, maxCost: int, maxColoredCost: int, maxPips: list[int], numLands: int):
+        self.averageCMC = averageCMC
+        # TODO implement this. Use a numerically stable algorithm from
+        # https://en.wikipedia.org/wiki/Algorithms_for_calculating_variance#Weighted_incremental_algorithm
+        self.stddevCMC = stddevCMC
+        self.maxCost = maxCost
+        self.maxColoredCost = maxColoredCost
+        # in WUBRGC order from ManaCost.getColorShardCounts()
+        self.maxPips = maxPips
+        # self.numSources = [0] * 6
+        self.numLands = numLands
+
+    @staticmethod
+    def fromCards(cards) -> "AiDeckStatistics":
+        totalCMC = 0
+        totalCount = 0
+        numLands = 0
+        maxCost = 0
+        maxPips = [0] * 6
+        maxColoredCost = 0
+        for c in cards:
+            rules = c.getRules()
+            if rules is None:
+                print(str(c) + " CardRules is null" + ("/token" if c.isToken() else "."), file=sys.stderr)
+                continue
+            type = rules.getType()
+            if type.isLand():
+                numLands += 1
+            else:
+                cost = rules.getManaCost().getCMC()
+                # TODO use alternate casting costs for this, free spells will usually be cast for free
+                maxCost = max(maxCost, cost)
+                totalCMC += cost
+                totalCount += 1
+                pips = rules.getManaCost().getColorShardCounts()
+                colored_pips = 0
+                for i in range(len(pips)):
+                    maxPips[i] = max(maxPips[i], pips[i])
+                    if i < 5:
+                        colored_pips += pips[i]
+                maxColoredCost = max(maxColoredCost, colored_pips)
+
+            # TODO implement the number of mana sources
+            # find the sources
+            # What about non-mana-ability mana sources?
+            # fetchlands, ramp spells, etc
+
+        return AiDeckStatistics(0 if totalCount == 0 else totalCMC / float(totalCount),
+                                0,  # TODO use https://en.wikipedia.org/wiki/Algorithms_for_calculating_variance
+                                maxCost,
+                                maxColoredCost,
+                                maxPips,
+                                numLands
+                                )
+
+    @staticmethod
+    def fromDeck(deck: Deck, player: Player) -> "AiDeckStatistics":
+        cardlist: list[Card] = []
+        for deckEntry in deck:
+            key = deckEntry.getKey()
+            if key == DeckSection.Main or key == DeckSection.Commander:
+                for poolEntry in deckEntry.getValue():
+                    card = Card.fromPaperCard(poolEntry.getKey(), player)
+                    cardlist.append(card)
+            else:
+                pass  # ignore other sections
+
+        return AiDeckStatistics.fromCards(cardlist)
+
+    @staticmethod
+    def fromPlayer(player: Player) -> "AiDeckStatistics":
+        deck = player.getRegisteredPlayer().getDeck()
+        if deck.isEmpty():
+            # we're in a test or some weird match, search through the hand and library and build the decklist
+            cardlist: list[Card] = []
+            for c in player.getAllCards():
+                if c.getPaperCard() is None:
+                    continue
+                cardlist.append(c)
+
+            return AiDeckStatistics.fromCards(cardlist)
+
+        return AiDeckStatistics.fromDeck(deck, player)
 ```

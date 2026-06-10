@@ -37,6 +37,10 @@ classDiagram
 - [[forge.game.card.Card|Card]]
 - [[forge.game.spellability.SpellAbility|SpellAbility]]
 
+## Design Description
+
+TriggerFight implements the game's "fight" trigger event, firing whenever a creature designated as the Fighter participates in a fight. As a concrete subclass of Trigger, it specializes the abstract trigger contract: performTest gates activation by validating the fighting creature against the trigger's ValidCard parameter, while setTriggeringObjects binds the Fighter from the run parameters onto the resolving SpellAbility so downstream effects can reference it. It collaborates with AbilityKey to key triggering data, Card as its host, and SpellAbility as the ability the trigger feeds. Notably, the class carries only behaviorâ€”state and lifecycle are delegated to the superclass via the constructorâ€”and getImportantStackObjects uses Localizer to produce a human-readable Fighter label for stack display, reflecting an intent to keep triggers thin, data-driven, and localization-aware.
+
 ## Source
 `forge-game/src/main/java/forge/game/trigger/TriggerFight.java`
 
@@ -117,4 +121,70 @@ public class TriggerFight extends Trigger {
         return sb.toString();
     }
 }
+```
+
+## Python
+`forge/game/trigger/TriggerFight.py`
+
+```python
+/*
+ * Forge: Play Magic: the Gathering.
+ * Copyright (C) 2011  Forge Team
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
+from typing import Map
+
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Localizer import Localizer
+from forge.game.trigger.Trigger import Trigger
+
+
+class TriggerFight(Trigger):
+    """
+    Trigger_Championed class.
+
+    @author Forge
+    @version $Id: TriggerChampioned.java 24762 2014-02-09 10:18:46Z swordshine $
+    @since 1.0.15
+    """
+
+    def __init__(self, params: dict[str, str], host: Card, intrinsic: bool):
+        """
+        Constructor for Trigger_Fight.
+
+        :param params: a HashMap object.
+        :param host: a Card object.
+        :param intrinsic: the intrinsic
+        """
+        super().__init__(params, host, intrinsic)
+
+    def performTest(self, runParams: dict[AbilityKey, object]) -> bool:
+        if not self.matchesValidParam("ValidCard", runParams.get(AbilityKey.Fighter)):
+            return False
+        return True
+
+    def setTriggeringObjects(self, sa: SpellAbility, runParams: dict[AbilityKey, object]) -> None:
+        sa.setTriggeringObjectsFrom(runParams, AbilityKey.Fighter)
+
+    def getImportantStackObjects(self, sa: SpellAbility) -> str:
+        sb = []
+        sb.append(Localizer.getInstance().getMessage("lblFighter"))
+        sb.append(": ")
+        sb.append(str(sa.getTriggeringObject(AbilityKey.Fighter)))
+        return "".join(sb)
 ```

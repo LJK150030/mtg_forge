@@ -50,7 +50,7 @@ classDiagram
 
 ## Design Description
 
-Forge MTG engine, providing the artificial-intelligence decision logic for regeneration-shield effects. Extending `SpellAbilityAi`, it overrides `checkApiLogic` to decide whether the AI should activate or cast a regeneration ability, and `doTriggerNoCost` to resolve mandatory or triggered cases. The core heuristic is purely defensive: it regenerates a creature only when one of the AI's permanents is genuinely at risk—threatened by something on the stack (via `ComputerUtil.predictThreatenedObjects`) or likely to be destroyed during the declare-blockers step (via `ComputerUtilCombat`)—and otherwise declines to avoid wasting the ability.
+Forge MTG engine, providing the artificial-intelligence decision logic for regeneration-shield effects. Extending `SpellAbilityAi`, it overrides `checkApiLogic` to decide whether the AI should activate or cast a regeneration ability, and `doTriggerNoCost` to resolve mandatory or triggered cases. The core heuristic is purely defensive: it regenerates a creature only when one of the AI's permanents is genuinely at riskâ€”threatened by something on the stack (via `ComputerUtil.predictThreatenedObjects`) or likely to be destroyed during the declare-blockers step (via `ComputerUtilCombat`)â€”and otherwise declines to avoid wasting the ability.
 
 It collaborates with the game model (`Game`, `Combat`, `Player`, `Card`, `CardCollection`) and the shared `ComputerUtil*` helpers, returning its verdict as an `AiAbilityDecision` carrying a confidence score and an `AiPlayDecision` reason. Notable intent includes targeting the best at-risk creature via `getBestCreatureAI`, skipping creatures that already hold regeneration shields, and seeking slightly more value by trying to save up to two permanents when multiple are defined.
 
@@ -253,4 +253,151 @@ public class RegenerateAi extends SpellAbilityAi {
     }
 
 }
+```
+
+## Python
+`forge/ai/ability/RegenerateAi.py`
+
+```python
+from forge.ai.SpellAbilityAi import SpellAbilityAi
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.ai.ComputerUtil import ComputerUtil
+from forge.ai.ComputerUtilCard import ComputerUtilCard
+from forge.ai.ComputerUtilCombat import ComputerUtilCombat
+from forge.game.Game import Game
+from forge.game.GameObject import GameObject
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CardPredicates import CardPredicates
+from forge.game.combat.Combat import Combat
+from forge.game.phase.PhaseType import PhaseType
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+
+
+class RegenerateAi(SpellAbilityAi):
+
+    def checkApiLogic(self, ai: Player, sa: SpellAbility) -> AiAbilityDecision:
+        game = ai.getGame()
+        combat = game.getCombat()
+        hostCard = sa.getHostCard()
+        chance = False
+
+        if sa.usesTargeting():
+            sa.resetTargets()
+            # filter AIs battlefield by what I can target
+            targetables = CardLists.getTargetableCards(ai.getCardsIn(ZoneType.Battlefield), sa)
+
+            if not targetables:
+                return AiAbilityDecision(0, AiPlayDecision.TargetingFailed)
+
+            if not game.getStack().isEmpty():
+                # check stack for something on the stack will kill anything i control
+                objects = ComputerUtil.predictThreatenedObjects(sa.getActivatingPlayer(), sa, True)
+
+                threatenedTargets = []
+
+                for c in targetables:
+                    if c in objects and not ComputerUtil.canRegenerate(ai, c):
+                        threatenedTargets.append(c)
+
+                if threatenedTargets:
+                    # Choose "best" of the remaining to regenerate
+                    sa.getTargets().add(ComputerUtilCard.getBestCreatureAI(threatenedTargets))
+                    chance = True
+            elif game.getPhaseHandler().is_(PhaseType.COMBAT_DECLARE_BLOCKERS):
+                combatants = CardLists.filter(targetables, CardPredicates.CREATURES)
+                ComputerUtilCard.sortByEvaluateCreature(combatants)
+
+                for c in combatants:
+                    if c.getShieldCount() == 0 and ComputerUtilCombat.combatantWouldBeDestroyed(ai, c, combat):
+                        sa.getTargets().add(c)
+                        chance = True
+                        break
+            if sa.getTargets().isEmpty():
+                return AiAbilityDecision(0, AiPlayDecision.TargetingFailed)
+        else:
+            list = AbilityUtils.getDefinedCards(hostCard, sa.getParam("Defined"), sa)
+            if not list:
+                return AiAbilityDecision(0, AiPlayDecision.MissingNeededCards)
+            # when regenerating more than one is possible try for slightly more value
+            numToSave = min(2, len(list))
+            saved = 0
+
+            if game.getPhaseHandler().is_(PhaseType.COMBAT_DECLARE_BLOCKERS):
+                for c in list:
+                    if c.getShieldCount() == 0 and ComputerUtil.predictCreatureWillDieThisTurn(ai, c, sa):
+                        saved += 1
+                    if saved == numToSave:
+                        break
+            else:
+                objects = ComputerUtil.predictThreatenedObjects(sa.getActivatingPlayer(), sa, True)
+                objects.retainAll(list)
+                saved = objects.size()
+            # if nothing on the stack, and it's not declare blockers no need to regen
+            chance = saved >= numToSave
+
+        if chance:
+            return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+        return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+    def doTriggerNoCost(self, ai: Player, sa: SpellAbility, mandatory: bool) -> AiAbilityDecision:
+        if sa.usesTargeting():
+            chance = RegenerateAi.regenMandatoryTarget(ai, sa, mandatory)
+        else:
+            # If there's no target on the trigger, just say yes.
+            chance = True
+        return AiAbilityDecision(100, AiPlayDecision.WillPlay) if chance else AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+    @staticmethod
+    def regenMandatoryTarget(ai: Player, sa: SpellAbility, mandatory: bool) -> bool:
+        game = ai.getGame()
+        sa.resetTargets()
+        # filter AIs battlefield by what I can target
+        targetables = CardLists.getTargetableCards(game.getCardsIn(ZoneType.Battlefield), sa)
+        compTargetables = CardLists.filterControlledBy(targetables, ai)
+
+        if targetables.isEmpty():
+            return False
+
+        if not mandatory and compTargetables.isEmpty():
+            return False
+
+        if compTargetables.size() > 0:
+            combatants = CardLists.filter(compTargetables, CardPredicates.CREATURES)
+            ComputerUtilCard.sortByEvaluateCreature(combatants)
+            if game.getPhaseHandler().is_(PhaseType.COMBAT_DECLARE_BLOCKERS):
+                combat = game.getCombat()
+                for c in combatants:
+                    if c.getShieldCount() == 0 and ComputerUtilCombat.combatantWouldBeDestroyed(ai, c, combat):
+                        sa.getTargets().add(c)
+                        return True
+
+            # TODO see if something on the stack is about to kill something i can target
+
+            # choose my best X without regen
+            if CardLists.getNotType(compTargetables, "Creature").isEmpty():
+                for c in combatants:
+                    if c.getShieldCount() == 0:
+                        sa.getTargets().add(c)
+                        return True
+                sa.getTargets().add(combatants.get(0))
+                return True
+            else:
+                CardLists.sortByCmcDesc(compTargetables)
+                for c in compTargetables:
+                    if c.getShieldCount() == 0:
+                        sa.getTargets().add(c)
+                        return True
+                sa.getTargets().add(compTargetables.get(0))
+                return True
+
+        sa.getTargets().add(ComputerUtilCard.getCheapestPermanentAI(targetables, sa, False))
+        return True
 ```

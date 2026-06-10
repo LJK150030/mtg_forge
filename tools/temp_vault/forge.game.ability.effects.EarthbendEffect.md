@@ -51,7 +51,7 @@ classDiagram
 
 ## Design Description
 
-EarthbendEffect implements Magic's "Earthbend" keyword action as a concrete `SpellAbilityEffect` subclass, plugging into Forge's ability-resolution framework by overriding the standard lifecycle hooks (`getStackDescription`, `buildSpellAbility`, and `resolve`). Its responsibility is to retarget a single land the player controls—constrained via `TargetRestrictions` to `Land.YouCtrl`—and transform it into a 0/0 haste creature that remains a land, using `CardType`/`RemoveType` changes plus a `GameEntityCounterTable` to place the specified number of +1/+1 counters.
+EarthbendEffect implements Magic's "Earthbend" keyword action as a concrete `SpellAbilityEffect` subclass, plugging into Forge's ability-resolution framework by overriding the standard lifecycle hooks (`getStackDescription`, `buildSpellAbility`, and `resolve`). Its responsibility is to retarget a single land the player controlsâ€”constrained via `TargetRestrictions` to `Land.YouCtrl`â€”and transform it into a 0/0 haste creature that remains a land, using `CardType`/`RemoveType` changes plus a `GameEntityCounterTable` to place the specified number of +1/+1 counters.
 
 A notable design intent is the delayed-trigger setup: the protected `buildTrigger` helper parses two trigger definitions (death and exile) and registers them with the `TriggerHandler` so the land returns to the battlefield tapped under the player's control. Timestamps order the layered changes, and the effect finally notifies the player via `triggerElementalBend` so other Earthbend-sensitive abilities can respond.
 
@@ -149,4 +149,88 @@ public class EarthbendEffect extends SpellAbilityEffect {
         game.getTriggerHandler().registerDelayedTrigger(trig);
     }
 }
+```
+
+## Python
+`forge/game/ability/effects/EarthbendEffect.py`
+
+```python
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.card.CardType import CardType
+from forge.card.RemoveType import RemoveType
+from forge.game.Game import Game
+from forge.game.GameEntityCounterTable import GameEntityCounterTable
+from forge.game.ability.AbilityFactory import AbilityFactory
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.card.Card import Card
+from forge.game.card.CounterEnumType import CounterEnumType
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.spellability.TargetRestrictions import TargetRestrictions
+from forge.game.trigger.Trigger import Trigger
+from forge.game.trigger.TriggerHandler import TriggerHandler
+from forge.game.trigger.TriggerType import TriggerType
+from forge.util.Lang import Lang
+
+
+class EarthbendEffect(SpellAbilityEffect):
+
+    def getStackDescription(self, sa: SpellAbility) -> str:
+        sb = []
+        card = sa.getHostCard()
+        amount = AbilityUtils.calculateAmount(card, sa.getParamOrDefault("Num", "1"), sa)
+
+        sb.append("Earthbend ")
+        sb.append(str(amount))
+        sb.append(". (Target land you control becomes a 0/0 creature with haste that's still a land. Put  ")
+        sb.append(Lang.nounWithNumeral(amount, "+1/+1 counter"))
+        sb.append(" on it. When it dies or is exiled, return it to the battlefield tapped under your control.)")
+
+        return "".join(sb)
+
+    def buildSpellAbility(self, sa: SpellAbility) -> None:
+        super().buildSpellAbility(sa)
+        abTgt = TargetRestrictions({"ValidTgtsDesc": "land you control", "ValidTgts": "Land.YouCtrl"})
+        sa.setTargetRestrictions(abTgt)
+
+    def resolve(self, sa: SpellAbility) -> None:
+        source = sa.getHostCard()
+        game = source.getGame()
+        pl = sa.getActivatingPlayer()
+        num = AbilityUtils.calculateAmount(source, sa.getParamOrDefault("Num", "1"), sa)
+
+        ts = game.getNextTimestamp()
+
+        desc = "When it dies or is exiled, return it to the battlefield tapped."
+        sbTrigA = "Mode$ ChangesZone | ValidCard$ Card.IsTriggerRemembered | Origin$ Battlefield | Destination$ Graveyard | TriggerDescription$ " + desc
+        sbTrigB = "Mode$ Exiled | Origin$ Battlefield | ValidCard$ Card.IsTriggerRemembered | TriggerZones$ Battlefield | TriggerDescription$ " + desc
+
+        # Earthbend should only target one land
+        for c in self.getTargetCards(sa):
+            c.addNewPT(0, 0, ts, 0)
+            c.addChangedCardTypes(CardType(["Creature"], True), None, False, set(), ts, 0, True, False)
+            c.addChangedCardKeywords(["Haste"], None, False, ts, None)
+
+            table = GameEntityCounterTable()
+            c.addCounter(CounterEnumType.P1P1, num, pl, table)
+            table.replaceCounterEffect(game, sa)
+
+            self.buildTrigger(sa, c, sbTrigA, "Graveyard")
+            self.buildTrigger(sa, c, sbTrigB, "Exile")
+        pl.triggerElementalBend(TriggerType.Earthbend)
+
+    def buildTrigger(self, sa: SpellAbility, c: Card, sbTrig: str, zone: str) -> None:
+        source = sa.getHostCard()
+        game = source.getGame()
+        trigSA = "DB$ ChangeZone | Defined$ DelayTriggerRemembered | Origin$ " + zone + " | Destination$ Battlefield | Tapped$ True | GainControl$ You"
+
+        trig = TriggerHandler.parseTrigger(sbTrig, source, sa.isIntrinsic())
+        newSa = AbilityFactory.getAbility(trigSA, sa.getHostCard())
+        newSa.setIntrinsic(sa.isIntrinsic())
+        trig.addRemembered(c)
+        trig.setOverridingAbility(newSa)
+        trig.setSpawningAbility(sa.copy(sa.getHostCard(), True))
+        trig.setKeyword(trig.getSpawningAbility().getKeyword())
+
+        game.getTriggerHandler().registerDelayedTrigger(trig)
 ```

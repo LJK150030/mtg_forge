@@ -59,3 +59,20 @@ public class BlankLineEffect extends SpellAbilityEffect {
     }
 }
 ```
+
+## Python
+`forge/game/ability/effects/BlankLineEffect.py`
+
+```python
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.spellability.SpellAbility import SpellAbility
+
+
+class BlankLineEffect(SpellAbilityEffect):
+    def getStackDescription(self, sa: SpellAbility) -> str:
+        return "\r\n"
+
+    def resolve(self, sa: SpellAbility) -> None:
+        # this "effect" just allows spacing to look better for certain card displays
+        pass
+```

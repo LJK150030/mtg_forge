@@ -238,3 +238,155 @@ public class FogAi extends SpellAbilityAi {
     }
 }
 ```
+
+## Python
+`forge/ai/ability/FogAi.py`
+
+```python
+from forge.ai.SpellAbilityAi import SpellAbilityAi
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.ai.AiCardMemory import AiCardMemory
+from forge.ai.ComputerUtil import ComputerUtil
+from forge.ai.ComputerUtilCombat import ComputerUtilCombat
+from forge.ai.PlayerControllerAi import PlayerControllerAi
+from forge.game.Game import Game
+from forge.game.GameObject import GameObject
+from forge.game.ability.ApiType import ApiType
+from forge.game.card.Card import Card
+from forge.game.card.CardLists import CardLists
+from forge.game.combat.Combat import Combat
+from forge.game.keyword.Keyword import Keyword
+from forge.game.phase.PhaseType import PhaseType
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+
+
+class FogAi(SpellAbilityAi):
+
+    # (non-Javadoc)
+    # @see forge.card.abilityfactory.SpellAiLogic#canPlayAI(forge.game.player.Player, java.util.Map, forge.card.spellability.SpellAbility)
+    def canPlay(self, ai: Player, sa: SpellAbility) -> AiAbilityDecision:
+        game = ai.getGame()
+        hostCard = sa.getHostCard()
+        combat = game.getCombat()
+
+        # Don't cast it, if the effect is already in place
+        if game.getReplacementHandler().isPreventCombatDamageThisTurn():
+            return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+        # TODO Test if we can even Fog successfully
+        if self.handleMemoryCheck(ai, sa):
+            return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+        # Only cast when Stack is empty, so Human uses spells/abilities first
+        if not game.getStack().isEmpty():
+            return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+        # TODO Only cast outside of combat if I won't be able to cast inside of combat
+        if combat is None:
+            return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+        # AI should only activate this during Opponents Declare Blockers phase
+        if not game.getPhaseHandler().getPlayerTurn().isOpponentOf(ai) or \
+                not game.getPhaseHandler().is_(PhaseType.COMBAT_DECLARE_BLOCKERS):
+            # TODO Be careful of effects that don't let you cast spells during combat
+            return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+        remainingLife = ComputerUtilCombat.lifeThatWouldRemain(ai, combat)
+        dmg = ai.getLife() - remainingLife
+
+        # Count the number of Fog spells in hand
+        fogs = self.countAvailableFogs(ai)
+        if fogs > 2 and dmg > 2:
+            # Playing a fog deck. If you got them play them.
+            return AiAbilityDecision(100, AiPlayDecision.Tempo)
+        if dmg > 2 and \
+                hostCard.hasKeyword(Keyword.BUYBACK) and \
+                CardLists.count(ai.getCardsIn(ZoneType.Battlefield), Card.isLand) > 3:
+            # Constant mists sacrifices a land to buyback. But if AI is running it, they are probably ok sacrificing some lands
+            return AiAbilityDecision(100, AiPlayDecision.Tempo)
+
+        if "SeriousDamage" == sa.getParam("AILogic"):
+            if dmg > ai.getLife() // 4:
+                return AiAbilityDecision(100, AiPlayDecision.Tempo)
+            elif dmg >= 5:
+                return AiAbilityDecision(100, AiPlayDecision.Tempo)
+            elif ai.getLife() < ai.getStartingLife() // 3:
+                return AiAbilityDecision(100, AiPlayDecision.Tempo)
+        # TODO Compare to poison counters?
+
+        # Cast it if life is in danger
+        if ComputerUtilCombat.lifeInDanger(ai, game.getCombat()):
+            return AiAbilityDecision(100, AiPlayDecision.Tempo)
+        else:
+            return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+    def handleMemoryCheck(self, ai: Player, sa: SpellAbility) -> bool:
+        hostCard = sa.getHostCard()
+        game = ai.getGame()
+
+        # if card would be destroyed, react and use immediately if it's not own turn
+        if AiCardMemory.isRememberedCard(ai, hostCard, AiCardMemory.MemorySet.CHOSEN_FOG_EFFECT) \
+                and not game.getStack().isEmpty() \
+                and not game.getPhaseHandler().isPlayerTurn(sa.getActivatingPlayer()):
+            objects = ComputerUtil.predictThreatenedObjects(ai, None)
+            if hostCard in objects:
+                AiCardMemory.clearMemorySet(ai, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_ENEMY_DECLBLK)
+                return True
+
+        # Reserve mana to cast this card if it will be likely needed
+        if (game.getPhaseHandler().isPlayerTurn(sa.getActivatingPlayer())
+                or game.getPhaseHandler().getPhase().isBefore(PhaseType.COMBAT_DECLARE_BLOCKERS)) \
+                and AiCardMemory.isMemorySetEmpty(ai, AiCardMemory.MemorySet.CHOSEN_FOG_EFFECT) \
+                and ComputerUtil.aiLifeInDanger(ai, False, 0):
+            reserved = PlayerControllerAi(ai.getController()).getAi().reserveManaSources(sa, PhaseType.COMBAT_DECLARE_BLOCKERS, True) \
+                if isinstance(ai.getController(), PlayerControllerAi) \
+                else ai.getController().getAi().reserveManaSources(sa, PhaseType.COMBAT_DECLARE_BLOCKERS, True)
+            if reserved:
+                AiCardMemory.rememberCard(ai, hostCard, AiCardMemory.MemorySet.CHOSEN_FOG_EFFECT)
+        return False
+
+    def countAvailableFogs(self, ai: Player) -> int:
+        fogs = 0
+        for c in ai.getCardsActivatableInExternalZones(False):
+            for ability in c.getSpellAbilities():
+                if ApiType.Fog == ability.getApi():
+                    fogs += 1
+                    break
+
+        for c in ai.getCardsIn(ZoneType.Hand):
+            for ability in c.getSpellAbilities():
+                if ApiType.Fog == ability.getApi():
+                    fogs += 1
+                    break
+        return fogs
+
+    def chkDrawback(self, ai: Player, sa: SpellAbility) -> AiAbilityDecision:
+        # AI should only activate this during Human's turn
+        game = ai.getGame()
+
+        # should really check if other player is attacking this player
+        if ai.isOpponentOf(game.getPhaseHandler().getPlayerTurn()):
+            chance = game.getPhaseHandler().getPhase().isBefore(PhaseType.COMBAT_FIRST_STRIKE_DAMAGE)
+        else:
+            chance = game.getPhaseHandler().getPhase().isAfter(PhaseType.COMBAT_DAMAGE)
+
+        if chance:
+            return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+        return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+    def doTriggerNoCost(self, aiPlayer: Player, sa: SpellAbility, mandatory: bool) -> AiAbilityDecision:
+        game = aiPlayer.getGame()
+        if game.getPhaseHandler().isPlayerTurn(sa.getActivatingPlayer().getWeakestOpponent()):
+            chance = game.getPhaseHandler().getPhase().isBefore(PhaseType.COMBAT_FIRST_STRIKE_DAMAGE)
+        else:
+            chance = game.getPhaseHandler().getPhase().isAfter(PhaseType.COMBAT_DAMAGE)
+
+        if mandatory or chance:
+            return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+        return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+```

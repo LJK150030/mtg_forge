@@ -64,6 +64,12 @@ classDiagram
 - [[forge.game.staticability.StaticAbility|StaticAbility]]
 - [[forge.game.trigger.Trigger|Trigger]]
 
+## Design Description
+
+Card-level descriptor that bundles a set of keyword modifications to be applied to a card. It holds keywords to grant (as a `KeywordCollection`), keywords to remove either by name (`List<String>`) or by specific `KeywordInterface` instance, and a flag to strip all keywords entirely.
+
+Implementing `ICardTraitChanges`, `IKeywordsChange`, and `Cloneable`, it participates in Forge's layered continuous-effect system: `applyKeywords` mutates a target collection by clearing, removing, then inserting, while `applySpellAbility`, `applyTrigger`, `applyReplacementEffect`, and `applyStaticAbility` delegate to the underlying keywords to surface their granted traits. The `copy` method performs a host-rebound deep clone for last-known-information snapshots, reflecting the engine's need to capture effect state at specific game moments. Helper predicates like `isEmpty` and `hasTraits` let callers skip changes that carry no effect.
+
 ## Source
 `forge-game/src/main/java/forge/game/keyword/KeywordsChange.java`
 
@@ -265,4 +271,122 @@ public class KeywordsChange implements ICardTraitChanges, IKeywordsChange, Clone
         return sb.toString();
     }
 }
+```
+
+## Python
+`forge/game/keyword/KeywordsChange.py`
+
+```python
+from forge.game.card.Card import Card
+from forge.game.card.ICardTraitChanges import ICardTraitChanges
+from forge.game.keyword.IKeywordsChange import IKeywordsChange
+from forge.game.keyword.KeywordCollection import KeywordCollection
+from forge.game.keyword.KeywordInterface import KeywordInterface
+from forge.game.replacement.ReplacementEffect import ReplacementEffect
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.staticability.StaticAbility import StaticAbility
+from forge.game.trigger.Trigger import Trigger
+
+
+class KeywordsChange(ICardTraitChanges, IKeywordsChange):
+    def __init__(self, keywordList, removeKeywordListOrInterfaces, removeAll):
+        self.keywords = KeywordCollection()
+        self.removeKeywordInterfaces = KeywordCollection()
+        self.removeKeywords = []
+        self.removeAllKeywords = False
+
+        # The Java class provides two overloaded constructors:
+        #   1) (Iterable<KeywordInterface>, Collection<String>, boolean)
+        #   2) (Collection<KeywordInterface>, Collection<KeywordInterface>, boolean)
+        # Disambiguate by inspecting the contents of the second argument: a
+        # collection of strings populates removeKeywords, while a collection of
+        # KeywordInterface instances populates removeKeywordInterfaces.
+        if keywordList is not None:
+            self.keywords.insertAll(keywordList)
+
+        if removeKeywordListOrInterfaces is not None:
+            if all(isinstance(k, str) for k in removeKeywordListOrInterfaces):
+                self.removeKeywords.extend(removeKeywordListOrInterfaces)
+            else:
+                self.removeKeywordInterfaces.insertAll(removeKeywordListOrInterfaces)
+
+        self.removeAllKeywords = removeAll
+
+    def getKeywords(self) -> "Collection[KeywordInterface]":
+        return self.keywords.getValues()
+
+    def getRemovedKeywordInstances(self) -> "Collection[KeywordInterface]":
+        return self.removeKeywordInterfaces.getValues()
+
+    def getRemoveKeywords(self) -> list[str]:
+        return self.removeKeywords
+
+    def isRemoveAllKeywords(self) -> bool:
+        return self.removeAllKeywords
+
+    def isEmpty(self) -> bool:
+        return (not self.removeAllKeywords
+                and self.keywords.isEmpty()
+                and len(self.removeKeywords) == 0)
+
+    def setHostCard(self, host: Card) -> None:
+        self.keywords.setHostCard(host)
+        for k in self.removeKeywordInterfaces:
+            k.setHostCard(host)
+
+    def copy(self, host: Card, lki: bool) -> "KeywordsChange":
+        try:
+            result = KeywordsChange.__new__(KeywordsChange)
+            result.__dict__.update(self.__dict__)
+
+            result.keywords = self.keywords.copy(host, lki)
+            result.removeKeywords = list(self.removeKeywords)
+            result.removeKeywordInterfaces = self.removeKeywordInterfaces.copy(host, lki)
+
+            return result
+        except Exception as ex:
+            raise RuntimeError("KeywordsChange : clone() error", ex)
+
+    def applySpellAbility(self, list: list[SpellAbility]) -> list[SpellAbility]:
+        return self.keywords.applySpellAbility(list)
+
+    def applyTrigger(self, list: list[Trigger]) -> list[Trigger]:
+        return self.keywords.applyTrigger(list)
+
+    def applyReplacementEffect(self, list: list[ReplacementEffect]) -> list[ReplacementEffect]:
+        return self.keywords.applyReplacementEffect(list)
+
+    def applyStaticAbility(self, list: list[StaticAbility]) -> list[StaticAbility]:
+        return self.keywords.applyStaticAbility(list)
+
+    def applyKeywords(self, list: KeywordCollection) -> None:
+        if self.isRemoveAllKeywords():
+            list.clear()
+        elif self.getRemoveKeywords() is not None:
+            list.removeAll(self.getRemoveKeywords())
+
+        list.removeInstances(self.getRemovedKeywordInstances())
+
+        if self.getKeywords() is not None:
+            list.insertAll(self.getKeywords())
+
+    def hasTraits(self) -> bool:
+        for k in self.keywords.getValues():
+            if k.hasTraits():
+                return True
+        return False
+
+    def toString(self) -> str:
+        sb = []
+        sb.append("<+")
+        sb.append(str(self.keywords))
+        sb.append("|-")
+        sb.append(str(self.removeKeywordInterfaces))
+        sb.append("|-")
+        sb.append(str(self.removeKeywords))
+        sb.append(">")
+        return "".join(sb)
+
+    def __str__(self) -> str:
+        return self.toString()
 ```

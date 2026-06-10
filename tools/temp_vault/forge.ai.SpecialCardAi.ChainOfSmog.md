@@ -35,10 +35,10 @@ classDiagram
 
 A nested static helper within `SpecialCardAi` that encapsulates the AI's decision logic for the card *Chain of Smog*, a discard-and-copy spell. Its sole `consider` method evaluates whether the AI should cast the ability for the given `Player`, returning an `AiAbilityDecision` paired with an `AiPlayDecision` outcome and a numeric confidence score.
 
-Acting as a stateless strategy callback, it collaborates with the game model (`Player`, `SpellAbility`, zones) to inspect hand contents and, when the AI holds cards, selects a legal opponent target—preferring one with a non-empty hand—before committing to play at full confidence. When the AI's own hand is empty it bails with a `TargetingFailed` decision. The design favors small per-card static classes over subclassing, and the inline TODO signals a known limitation in target selection awaiting refinement.
+Acting as a stateless strategy callback, it collaborates with the game model (`Player`, `SpellAbility`, zones) to inspect hand contents and, when the AI holds cards, selects a legal opponent targetâ€”preferring one with a non-empty handâ€”before committing to play at full confidence. When the AI's own hand is empty it bails with a `TargetingFailed` decision. The design favors small per-card static classes over subclassing, and the inline TODO signals a known limitation in target selection awaiting refinement.
 
 ## Source
-`forge-ai/src/main/java/forge/ai/SpecialCardAi.java` â€” declaration excerpt
+`forge-ai/src/main/java/forge/ai/SpecialCardAi.java` Ã¢â‚¬â€ declaration excerpt
 
 ```java
     // Chain of Smog
@@ -65,4 +65,38 @@ Acting as a stateless strategy callback, it collaborates with the game model (`P
             return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
         }
     }
+```
+
+## Python
+`forge/ai/SpecialCardAi/ChainOfSmog.py`
+
+```python
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.Aggregates import Aggregates
+
+
+# Chain of Smog
+class ChainOfSmog:
+    @staticmethod
+    def consider(ai: Player, sa: SpellAbility) -> AiAbilityDecision:
+        if ai.getCardsIn(ZoneType.Hand).isEmpty():
+            # to avoid failure to add to stack, provide a legal target opponent first (choosing random at this point)
+            # TODO: this makes the AI target opponents with 0 cards in hand, but bailing from here causes a
+            # "failed to add to stack" error, needs investigation and improvement.
+            targOpp = Aggregates.random(ai.getOpponents())
+
+            for opp in ai.getOpponents():
+                if not opp.getCardsIn(ZoneType.Hand).isEmpty():
+                    targOpp = opp
+                    break
+
+            sa.getParent().resetTargets()
+            sa.getParent().getTargets().add(targOpp)
+            return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+        return AiAbilityDecision(0, AiPlayDecision.TargetingFailed)
 ```

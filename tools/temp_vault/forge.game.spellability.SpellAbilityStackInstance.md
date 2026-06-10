@@ -74,6 +74,12 @@ classDiagram
 - [[forge.game.spellability.StackItemView|StackItemView]]
 - [[forge.game.spellability.TargetChoices|TargetChoices]]
 
+## Design Description
+
+SpellAbilityStackInstance represents a single spell or ability while it sits on the game stack, capturing the state needed to resolve it independently of later mutations to the originating SpellAbility. It wraps the SpellAbility, assigns each entry a unique identity (implementing IIdentifiable via a static incrementing id), caches a cleaned-up stack description, and recursively builds a subInstance chain mirroring the ability's sub-abilities.
+
+Most query methods (isSpell, isTrigger, getTargetChoices, triggering-object accessors) delegate to the wrapped ability, while updateTarget actively fires BecomesTarget and BecomesTargetOnce triggers when targets change and refreshes the paired StackItemView. By implementing IHasCardView and owning a StackItemView, it bridges game-engine state to the UI layer. A code comment signals design intent to evolve toward an "active instance" model akin to TargetChoices, indicating the current duplicated-parameter approach is provisional.
+
 ## Source
 `forge-game/src/main/java/forge/game/spellability/SpellAbilityStackInstance.java`
 
@@ -298,4 +304,170 @@ public class SpellAbilityStackInstance implements IIdentifiable, IHasCardView {
         return CardView.get(getSourceCard());
     }
 }
+```
+
+## Python
+`forge/game/spellability/SpellAbilityStackInstance.py`
+
+```python
+from typing import Set, Dict
+
+from forge.game.GameObject import GameObject
+from forge.game.IIdentifiable import IIdentifiable
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.ability.ApiType import ApiType
+from forge.game.card.Card import Card
+from forge.game.card.CardView import CardView
+from forge.game.card.IHasCardView import IHasCardView
+from forge.game.player.Player import Player
+from forge.game.trigger.TriggerType import TriggerType
+from forge.util.TextUtil import TextUtil
+
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.spellability.StackItemView import StackItemView
+from forge.game.spellability.TargetChoices import TargetChoices
+
+
+class SpellAbilityStackInstance(IIdentifiable, IHasCardView):
+    maxId = 0
+
+    @staticmethod
+    def nextId() -> int:
+        SpellAbilityStackInstance.maxId += 1
+        return SpellAbilityStackInstance.maxId
+
+    # At some point I want this functioning more like Target/Target Choices
+    # where the SA has an "active"
+    # Stack Instance, and instead of having duplicate parameters, it adds
+    # changes directly to the "active" one
+    # When hitting the Stack, the active SI gets "applied" to the Stack and
+    # gets cleared from the base SI
+    # Coming off the Stack would work similarly, except it would just add the
+    # full active SI instead of each of the parts
+
+    def __init__(self, sa: SpellAbility, assignedId: int = None):
+        if assignedId is None:
+            assignedId = SpellAbilityStackInstance.nextId()
+
+        # Base SA info
+        self.id = assignedId
+        self.ability = sa
+        self.stackDescription = sa.getStackDescription()
+
+        self.subInstance = None if self.ability.getSubAbility() is None else SpellAbilityStackInstance(self.ability.getSubAbility())
+
+        if ApiType.SetState == sa.getApi() and not self.ability.hasSVar("StoredTransform"):
+            # Record current state of Transformation if the ability might change state
+            self.ability.setSVar("StoredTransform", str(self.ability.getHostCard().getTransformedTimestamp()))
+
+        if sa.getApi() == ApiType.Charm and sa.hasParam("ChoiceRestriction"):
+            # Remember the Choice here for later handling
+            sa.getHostCard().addChosenModes(sa, sa.getSubAbility().getDescription(), sa.getHostCard().getGame().getPhaseHandler().inCombat())
+
+        self.view = StackItemView(self)
+
+    def getId(self) -> int:
+        return self.id
+
+    def getSpellAbility(self) -> SpellAbility:
+        return self.ability
+
+    # A bit of SA shared abilities to restrict conflicts
+    def getStackDescription(self) -> str:
+        return self.stackDescription.replace("\\r\\n", "").replace(".\u2022", ";").replace("\u2022", "")
+
+    def getSourceCard(self) -> Card:
+        return self.ability.getHostCard()
+
+    def isSpell(self) -> bool:
+        return self.ability.isSpell()
+
+    def isAbility(self) -> bool:
+        return self.ability.isAbility()
+
+    def isTrigger(self) -> bool:
+        return self.ability.isTrigger()
+
+    def isStateTrigger(self, id: int) -> bool:
+        return self.ability.getSourceTrigger() == id
+
+    def isOptionalTrigger(self) -> bool:
+        return self.ability.isOptionalTrigger()
+
+    def getSubInstance(self) -> "SpellAbilityStackInstance":
+        return self.subInstance
+
+    def getTargetChoices(self) -> TargetChoices:
+        return self.ability.getTargets()
+
+    def updateTarget(self, oldTC: TargetChoices, cause: Card) -> None:
+        if oldTC is not None:
+            self.stackDescription = self.ability.getStackDescription()
+            self.view.updateTargetCards(self)
+            self.view.updateTargetPlayers(self)
+            self.view.updateText(self)
+
+            distinctObjects: Set[GameObject] = set()
+            for tgt in self.ability.getTargets():
+                if oldTC.contains(tgt):
+                    # it was an old target, so don't trigger becomes target
+                    continue
+                if tgt in distinctObjects:
+                    continue
+                distinctObjects.add(tgt)
+
+                runParams: Dict[AbilityKey, object] = AbilityKey.newMap()
+                runParams[AbilityKey.SourceSA] = self.ability
+                runParams[AbilityKey.Target] = tgt
+                if isinstance(tgt, Card):
+                    c = tgt
+                    if not c.hasBecomeTargetThisTurn():
+                        runParams[AbilityKey.FirstTime] = None
+                    if c.isValiant(self.ability.getActivatingPlayer()):
+                        runParams[AbilityKey.Valiant] = None
+                    c.addTargetFromThisTurn(self.ability.getActivatingPlayer())
+                self.getSourceCard().getGame().getTriggerHandler().runTrigger(TriggerType.BecomesTarget, runParams, False)
+            # Only run BecomesTargetOnce when at least one target is changed
+            if len(distinctObjects) != 0:
+                runParams: Dict[AbilityKey, object] = AbilityKey.newMap()
+                runParams[AbilityKey.SourceSA] = self.ability
+                runParams[AbilityKey.Targets] = distinctObjects
+                runParams[AbilityKey.Cause] = cause
+                self.getSourceCard().getGame().getTriggerHandler().runTrigger(TriggerType.BecomesTargetOnce, runParams, False)
+
+    def addTriggeringObject(self, trigObj: AbilityKey, value: object) -> bool:
+        if not self.ability.hasTriggeringObject(trigObj):
+            self.ability.setTriggeringObject(trigObj, value)
+            return True
+        return False
+
+    def updateTriggeringObject(self, trigObj: AbilityKey, value: object) -> bool:
+        if self.ability.hasTriggeringObject(trigObj):
+            self.ability.setTriggeringObject(trigObj, value)
+            return True
+        return False
+
+    def getTriggeringObject(self, trigObj: AbilityKey) -> object:
+        return self.ability.getTriggeringObject(trigObj)
+
+    def getActivatingPlayer(self) -> Player:
+        return self.ability.getActivatingPlayer()
+
+    def setActivatingPlayer(self, activatingPlayer0: Player) -> None:
+        self.ability.setActivatingPlayer(activatingPlayer0)
+        self.view.updateActivatingPlayer(self)
+        if self.subInstance is not None:
+            self.subInstance.setActivatingPlayer(activatingPlayer0)
+
+    def toString(self) -> str:
+        return TextUtil.concatNoSpace(self.getSourceCard().toString(), "->", self.getStackDescription())
+
+    def __str__(self) -> str:
+        return self.toString()
+
+    def getView(self) -> StackItemView:
+        return self.view
+
+    def getCardView(self) -> CardView:
+        return CardView.get(self.getSourceCard())
 ```

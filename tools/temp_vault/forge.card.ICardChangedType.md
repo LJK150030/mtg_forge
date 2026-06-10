@@ -50,3 +50,22 @@ public interface ICardChangedType {
     }
 }
 ```
+
+## Python
+`forge/card/ICardChangedType.py`
+
+```python
+from abc import ABC, abstractmethod
+
+from forge.card.CardType import CardType
+
+
+class ICardChangedType(ABC):
+
+    @abstractmethod
+    def applyChanges(self, newType: CardType) -> CardType:
+        ...
+
+    def isRemoveLandTypes(self) -> bool:
+        return False
+```

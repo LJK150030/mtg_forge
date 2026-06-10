@@ -185,3 +185,135 @@ public class RestartGameEffect extends SpellAbilityEffect {
     }
 }
 ```
+
+## Python
+`forge/game/ability/effects/RestartGameEffect.py`
+
+```python
+package = "forge.game.ability.effects"
+
+Let me produce the Python port.
+
+Imports based on Java imports and Relationships:
+- forge.game.Game
+- forge.game.GameAction
+- forge.game.GameStage
+- forge.game.ability.SpellAbilityEffect
+- forge.game.card.Card
+- forge.game.card.CardCollection
+- forge.game.card.CardLists
+- forge.game.player.Player
+- forge.game.spellability.SpellAbility
+- forge.game.trigger.TriggerHandler
+- forge.game.trigger.TriggerType
+- forge.game.zone.ZoneType
+- forge.util.collect.FCollectionView
+- forge.game.trigger.Trigger (used via forge.game.trigger.Trigger.resetIDs())from forge.game.Game import Game
+from forge.game.GameAction import GameAction
+from forge.game.GameStage import GameStage
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardLists import CardLists
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.trigger.Trigger import Trigger
+from forge.game.trigger.TriggerHandler import TriggerHandler
+from forge.game.trigger.TriggerType import TriggerType
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.collect.FCollectionView import FCollectionView
+
+
+class RestartGameEffect(SpellAbilityEffect):
+    def resolve(self, sa: SpellAbility) -> None:
+        activator = sa.getActivatingPlayer()
+        game = activator.getGame()
+        players = game.getPlayers()
+
+        # Don't grab Ante Zones
+        restartZones = [ZoneType.Battlefield, ZoneType.Library,
+                        ZoneType.Graveyard, ZoneType.Hand, ZoneType.Exile]
+
+        leaveZone = ZoneType.smartValueOf(sa.getParam("RestrictFromZone"))
+        if leaveZone in restartZones:
+            restartZones.remove(leaveZone)
+        leaveRestriction = sa.getParamOrDefault("RestrictFromValid", "Card")
+
+        # Card.resetUniqueNumber();
+        # need this code here, otherwise observables fail
+        Trigger.resetIDs()
+        trigHandler = game.getTriggerHandler()
+        trigHandler.clearDelayedTrigger()
+        trigHandler.clearPlayerDefinedDelayedTrigger()
+        trigHandler.suppressMode(TriggerType.ChangesZone)
+        # Avoid Psychic Surgery trigger in new game
+        trigHandler.suppressMode(TriggerType.Shuffled)
+
+        game.getPhaseHandler().restart()
+        game.getUntap().clearCommands()
+        game.getUpkeep().clearCommands()
+        game.getEndOfCombat().clearCommands()
+        game.getEndOfTurn().clearCommands()
+        game.getCleanup().clearCommands()
+
+        game.getStack().reset()
+        game.clearCounterAddedThisTurn()
+        game.clearCounterRemovedThisTurn()
+        game.setMonarch(None)
+        game.setHasInitiative(None)
+        game.setDayTime(None)
+        action = game.getAction()
+
+        for p in players:
+            p.setStartingLife(p.getStartingLife())
+            p.clearCounters()
+            p.resetSpellCastThisGame()
+            p.onCleanupPhase()
+            p.setLandsPlayedLastTurn(0)
+            p.setSpellsCastLastTurn(0)
+            p.setLifeLostLastTurn(0)
+            p.resetCommanderStats()
+            p.resetCompletedDungeons()
+            p.resetRingTemptedYou()
+            p.clearRingBearer()
+            p.clearTheRing()
+            p.setBlessing(False, None)
+            p.clearController()
+
+            newLibrary = CardCollection(p.getCardsIn(restartZones, False))
+            if leaveZone is not None:
+                filteredCards = CardLists.getValidCards(p.getCardsIn(leaveZone), leaveRestriction, p, sa.getHostCard(), sa)
+                newLibrary.addAll(filteredCards)
+
+            # special handling for Karn to filter out non-cards
+            for c in p.getCardsIn(ZoneType.Command):
+                if c.isCommander():
+                    newLibrary.add(c)
+            p.getZone(ZoneType.Command).removeAllCards(True)
+
+            for c in newLibrary:
+                if c.getIntensity(False) > 0:
+                    c.setIntensity(0)
+                action.moveToLibrary(c, 0, sa)
+            p.initVariantsZones(p.getRegisteredPlayer())
+
+            p.shuffle(None)
+
+        trigHandler.clearSuppression(TriggerType.Shuffled)
+        trigHandler.clearSuppression(TriggerType.ChangesZone)
+
+        game.resetTurnOrder()
+        game.setAge(GameStage.RestartedByKarn)
+        # For the rare case that you get to resolve it during another players turn
+        game.getPhaseHandler().setPlayerTurn(activator)
+
+        # The rest is handled by phaseHandler
+
+    def getStackDescription(self, sa: SpellAbility) -> str:
+        desc = sa.getParam("SpellDescription")
+
+        if desc is None:
+            desc = "Restart the game."
+
+        return desc
+```

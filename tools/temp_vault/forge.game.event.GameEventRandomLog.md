@@ -51,3 +51,24 @@ public record GameEventRandomLog(String message) implements GameEvent {
     }
 }
 ```
+
+## Python
+`forge/game/event/GameEventRandomLog.py`
+
+```python
+from typing import TypeVar
+
+from forge.game.event.GameEvent import GameEvent
+from forge.game.event.IGameEventVisitor import IGameEventVisitor
+
+T = TypeVar("T")
+
+
+class GameEventRandomLog(GameEvent):
+
+    def __init__(self, message: str):
+        self.message = message
+
+    def visit(self, visitor: "IGameEventVisitor[T]") -> T:
+        return visitor.visit(self)
+```

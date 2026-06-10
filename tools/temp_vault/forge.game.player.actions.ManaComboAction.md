@@ -30,6 +30,12 @@ classDiagram
 **Extends:**
 - [[forge.game.player.actions.PlayerAction|PlayerAction]]
 
+## Design Description
+
+A class for the player action of choosing a mana combination, ManaComboAction extends PlayerAction and represents one concrete entry in Forge's player-action hierarchy. It captures an immutable mapping of mana color codes (`Byte`) to quantities (`Integer`), defensively copying the supplied map into a `LinkedHashMap` so the chosen combination's insertion order is preserved and the internal state cannot be mutated by callers.
+
+The class invokes its superclass constructor with a fixed descriptive label ("Choose mana combination") and overrides the protected `appendDetails` hook to contribute its mana-combo state to the action's string representation, following the template-method pattern established by `PlayerAction`. Its accessor exposes the stored combination, making the type a lightweight, largely immutable value object that records a player's mana-payment decision within the game engine.
+
 ## Source
 `forge-game/src/main/java/forge/game/player/actions/ManaComboAction.java`
 
@@ -56,4 +62,23 @@ public class ManaComboAction extends PlayerAction {
         sb.append(" manaCombo=").append(manaCombo);
     }
 }
+```
+
+## Python
+`forge/game/player/actions/ManaComboAction.py`
+
+```python
+from forge.game.player.actions.PlayerAction import PlayerAction
+
+
+class ManaComboAction(PlayerAction):
+    def __init__(self, manaCombo: dict[int, int]):
+        super().__init__(None, "Choose mana combination")
+        self.manaCombo = dict(manaCombo)
+
+    def getManaCombo(self) -> dict[int, int]:
+        return self.manaCombo
+
+    def appendDetails(self, sb) -> None:
+        sb.append(" manaCombo=").append(self.manaCombo)
 ```

@@ -35,7 +35,7 @@ StatBreakdown is a small, immutable value object nested within `Card` that decom
 Its design intent is clear from the `final` fields and the convenience constructors: instances are read-only snapshots, with a no-arg constructor yielding an all-zero breakdown and `getTotal()` summing the parts on demand. The `toString()` renders a compact `c:/tb:/bfc:` form via `TextUtil`, signalling a diagnostic role. As a passive data holder it collaborates with `Card`, which constructs and returns it from stat-calculation logic, but it holds no behavior beyond aggregation and formatting.
 
 ## Source
-`forge-game/src/main/java/forge/game/card/Card.java` â€” declaration excerpt
+`forge-game/src/main/java/forge/game/card/Card.java` Ã¢â‚¬â€ declaration excerpt
 
 ```java
     public static class StatBreakdown {
@@ -60,4 +60,27 @@ Its design intent is clear from the `final` fields and the convenience construct
             return TextUtil.concatWithSpace("c:"+ currentValue,"tb:"+ tempBoost,"bfc:"+ bonusFromCounters);
         }
     }
+```
+
+## Python
+`forge/game/card/Card/StatBreakdown.py`
+
+```python
+from forge.util.TextUtil import TextUtil
+
+
+class StatBreakdown:
+    def __init__(self, currentValue: int = 0, tempBoost: int = 0, bonusFromCounters: int = 0):
+        self.currentValue = currentValue
+        self.tempBoost = tempBoost
+        self.bonusFromCounters = bonusFromCounters
+
+    def getTotal(self) -> int:
+        return self.currentValue + self.tempBoost + self.bonusFromCounters
+
+    def toString(self) -> str:
+        return TextUtil.concatWithSpace("c:" + str(self.currentValue), "tb:" + str(self.tempBoost), "bfc:" + str(self.bonusFromCounters))
+
+    def __str__(self) -> str:
+        return self.toString()
 ```

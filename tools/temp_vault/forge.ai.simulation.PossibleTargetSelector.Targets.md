@@ -34,7 +34,7 @@ A factory-produced, immutable value object representing one concrete targeting c
 The constructor enforces an invariant: a non-sentinel `targetIndex` must fall within the valid range, throwing `IllegalArgumentException` otherwise (`-1` signals "no specific target"). By overriding `toString()` to return the stored `description`, the class supports readable logging and debugging of the AI's enumerated targeting options during decision simulation.
 
 ## Source
-`forge-ai/src/main/java/forge/ai/simulation/PossibleTargetSelector.java` â€” declaration excerpt
+`forge-ai/src/main/java/forge/ai/simulation/PossibleTargetSelector.java` Ã¢â‚¬â€ declaration excerpt
 
 ```java
     public static class Targets {
@@ -59,4 +59,25 @@ The constructor enforces an invariant: a non-sentinel `targetIndex` must fall wi
             return description;
         }
     }
+```
+
+## Python
+`forge/ai/simulation/PossibleTargetSelector/Targets.py`
+
+```python
+from forge.ai.simulation.PossibleTargetSelector import PossibleTargetSelector
+
+
+class Targets:
+    def __init__(self, targetingSaIndex: int, originalTargetCount: int, targetIndex: int, description: str):
+        self.targetingSaIndex = targetingSaIndex
+        self.originalTargetCount = originalTargetCount
+        self.targetIndex = targetIndex
+        self.description = description
+
+        if targetIndex != -1 and (targetIndex < 0 or targetIndex >= originalTargetCount):
+            raise ValueError("Invalid targetIndex=" + str(targetIndex))
+
+    def __str__(self) -> str:
+        return self.description
 ```

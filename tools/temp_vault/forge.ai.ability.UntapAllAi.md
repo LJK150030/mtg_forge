@@ -46,7 +46,7 @@ classDiagram
 
 UntapAllAi supplies the AI decision logic for the "untap all" spell effect, telling the engine whether and when the computer player should activate an UntapAll ability. As a concrete subclass of `SpellAbilityAi`, it overrides two hooks: `canPlay`, which evaluates voluntary casting, and `doTriggerNoCost`, which handles triggered or mandatory resolutions. Both return an `AiAbilityDecision` pairing a confidence score with an `AiPlayDecision` verdict.
 
-The class collaborates with the game model—filtering `CardCollectionView` battlefield contents for tapped, valid `Card`s and inspecting the host card and `Player`'s team. Its notable design intent is self-serving play: it casts only when the AI's own team controls a tapped target, declining when the untap would solely benefit the opponent. It also inspects the `SpellAbility`'s `AbilitySub`, suppressing play when chained to an AddPhase effect before combat ends, and treats mandatory triggers as always-willing regardless of board state.
+The class collaborates with the game modelâ€”filtering `CardCollectionView` battlefield contents for tapped, valid `Card`s and inspecting the host card and `Player`'s team. Its notable design intent is self-serving play: it casts only when the AI's own team controls a tapped target, declining when the untap would solely benefit the opponent. It also inspects the `SpellAbility`'s `AbilitySub`, suppressing play when chained to an AddPhase effect before combat ends, and treats mandatory triggers as always-willing regardless of board state.
 
 ## Source
 `forge-ai/src/main/java/forge/ai/ability/UntapAllAi.java`
@@ -106,4 +106,54 @@ public class UntapAllAi extends SpellAbilityAi {
         return mandatory ? new AiAbilityDecision(100, AiPlayDecision.WillPlay) : new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
     }
 }
+```
+
+## Python
+`forge/ai/ability/UntapAllAi.py`
+
+```python
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.ai.SpellAbilityAi import SpellAbilityAi
+from forge.game.ability.ApiType import ApiType
+from forge.game.card.Card import Card
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CardPredicates import CardPredicates
+from forge.game.phase.PhaseType import PhaseType
+from forge.game.player.Player import Player
+from forge.game.spellability.AbilitySub import AbilitySub
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+
+
+class UntapAllAi(SpellAbilityAi):
+    def canPlay(self, aiPlayer: Player, sa: SpellAbility) -> AiAbilityDecision:
+        source = sa.getHostCard()
+
+        abSub = sa.getSubAbility()
+        if abSub is not None:
+            if (ApiType.AddPhase == abSub.getApi()
+                    and source.getGame().getPhaseHandler().getPhase().isBefore(PhaseType.COMBAT_END)):
+                return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+            list = CardLists.filter(aiPlayer.getGame().getCardsIn(ZoneType.Battlefield), CardPredicates.TAPPED)
+            valid = sa.getParamOrDefault("ValidCards", "")
+            list = CardLists.getValidCards(list, valid, source.getController(), source, sa)
+            # don't untap if only opponent benefits
+            if list.anyMatch(CardPredicates.isControlledByAnyOf(aiPlayer.getYourTeam())):
+                return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+            else:
+                return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+        return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+    def doTriggerNoCost(self, aiPlayer: Player, sa: SpellAbility, mandatory: bool) -> AiAbilityDecision:
+        source = sa.getHostCard()
+
+        if sa.hasParam("ValidCards"):
+            valid = sa.getParam("ValidCards")
+            list = CardLists.filter(aiPlayer.getGame().getCardsIn(ZoneType.Battlefield), CardPredicates.TAPPED)
+            list = CardLists.getValidCards(list, valid, source.getController(), source, sa)
+            return AiAbilityDecision(100, AiPlayDecision.WillPlay) if (mandatory or not list.isEmpty()) else AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+        return AiAbilityDecision(100, AiPlayDecision.WillPlay) if mandatory else AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
 ```

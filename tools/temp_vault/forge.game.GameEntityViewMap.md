@@ -106,3 +106,53 @@ public class GameEntityViewMap<Entity extends GameEntity, View extends GameEntit
     }
 }
 ```
+
+## Python
+`forge/game/GameEntityViewMap.py`
+
+```python
+package: forge.game
+
+from typing import List, Iterable
+
+from com.google.common.collect.ForwardingMap import ForwardingMap
+from com.google.common.collect.Maps import Maps
+
+from forge.game.GameEntity import GameEntity
+from forge.game.GameEntityView import GameEntityView
+from forge.trackable.TrackableCollection import TrackableCollection
+
+
+class GameEntityViewMap(ForwardingMap):
+    def __init__(self):
+        self.dataMap = Maps.newLinkedHashMap()
+
+    def delegate(self):
+        return self.dataMap
+
+    def put(self, e):
+        return super().put(e.getView(), e)
+
+    def putAll(self, entities):
+        for e in entities:
+            self.put(e)
+
+    def remove(self, e):
+        return super().remove(e.getView())
+
+    def removeAll(self, entities):
+        for e in entities:
+            self.remove(e)
+
+    def addToList(self, views, list):
+        if views is None:
+            return list
+        for view in views:
+            entity = self.get(view)
+            if entity is not None:
+                list.append(entity)
+        return list
+
+    def getTrackableKeys(self):
+        return TrackableCollection(self.keySet())
+```

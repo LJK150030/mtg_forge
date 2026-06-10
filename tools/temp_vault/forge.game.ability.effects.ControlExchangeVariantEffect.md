@@ -112,3 +112,61 @@ public class ControlExchangeVariantEffect extends SpellAbilityEffect {
     }
 }
 ```
+
+## Python
+`forge/game/ability/effects/ControlExchangeVariantEffect.py`
+
+````python
+package_marker = None
+```
+
+Wait, I need to output only Python source.
+
+```python
+from typing import List
+
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.Localizer import Localizer
+
+
+class ControlExchangeVariantEffect(SpellAbilityEffect):
+    def getStackDescription(self, sa: SpellAbility) -> str:
+        return "Exchange cards controlled by " + ",".join(str(p) for p in self.getTargetPlayers(sa))
+
+    def resolve(self, sa: SpellAbility) -> None:
+        activator = sa.getActivatingPlayer()
+        players = self.getTargetPlayers(sa)
+        if len(players) != 2:
+            return
+        player1 = players[0]
+        player2 = players[1]
+        zone = ZoneType.smartValueOf(sa.getParamOrDefault("Zone", "Battlefield"))
+        type = sa.getParamOrDefault("Type", "Card")
+        # get valid lists
+        list1 = AbilityUtils.filterListByType(player1.getCardsIn(zone), type, sa)
+        list2 = AbilityUtils.filterListByType(player2.getCardsIn(zone), type, sa)
+        max = min(list1.size(), list2.size())
+        # choose the same number of cards
+        chosen1 = activator.getController().chooseCardsForEffect(list1, sa, Localizer.getInstance().getMessage("lblChooseCards") + ":" + str(player1), 0, max, True, None)
+        num = chosen1.size()
+        chosen2 = activator.getController().chooseCardsForEffect(list2, sa, Localizer.getInstance().getMessage("lblChooseCards") + ":" + str(player2), num, num, True, None)
+        # check all cards can be controlled by the other player
+        for c in chosen1:
+            if not c.canBeControlledBy(player2):
+                return
+        for c in chosen2:
+            if not c.canBeControlledBy(player1):
+                return
+        # set new controller
+        tStamp = sa.getActivatingPlayer().getGame().getNextTimestamp()
+        for c in chosen1:
+            c.addTempController(player2, tStamp)
+        for c in chosen2:
+            c.addTempController(player1, tStamp)
+````

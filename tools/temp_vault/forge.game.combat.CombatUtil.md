@@ -99,7 +99,7 @@ classDiagram
 
 `CombatUtil` is a stateless utility class (all methods static, no instance state) that centralizes the rules logic governing Magic's combat phase. It answers the core legality and cost questions that drive attacker and blocker declaration: which `GameEntity` defenders a `Player` may target, whether a given `Card` can attack or block under the current `Combat` state, what `Cost` (propaganda-style taxes) attacking or blocking incurs, and whether a proposed set of attackers or blocks satisfies all requirements and restrictions.
 
-As a collaborator rather than a domain object, it orchestrates many model types—delegating restriction checks to the `StaticAbility*` family, deferring legality optimization to `AttackConstraints`, and firing `Attacks` triggers via `AbilityKey`. Its design intent is to encode the comparative MTG rules (goad, lure/must-block effects, shadow, minimum-blocker counts, rule 802.4a) in one reusable place so both the engine and AI can validate combat decisions consistently, including hypothetical "next turn" evaluation.
+As a collaborator rather than a domain object, it orchestrates many model typesâ€”delegating restriction checks to the `StaticAbility*` family, deferring legality optimization to `AttackConstraints`, and firing `Attacks` triggers via `AbilityKey`. Its design intent is to encode the comparative MTG rules (goad, lure/must-block effects, shadow, minimum-blocker counts, rule 802.4a) in one reusable place so both the engine and AI can validate combat decisions consistently, including hypothetical "next turn" evaluation.
 
 ## Source
 `forge-game/src/main/java/forge/game/combat/CombatUtil.java`
@@ -1145,3 +1145,688 @@ public class CombatUtil {
     }
 }
 ```
+
+## Python
+`forge/game/combat/CombatUtil.py`
+
+````python
+forge/game/combat/CombatUtil.py
+
+```python
+from forge.card.mana.ManaCost import ManaCost
+from forge.game.Game import Game
+from forge.game.GameEntity import GameEntity
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CardPredicates import CardPredicates
+from forge.game.card.CardCopyService import CardCopyService
+from forge.game.cost.Cost import Cost
+from forge.game.cost.CostPart import CostPart
+from forge.game.keyword.Keyword import Keyword
+from forge.game.keyword.KeywordInterface import KeywordInterface
+from forge.game.phase.PhaseType import PhaseType
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.spellability.SpellAbility.EmptySa import EmptySa
+from forge.game.staticability.StaticAbility import StaticAbility
+from forge.game.staticability.StaticAbilityBlockRestrict import StaticAbilityBlockRestrict
+from forge.game.staticability.StaticAbilityCantAttackBlock import StaticAbilityCantAttackBlock
+from forge.game.staticability.StaticAbilityMustBlock import StaticAbilityMustBlock
+from forge.game.combat.AttackConstraints import AttackConstraints
+from forge.game.combat.Combat import Combat
+from forge.game.trigger.TriggerType import TriggerType
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.TextUtil import TextUtil
+from forge.util.collect.FCollection import FCollection
+from forge.util.collect.FCollectionView import FCollectionView
+
+
+class CombatUtil:
+    """Static class containing utility methods related to combat."""
+
+    @staticmethod
+    def getAllPossibleDefenders(playerWhoAttacks):
+        # Opponents, opposing planeswalkers, and any battle you don't protect
+        defenders = FCollection()
+        for defender in playerWhoAttacks.getOpponents():
+            defenders.add(defender)
+            defenders.addAll(defender.getPlaneswalkersInPlay())
+
+        # Relevant battles (protected by the attacking player's opponents)
+        game = playerWhoAttacks.getGame()
+        battles = CardLists.filter(game.getCardsIn(ZoneType.Battlefield), CardPredicates.BATTLES)
+        for battle in battles:
+            if battle.getProtectingPlayer().isOpponentOf(playerWhoAttacks):
+                defenders.add(battle)
+
+        return defenders
+
+    # ////////////////////////////////////
+    # ////////// ATTACK METHODS //////////
+    # ////////////////////////////////////
+
+    @staticmethod
+    def validateAttackers(combat):
+        constraints = combat.getAttackConstraints()
+        myViolations = constraints.countViolations(combat.getAttackersAndDefenders())
+        if myViolations == -1:
+            return False
+        bestAttack = constraints.getLegalAttackers()
+        return myViolations <= bestAttack.getRight()
+
+    @staticmethod
+    def couldAttackButNotAttacking(combat, attacker):
+        # If the player didn't declare attackers, combat here will be null
+        if combat is None:
+            combat = Combat(attacker.getController())
+        elif combat.isAttacking(attacker):
+            return False
+
+        constraints = combat.getAttackConstraints()
+        bestAttack = constraints.getLegalAttackers()
+        attackers = dict(combat.getAttackersAndDefenders())
+        game = attacker.getGame()
+
+        def _pred(defender):
+            if not CombatUtil.canAttack(attacker, defender) or CombatUtil.getAttackCost(game, attacker, defender) is not None:
+                return False
+            attackers[attacker] = defender
+            myViolations = constraints.countViolations(attackers)
+            if myViolations == -1:
+                return False
+            return myViolations <= bestAttack.getRight()
+
+        return CombatUtil.getAllPossibleDefenders(attacker.getController()).anyMatch(_pred)
+
+    @staticmethod
+    def getPossibleAttackers(p):
+        return CardLists.filter(p.getCreaturesInPlay(), CombatUtil.canAttack)
+
+    @staticmethod
+    def canAttack(*args):
+        n = len(args)
+        if n == 1:
+            a0 = args[0]
+            if isinstance(a0, Player):
+                # canAttack(Player p)
+                possibleAttackers = CombatUtil.getPossibleAttackers(a0)
+                return not possibleAttackers.isEmpty()
+            # canAttack(Card attacker)
+            attacker = a0
+            return CombatUtil.getAllPossibleDefenders(attacker.getController()).anyMatch(
+                lambda defender: CombatUtil.canAttack(attacker, defender))
+        if n == 2:
+            # canAttack(Card attacker, GameEntity defender)
+            attacker, defender = args
+            return CombatUtil.canAttack(attacker, defender, False)
+
+        # private canAttack(Card attacker, GameEntity defender, boolean forNextTurn)
+        attacker, defender, forNextTurn = args
+        game = attacker.getGame()
+
+        if attacker.isBattle():
+            return False
+
+        # Basic checks (unless is for next turn)
+        if (not forNextTurn and
+                (not attacker.isCreature()
+                 or attacker.isTapped() or attacker.isPhasedOut()
+                 or CombatUtil.isAttackerSick(attacker, defender)
+                 or game.getPhaseHandler().getPhase().isAfter(PhaseType.COMBAT_DECLARE_ATTACKERS))):
+            return False
+
+        # Goad logic
+        # a goaded creature does need to attack a player which does not goaded her
+        # or if not possible a planeswalker or a player which does goaded her
+        if attacker.isGoaded():
+            goadedByDefender = isinstance(defender, Player) and attacker.isGoadedBy(defender)
+            # attacker got goaded by defender or defender is not player
+            if goadedByDefender or not isinstance(defender, Player):
+                for ge in CombatUtil.getAllPossibleDefenders(attacker.getController()):
+                    if not ge.equals(defender) and isinstance(ge, Player):
+                        # found a player which does not goad that creature
+                        # and creature can attack this player or planeswalker
+                        if not attacker.isGoadedBy(ge) and CombatUtil.canAttack(attacker, ge):
+                            return False
+
+        # CantAttack static abilities
+        if StaticAbilityCantAttackBlock.cantAttack(attacker, defender):
+            return False
+
+        return True
+
+    @staticmethod
+    def canAttackNextTurn(attacker, defender):
+        return CombatUtil.canAttack(attacker, defender, True)
+
+    @staticmethod
+    def isAttackerSick(attacker, defender):
+        return not StaticAbilityCantAttackBlock.canAttackHaste(attacker, defender)
+
+    @staticmethod
+    def checkPropagandaEffects(game, attacker, combat, attackersWithOptionalCost):
+        attackCost = CombatUtil.getAttackCost(game, attacker, combat.getDefenderByAttacker(attacker), attackersWithOptionalCost)
+        if attackCost is None:
+            return True
+
+        # Not a great solution, but prevents a crash by passing a fake SA for Propaganda payments
+        # If there's a better way of handling this somewhere deeper in the code, feel free to remove
+        fakeSA = EmptySa(attacker, attacker.getController())
+        fakeSA.setCardState(attacker.getCurrentState())
+        # need to set this for "CostContainsX" restriction
+        fakeSA.setPayCosts(attackCost)
+        # prevent recalculating X
+        fakeSA.setSVar("X", "0")
+        return attacker.getController().getController().payCombatCost(attacker, attackCost, fakeSA,
+            "Pay additional cost to declare " + str(attacker) + " an attacker")
+
+    @staticmethod
+    def getAttackCost(game, attacker, defender, attackersWithOptionalCost=None):
+        if attackersWithOptionalCost is None:
+            attackersWithOptionalCost = []
+        attackCost = Cost(ManaCost.ZERO, True)
+        hasCost = False
+        # Sort abilities to apply them in proper order
+        for card in game.getCardsIn(ZoneType.STATIC_ABILITIES_SOURCE_ZONES):
+            for stAb in card.getStaticAbilities():
+                additionalCost = stAb.getAttackCost(attacker, defender, attackersWithOptionalCost)
+                if additionalCost is not None:
+                    attackCost.add(additionalCost)
+                    hasCost = True
+
+        if not hasCost:
+            return None
+        return attackCost
+
+    @staticmethod
+    def getOptionalAttackCostCreatures(attackers, costType):
+        attackersWithCost = CardCollection()
+        for card in attackers:
+            for stAb in card.getStaticAbilities():
+                if stAb.hasAttackCost(card, costType):
+                    attackersWithCost.add(card)
+
+        return attackersWithCost
+
+    @staticmethod
+    def payRequiredBlockCosts(game, blocker, attacker):
+        blockCost = CombatUtil.getBlockCost(game, blocker, attacker)
+        if blockCost is None:
+            return True
+
+        fakeSA = EmptySa(blocker, blocker.getController())
+        fakeSA.setCardState(blocker.getCurrentState())
+        fakeSA.setPayCosts(blockCost)
+        fakeSA.setSVar("X", "0")
+        return blocker.getController().getController().payCombatCost(blocker, blockCost, fakeSA, "Pay cost to declare " + str(blocker) + " a blocker. ")
+
+    @staticmethod
+    def getBlockCost(game, blocker, attacker):
+        blockCost = Cost(ManaCost.ZERO, True)
+        # Sort abilities to apply them in proper order
+        noCost = True
+        for card in game.getCardsIn(ZoneType.STATIC_ABILITIES_SOURCE_ZONES):
+            for stAb in card.getStaticAbilities():
+                c1 = stAb.getBlockCost(blocker, attacker)
+                if c1 is not None:
+                    blockCost.add(c1)
+                    noCost = False
+
+        if noCost:
+            return None
+        return blockCost
+
+    @staticmethod
+    def checkDeclaredAttacker(game, c, combat, triggers):
+        defender = combat.getDefenderByAttacker(c)
+        otherAttackers = combat.getAttackers()
+
+        if triggers:
+            runParams = AbilityKey.newMap()
+            runParams.put(AbilityKey.Attacker, c)
+            otherAttackers.remove(c)
+            runParams.put(AbilityKey.OtherAttackers, otherAttackers)
+            runParams.put(AbilityKey.Attacked, defender)
+            runParams.put(AbilityKey.DefendingPlayer, combat.getDefenderPlayerByAttacker(c))
+            # only add defenders that were attacked
+            defenders = FCollection()
+            for e in combat.getDefenders():
+                if not combat.getAttackersOf(e).isEmpty():
+                    defenders.add(e)
+            runParams.put(AbilityKey.Defenders, defenders)
+            game.getTriggerHandler().runTrigger(TriggerType.Attacks, runParams, False)
+
+        c.getDamageHistory().setCreatureAttackedThisCombat(defender, otherAttackers.size())
+        c.getDamageHistory().clearNotAttackedSinceLastUpkeepOf()
+        c.getController().addCreaturesAttackedThisTurn(CardCopyService.getLKICopy(c), defender)
+
+    @staticmethod
+    def getAllRequirements(combat):
+        return AttackConstraints(combat)
+
+    # ///////////////////////////////////
+    # ////////// BLOCK METHODS //////////
+    # ///////////////////////////////////
+
+    @staticmethod
+    def canBlock(*args):
+        n = len(args)
+        if n == 1:
+            # canBlock(Card blocker)
+            return CombatUtil.canBlock(args[0], False)
+
+        if n == 2:
+            a0, a1 = args
+            if isinstance(a0, Player):
+                # canBlock(Player p, Combat combat)
+                p = a0
+                combat = a1
+                creatures = p.getCreaturesInPlay()
+                if creatures.isEmpty():
+                    return False
+                attackers = combat.getAttackers()
+                if attackers.isEmpty():
+                    return False
+                for c in creatures:
+                    for a in attackers:
+                        if CombatUtil.canBlock(a, c, combat):
+                            return True
+                return False
+            if isinstance(a1, bool):
+                # canBlock(Card blocker, boolean nextTurn)
+                blocker = a0
+                nextTurn = a1
+                if blocker is None or not blocker.isCreature():
+                    return False
+                if blocker.isBattle():
+                    return False
+                if not nextTurn and blocker.isPhasedOut():
+                    return False
+                if not nextTurn and blocker.isTapped() and not StaticAbilityCantAttackBlock.canBlockTapped(blocker):
+                    return False
+                if blocker.hasKeyword("CARDNAME can't block.") or blocker.hasKeyword("CARDNAME can't attack or block."):
+                    return False
+                if StaticAbilityCantAttackBlock.cantBlock(blocker):
+                    return False
+                cantBlockAlone = blocker.hasKeyword("CARDNAME can't attack or block alone.") or blocker.hasKeyword("CARDNAME can't block alone.")
+                lst = blocker.getController().getCreaturesInPlay()
+                return lst.size() >= 2 or not cantBlockAlone
+            if isinstance(a1, Combat):
+                # canBlock(Card blocker, Combat combat)
+                blocker = a0
+                combat = a1
+                if blocker is None:
+                    return False
+                if combat is None:
+                    return CombatUtil.canBlock(blocker)
+                if not CombatUtil.canBlockMoreCreatures(blocker, combat.getAttackersBlockedBy(blocker)):
+                    return False
+                allOtherBlockers = combat.getAllBlockers()
+                allOtherBlockers.remove(blocker)
+                blockersFromOnePlayer = CardLists.count(allOtherBlockers, CardPredicates.isController(blocker.getController()))
+                if blockersFromOnePlayer >= StaticAbilityBlockRestrict.blockRestrictNum(blocker.getController()):
+                    return False
+                return CombatUtil.canBlock(blocker)
+            # canBlock(Card attacker, Card blocker)
+            return CombatUtil.canBlock(a0, a1, False)
+
+        # n == 3
+        a0, a1, a2 = args
+        if isinstance(a2, bool):
+            # canBlock(Card attacker, Card blocker, boolean nextTurn)
+            attacker = a0
+            blocker = a1
+            nextTurn = a2
+            if attacker is None or blocker is None or not blocker.isCreature():
+                return False
+
+            if not CombatUtil.canBlock(blocker, nextTurn):
+                return False
+
+            # rare case:
+            if (blocker.hasKeyword(Keyword.SHADOW)
+                    and blocker.hasKeyword("CARDNAME can block creatures with shadow as though they didn't have shadow.")):
+                return False
+
+            if (attacker.hasKeyword(Keyword.SHADOW) and not blocker.hasKeyword(Keyword.SHADOW)
+                    and not blocker.hasKeyword("CARDNAME can block creatures with shadow as though they didn't have shadow.")):
+                return False
+
+            if not attacker.hasKeyword(Keyword.SHADOW) and blocker.hasKeyword(Keyword.SHADOW):
+                return False
+
+            # CantBlockBy static abilities
+            if StaticAbilityCantAttackBlock.cantBlockBy(attacker, blocker):
+                return False
+
+            return True
+
+        # canBlock(Card attacker, Card blocker, Combat combat)
+        attacker = a0
+        blocker = a1
+        combat = a2
+        if attacker is None or blocker is None:
+            return False
+
+        if not CombatUtil.canBlock(blocker, combat):
+            return False
+        if not CombatUtil.canBeBlocked(attacker, combat, blocker.getController()):
+            return False
+        if combat is not None and combat.isBlocking(blocker, attacker):  # Can't block if already blocking the attacker
+            return False
+
+        # TODO remove with HiddenKeyword or Static Ability
+        mustBeBlockedBy = False
+        for inst in attacker.getKeywords():
+            keyword = inst.getOriginal()
+            # MustBeBlockedBy <valid>
+            if keyword.startswith("MustBeBlockedBy "):
+                valid = keyword[len("MustBeBlockedBy "):]
+                if (blocker.isValid(valid, None, None, None) and
+                        CardLists.getValidCardCount(combat.getBlockers(attacker), valid, None, None, None) == 0):
+                    mustBeBlockedBy = True
+                    break
+            # MustBeBlockedByAll:<valid>
+            if keyword.startswith("MustBeBlockedByAll"):
+                valid = keyword.split(":")[1]
+                if blocker.isValid(valid, None, None, None):
+                    mustBeBlockedBy = True
+                    break
+
+        # if the attacker has no lure effect, but the blocker can block another
+        # attacker with lure, the blocker can't block the former
+        if (not attacker.hasKeyword("All creatures able to block CARDNAME do so.")
+                and not (attacker.hasKeyword("CARDNAME must be blocked if able.") and combat.getBlockers(attacker).isEmpty())
+                and not (attacker.hasKeyword("CARDNAME must be blocked by exactly one creature if able.") and combat.getBlockers(attacker).size() != 1)
+                and not (attacker.hasKeyword("CARDNAME must be blocked by two or more creatures if able.") and combat.getBlockers(attacker).size() < 2)
+                and not blocker.getMustBlockCards().contains(attacker)
+                and not mustBeBlockedBy
+                and CombatUtil.mustBlockAnAttacker(blocker, combat, None)):
+            return False
+
+        return CombatUtil.canBlock(attacker, blocker)
+
+    @staticmethod
+    def canBlockMoreCreatures(blocker, blockedBy):
+        if blockedBy.isEmpty() or blocker.canBlockAny():
+            return True
+        canBlockMore = blocker.canBlockAdditional()
+        return canBlockMore >= blockedBy.size()
+
+    @staticmethod
+    def canBeBlocked(attacker, second, third):
+        if isinstance(second, Combat):
+            # canBeBlocked(Card attacker, Combat combat, Player defendingPlayer)
+            combat = second
+            defendingPlayer = third
+            if attacker is None:
+                return True
+
+            if combat is not None:
+                if StaticAbilityCantAttackBlock.getMinMaxBlocker(attacker, defendingPlayer).getRight() == combat.getBlockers(attacker).size():
+                    return False
+
+                # Rule 802.4a: A player can block only creatures attacking him/her or a planeswalker he/she controls
+                attacked = combat.getDefendingPlayerRelatedTo(attacker)
+                if attacked is not None and attacked != defendingPlayer:
+                    return False
+
+            # Unblockable check
+            if StaticAbilityCantAttackBlock.cantBlockBy(attacker, None):
+                return False
+
+            return True
+
+        # canBeBlocked(Card attacker, List<Card> blockers, Combat combat)
+        blockers = second
+        combat = third
+        blocks = 0
+        for blocker in blockers:
+            if CombatUtil.canBlock(attacker, blocker):
+                blocks += 1
+
+        return CombatUtil.canAttackerBeBlockedWithAmount(attacker, blocks, combat)
+
+    @staticmethod
+    def canBlockAtLeastOne(blocker, attackers):
+        for attacker in attackers:
+            if CombatUtil.canBlock(attacker, blocker):
+                return True
+        return False
+
+    @staticmethod
+    def getPotentialBestBlockers(attacker, blockers, combat):
+        potentialBlockers = []
+        if blockers.isEmpty() or attacker is None:
+            return potentialBlockers
+
+        for blocker in blockers:
+            if CombatUtil.canBlock(attacker, blocker):
+                potentialBlockers.append(blocker)
+
+        minBlockers = CombatUtil.getMinNumBlockersForAttacker(attacker, blockers.get(0).getController())
+
+        CardLists.sortByPowerDesc(potentialBlockers)
+
+        minBlockerList = []
+        i = 0
+        while i < minBlockers and i < len(potentialBlockers):
+            minBlockerList.append(potentialBlockers[i])
+            i += 1
+
+        return minBlockerList
+
+    # return all creatures that could help satisfy a blocking requirement without breaking another
+    # TODO according to 509.1c, this should really check if the maximum possible is already fulfilled
+    @staticmethod
+    def findFreeBlockers(defendersArmy, combat):
+        freeBlockers = CardCollection()
+        for blocker in defendersArmy:
+            if CombatUtil.canBlock(blocker) and not CombatUtil.mustBlockAnAttacker(blocker, combat, None):
+                blockedAttackers = combat.getAttackersBlockedBy(blocker)
+                blockChange = blockedAttackers.isEmpty()
+                for attacker in blockedAttackers:
+                    # check if we could unblock something
+                    blockersReduced = combat.getBlockers(attacker)
+                    blockersReduced.remove(blocker)
+                    if CombatUtil.canBlockMoreCreatures(blocker, blockedAttackers) or CombatUtil.canBeBlocked(attacker, blockersReduced, combat):
+                        blockChange = True
+                        break
+                if blockChange:
+                    freeBlockers.add(blocker)
+        return freeBlockers
+
+    @staticmethod
+    def validateBlocks(combat, defending):
+        defendersArmy = defending.getCreaturesInPlay()
+        attackers = combat.getAttackers()
+        blockers = CardLists.filterControlledBy(combat.getAllBlockers(), defending)
+        freeBlockers = CombatUtil.findFreeBlockers(defendersArmy, combat)
+
+        # if a creature does not block but should, return false
+        for blocker in defendersArmy:
+            if not blocker.getMustBlockCards().isEmpty():
+                blockedSoFar = combat.getAttackersBlockedBy(blocker)
+                for cardToBeBlocked in blocker.getMustBlockCards():
+                    # If a creature can't block unless a player pays a cost, that player is not required to pay that cost
+                    if CombatUtil.getBlockCost(blocker.getGame(), blocker, cardToBeBlocked) is not None:
+                        continue
+
+                    additionalBlockers = CombatUtil.getMinNumBlockersForAttacker(cardToBeBlocked, defending) - 1
+                    potentialBlockers = 0
+                    # if the attacker can only be blocked with multiple creatures check if that's possible
+                    for i in range(additionalBlockers):
+                        for freeBlocker in CardCollection(freeBlockers):
+                            if freeBlocker != blocker and CombatUtil.canBlock(cardToBeBlocked, freeBlocker):
+                                freeBlockers.remove(freeBlocker)
+                                potentialBlockers += 1
+                    if (potentialBlockers >= additionalBlockers and not blockedSoFar.contains(cardToBeBlocked)
+                            and (CombatUtil.canBlockMoreCreatures(blocker, blockedSoFar) or freeBlockers.contains(blocker))
+                            and combat.isAttacking(cardToBeBlocked) and CombatUtil.canBlock(cardToBeBlocked, blocker)):
+                        return TextUtil.concatWithSpace(blocker.toString(), "must still block", TextUtil.addSuffix(cardToBeBlocked.toString(), "."))
+            # lure effects
+            if CombatUtil.mustBlockAnAttacker(blocker, combat, freeBlockers):
+                return TextUtil.concatWithSpace(blocker.toString(), "must block an attacker, but has not been assigned to block", "the right ones." if blockers.contains(blocker) else "any.")
+
+            # "CARDNAME blocks each turn/combat if able."
+            if not blockers.contains(blocker) and StaticAbilityMustBlock.blocksEachCombatIfAble(blocker):
+                for attacker in attackers:
+                    if CombatUtil.getBlockCost(blocker.getGame(), blocker, attacker) is not None:
+                        continue
+
+                    if CombatUtil.canBlock(attacker, blocker, combat):
+                        must = True
+                        if CombatUtil.getMinNumBlockersForAttacker(attacker, defending) > 1:
+                            possibleBlockers = list(freeBlockers)
+                            possibleBlockers.extend(combat.getBlockers(attacker))
+                            if not CombatUtil.canBeBlocked(attacker, possibleBlockers, combat):
+                                must = False
+                        if must:
+                            return TextUtil.concatWithSpace(blocker.toString(), "must block each combat but was not assigned to block any attacker now.")
+
+        # Creatures that aren't allowed to block unless certain restrictions are met.
+        for blocker in blockers:
+            cantBlockAlone = blocker.hasKeyword("CARDNAME can't attack or block alone.") or blocker.hasKeyword("CARDNAME can't block alone.")
+            if blockers.size() < 2 and cantBlockAlone:
+                return TextUtil.concatWithSpace(blocker.toString(), "can't block alone.")
+            elif blockers.size() < 3 and blocker.hasKeyword("CARDNAME can't block unless at least two other creatures block."):
+                return TextUtil.concatWithSpace(blocker.toString(), "can't block unless at least two other creatures block.")
+            elif blocker.hasKeyword("CARDNAME can't block unless a creature with greater power also blocks."):
+                found = False
+                power = blocker.getNetPower()
+                # Note: This is O(n^2), but there shouldn't generally be many creatures with the above keyword.
+                for blocker2 in blockers:
+                    if blocker2.getNetPower() > power:
+                        found = True
+                        break
+                if not found:
+                    return TextUtil.concatWithSpace(blocker.toString(), "can't block unless a creature with greater power also blocks.")
+
+        for attacker in attackers:
+            cntBlockers = combat.getBlockers(attacker).size()
+            # don't accept blocker amount for attackers with keyword defining valid blockers amount
+            if cntBlockers > 0 and not CombatUtil.canAttackerBeBlockedWithAmount(attacker, cntBlockers, combat):
+                return TextUtil.concatWithSpace(attacker.toString(), "cannot be blocked with", str(cntBlockers), "creatures you've assigned")
+
+        return None
+
+    @staticmethod
+    def mustBlockAnAttacker(blocker, combat, freeBlockers):
+        if blocker is None or combat is None:
+            return False
+
+        attackers = combat.getAttackers()
+
+        requirementCards = CardCollection()
+        defender = blocker.getController()
+        for attacker in attackers:
+            if CombatUtil.getBlockCost(blocker.getGame(), blocker, attacker) is not None:
+                continue
+
+            if CombatUtil.attackerLureSatisfied(attacker, blocker, combat.getBlockers(attacker)):
+                continue
+
+            if CombatUtil.canBeBlocked(attacker, combat, defender) and CombatUtil.canBlock(attacker, blocker):
+                canBe = True
+                defendingPlayer = combat.getDefenderPlayerByAttacker(attacker)
+
+                if CombatUtil.getMinNumBlockersForAttacker(attacker, defendingPlayer) > 1:
+                    blockers = defendingPlayer.getCreaturesInPlay()
+                    blockers.remove(blocker)
+                    if not CombatUtil.canBeBlocked(attacker, blockers, combat):
+                        canBe = False
+                if canBe:
+                    requirementCards.add(attacker)
+
+        for attacker in blocker.getMustBlockCards():
+            if CombatUtil.getBlockCost(blocker.getGame(), blocker, attacker) is not None:
+                continue
+
+            if (CombatUtil.canBeBlocked(attacker, combat, defender) and CombatUtil.canBlock(attacker, blocker)
+                    and combat.isAttacking(attacker)):
+                canBe = True
+                defendingPlayer = combat.getDefenderPlayerByAttacker(attacker)
+
+                if CombatUtil.getMinNumBlockersForAttacker(attacker, defendingPlayer) > 1:
+                    blockers = CardCollection(freeBlockers) if freeBlockers is not None else defendingPlayer.getCreaturesInPlay()
+                    blockers.remove(blocker)
+                    if not CombatUtil.canBeBlocked(attacker, blockers, combat):
+                        canBe = False
+                if canBe:
+                    requirementCards.add(attacker)
+
+        if requirementCards.isEmpty():
+            return False
+
+        if combat.getAttackersBlockedBy(blocker).containsAll(requirementCards):
+            return False
+
+        if not CombatUtil.canBlock(blocker, combat):
+            # the blocker can't block more but is he even part of another requirement?
+            for attacker in attackers:
+                requirementSatisfied = CombatUtil.attackerLureSatisfied(attacker, blocker, combat.getBlockers(attacker))
+                reducedBlockers = combat.getBlockers(attacker)
+                if requirementSatisfied and reducedBlockers.contains(blocker):
+                    reducedBlockers.remove(blocker)
+                    if not CombatUtil.attackerLureSatisfied(attacker, blocker, reducedBlockers):
+                        return False
+
+        blockedBy = combat.getAttackersBlockedBy(blocker)
+        for rc in requirementCards:
+            if blockedBy.contains(rc):
+                return False
+        return True
+
+    @staticmethod
+    def attackerLureSatisfied(attacker, blocker, blockers):
+        if (attacker.hasStartOfKeyword("All creatures able to block CARDNAME do so.")
+                or (attacker.hasStartOfKeyword("CARDNAME must be blocked if able.")
+                    and blockers.isEmpty())
+                or (attacker.hasStartOfKeyword("CARDNAME must be blocked by exactly one creature if able.")
+                    and blockers.size() != 1)
+                or (attacker.hasStartOfKeyword("CARDNAME must be blocked by two or more creatures if able.")
+                    and blockers.size() < 2)):
+            return False
+
+        # TODO replace with Hidden Keyword or Static Ability
+        for inst in attacker.getKeywords():
+            keyword = inst.getOriginal()
+            # MustBeBlockedBy <valid>
+            if keyword.startswith("MustBeBlockedBy "):
+                valid = keyword[len("MustBeBlockedBy "):]
+                if (blocker.isValid(valid, None, None, None) and
+                        CardLists.getValidCardCount(blockers, valid, None, None, None) == 0):
+                    return False
+            # MustBeBlockedByAll:<valid>
+            if keyword.startswith("MustBeBlockedByAll"):
+                valid = keyword.split(":")[1]
+                if blocker.isValid(valid, None, None, None):
+                    return False
+
+        return True
+
+    @staticmethod
+    def canAttackerBeBlockedWithAmount(attacker, amount, third):
+        if isinstance(third, Combat):
+            # canAttackerBeBlockedWithAmount(Card attacker, int amount, Combat combat)
+            return CombatUtil.canAttackerBeBlockedWithAmount(attacker, amount, third.getDefenderPlayerByAttacker(attacker))
+
+        # canAttackerBeBlockedWithAmount(Card attacker, int amount, Player defender)
+        defender = third
+        if amount == 0:
+            return False  # no block
+
+        minMaxBlock = StaticAbilityCantAttackBlock.getMinMaxBlocker(attacker, defender)
+
+        if minMaxBlock.getLeft() > amount or minMaxBlock.getRight() < amount:
+            return False
+
+        return True
+
+    @staticmethod
+    def getMinNumBlockersForAttacker(attacker, defender):
+        return StaticAbilityCantAttackBlock.getMinMaxBlocker(attacker, defender).getLeft()
+````

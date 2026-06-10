@@ -80,7 +80,7 @@ classDiagram
 
 `AbilityFactory` is a `final`, stateless utility class that acts as the central parser and builder of the ability system, translating Forge's `$`-delimited card-script strings into runtime `SpellAbility` objects. Its overloaded static `getAbility` methods resolve an ability either from a raw script line or indirectly through an SVar on a `Card`/`CardState`; they map parameters via `getMapParams`, derive a `Cost` through `parseAbilityCost`, read optional `TargetRestrictions`, and delegate construction to the inner `AbilityRecordType` enum.
 
-That enum classifies the four ability kinds (AB/SP/ST/DB) and selects the matching `AbilityApiBased`, `SpellApiBased`, `StaticAbilityApiBased`, or `AbilitySub` subtype keyed by `ApiType`. The factory then wires the assembled tree—recursively attaching sub-abilities, additional ability keys, choices, descriptions, restrictions, and conditions—and supplies specialized builders like `buildFusedAbility` for split cards. Sentry breadcrumbs around construction signal a deliberate focus on diagnosing data-driven scripting failures.
+That enum classifies the four ability kinds (AB/SP/ST/DB) and selects the matching `AbilityApiBased`, `SpellApiBased`, `StaticAbilityApiBased`, or `AbilitySub` subtype keyed by `ApiType`. The factory then wires the assembled treeâ€”recursively attaching sub-abilities, additional ability keys, choices, descriptions, restrictions, and conditionsâ€”and supplies specialized builders like `buildFusedAbility` for split cards. Sentry breadcrumbs around construction signal a deliberate focus on diagnosing data-driven scripting failures.
 
 ## Source
 `forge-game/src/main/java/forge/game/ability/AbilityFactory.java`
@@ -501,4 +501,392 @@ public final class AbilityFactory {
         return left;
     }
 }
+```
+
+## Python
+`forge/game/ability/AbilityFactory.py`
+
+```python
+from enum import Enum
+
+from forge.card.CardStateName import CardStateName
+from forge.game.CardTraitBase import CardTraitBase
+from forge.game.IHasSVars import IHasSVars
+from forge.game.ability.AbilityApiBased import AbilityApiBased
+from forge.game.ability.ApiType import ApiType
+from forge.game.ability.SpellApiBased import SpellApiBased
+from forge.game.ability.StaticAbilityApiBased import StaticAbilityApiBased
+from forge.game.ability.effects.CharmEffect import CharmEffect
+from forge.game.ability.effects.RollDiceEffect import RollDiceEffect
+from forge.game.card.Card import Card
+from forge.game.card.CardState import CardState
+from forge.game.cost.Cost import Cost
+from forge.game.spellability.AbilitySub import AbilitySub
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.spellability.SpellAbilityCondition import SpellAbilityCondition
+from forge.game.spellability.SpellAbilityRestriction import SpellAbilityRestriction
+from forge.game.spellability.TargetRestrictions import TargetRestrictions
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.FileSection import FileSection
+from io.sentry.Breadcrumb import Breadcrumb
+from io.sentry.Sentry import Sentry
+
+
+class AbilityFactory:
+    """
+    AbilityFactory class.
+
+    @author Forge
+    @version $Id$
+    """
+
+    additionalAbilityKeys = [
+        "WinSubAbility", "OtherwiseSubAbility",  # Clash
+        "BidSubAbility",  # BidLifeEffect
+        "ChooseNumberSubAbility", "Lowest", "Highest", "NotLowest", "GuessCorrect", "GuessWrong", "MatchedAbility", "UnmatchedAbility",  # ChooseNumber
+        "HeadsSubAbility", "TailsSubAbility", "LoseSubAbility",  # FlipCoin
+        "TrueSubAbility", "FalseSubAbility",  # Branch
+        "ChosenPile", "UnchosenPile",  # MultiplePiles & TwoPiles
+        "RepeatSubAbility",  # Repeat & RepeatEach
+        "Execute",  # DelayedTrigger
+        "FallbackAbility",  # Complex Unless costs which can be unpayable
+        "ChooseSubAbility",  # Can choose a player via ChoosePlayer
+        "CantChooseSubAbility",  # Can't choose a player via ChoosePlayer
+        "RegenerationAbility",  # for Regeneration Effect
+        "ReturnAbility",  # for Delayed Trigger on Magpie
+        "GiftAbility",  # for Promise Gift
+        "VoteSubAbility",  # for Vote with VoteCard
+        "VoteTiedAbility"  # for fallback to Choices
+    ]
+
+    class AbilityRecordType(Enum):
+        Ability = "AB"
+        Spell = "SP"
+        StaticAbility = "ST"
+        SubAbility = "DB"
+
+        def __init__(self, prefix):
+            self.prefix = prefix
+
+        def getPrefix(self):
+            return self.prefix
+
+        def buildSpellAbility(self, api, hostCard, abCost, abTgt, mapParams):
+            if self is AbilityFactory.AbilityRecordType.Ability:
+                return AbilityApiBased(api, hostCard, abCost, abTgt, mapParams)
+            elif self is AbilityFactory.AbilityRecordType.Spell:
+                return SpellApiBased(api, hostCard, abCost, abTgt, mapParams)
+            elif self is AbilityFactory.AbilityRecordType.StaticAbility:
+                return StaticAbilityApiBased(api, hostCard, abCost, abTgt, mapParams)
+            elif self is AbilityFactory.AbilityRecordType.SubAbility:
+                return AbilitySub(api, hostCard, abTgt, mapParams)
+            return None  # exception here would be fine!
+
+        def getApiTypeOf(self, abParams):
+            return ApiType.smartValueOf(abParams.get(self.getPrefix()))
+
+        @staticmethod
+        def getRecordType(abParams):
+            if AbilityFactory.AbilityRecordType.Ability.getPrefix() in abParams:
+                return AbilityFactory.AbilityRecordType.Ability
+            elif AbilityFactory.AbilityRecordType.Spell.getPrefix() in abParams:
+                return AbilityFactory.AbilityRecordType.Spell
+            elif AbilityFactory.AbilityRecordType.StaticAbility.getPrefix() in abParams:
+                return AbilityFactory.AbilityRecordType.StaticAbility
+            elif AbilityFactory.AbilityRecordType.SubAbility.getPrefix() in abParams:
+                return AbilityFactory.AbilityRecordType.SubAbility
+            else:
+                return None
+
+    @staticmethod
+    def getAbility(*args):
+        # Dispatch based on argument types to mirror Java's overloads.
+        if len(args) == 2:
+            first, second = args
+            if isinstance(first, str) and isinstance(second, Card):
+                return AbilityFactory._getAbility_string_card(first, second)
+            elif isinstance(first, str) and isinstance(second, CardState):
+                return AbilityFactory._getAbility_string_state(first, second)
+            elif isinstance(first, Card) and isinstance(second, str):
+                return AbilityFactory._getAbility_card_svar(first, second)
+        elif len(args) == 3:
+            first, second, third = args
+            if isinstance(first, str) and isinstance(second, Card):
+                return AbilityFactory._getAbility_string_card_holder(first, second, third)
+            elif isinstance(first, str) and isinstance(second, CardState):
+                return AbilityFactory._getAbility_string_state_holder(first, second, third)
+            elif isinstance(first, Card) and isinstance(second, str):
+                return AbilityFactory._getAbility_card_svar_holder(first, second, third)
+            elif isinstance(first, CardState) and isinstance(second, str):
+                return AbilityFactory._getAbility_state_svar_holder(first, second, third)
+            elif isinstance(first, dict):
+                return AbilityFactory._getAbility_map(first, second, third, None)
+        elif len(args) == 4:
+            return AbilityFactory._getAbility_map(args[0], args[1], args[2], args[3])
+        elif len(args) == 6:
+            return AbilityFactory._getAbility_full(args[0], args[1], args[2], args[3], args[4], args[5])
+        raise RuntimeError("AbilityFactory : getAbility -- no matching overload")
+
+    @staticmethod
+    def _getAbility_string_card(abString, card):
+        return AbilityFactory.getAbility(abString, card.getCurrentState())
+
+    @staticmethod
+    def _getAbility_string_card_holder(abString, card, sVarHolder):
+        return AbilityFactory.getAbility(abString, card.getCurrentState(), sVarHolder)
+
+    @staticmethod
+    def _getAbility_string_state(abString, state):
+        """
+        getAbility.
+
+        @param abString a str object.
+        @param state a forge.game.card.CardState object.
+        @return a forge.game.spellability.SpellAbility object.
+        """
+        return AbilityFactory.getAbility(abString, state, state)
+
+    @staticmethod
+    def _getAbility_string_state_holder(abString, state, sVarHolder):
+        try:
+            mapParams = AbilityFactory.getMapParams(abString)
+        except RuntimeError as ex:
+            raise RuntimeError(state.getName() + ": " + str(ex))
+        # parse universal parameters
+        type = AbilityFactory.AbilityRecordType.getRecordType(mapParams)
+        if type is None:
+            source = abString if state.getName() == "" else state.getName()
+            raise RuntimeError("AbilityFactory : getAbility -- no API in " + source + ": " + abString)
+        try:
+            return AbilityFactory.getAbility(mapParams, type, state, sVarHolder)
+        except Exception as ex:
+            msg = "AbilityFactory:getAbility: crash when trying to create ability "
+
+            bread = Breadcrumb(msg)
+            bread.setData("Card", state.getName())
+            bread.setData("Ability", abString)
+
+            Sentry.addBreadcrumb(bread)
+            raise RuntimeError(msg + " of card: " + state.getName(), ex)
+
+    @staticmethod
+    def _getAbility_card_svar(hostCard, svar):
+        return AbilityFactory.getAbility(hostCard, svar, hostCard.getCurrentState())
+
+    @staticmethod
+    def _getAbility_card_svar_holder(hostCard, svar, sVarHolder):
+        return AbilityFactory.getAbility(hostCard.getCurrentState(), svar, sVarHolder)
+
+    @staticmethod
+    def _getAbility_state_svar_holder(state, svar, sVarHolder):
+        if not sVarHolder.hasSVar(svar):
+            source = state.getCard().getName()
+            raise RuntimeError("AbilityFactory : getAbility -- " + source + " has no SVar: " + svar)
+        else:
+            return AbilityFactory.getAbility(sVarHolder.getSVar(svar), state, sVarHolder)
+
+    @staticmethod
+    def _getAbility_map(mapParams, type, state, sVarHolder):
+        return AbilityFactory.getAbility(type, type.getApiTypeOf(mapParams), mapParams, None, state, sVarHolder)
+
+    @staticmethod
+    def parseAbilityCost(state, mapParams, type):
+        if type == AbilityFactory.AbilityRecordType.SubAbility:
+            return None
+        cost = mapParams.get("Cost")
+        if cost is not None:
+            return Cost(cost, type == AbilityFactory.AbilityRecordType.Ability)
+        if type == AbilityFactory.AbilityRecordType.Spell:
+            # for a Spell if no Cost is used, use the card states ManaCost
+            return Cost(state.getManaCost(), False)
+        else:
+            raise RuntimeError("AbilityFactory : getAbility -- no Cost in " + state.getName())
+
+    @staticmethod
+    def _getAbility_full(type, api, mapParams, abCost, state, sVarHolder):
+        hostCard = state.getCard()
+        abTgt = AbilityFactory.readTarget(mapParams) if "ValidTgts" in mapParams else None
+
+        if abCost is None:
+            abCost = AbilityFactory.parseAbilityCost(state, mapParams, type)
+        spellAbility = type.buildSpellAbility(api, hostCard, abCost, abTgt, mapParams)
+
+        if spellAbility is None:
+            msg = []
+            msg.append("AbilityFactory : SpellAbility was not created for ")
+            msg.append(str(state))
+            msg.append(". Looking for API: ")
+            msg.append(str(api))
+            raise RuntimeError("".join(msg))
+
+        if isinstance(sVarHolder, CardState):
+            spellAbility.setCardState(sVarHolder)
+        elif isinstance(sVarHolder, CardTraitBase):
+            spellAbility.setCardState(sVarHolder.getCardState())
+        else:
+            spellAbility.setCardState(state)
+
+        # *********************************************
+        # set universal properties of the SpellAbility
+
+        if (api == ApiType.DelayedTrigger or api == ApiType.ImmediateTrigger) and "Execute" in mapParams:
+            spellAbility.setSVar(mapParams.get("Execute"), sVarHolder.getSVar(mapParams.get("Execute")))
+
+        if "PreventionSubAbility" in mapParams:
+            spellAbility.setSVar(mapParams.get("PreventionSubAbility"), sVarHolder.getSVar(mapParams.get("PreventionSubAbility")))
+
+        if "SubAbility" in mapParams:
+            name = mapParams.get("SubAbility")
+            spellAbility.setSubAbility(AbilityFactory.getSubAbility(state, name, sVarHolder))
+
+        for key in AbilityFactory.additionalAbilityKeys:
+            if key in mapParams and spellAbility.getAdditionalAbility(key) is None:
+                spellAbility.setAdditionalAbility(key, AbilityFactory.getAbility(state, mapParams.get(key), sVarHolder))
+
+        if api == ApiType.Charm or api == ApiType.GenericChoice or api == ApiType.AssignGroup or api == ApiType.VillainousChoice or api == ApiType.Vote:
+            key = "Choices"
+            if key in mapParams:
+                names = mapParams.get(key).split(",")
+
+                def _makeChoice(input):
+                    sub = AbilityFactory.getSubAbility(state, input, sVarHolder)
+                    if api == ApiType.GenericChoice:
+                        # support scripters adding restrictions to filter illegal choices
+                        sub.setRestrictions(SpellAbilityRestriction())
+                        AbilityFactory.makeRestrictions(sub)
+                    return sub
+
+                spellAbility.setAdditionalAbilityList(key, [_makeChoice(input) for input in names])
+
+        if api == ApiType.RollDice:
+            key = "ResultSubAbilities"
+            if key in mapParams:
+                diceAbilities = mapParams.get(key).split(",")
+                for ab in diceAbilities:
+                    kv = ab.split(":")
+                    spellAbility.setAdditionalAbility(kv[0], AbilityFactory.getSubAbility(state, kv[1], sVarHolder))
+
+        if isinstance(spellAbility, SpellApiBased) and hostCard.isPermanent():
+            desc = mapParams.get("SpellDescription", spellAbility.getHostCard().getName())
+            spellAbility.setDescription(desc)
+        elif spellAbility.hasParam("SpellDescription"):
+            spellAbility.rebuiltDescription()
+        elif api == ApiType.Charm:
+            spellAbility.setDescription(CharmEffect.makeFormatedDescription(spellAbility))
+        else:
+            spellAbility.setDescription("")
+
+        if api == ApiType.RollDice:
+            spellAbility.setDescription(spellAbility.getDescription() + RollDiceEffect.makeFormatedDescription(spellAbility))
+        elif api == ApiType.Repeat:
+            spellAbility.setDescription(spellAbility.getDescription() + spellAbility.getAdditionalAbility("RepeatSubAbility").getDescription())
+
+        AbilityFactory.initializeParams(spellAbility)
+        AbilityFactory.makeRestrictions(spellAbility)
+        AbilityFactory.makeConditions(spellAbility)
+
+        return spellAbility
+
+    @staticmethod
+    def readTarget(mapParams):
+        # TgtPrompt should only be needed for more complicated ValidTgts
+        return TargetRestrictions(mapParams)
+
+    @staticmethod
+    def initializeParams(sa):
+        """
+        initializeParams.
+
+        @param sa a forge.game.spellability.SpellAbility object.
+        """
+        if sa.hasParam("NonBasicSpell"):
+            sa.setBasicSpell(False)
+
+    @staticmethod
+    def makeRestrictions(sa):
+        """
+        makeRestrictions.
+
+        @param sa a forge.game.spellability.SpellAbility object.
+        """
+        # SpellAbilityRestrictions should be added in here
+        restrict = sa.getRestrictions()
+        if restrict is not None:
+            restrict.setRestrictions(sa.getMapParams())
+
+    @staticmethod
+    def makeConditions(sa):
+        """
+        makeConditions.
+
+        @param sa a forge.game.spellability.SpellAbility object.
+        """
+        # SpellAbilityConditions should be added in here
+        condition = sa.getConditions()
+        condition.setConditions(sa.getMapParams())
+
+    # Easy creation of SubAbilities
+    @staticmethod
+    def getSubAbility(state, sSub, sVarHolder):
+        """
+        getSubAbility.
+
+        @param sSub
+        @return a forge.game.spellability.AbilitySub object.
+        """
+        if sVarHolder.hasSVar(sSub):
+            return AbilityFactory.getAbility(state, sSub, sVarHolder)
+        print("SubAbility '" + sSub + "' not found for: " + state.getName())
+
+        return None
+
+    @staticmethod
+    def getMapParams(abString):
+        return FileSection.parseToMap(abString, FileSection.DOLLAR_SIGN_KV_SEPARATOR)
+
+    @staticmethod
+    def adjustChangeZoneTarget(params, sa):
+        if "Origin" in params:
+            origin = ZoneType.listValueOf(params.get("Origin"))
+
+            tgt = sa.getTargetRestrictions()
+
+            # Don't set the zone if it targets a player
+            if tgt is not None and not tgt.canTgtPlayer():
+                tgt.setZone(origin)
+
+    @staticmethod
+    def buildFusedAbility(card):
+        if not card.isSplitCard():
+            raise RuntimeError("Fuse ability may be built only on split cards")
+
+        leftState = card.getState(CardStateName.LeftSplit)
+        leftAbility = leftState.getFirstAbility()
+        leftMap = dict(leftAbility.getMapParams())
+        leftType = AbilityFactory.AbilityRecordType.getRecordType(leftMap)
+        leftApi = leftType.getApiTypeOf(leftMap)
+        leftMap["StackDescription"] = leftMap.get("SpellDescription")
+        leftMap["SpellDescription"] = "Fuse (You may cast one or both halves of this card from your hand.)"
+        leftMap["ActivationZone"] = "Hand"
+        leftMap["Secondary"] = "True"
+
+        rightState = card.getState(CardStateName.RightSplit)
+        rightAbility = rightState.getFirstAbility()
+        rightMap = dict(rightAbility.getMapParams())
+
+        rightType = AbilityFactory.AbilityRecordType.getRecordType(rightMap)
+        rightApi = leftType.getApiTypeOf(rightMap)
+        rightMap["StackDescription"] = rightMap.get("SpellDescription")
+        rightMap["SpellDescription"] = ""
+
+        totalCost = AbilityFactory.parseAbilityCost(leftState, leftMap, leftType)
+        totalCost.add(AbilityFactory.parseAbilityCost(rightState, rightMap, rightType))
+
+        left = AbilityFactory.getAbility(leftType, leftApi, leftMap, totalCost, leftState, leftState)
+        left.setOriginalAbility(leftAbility)
+        left.setCardState(card.getState(CardStateName.Original))
+        right = AbilityFactory.getAbility(AbilityFactory.AbilityRecordType.SubAbility, rightApi, rightMap, None, rightState, rightState)
+        right.setOriginalAbility(rightAbility)
+        left.appendSubAbility(right)
+        return left
 ```

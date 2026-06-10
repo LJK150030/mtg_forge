@@ -30,6 +30,12 @@ classDiagram
 - [[forge.game.card.Card|Card]]
 - [[forge.game.staticability.StaticAbility|StaticAbility]]
 
+## Design Description
+
+StaticAbilityActivateAbilityAsIfHaste is a stateless utility that implements the "activate abilities as if it had haste" static effect, letting a card bypass the summoning-sickness restriction on its activated abilities. Its sole public entry point, `canActivate(Card)`, scans every card in the game's static-ability source zones, examines each card's StaticAbilities, andâ€”via the private `applyCanActivateAbility` helperâ€”returns true when one whose mode is ActivateAbilityAsIfHaste passes its conditions and matches the card against its `ValidCard` parameter.
+
+Rather than implementing an interface or extending a supertype, it follows the package convention of a final-style static helper keyed to a single StaticAbilityMode, collaborating with Card for zone and ability lookup and with StaticAbility for condition and validity checks. Delegating matching to the data-driven `ValidCard`/`checkConditions` mechanism keeps the rule generic, so any card definition can grant the haste-like permission without bespoke code.
+
 ## Source
 `forge-game/src/main/java/forge/game/staticability/StaticAbilityActivateAbilityAsIfHaste.java`
 
@@ -85,4 +91,39 @@ public class StaticAbilityActivateAbilityAsIfHaste {
         return true;
     }
 }
+```
+
+## Python
+`forge/game/staticability/StaticAbilityActivateAbilityAsIfHaste.py`
+
+```python
+from forge.game.card.Card import Card
+from forge.game.zone.ZoneType import ZoneType
+from forge.game.staticability.StaticAbility import StaticAbility
+from forge.game.staticability.StaticAbilityMode import StaticAbilityMode
+
+
+class StaticAbilityActivateAbilityAsIfHaste:
+    """
+    The Class StaticAbility_ActivateAbilityAsIfHaste.
+     - used to allow cards to activate abilities as if they had haste
+    """
+
+    @staticmethod
+    def canActivate(card: Card) -> bool:
+        for ca in card.getGame().getCardsIn(ZoneType.STATIC_ABILITIES_SOURCE_ZONES):
+            for stAb in ca.getStaticAbilities():
+                if not stAb.checkConditions(StaticAbilityMode.ActivateAbilityAsIfHaste):
+                    continue
+
+                if StaticAbilityActivateAbilityAsIfHaste.applyCanActivateAbility(stAb, card):
+                    return True
+        return False
+
+    @staticmethod
+    def applyCanActivateAbility(stAb: StaticAbility, card: Card) -> bool:
+        if not stAb.matchesValidParam("ValidCard", card):
+            return False
+
+        return True
 ```

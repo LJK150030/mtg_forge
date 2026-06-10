@@ -33,12 +33,12 @@ classDiagram
 
 ## Design Description
 
-GuiltyConscience is a stateless AI helper—one of the nested static strategy classes inside `SpecialCardAi`—that encapsulates targeting logic for the card Guilty Conscience, which reflects combat damage back onto an enchanted creature. Its sole responsibility is the `getBestAttachTarget` method, which selects the most advantageous creature from a candidate list given the AI player and the pending `SpellAbility`.
+GuiltyConscience is a stateless AI helperâ€”one of the nested static strategy classes inside `SpecialCardAi`â€”that encapsulates targeting logic for the card Guilty Conscience, which reflects combat damage back onto an enchanted creature. Its sole responsibility is the `getBestAttachTarget` method, which selects the most advantageous creature from a candidate list given the AI player and the pending `SpellAbility`.
 
 The design encodes two prioritized intents: first, attach to the AI's own damage-reflecting creatures (Stuffy Doll, Boros Reckoner, Spitemare) to weaponize the aura defensively; otherwise, attach to an opponent's creature that would destroy itself when its combat damage meets or exceeds its toughness, while avoiding redundant enchantment. It collaborates with `Card`, `Player`, and `SpellAbility` as data inputs and delegates filtering and evaluation to utility classes like `CardLists` and `ComputerUtilCard`, keeping the class a pure, side-effect-free decision routine.
 
 ## Source
-`forge-ai/src/main/java/forge/ai/SpecialCardAi.java` â€” declaration excerpt
+`forge-ai/src/main/java/forge/ai/SpecialCardAi.java` Ã¢â‚¬â€ declaration excerpt
 
 ```java
     // Guilty Conscience
@@ -69,4 +69,42 @@ The design encodes two prioritized intents: first, attach to the AI's own damage
             return chosen;
         }
     }
+```
+
+## Python
+`forge/ai/SpecialCardAi/GuiltyConscience.py`
+
+```python
+from forge.game.card.Card import Card
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.ai.CardLists import CardLists
+from forge.ai.ComputerUtilCard import ComputerUtilCard
+
+
+class GuiltyConscience:
+    @staticmethod
+    def getBestAttachTarget(ai: Player, sa: SpellAbility, list: list[Card]) -> Card:
+        chosen = None
+
+        def isAiStuffy(c: Card) -> bool:
+            # Don't enchant creatures that can survive
+            if not c.getController().equals(ai):
+                return False
+            name = c.getName()
+            return name == "Stuffy Doll" or name == "Boros Reckoner" or name == "Spitemare"
+
+        aiStuffies = CardLists.filter(list, isAiStuffy)
+        if aiStuffies:
+            chosen = aiStuffies[0]
+        else:
+            creatures = CardLists.filterControlledBy(list, ai.getOpponents())
+            # Don't enchant creatures that can survive
+            creatures = CardLists.filter(creatures, lambda c: c.canBeDestroyed()
+                and c.getNetCombatDamage() >= c.getNetToughness()
+                and not c.isEnchantedBy("Guilty Conscience")
+            )
+            chosen = ComputerUtilCard.getBestCreatureAI(creatures)
+
+        return chosen
 ```

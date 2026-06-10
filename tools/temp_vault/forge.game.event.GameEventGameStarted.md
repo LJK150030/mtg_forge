@@ -78,3 +78,40 @@ public record GameEventGameStarted(GameType gameType, PlayerView firstTurn, Iter
 
 }
 ```
+
+## Python
+`forge/game/event/GameEventGameStarted.py`
+
+```python
+from forge.game.event.GameEvent import GameEvent
+from forge.game.GameType import GameType
+from forge.game.event.IGameEventVisitor import IGameEventVisitor
+from forge.game.player.Player import Player
+from forge.game.player.PlayerView import PlayerView
+from forge.util.Lang import Lang
+from forge.util.TextUtil import TextUtil
+
+
+class GameEventGameStarted(GameEvent):
+
+    def __init__(self, gameType: GameType, firstTurn, players):
+        if isinstance(firstTurn, Player):
+            self.gameType = gameType
+            self.firstTurn = PlayerView.get(firstTurn)
+            self.players = PlayerView.getCollection(players)
+        else:
+            self.gameType = gameType
+            self.firstTurn = firstTurn
+            self.players = players
+
+    def visit(self, visitor: IGameEventVisitor):
+        return visitor.visit(self)
+
+    # (non-Javadoc)
+    # @see java.lang.Object#toString()
+    def toString(self) -> str:
+        return TextUtil.concatWithSpace(self.gameType.toString(), "game between", Lang.joinHomogenous(self.players), "started.", self.firstTurn.toString(), "goes first ")
+
+    def __str__(self) -> str:
+        return self.toString()
+```

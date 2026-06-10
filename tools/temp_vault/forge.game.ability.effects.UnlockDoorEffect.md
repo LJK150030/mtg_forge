@@ -157,3 +157,87 @@ public class UnlockDoorEffect extends SpellAbilityEffect {
 
 }
 ```
+
+## Python
+`forge/game/ability/effects/UnlockDoorEffect.py`
+
+```python
+from forge.card.CardStateName import CardStateName
+from forge.game.Game import Game
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CardState import CardState
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.Localizer import Localizer
+
+
+class UnlockDoorEffect(SpellAbilityEffect):
+
+    def resolve(self, sa: SpellAbility) -> None:
+        source = sa.getHostCard()
+        game = source.getGame()
+        activator = sa.getActivatingPlayer()
+
+        list = None
+
+        if sa.hasParam("Choices"):
+            chooser = activator
+            title = sa.getParam("ChoiceTitle") if sa.hasParam("ChoiceTitle") else Localizer.getInstance().getMessage("lblChoose") + " "
+
+            choices = CardLists.getValidCards(game.getCardsIn(ZoneType.Battlefield), sa.getParam("Choices"), activator, source, sa)
+
+            c = chooser.getController().chooseSingleEntityForEffect(choices, sa, title, {})
+            if c is None:
+                return
+            list = CardCollection(c)
+        else:
+            list = self.getTargetCards(sa)
+
+        for c in list:
+            params: dict[str, object] = {}
+            params["Object"] = c
+            mode = sa.getParamOrDefault("Mode", "ThisDoor")
+            if mode == "ThisDoor":
+                c.unlockRoom(activator, sa.getCardStateName())
+            elif mode == "Unlock":
+                states = [c.getState(name) for name in c.getLockedRooms()]
+
+                # need to choose Room Name
+                chosen = activator.getController().chooseSingleCardState(sa, states, "Choose Room to unlock", params)
+                if chosen is None:
+                    continue
+                c.unlockRoom(activator, chosen.getStateName())
+            elif mode == "LockOrUnlock":
+                locked_count = len(c.getLockedRooms())
+                if locked_count == 0:
+                    # no locked, all unlocked, can only lock door
+                    unlockStates = [c.getState(name) for name in c.getUnlockedRooms()]
+                    chosenUnlock = activator.getController().chooseSingleCardState(sa, unlockStates, "Choose Room to lock", params)
+                    if chosenUnlock is None:
+                        continue
+                    c.lockRoom(activator, chosenUnlock.getStateName())
+                elif locked_count == 1:
+                    # TODO check for Lock vs Unlock first?
+                    bothStates = []
+                    bothStates.append(c.getState(CardStateName.LeftSplit))
+                    bothStates.append(c.getState(CardStateName.RightSplit))
+                    chosenBoth = activator.getController().chooseSingleCardState(sa, bothStates, "Choose Room to lock or unlock", params)
+                    if chosenBoth is None:
+                        continue
+                    if chosenBoth.getStateName() in c.getLockedRooms():
+                        c.unlockRoom(activator, chosenBoth.getStateName())
+                    else:
+                        c.lockRoom(activator, chosenBoth.getStateName())
+                elif locked_count == 2:
+                    lockStates = [c.getState(name) for name in c.getLockedRooms()]
+
+                    # need to choose Room Name
+                    chosenLock = activator.getController().chooseSingleCardState(sa, lockStates, "Choose Room to unlock", params)
+                    if chosenLock is None:
+                        continue
+                    c.unlockRoom(activator, chosenLock.getStateName())
+```

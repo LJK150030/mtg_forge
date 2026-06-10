@@ -36,6 +36,12 @@ classDiagram
 - [[forge.game.staticability.StaticAbility|StaticAbility]]
 - [[forge.game.staticability.StaticAbilityMode|StaticAbilityMode]]
 
+## Design Description
+
+StaticAbilityCantPhase is a stateless utility that evaluates whether a given Card is currently forbidden from phasing in or phasing out by any active static ability in play. Its public `cantPhaseIn` and `cantPhaseOut` entry points delegate to a shared private `cantPhase` routine that scans every Card in the game's static-ability source zones, checks each StaticAbility's conditions against the corresponding StaticAbilityMode, and applies a `ValidCard` match to decide if the restriction affects the card.
+
+The class is a static helper rather than a subtype of StaticAbility itself, collaborating with Card, Game, StaticAbility, and StaticAbilityMode purely through their public interfaces. This mode-driven, short-circuiting design mirrors the engine's broader family of StaticAbility-prefixed checkers, centralizing one rule category behind a small, side-effect-free API.
+
 ## Source
 `forge-game/src/main/java/forge/game/staticability/StaticAbilityCantPhase.java`
 
@@ -74,4 +80,42 @@ public class StaticAbilityCantPhase {
         return stAb.matchesValidParam("ValidCard", card);
     }
 }
+```
+
+## Python
+`forge/game/staticability/StaticAbilityCantPhase.py`
+
+```python
+package: forge.game.staticability ΓåÆ module forge/game/staticability/StaticAbilityCantPhase.py
+
+from forge.game.Game import Game
+from forge.game.card.Card import Card
+from forge.game.zone.ZoneType import ZoneType
+from forge.game.staticability.StaticAbility import StaticAbility
+from forge.game.staticability.StaticAbilityMode import StaticAbilityMode
+
+
+class StaticAbilityCantPhase:
+    @staticmethod
+    def cantPhaseIn(card: Card) -> bool:
+        return StaticAbilityCantPhase.cantPhase(card, StaticAbilityMode.CantPhaseIn)
+
+    @staticmethod
+    def cantPhaseOut(card: Card) -> bool:
+        return StaticAbilityCantPhase.cantPhase(card, StaticAbilityMode.CantPhaseOut)
+
+    @staticmethod
+    def cantPhase(card: Card, mode: StaticAbilityMode) -> bool:
+        game: Game = card.getGame()
+        for ca in game.getCardsIn(ZoneType.STATIC_ABILITIES_SOURCE_ZONES):
+            for stAb in ca.getStaticAbilities():
+                if not stAb.checkConditions(mode):
+                    continue
+                if StaticAbilityCantPhase.applyCantPhase(stAb, card):
+                    return True
+        return False
+
+    @staticmethod
+    def applyCantPhase(stAb: StaticAbility, card: Card) -> bool:
+        return stAb.matchesValidParam("ValidCard", card)
 ```

@@ -40,6 +40,12 @@ classDiagram
 - [[forge.item.PaperCard|PaperCard]]
 - [[forge.item.SealedTemplate|SealedTemplate]]
 
+## Design Description
+
+TournamentPack models a Magic: the Gathering tournament-pack product, a fixed assortment of cards sold to bootstrap a player's collection. It extends SealedProduct, inheriting the named-contents and card-generation lifecycle while specializing the product type. The static `fromSet` factory builds an instance for a given CardEdition by looking up its SealedTemplate in StaticData's registry of tournament packs, and `generate()` delegates to BoosterGenerator to produce the actual List of PaperCards from those contents.
+
+The class collaborates with SealedTemplate to describe slot composition and overrides several hooks to reflect product identity: `getItemType` and `isStarterDeck` distinguish a true tournament pack from a starter deck by inspecting the commons slot count (an acknowledged hack), while `getImageKey` and `clone` supply art lookup and copy semantics. The design intent is a thin, edition-driven specialization that defers heavy lifting to its supertype and the booster-generation machinery.
+
 ## Source
 `forge-core/src/main/java/forge/item/TournamentPack.java`
 
@@ -105,4 +111,43 @@ public class TournamentPack extends SealedProduct {
         return ImageKeys.TOURNAMENTPACK_PREFIX + getEdition();
     }
 }
+```
+
+## Python
+`forge/item/TournamentPack.py`
+
+```python
+from forge.ImageKeys import ImageKeys
+from forge.StaticData import StaticData
+from forge.card.CardEdition import CardEdition
+from forge.item.generation.BoosterGenerator import BoosterGenerator
+from forge.item.SealedProduct import SealedProduct
+from forge.item.PaperCard import PaperCard
+from forge.item.SealedTemplate import SealedTemplate
+
+
+class TournamentPack(SealedProduct):
+
+    @staticmethod
+    def fromSet(edition: CardEdition) -> "TournamentPack":
+        d = StaticData.instance().getTournamentPacks().get(edition.getCode())
+        return TournamentPack(edition.getName(), d)
+
+    def __init__(self, name0: str, boosterData: SealedTemplate):
+        super().__init__(name0, boosterData)
+
+    def isStarterDeck(self) -> bool:
+        return self.contents.getSlots().get(0).getRight() < 30  # hack - getting number of commons, they are first in list
+
+    def getItemType(self) -> str:
+        return "Tournament Pack" if not self.isStarterDeck() else "Starter Deck"
+
+    def generate(self) -> list[PaperCard]:
+        return BoosterGenerator.getBoosterPack(self.contents)
+
+    def clone(self) -> object:
+        return TournamentPack(self.name, self.contents)
+
+    def getImageKey(self, altState: bool) -> str:
+        return ImageKeys.TOURNAMENTPACK_PREFIX + self.getEdition()
 ```

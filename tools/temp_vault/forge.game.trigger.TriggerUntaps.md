@@ -37,6 +37,12 @@ classDiagram
 - [[forge.game.card.Card|Card]]
 - [[forge.game.spellability.SpellAbility|SpellAbility]]
 
+## Design Description
+
+TriggerUntaps is a concrete trigger that fires when a card becomes untapped. Extending the abstract Trigger base class, it specializes the template by implementing performTest to filter events against the trigger's "ValidCard" parameter, setTriggeringObjects to expose the untapped Card to the resolving SpellAbility, and getImportantStackObjects to render a localized stack description. It collaborates with AbilityKey to look up the relevant Card from the runtime parameter map, keeping triggering-object identification keyed by a typed enum rather than ad-hoc strings.
+
+The class is intentionally minimal: it inherits construction, registration, and lifecycle handling from Trigger and only overrides the hooks that distinguish an untap event. Reliance on matchesValidParam and setTriggeringObjectsFrom delegates shared filtering and binding logic to the superclass, while Localizer use signals attention to internationalized presentation.
+
 ## Source
 `forge-game/src/main/java/forge/game/trigger/TriggerUntaps.java`
 
@@ -117,4 +123,41 @@ public class TriggerUntaps extends Trigger {
         return sb.toString();
     }
 }
+```
+
+## Python
+`forge/game/trigger/TriggerUntaps.py`
+
+```python
+package forge.game.trigger
+# Module corresponds to fqn forge.game.trigger.TriggerUntaps
+
+from typing import Map  # placeholder
+
+from forge.game.trigger.Trigger import Trigger
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Localizer import Localizer
+
+
+class TriggerUntaps(Trigger):
+    def __init__(self, params: dict[str, str], host: Card, intrinsic: bool):
+        super().__init__(params, host, intrinsic)
+
+    def performTest(self, runParams: dict[AbilityKey, object]) -> bool:
+        if not self.matchesValidParam("ValidCard", runParams.get(AbilityKey.Card)):
+            return False
+
+        return True
+
+    def setTriggeringObjects(self, sa: SpellAbility, runParams: dict[AbilityKey, object]) -> None:
+        sa.setTriggeringObjectsFrom(runParams, AbilityKey.Card)
+
+    def getImportantStackObjects(self, sa: SpellAbility) -> str:
+        sb = []
+        sb.append(Localizer.getInstance().getMessage("lblUntapped"))
+        sb.append(": ")
+        sb.append(str(sa.getTriggeringObject(AbilityKey.Card)))
+        return "".join(sb)
 ```

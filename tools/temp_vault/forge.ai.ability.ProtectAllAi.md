@@ -73,3 +73,33 @@ public class ProtectAllAi extends SpellAbilityAi {
     }
 }
 ```
+
+## Python
+`forge/ai/ability/ProtectAllAi.py`
+
+```python
+package: forge.ai.ability
+
+(Outputting only the Python source as required.)
+
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.ai.SpellAbilityAi import SpellAbilityAi
+from forge.game.card.Card import Card
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+
+
+class ProtectAllAi(SpellAbilityAi):
+
+    def checkApiLogic(self, ai: Player, sa: SpellAbility) -> AiAbilityDecision:
+        hostCard = sa.getHostCard()
+        # if there is no target and host card isn't in play, don't activate
+        if not sa.usesTargeting() and not hostCard.isInPlay():
+            return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+        return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+    def doTriggerNoCost(self, aiPlayer: Player, sa: SpellAbility, mandatory: bool) -> AiAbilityDecision:
+        return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+```

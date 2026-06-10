@@ -45,7 +45,7 @@ classDiagram
 
 LearnEffect is a concrete spell-ability effect implementing Magic's "Learn" keyword action, which lets a player either retrieve a Lesson card from outside the game or discard a card to draw one. Extending SpellAbilityEffect, it plugs into Forge's effect-resolution framework by overriding `getStackDescription` to supply the player-facing rules reminder text and `resolve` to apply the game-state change.
 
-On resolution it obtains the host Card and its Game, builds an AbilityKey parameter map seeded with a CardZoneTable for tracking zone movements, then delegates the per-player decision to each targeted Player via `learnLesson`. Once every player has acted, it flushes the accumulated zone changes through `table.triggerChangesZoneAll`, ensuring zone-change triggers fire. The design deliberately keeps the effect thin—orchestrating shared infrastructure while delegating Lesson-specific logic to the Player model.
+On resolution it obtains the host Card and its Game, builds an AbilityKey parameter map seeded with a CardZoneTable for tracking zone movements, then delegates the per-player decision to each targeted Player via `learnLesson`. Once every player has acted, it flushes the accumulated zone changes through `table.triggerChangesZoneAll`, ensuring zone-change triggers fire. The design deliberately keeps the effect thinâ€”orchestrating shared infrastructure while delegating Lesson-specific logic to the Player model.
 
 ## Source
 `forge-game/src/main/java/forge/game/ability/effects/LearnEffect.java`
@@ -82,4 +82,34 @@ public class LearnEffect extends SpellAbilityEffect {
     }
 
 }
+```
+
+## Python
+`forge/game/ability/effects/LearnEffect.py`
+
+```python
+package: forge.game.ability.effects
+
+from forge.game.Game import Game
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.card.CardZoneTable import CardZoneTable
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+
+
+class LearnEffect(SpellAbilityEffect):
+
+    def getStackDescription(self, sa: SpellAbility) -> str:
+        return "Learn. (You may reveal a Lesson card you own from outside the game and put it into your hand, or discard a card to draw a card.)"
+
+    def resolve(self, sa: SpellAbility) -> None:
+        source = sa.getHostCard()
+        game = source.getGame()
+        moveParams = AbilityKey.newMap()
+        table = AbilityKey.addCardZoneTableParams(moveParams, sa)
+        for p in self.getTargetPlayers(sa):
+            p.learnLesson(sa, moveParams)
+        table.triggerChangesZoneAll(game, sa)
 ```

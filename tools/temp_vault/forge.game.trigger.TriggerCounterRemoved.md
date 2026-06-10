@@ -39,6 +39,10 @@ classDiagram
 - [[forge.game.card.CounterType|CounterType]]
 - [[forge.game.spellability.SpellAbility|SpellAbility]]
 
+## Design Description
+
+TriggerCounterRemoved is a concrete trigger that fires when a counter is removed from a permanent, specializing the abstract Trigger base class within Forge's event-driven triggered-ability system. It overrides performTest to gate firing against the run-time parameters supplied through an AbilityKey-keyed mapâ€”validating the affected Card and Player, and optionally matching a configured CounterType and resulting NewCounterAmountâ€”so only triggers whose conditions are met proceed. setTriggeringObjects exposes the affected Card to the resolving SpellAbility, while getImportantStackObjects builds a localized, human-readable stack description. The design follows the family's data-driven convention: behavior is configured by string parameters parsed from card scripts rather than hard-coded, letting one class serve every "whenever a counter is removed" effect.
+
 ## Source
 `forge-game/src/main/java/forge/game/trigger/TriggerCounterRemoved.java`
 
@@ -142,4 +146,63 @@ public class TriggerCounterRemoved extends Trigger {
         return sb.toString();
     }
 }
+```
+
+## Python
+`forge/game/trigger/TriggerCounterRemoved.py`
+
+```python
+from typing import Map
+
+from forge.game.trigger.Trigger import Trigger
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.card.CounterType import CounterType
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Localizer import Localizer
+
+
+class TriggerCounterRemoved(Trigger):
+    """
+    Trigger_CounterRemoved class.
+
+    @author Forge
+    @version $Id: TriggerCounterAdded.java 12297 2011-11-28 19:56:47Z jendave $
+    """
+
+    def __init__(self, params: dict[str, str], host: Card, intrinsic: bool):
+        super().__init__(params, host, intrinsic)
+
+    def performTest(self, runParams: dict[AbilityKey, object]) -> bool:
+        addedType = runParams.get(AbilityKey.CounterType)
+        addedNewCounterAmount = runParams.get(AbilityKey.NewCounterAmount)
+
+        if not self.matchesValidParam("ValidCard", runParams.get(AbilityKey.Card)):
+            return False
+
+        if not self.matchesValidParam("ValidPlayer", runParams.get(AbilityKey.Player)):
+            return False
+
+        if self.hasParam("CounterType"):
+            type = self.getParam("CounterType")
+            if type != str(addedType):
+                return False
+
+        if self.hasParam("NewCounterAmount"):
+            amtString = self.getParam("NewCounterAmount")
+            amt = int(amtString)
+            if amt != addedNewCounterAmount:
+                return False
+
+        return True
+
+    def setTriggeringObjects(self, sa: SpellAbility, runParams: dict[AbilityKey, object]) -> None:
+        sa.setTriggeringObjectsFrom(runParams, AbilityKey.Card)
+
+    def getImportantStackObjects(self, sa: SpellAbility) -> str:
+        sb = []
+        sb.append(Localizer.getInstance().getMessage("lblRemovedFrom"))
+        sb.append(": ")
+        sb.append(str(sa.getTriggeringObject(AbilityKey.Card)))
+        return "".join(sb)
 ```

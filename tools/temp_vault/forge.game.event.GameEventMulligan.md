@@ -64,3 +64,26 @@ public record GameEventMulligan(PlayerView player) implements GameEvent {
     }
 }
 ```
+
+## Python
+`forge/game/event/GameEventMulligan.py`
+
+```python
+from forge.game.event.GameEvent import GameEvent
+from forge.game.event.IGameEventVisitor import IGameEventVisitor
+from forge.game.player.PlayerView import PlayerView
+
+
+class GameEventMulligan(GameEvent):
+
+    def __init__(self, player: PlayerView):
+        self.player = player
+
+    def visit(self, visitor: IGameEventVisitor):
+        return visitor.visit(self)
+
+    # (non-Javadoc)
+    # @see java.lang.Object#toString()
+    def __str__(self) -> str:
+        return "" + str(self.player) + " mulligans"
+```

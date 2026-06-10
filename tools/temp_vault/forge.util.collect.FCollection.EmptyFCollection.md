@@ -63,8 +63,14 @@ classDiagram
 **Extends:**
 - [[forge.util.collect.FCollection|FCollection]]
 
+## Design Description
+
+The EmptyFCollection class is a static nested subclass of FCollection that represents an immutable, permanently empty collection. Its responsibility is to provide a specialized, zero-element implementation that overrides every mutating and accessing method with constant-time behavior tailored to emptinessâ€”mutators silently no-op or return false, size queries return 0, accessors throw IndexOutOfBoundsException or NoSuchElementException, and iterators delegate to the JDK's shared empty instances.
+
+By extending FCollection, it remains substitutable wherever its supertype is expected while collaborating with standard Collection, Iterator, ListIterator, Stream, and Comparator types. The design intent is performance and safety: methods are declared final to lock down the empty contract, allocation is avoided by reusing shared empty iterators and ArrayUtils.EMPTY_OBJECT_ARRAY, and the singleton-friendly instance serves as a lightweight, reusable sentinel for absent collections.
+
 ## Source
-`forge-core/src/main/java/forge/util/collect/FCollection.java` — declaration excerpt
+`forge-core/src/main/java/forge/util/collect/FCollection.java` Ã¢â‚¬â€ declaration excerpt
 
 ```java
     /**
@@ -182,4 +188,117 @@ classDiagram
             return "[]";
         }
     }
+```
+
+## Python
+`forge/util/collect/FCollection/EmptyFCollection.py`
+
+```python
+from forge.util.collect.FCollection import FCollection
+
+
+class EmptyFCollection(FCollection):
+    """
+    An unmodifiable, empty FCollection. Overrides all methods with
+    default implementations suitable for an empty collection, to improve
+    performance.
+    """
+
+    serialVersionUID = 8667965158891635997
+
+    def __init__(self):
+        super().__init__()
+
+    def add(self, index, element=None):
+        if element is None:
+            # add(T e) -> boolean
+            return False
+        # add(int index, T element) -> void
+        return None
+
+    def addAll(self, *args):
+        return False
+
+    def clear(self):
+        pass
+
+    def contains(self, o):
+        return False
+
+    def containsAll(self, c):
+        return c.isEmpty()
+
+    def get(self, index):
+        raise IndexError("Any index is out of bounds for an empty collection")
+
+    def getFirst(self):
+        raise StopIteration("Collection is empty")
+
+    def getLast(self):
+        raise StopIteration("Collection is empty")
+
+    def indexOf(self, o):
+        return -1
+
+    def isEmpty(self):
+        return True
+
+    def iterator(self):
+        return iter(())
+
+    def lastIndexOf(self, o):
+        return -1
+
+    def listIterator(self, index=None):
+        return iter(())
+
+    def remove(self, arg):
+        if isinstance(arg, int):
+            raise IndexError("Any index is out of bounds for an empty collection")
+        return False
+
+    def removeAll(self, c):
+        return False
+
+    def retainAll(self, c):
+        return False
+
+    def set(self, index, element):
+        raise IndexError("Any index is out of bounds for an empty collection")
+
+    def size(self):
+        return 0
+
+    def sort(self, comparator=None):
+        pass
+
+    def subList(self, fromIndex, toIndex):
+        if fromIndex == 0 and toIndex == 0:
+            return self
+        raise IndexError("Any index is out of bounds for an empty collection")
+
+    def threadSafeIterable(self):
+        return self
+
+    def toArray(self, a=None):
+        if a is None:
+            return []
+        if len(a) > 0:
+            a[0] = None
+        return a
+
+    def stream(self):
+        return iter(())
+
+    def anyMatch(self, test):
+        return False
+
+    def allMatch(self, test):
+        return True
+
+    def __str__(self):
+        return "[]"
+
+    def toString(self):
+        return "[]"
 ```

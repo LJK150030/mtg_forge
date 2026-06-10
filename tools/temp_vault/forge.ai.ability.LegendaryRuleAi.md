@@ -43,7 +43,7 @@ classDiagram
 
 ## Design Description
 
-Forge's AI handler for the Legendary Rule state-based action, residing in the `forge.ai.ability` package alongside other ability-specific AI strategies. It extends `SpellAbilityAi`, but overrides `canPlay` to refuse outright—returning a `CantPlayAi` decision—since the legend rule is enforced by game state, not actively cast by the AI; the class exists solely to make the forced "which duplicate to keep" choice.
+Forge's AI handler for the Legendary Rule state-based action, residing in the `forge.ai.ability` package alongside other ability-specific AI strategies. It extends `SpellAbilityAi`, but overrides `canPlay` to refuse outrightâ€”returning a `CantPlayAi` decisionâ€”since the legend rule is enforced by game state, not actively cast by the AI; the class exists solely to make the forced "which duplicate to keep" choice.
 
 Its real work is in `chooseSingleCard`, where it decides which legendary permanent or planeswalker to retain. It first uses `ComputerUtil.choosePermanentsToSacrifice` to rank the `CardCollection` of candidates, then applies card-specific heuristics: preserving the lowest ICE-counter copy of "Dark Depths" (to hasten its Marit Lage transformation) and otherwise favoring the highest KI-counter card. The unfinished branches and TODOs reveal design intent toward more generic, counter- and combat-aware selection logic.
 
@@ -122,4 +122,69 @@ public class LegendaryRuleAi extends SpellAbilityAi {
     }
 
 }
+```
+
+## Python
+`forge/ai/ability/LegendaryRuleAi.py`
+
+```python
+package forge.ai.ability ΓÇö translating to Python.
+
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.ai.ComputerUtil import ComputerUtil
+from forge.ai.SpellAbilityAi import SpellAbilityAi
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CounterType import CounterType
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+
+from typing import Iterable, Map  # noqa
+from typing import Optional
+
+
+# TODO: Write javadoc for this type.
+#
+class LegendaryRuleAi(SpellAbilityAi):
+
+    # (non-Javadoc)
+    # @see forge.card.ability.SpellAbilityAi#canPlayAI(forge.game.player.Player, forge.card.spellability.SpellAbility)
+    def canPlay(self, aiPlayer: Player, sa: SpellAbility) -> AiAbilityDecision:
+        return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)  # should not get here
+
+    def chooseSingleCard(self, ai: Player, sa: SpellAbility, options: Iterable[Card], isOptional: bool, targetedPlayer: Player, params: dict[str, object]) -> Card:
+        # Choose a single legendary/planeswalker card to keep
+        legends = CardCollection(options)
+        badOptions = ComputerUtil.choosePermanentsToSacrifice(ai, legends, legends.size() - 1, sa, False, False)
+        legends.removeAll(badOptions)
+        firstOption = next(iter(legends), None)
+        choosingFromPlanewalkers = firstOption.isPlaneswalker()
+
+        if choosingFromPlanewalkers:
+            # AI decision making - should AI compare counters?
+            pass
+        else:
+            # AI decision making - should AI compare damage and debuffs?
+            pass
+
+        ice = CounterType.getType("ICE")
+        ki = CounterType.getType("KI")
+
+        # TODO: Can this be made more generic somehow?
+        if firstOption.getName() == "Dark Depths":
+            best = firstOption
+            for c in options:
+                if c.getCounters(ice) < best.getCounters(ice):
+                    best = c
+            return best
+        elif firstOption.getCounters(ki) > 0:
+            # Extra Rule for KI counter
+            best = firstOption
+            for c in options:
+                if c.getCounters(ki) > best.getCounters(ki):
+                    best = c
+            return best
+
+        return firstOption
 ```

@@ -52,7 +52,7 @@ classDiagram
 
 AmassEffect is a resolvable spell-ability effect implementing Magic: The Gathering's "Amass" keyword action. Extending TokenEffectBase, it inherits token-construction helpers and overrides only `getStackDescription` to render reminder text and `resolve` to apply the effect against game state. On resolution it ensures the activating Player controls an "Army": if none exists, it builds a 0/0 black Army token of the parameterized subtype via the inherited token machinery, batching zone changes through CardZoneTable and firing GameEventTokenCreated/GameEventCombatChanged on the Game. It then lets the controller choose an Army and adds the requested +1/+1 counters through a GameEntityCounterTable.
 
-The design is data-driven, reading `Num`, `Type`, and `RememberAmass` from the SpellAbility. Notably, when the chosen Army lacks the granted creature type, it attaches a continuous command-zone static ability adding the subtype and self-exiling when the Army leaves play—cleanly modeling the type-granting rule through Forge's static-ability system rather than ad-hoc mutation.
+The design is data-driven, reading `Num`, `Type`, and `RememberAmass` from the SpellAbility. Notably, when the chosen Army lacks the granted creature type, it attaches a continuous command-zone static ability adding the subtype and self-exiling when the Army leaves playâ€”cleanly modeling the type-granting rule through Forge's static-ability system rather than ad-hoc mutation.
 
 ## Source
 `forge-game/src/main/java/forge/game/ability/effects/AmassEffect.java`
@@ -156,7 +156,7 @@ public class AmassEffect extends TokenEffectBase {
         GameEntityCounterTable table = new GameEntityCounterTable();
         tgt.addCounter(CounterEnumType.P1P1, amount, activator, table);
         table.replaceCounterEffect(game, sa);
-        // 01.44a If it isnÃ¢â‚¬â„¢t a [subtype], it becomes a [subtype] in addition to its other types.
+        // 01.44a If it isnÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢t a [subtype], it becomes a [subtype] in addition to its other types.
         if (!tgt.getType().hasCreatureType(type)) {
             final Card eff = createEffect(sa, activator, "Amass Effect", source.getImageKey());
             eff.setRenderForUI(false);
@@ -171,4 +171,119 @@ public class AmassEffect extends TokenEffectBase {
     }
 
 }
+```
+
+## Python
+`forge/game/ability/effects/AmassEffect.py`
+
+```python
+from java.util import Map
+
+from org.apache.commons.lang3.mutable.MutableBoolean import MutableBoolean
+
+from com.google.common.collect.Lists import Lists
+from com.google.common.collect.Maps import Maps
+
+from forge.card.CardType import CardType
+from forge.game.Game import Game
+from forge.game.GameEntityCounterTable import GameEntityCounterTable
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.card.Card import Card
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CardPredicates import CardPredicates
+from forge.game.card.CardZoneTable import CardZoneTable
+from forge.game.card.CounterEnumType import CounterEnumType
+from forge.game.card.token.TokenInfo import TokenInfo
+from forge.game.event.GameEventCombatChanged import GameEventCombatChanged
+from forge.game.event.GameEventTokenCreated import GameEventTokenCreated
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.Lang import Lang
+from forge.util.Localizer import Localizer
+
+from forge.game.ability.effects.TokenEffectBase import TokenEffectBase
+
+
+class AmassEffect(TokenEffectBase):
+
+    def getStackDescription(self, sa: SpellAbility) -> str:
+        sb = []
+        card = sa.getHostCard()
+        amount = AbilityUtils.calculateAmount(card, sa.getParamOrDefault("Num", "1"), sa)
+        type = sa.getParam("Type")
+
+        sb.append("Amass ")
+        sb.append(CardType.getPluralType(type))
+        sb.append(" ")
+        sb.append(str(amount))
+        sb.append(" (Put ")
+
+        sb.append(Lang.nounWithNumeral(amount, "+1/+1 counter"))
+
+        # TODO fix reminder after CR
+        sb.append("on an Army you control. If you don't control one, create a 0/0 black " + type + " Army creature token first.)")
+
+        return "".join(sb)
+
+    def resolve(self, sa: SpellAbility) -> None:
+        source = sa.getHostCard()
+        game = source.getGame()
+        activator = sa.getActivatingPlayer()
+        amount = AbilityUtils.calculateAmount(source, sa.getParamOrDefault("Num", "1"), sa)
+        type = sa.getParam("Type")
+
+        # create army token if needed
+        if not activator.getCardsIn(ZoneType.Battlefield).anyMatch(CardPredicates.isType("Army")):
+            triggerList = CardZoneTable()
+            combatChanged = MutableBoolean(False)
+
+            sb = []
+            sb.append("b_0_0_")
+            sb.append(sa.getOriginalParam("Type").lower())
+            sb.append("_army")
+
+            result = TokenInfo.getProtoType("".join(sb), sa, activator, False)
+            # need to alter the token to add the Type from the Parameter
+            result.setCreatureTypes(Lists.newArrayList(type, "Army"))
+            result.setName(type + " Army Token")
+            result.setTokenSpawningAbility(sa)
+
+            self.makeTokenTable(self.makeTokenTableInternal(activator, result, 1), False, triggerList, combatChanged, sa)
+
+            triggerList.triggerChangesZoneAll(game, sa)
+
+            game.fireEvent(GameEventTokenCreated())
+
+            if combatChanged.isTrue():
+                game.updateCombatForView()
+                game.fireEvent(GameEventCombatChanged())
+
+        tgtCards = CardLists.getType(activator.getCardsIn(ZoneType.Battlefield), "Army")
+        if tgtCards.isEmpty():
+            return
+
+        params = Maps.newHashMap()
+        params.put("CounterType", CounterEnumType.P1P1)
+        params.put("Amount", amount)
+        tgt = activator.getController().chooseSingleEntityForEffect(tgtCards, sa, Localizer.getInstance().getMessage("lblChooseAnArmy"), False, params)
+
+        if sa.hasParam("RememberAmass"):
+            source.addRemembered(tgt)
+
+        table = GameEntityCounterTable()
+        tgt.addCounter(CounterEnumType.P1P1, amount, activator, table)
+        table.replaceCounterEffect(game, sa)
+        # 01.44a If it isn't a [subtype], it becomes a [subtype] in addition to its other types.
+        if not tgt.getType().hasCreatureType(type):
+            eff = self.createEffect(sa, activator, "Amass Effect", source.getImageKey())
+            eff.setRenderForUI(False)
+            eff.addRemembered(tgt)
+
+            s = "Mode$ Continuous | Affected$ Card.IsRemembered | EffectZone$ Command | AddType$ " + type
+            eff.addStaticAbility(s)
+
+            tgt.addLeavesPlayCommand(lambda: game.getAction().exileEffect(eff))
+            game.getAction().moveToCommand(eff, sa)
 ```

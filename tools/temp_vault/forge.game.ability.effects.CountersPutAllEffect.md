@@ -49,7 +49,7 @@ classDiagram
 
 CountersPutAllEffect resolves "put counters on every valid card" abilities in Forge's MTG engine. As a concrete subclass of `SpellAbilityEffect`, it supplies two overrides: `getStackDescription`, which composes a localized summary of the counter type, amount, and target zone, and `resolve`, which performs the actual mutation. All behavior is data-driven by parameters on the resolving `SpellAbility` (CounterType, CounterNum, ValidCards, ValidZone, Placer), letting one class back many card scripts.
 
-At resolution it pulls cards from the chosen `ZoneType` via `Game`, narrows them with `CardLists` validity filtering and optional player targeting, then adds counters to each `Card`. Placement is flexible — activator, per-card controller/owner, or a defined `Player` — and per-card amounts can be derived from a chosen-card map. Notably, every addition is funneled through a shared `GameEntityCounterTable` so replacement effects apply collectively via `replaceCounterEffect`, and an optional second pass (ValidCards2/CounterType2) handles dual-counter cards.
+At resolution it pulls cards from the chosen `ZoneType` via `Game`, narrows them with `CardLists` validity filtering and optional player targeting, then adds counters to each `Card`. Placement is flexible â€” activator, per-card controller/owner, or a defined `Player` â€” and per-card amounts can be derived from a chosen-card map. Notably, every addition is funneled through a shared `GameEntityCounterTable` so replacement effects apply collectively via `replaceCounterEffect`, and an optional second pass (ValidCards2/CounterType2) handles dual-counter cards.
 
 ## Source
 `forge-game/src/main/java/forge/game/ability/effects/CountersPutAllEffect.java`
@@ -176,4 +176,109 @@ public class CountersPutAllEffect extends SpellAbilityEffect  {
     }
 
 }
+```
+
+## Python
+`forge/game/ability/effects/CountersPutAllEffect.py`
+
+```python
+from forge.game.Game import Game
+from forge.game.GameEntityCounterTable import GameEntityCounterTable
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CounterType import CounterType
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.Lang import Lang
+
+
+class CountersPutAllEffect(SpellAbilityEffect):
+
+    def getStackDescription(self, sa: SpellAbility) -> str:
+        sb = []
+
+        cType = CounterType.getType(sa.getParam("CounterType"))
+        amount = AbilityUtils.calculateAmount(sa.getHostCard(), sa.getParamOrDefault("CounterNum", "1"), sa)
+        zone = sa.getParamOrDefault("ValidZone", "Battlefield")
+
+        sb.append("Put ")
+        sb.append(Lang.nounWithNumeralExceptOne(amount, cType.getName().lower() + " counter"))
+        sb.append(" on each ")
+        if sa.hasParam("ValidCardsDesc"):
+            sb.append(sa.getParam("ValidCardsDesc") + ".")
+        else:
+            sb.append("valid ")
+            if zone == "Battlefield":
+                sb.append("permanent.")
+            else:
+                sb.append("card in ")
+                sb.append(zone + ".")
+
+        return "".join(sb)
+
+    def resolve(self, sa: SpellAbility) -> None:
+        host = sa.getHostCard()
+        activator = sa.getActivatingPlayer()
+        type = CounterType.getType(sa.getParam("CounterType"))
+        counterAmount = AbilityUtils.calculateAmount(host, sa.getParamOrDefault("CounterNum", "1"), sa)
+        valid = sa.getParam("ValidCards")
+        zone = ZoneType.smartValueOf(sa.getParam("ValidZone")) if sa.hasParam("ValidZone") else ZoneType.Battlefield
+        game = activator.getGame()
+
+        if counterAmount <= 0:
+            return
+
+        cards = game.getCardsIn(zone)
+        cards = CardLists.getValidCards(cards, valid, activator, host, sa)
+
+        if sa.usesTargeting():
+            pl = sa.getTargets().getFirstTargetedPlayer()
+            cards = CardLists.filterControlledBy(cards, pl)
+
+        placer = activator
+        placerPerCard = ""
+        if sa.hasParam("Placer"):
+            pstr = sa.getParam("Placer")
+            if pstr == "Controller":
+                placerPerCard = "Controller"
+            elif pstr == "Owner":
+                placerPerCard = "Owner"
+            else:
+                placer = AbilityUtils.getDefinedPlayers(host, pstr, sa).get(0)
+
+        table = GameEntityCounterTable()
+        for tgtCard in cards:
+            if placerPerCard == "Controller":
+                placer = tgtCard.getController()
+            elif placerPerCard == "Owner":
+                placer = tgtCard.getOwner()
+            if sa.hasParam("AmountByChosenMap"):
+                parse = sa.getParam("AmountByChosenMap").split(" INDEX ")
+                index = int(parse[1]) if len(parse) > 1 else 0
+                if index >= len(host.getChosenMap().get(placer)):
+                    continue
+                chosen = host.getChosenMap().get(placer).get(index)
+                counterAmount = AbilityUtils.xCount(chosen, parse[0], sa)
+            tgtCard.addCounter(type, counterAmount, placer, table)
+
+        if sa.hasParam("ValidCards2") or sa.hasParam("CounterType2") or sa.hasParam("CounterNum2"):
+            type2 = CounterType.getType(sa.getParam("CounterType2")) if sa.hasParam("CounterType2") else type
+            zone2 = ZoneType.smartValueOf(sa.getParam("ValidZone2")) if sa.hasParam("ValidZone2") else zone
+            if sa.hasParam("ValidCards2"):
+                cards = CardLists.getValidCards(game.getCardsIn(zone2), sa.getParam("ValidCards2"),
+                                                activator, host, sa)
+                if sa.usesTargeting():
+                    cards = CardLists.filterControlledBy(cards, sa.getTargets().getFirstTargetedPlayer())
+            counterAmount2 = AbilityUtils.calculateAmount(host, sa.getParam("CounterNum2"), sa) if sa.hasParam("CounterNum2") else counterAmount
+
+            for tgtCard in cards:
+                if placerPerCard == "Controller":
+                    placer = tgtCard.getController()
+                tgtCard.addCounter(type2, counterAmount2, placer, table)
+
+        table.replaceCounterEffect(game, sa)
 ```

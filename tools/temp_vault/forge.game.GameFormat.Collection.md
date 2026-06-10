@@ -79,7 +79,7 @@ classDiagram
 Its primary responsibility is querying and filtering: it exposes named accessors for canonical formats and a family of list/map views (sanctioned, archived, casual, block, etc.) that filter by `FormatType`/`FormatSubType`. It also resolves formats from game data, determining which format(s) a `Deck` or `PaperCard` legally belongs to via `isDeckLegal`/`isPoolLegal` over a `CardPool`, deduplicating archived variants and excluding digital/commander formats unless an exhaustive scan is requested, falling back to `NoFormat` when nothing matches.
 
 ## Source
-`forge-game/src/main/java/forge/game/GameFormat.java` â€” declaration excerpt
+`forge-game/src/main/java/forge/game/GameFormat.java` Ã¢â‚¬â€ declaration excerpt
 
 ```java
     public static class Collection extends StorageBase<GameFormat> {
@@ -285,4 +285,174 @@ Its primary responsibility is querying and filtering: it exposes named accessors
             naturallyOrdered.add(item);
         }
     }
+```
+
+## Python
+`forge/game/GameFormat/Collection.py`
+
+```python
+from forge.util.storage.StorageBase import StorageBase
+from forge.deck.CardPool import CardPool
+from forge.deck.Deck import Deck
+from forge.game.GameFormat import GameFormat
+from forge.game.GameFormat.FormatSubType import FormatSubType
+from forge.game.GameFormat.FormatType import FormatType
+from forge.game.GameFormat.InverseDateComparator import InverseDateComparator
+from forge.game.GameFormat.Reader import Reader
+from forge.item.PaperCard import PaperCard
+
+
+class Collection(StorageBase):
+    def __init__(self, reader: Reader):
+        super().__init__("Format collections", reader)
+        self.naturallyOrdered: list[GameFormat] = reader.naturallyOrdered
+        self.reverseDateOrdered: list[GameFormat] = list(self.naturallyOrdered)
+        self.naturallyOrdered.sort()
+        self.reverseDateOrdered.sort(key=InverseDateComparator().key())
+        self.formatsTypeMap: dict[FormatType, list[GameFormat]] = None
+
+    def getOrderedList(self) -> list[GameFormat]:
+        return self.naturallyOrdered
+
+    def getReverseDateOrderedList(self) -> list[GameFormat]:
+        return self.reverseDateOrdered
+
+    def getFormatTypeMap(self) -> dict[FormatType, list[GameFormat]]:
+        if self.formatsTypeMap is None:
+            self.formatsTypeMap = {}
+            for formatType in FormatType.values():
+                self.formatsTypeMap[formatType] = []
+
+            for format in self.naturallyOrdered:
+                key = format.getFormatType()
+                formatsOfType = self.formatsTypeMap[key]
+                formatsOfType.append(format)
+        return self.formatsTypeMap
+
+    def getSanctionedList(self) -> list[GameFormat]:
+        coreList: list[GameFormat] = []
+        for format in self.naturallyOrdered:
+            if format.getFormatType() == FormatType.SANCTIONED:
+                coreList.append(format)
+        return coreList
+
+    def getFilterList(self) -> list[GameFormat]:
+        coreList: list[GameFormat] = []
+        for format in self.naturallyOrdered:
+            if (format.getFormatType() != FormatType.ARCHIVED
+                    and format.getFormatType() != FormatType.DIGITAL):
+                coreList.append(format)
+        return coreList
+
+    def getArchivedList(self) -> list[GameFormat]:
+        coreList: list[GameFormat] = []
+        for format in self.naturallyOrdered:
+            if format.getFormatType() == FormatType.ARCHIVED:
+                coreList.append(format)
+        return coreList
+
+    def getCasualList(self) -> list[GameFormat]:
+        casualList: list[GameFormat] = []
+        for format in self.naturallyOrdered:
+            if format.getFormatType() == FormatType.CASUAL:
+                casualList.append(format)
+        return casualList
+
+    def getCoreFormatsWithLimitedSets(self) -> list[GameFormat]:
+        formatsWithLimitedSets: list[GameFormat] = []
+        for format in self.naturallyOrdered:
+            if len(format.getAllowedSetCodes()) > 0:
+                formatsWithLimitedSets.append(format)
+        return formatsWithLimitedSets
+
+    def getBlockList(self) -> list[GameFormat]:
+        blockFormats: list[GameFormat] = []
+        for format in self.getArchivedList():
+            if format.getFormatSubType() != FormatSubType.BLOCK:
+                continue
+            if not format.getName().endswith("Block"):
+                continue
+            blockFormats.append(format)
+        blockFormats.sort()  # GameFormat will be sorted by Index!
+        return blockFormats
+
+    def getArchivedMap(self) -> dict[str, list[GameFormat]]:
+        coreList: dict[str, list[GameFormat]] = {}
+        for format in self.naturallyOrdered:
+            if format.getFormatType() == FormatType.ARCHIVED:
+                alpha = format.getName()[0:1]
+                if alpha not in coreList:
+                    coreList[alpha] = []
+                coreList[alpha].append(format)
+        return coreList
+
+    def getStandard(self) -> GameFormat:
+        return self.map.get("Standard")
+
+    def getExtended(self) -> GameFormat:
+        return self.map.get("Extended")
+
+    def getPioneer(self) -> GameFormat:
+        return self.map.get("Pioneer")
+
+    def getHistoric(self) -> GameFormat:
+        return self.map.get("Historic")
+
+    def getModern(self) -> GameFormat:
+        return self.map.get("Modern")
+
+    def getLegacy(self) -> GameFormat:
+        return self.map.get("Legacy")
+
+    def getVintage(self) -> GameFormat:
+        return self.map.get("Vintage")
+
+    def getPremodern(self) -> GameFormat:
+        return self.map.get("Premodern")
+
+    def getPauper(self) -> GameFormat:
+        return self.map.get("Pauper")
+
+    def getFormat(self, format: str) -> GameFormat:
+        return self.map.get(format)
+
+    def getFormatOfDeck(self, deck: Deck) -> GameFormat:
+        for gf in self.reverseDateOrdered:
+            if gf.isDeckLegal(deck):
+                return gf
+        return GameFormat.NoFormat
+
+    def getAllFormatsOfCard(self, card: PaperCard) -> set[GameFormat]:
+        result: set[GameFormat] = set()
+        for gf in self.naturallyOrdered:
+            if gf.getFilterRules().test(card):
+                result.add(gf)
+        if not result:
+            result.add(GameFormat.NoFormat)
+        return result
+
+    def getAllFormatsOfDeck(self, deck: Deck, exhaustive: bool = False) -> set[GameFormat]:
+        result: set[GameFormat] = set()
+        coveredTypes: set[FormatSubType] = set()
+        allCards: CardPool = deck.getAllCardsInASinglePool()
+        for gf in self.reverseDateOrdered:
+            if gf.getFormatType() == FormatType.DIGITAL and not exhaustive:
+                # exclude Digital formats from lists for now
+                continue
+            if gf.getFormatSubType() == FormatSubType.COMMANDER:
+                # exclude Commander format as other deck checks are not performed here
+                continue
+            if (gf.getFormatType() == FormatType.ARCHIVED and gf.getFormatSubType() in coveredTypes
+                    and not exhaustive):
+                # exclude duplicate formats - only keep first of e.g. Standard archived
+                continue
+            if gf.isPoolLegal(allCards):
+                result.add(gf)
+                coveredTypes.add(gf.getFormatSubType())
+        if not result:
+            result.add(GameFormat.NoFormat)
+        return result
+
+    def add(self, item: GameFormat) -> None:
+        self.naturallyOrdered.append(item)
 ```

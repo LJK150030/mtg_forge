@@ -87,3 +87,38 @@ public class RunChaosEffect extends SpellAbilityEffect {
     }
 }
 ```
+
+## Python
+`forge/game/ability/effects/RunChaosEffect.py`
+
+```python
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.card.Card import Card
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.trigger.Trigger import Trigger
+from forge.game.trigger.TriggerType import TriggerType
+from forge.game.trigger.WrappedAbility import WrappedAbility
+
+
+class RunChaosEffect(SpellAbilityEffect):
+
+    def resolve(self, sa: SpellAbility) -> None:
+        validSA: list[SpellAbility] = []
+        for c in self.getTargetCards(sa):
+            for t in c.getTriggers():
+                if t.getMode() == TriggerType.ChaosEnsues:
+                    triggerSA = t.ensureAbility().copy(sa.getActivatingPlayer())
+
+                    decider = sa.getActivatingPlayer()
+                    if t.hasParam("OptionalDecider"):
+                        sa.setOptionalTrigger(True)
+                        decider = AbilityUtils.getDefinedPlayers(c, t.getParam("OptionalDecider"), sa)[0]
+                    elif t.hasParam("Cost"):
+                        sa.setOptionalTrigger(True)
+
+                    wrapperAbility = WrappedAbility(t, triggerSA, decider)
+                    validSA.append(wrapperAbility)
+        sa.getActivatingPlayer().getController().orderAndPlaySimultaneousSa(validSA)
+```

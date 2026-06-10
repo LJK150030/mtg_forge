@@ -36,6 +36,12 @@ classDiagram
 - [[forge.game.card.Card|Card]]
 - [[forge.game.spellability.SpellAbility|SpellAbility]]
 
+## Design Description
+
+ReplaceLearn is a concrete replacement effect that implements Magic's "learn" mechanic, defining how a replacement event targeting a player is recognized and rebound. Extending ReplacementEffect, it inherits the standard map/host/intrinsic construction and overrides the two hooks that drive replacement processing: canReplace gates the effect by validating the affected player against the "ValidPlayer" parameter, and setReplacingObjects exposes that affected player as the AbilityKey.Player replacing object for downstream resolution.
+
+It collaborates with AbilityKey to read run parameters and publish replacing objects, operates on a Card host, and supplies a SpellAbility with its replacement context. The design follows the engine's data-driven replacement pattern, keeping the class minimalâ€”delegating matching and lifecycle to its supertype while contributing only the learn-specific player validation and binding logic.
+
 ## Source
 `forge-game/src/main/java/forge/game/replacement/ReplaceLearn.java`
 
@@ -92,4 +98,29 @@ public class ReplaceLearn extends ReplacementEffect {
     }
 
 }
+```
+
+## Python
+`forge/game/replacement/ReplaceLearn.py`
+
+```python
+from forge.game.replacement.ReplacementEffect import ReplacementEffect
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.spellability.SpellAbility import SpellAbility
+
+
+class ReplaceLearn(ReplacementEffect):
+
+    def __init__(self, map: dict[str, str], host: Card, intrinsic: bool):
+        super().__init__(map, host, intrinsic)
+
+    def canReplace(self, runParams: dict[AbilityKey, object]) -> bool:
+        if not self.matchesValidParam("ValidPlayer", runParams.get(AbilityKey.Affected)):
+            return False
+
+        return True
+
+    def setReplacingObjects(self, runParams: dict[AbilityKey, object], sa: SpellAbility) -> None:
+        sa.setReplacingObject(AbilityKey.Player, runParams.get(AbilityKey.Affected))
 ```

@@ -49,7 +49,7 @@ classDiagram
 
 ## Design Description
 
-ChooseGenericEffect is a resolution handler for "choose one (or more) from a list" abilities, extending SpellAbilityEffect to slot into Forge's ability-resolution pipeline by overriding getStackDescription and resolve. For each defined or targeted Player it gathers the host SpellAbility's "Choices" sub-abilities, filters out options whose restrictions or UnlessCost cannot be satisfied, has the player's controller pick the configured amount, and resolves the selections via AbilityUtils—falling back to a FallbackAbility when nothing is payable.
+ChooseGenericEffect is a resolution handler for "choose one (or more) from a list" abilities, extending SpellAbilityEffect to slot into Forge's ability-resolution pipeline by overriding getStackDescription and resolve. For each defined or targeted Player it gathers the host SpellAbility's "Choices" sub-abilities, filters out options whose restrictions or UnlessCost cannot be satisfied, has the player's controller pick the configured amount, and resolves the selections via AbilityUtilsâ€”falling back to a FallbackAbility when nothing is payable.
 
 It collaborates with Game to fire GameEventCardModeChosen notifications and apply outcomes, and optionally installs shared CardDamageMap, GameEntityCounterTable, and CardZoneTable accumulators so damage and zone changes batch and apply once at the end. Numerous optional parameters (AtRandom with the "Urza" retargeting case, NumRandomChoices, Secretly, ShowChoice, TempRemember) reflect a design intent to drive many distinct card behaviors from one data-configurable effect.
 
@@ -214,4 +214,143 @@ public class ChooseGenericEffect extends SpellAbilityEffect {
     }
 
 }
+```
+
+## Python
+`forge/game/ability/effects/ChooseGenericEffect.py`
+
+```python
+import sys
+
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.card.CardDamageMap import CardDamageMap
+from forge.game.card.CardZoneTable import CardZoneTable
+from forge.game.cost.Cost import Cost
+from forge.game.event.GameEventCardModeChosen import GameEventCardModeChosen
+from forge.game.Game import Game
+from forge.game.GameEntityCounterTable import GameEntityCounterTable
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Lang import Lang
+from forge.util.Aggregates import Aggregates
+from forge.util.IterableUtil import IterableUtil
+from forge.util.Localizer import Localizer
+
+
+class ChooseGenericEffect(SpellAbilityEffect):
+
+    def getStackDescription(self, sa: SpellAbility) -> str:
+        sb = []
+        players = self.getDefinedPlayersOrTargeted(sa)
+
+        sb.append(Lang.joinHomogenous(players))
+        sb.append(" chooses" if len(players) == 1 else " choose")
+        sb.append(" from a list.")
+
+        return "".join(sb)
+
+    def resolve(self, sa: SpellAbility) -> None:
+        host = sa.getHostCard()
+        game = host.getGame()
+
+        abilities = list(sa.getAdditionalAbilityList("Choices"))
+        if sa.hasParam("NumRandomChoices"):
+            n = AbilityUtils.calculateAmount(host, sa.getParam("NumRandomChoices"), sa)
+            while len(abilities) > n:
+                Aggregates.removeRandom(abilities)
+        # TODO Can this be simplified somehow to avoid needing a dedicated fallback ability?
+        fallback = sa.getAdditionalAbility("FallbackAbility")
+        amount = AbilityUtils.calculateAmount(host, sa.getParamOrDefault("ChoiceAmount", "1"), sa)
+
+        tempRem = sa.hasParam("TempRemember")
+        secretly = sa.hasParam("Secretly")
+        record = []
+        changeZoneTable = sa.hasParam("ChangeZoneTable")
+        damageMap = sa.hasParam("DamageMap")
+
+        if damageMap:
+            sa.setDamageMap(CardDamageMap())
+            sa.setPreventMap(CardDamageMap())
+            sa.setCounterTable(GameEntityCounterTable())
+        if changeZoneTable:
+            sa.setChangeZoneTable(CardZoneTable())
+
+        for p in self.getDefinedPlayersOrTargeted(sa):
+            if not p.isInGame():
+                p = self.getNewChooser(sa, p)
+
+            # determine if any of the choices are not valid
+            availableSA = list(abilities)
+            for saChoice in abilities:
+                if saChoice.getRestrictions() is not None and not saChoice.getRestrictions().checkOtherRestrictions(host, saChoice, sa.getActivatingPlayer()):
+                    availableSA.remove(saChoice)
+                elif saChoice.hasParam("UnlessCost"):
+                    # generic check for if the cost can be paid
+                    unlessCost = Cost(saChoice.getParam("UnlessCost"), False)
+                    if not unlessCost.canPay(sa, p, True):
+                        availableSA.remove(saChoice)
+
+            chosenSAs = []
+            prompt = sa.getParamOrDefault("ChoicePrompt", "Choose")
+            random = False
+
+            if sa.hasParam("AtRandom"):
+                random = True
+                chosenSAs = Aggregates.random(availableSA, amount)
+
+                i = 0
+                while sa.getParam("AtRandom") == "Urza" and i < len(chosenSAs):
+                    if not chosenSAs[i].usesTargeting():
+                        i += 1
+                    elif chosenSAs[i].getTargetRestrictions().hasCandidates(chosenSAs[i]):
+                        p.getController().chooseTargetsFor(chosenSAs[i])
+                        i += 1
+                    else:
+                        chosenSAs[i] = Aggregates.random(abilities)
+            elif availableSA:
+                chosenSAs = p.getController().chooseSpellAbilitiesForEffect(availableSA, sa, prompt, amount, {})
+
+            oldRem = list(IterableUtil.filter(host.getRemembered(), Player))
+            if tempRem:
+                host.removeRemembered(oldRem)
+                host.addRemembered(p)  # currently we only ever need the Chooser, may need more support later
+            if chosenSAs:
+                for chosenSA in chosenSAs:
+                    chosenValue = chosenSA.getDescription()
+                    if sa.hasParam("ShowChoice"):
+                        dontNotifySelf = sa.getParam("ShowChoice") == "ExceptSelf"
+                        game.getAction().notifyOfValue(sa, p, chosenValue, p if dontNotifySelf else None)
+                    elif secretly:
+                        if len(record) > 0:
+                            record.append("\r\n")
+                        record.append(Localizer.getInstance().getMessage("lblPlayerChooseValue", p, chosenValue))
+                    if sa.hasParam("SetChosenMode"):
+                        sa.getHostCard().setChosenMode(chosenValue)
+                    game.fireEvent(GameEventCardModeChosen(p, host.getName(), chosenValue,
+                            sa.hasParam("ShowChoice"), random))
+
+                    AbilityUtils.resolve(chosenSA)
+            else:
+                # no choices are valid, e.g. maybe all Unless costs are unpayable
+                if fallback is not None:
+                    game.fireEvent(GameEventCardModeChosen(p, host.getName(), fallback.getDescription(),
+                            sa.hasParam("ShowChoice"), random))
+                    AbilityUtils.resolve(fallback)
+                elif not random:
+                    print("Warning: all Unless costs were unpayable for " + host.getName() + ", but it had no FallbackAbility defined. Doing nothing (this is most likely incorrect behavior).", file=sys.stderr)
+            if tempRem:
+                host.removeRemembered(p)
+                host.addRemembered(oldRem)
+        if secretly:
+            game.getAction().notifyOfValue(sa, host, "".join(record), None)
+        if damageMap:
+            game.getAction().dealDamage(False, sa.getDamageMap(), sa.getPreventMap(),
+                    sa.getCounterTable(), sa)
+        if changeZoneTable:
+            sa.getChangeZoneTable().triggerChangesZoneAll(game, sa)
+            sa.setChangeZoneTable(None)
+        if sa.hasParam("Guess"):
+            game.incPiledGuessedSA()
 ```

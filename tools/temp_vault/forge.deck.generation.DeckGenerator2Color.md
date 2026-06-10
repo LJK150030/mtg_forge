@@ -50,7 +50,7 @@ classDiagram
 
 DeckGenerator2Color is a concrete deck builder that generates a randomized, format-legal two-color Magic deck. As a subclass of DeckGeneratorBase, its responsibility is to supply the strategy that the inherited generation machinery consumes: fixed land/creature/spell ratios (42%/34%/24%) overridden as final, and a mana-curve template (cmcLevels) that weights cheap cards heavily over expensive ones and is tuned per DeckFormat via adjustCMCLevels. Its initialize routine resolves two colors from the supplied names, randomly choosing distinct WUBRG colors when one or both are unspecified.
 
-The class collaborates with IDeckGenPool as the card source, DeckFormat for legality and curve adjustment, FilterCMC for curve bucketing, and PaperCard as the filter target. getDeck orchestrates assembly—adding creatures and spells along the curve, then dual lands and basic lands sized to the land percentage—and returns a CardPool. The design deliberately confines color and ratio policy to the subclass while delegating the heavy lifting to base-class helpers.
+The class collaborates with IDeckGenPool as the card source, DeckFormat for legality and curve adjustment, FilterCMC for curve bucketing, and PaperCard as the filter target. getDeck orchestrates assemblyâ€”adding creatures and spells along the curve, then dual lands and basic lands sized to the land percentageâ€”and returns a CardPool. The design deliberately confines color and ratio policy to the subclass while delegating the heavy lifting to base-class helpers.
 
 ## Source
 `forge-core/src/main/java/forge/deck/generation/DeckGenerator2Color.java`
@@ -179,4 +179,94 @@ public class DeckGenerator2Color extends DeckGeneratorBase {
         return tDeck;
     }
 }
+```
+
+## Python
+`forge/deck/generation/DeckGenerator2Color.py`
+
+```python
+from forge.card.ColorSet import ColorSet
+from forge.card.MagicColor import MagicColor
+from forge.deck.CardPool import CardPool
+from forge.deck.DeckFormat import DeckFormat
+from forge.deck.generation.DeckGeneratorBase import DeckGeneratorBase
+from forge.deck.generation.DeckGeneratorBase.FilterCMC import FilterCMC
+from forge.deck.generation.IDeckGenPool import IDeckGenPool
+from forge.item.PaperCard import PaperCard
+from forge.util.MyRandom import MyRandom
+from typing import Callable, List, Tuple
+
+
+class DeckGenerator2Color(DeckGeneratorBase):
+    def getLandPercentage(self) -> float:
+        return 0.42
+
+    def getCreaturePercentage(self) -> float:
+        return 0.34
+
+    def getSpellPercentage(self) -> float:
+        return 0.24
+
+    def __init__(self, pool0: IDeckGenPool, format0: DeckFormat,
+                 formatFilter0: Callable[[PaperCard], bool] = None,
+                 clr1: str = None, clr2: str = None):
+        if formatFilter0 is not None:
+            super().__init__(pool0, format0, formatFilter0)
+        else:
+            super().__init__(pool0, format0)
+
+        self.cmcLevels: List[Tuple[FilterCMC, int]] = [
+            (FilterCMC(0, 2), 6),
+            (FilterCMC(3, 4), 4),
+            (FilterCMC(5, 6), 2),
+            (FilterCMC(7, 20), 1),
+        ]
+
+        # mana curve of the card pool
+        # 20x 0 - 2
+        # 16x 3 - 4
+        # 12x 5 - 6
+        # 4x 7 - 20
+        # = 52x - card pool (before further random filtering)
+
+        self.initialize(format0, clr1, clr2)
+
+    def initialize(self, format0: DeckFormat, clr1: str, clr2: str) -> None:
+        c1 = MagicColor.fromName(clr1)
+        c2 = MagicColor.fromName(clr2)
+
+        format0.adjustCMCLevels(self.cmcLevels)
+
+        if c1 == 0 and c2 == 0:
+            color1 = MyRandom.getRandom().nextInt(5)
+            color2 = (color1 + 1 + MyRandom.getRandom().nextInt(4)) % 5
+            self.colors = ColorSet.fromMask(MagicColor.WHITE << color1 | MagicColor.WHITE << color2)
+        elif c1 == 0 or c2 == 0:
+            knownColor = (c1 | c2) & 0xFF
+            color1 = __import__('bisect').bisect_left(MagicColor.WUBRG, knownColor)
+            color2 = (color1 + 1 + MyRandom.getRandom().nextInt(4)) % 5
+            self.colors = ColorSet.fromMask(MagicColor.WHITE << color1 | MagicColor.WHITE << color2)
+        else:
+            self.colors = ColorSet.fromMask(c1 | c2)
+
+    def getDeck(self, size: int, forAi: bool) -> CardPool:
+        self.addCreaturesAndSpells(size, self.cmcLevels, forAi)
+
+        # Add lands
+        numLands = round(size * self.getLandPercentage())
+        self.adjustDeckSize(size - numLands)
+        self.trace.append("Adjusted deck size to: %d, should add %d land(s)%s" % (size - numLands, numLands, "\n"))
+
+        # Add dual lands
+        duals = self.getDualLandList(forAi)
+        for s in duals:
+            self.cardCounts[s] = 0
+
+        dblsAdded = self.addSomeStr((numLands // 6), duals)
+        numLands -= dblsAdded
+
+        self.addBasicLand(numLands)
+        self.adjustDeckSize(size)
+        self.trace.append("DeckSize:").append(self.tDeck.countAll()).append("\n")
+        return self.tDeck
 ```

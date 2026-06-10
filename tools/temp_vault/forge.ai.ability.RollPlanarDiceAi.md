@@ -258,3 +258,156 @@ public class RollPlanarDiceAi extends SpellAbilityAi {
     }
 }
 ```
+
+## Python
+`forge/ai/ability/RollPlanarDiceAi.py`
+
+```python
+from forge.ai.SpellAbilityAi import SpellAbilityAi
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.ai.AiProfileUtil import AiProfileUtil
+from forge.ai.AiProps import AiProps
+from forge.game.card.Card import Card
+from forge.game.phase.PhaseType import PhaseType
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.MyRandom import MyRandom
+from forge.util.TextUtil import TextUtil
+
+
+class RollPlanarDiceAi(SpellAbilityAi):
+    # (non-Javadoc)
+    # @see forge.card.abilityfactory.SpellAiLogic#canPlayAI(forge.game.player.Player, java.util.Map, forge.card.spellability.SpellAbility)
+    def canPlay(self, ai: Player, sa: SpellAbility) -> AiAbilityDecision:
+        if ai.getGame().getActivePlanes() is None:
+            return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+        for c in ai.getGame().getActivePlanes():
+            if self.willRollOnPlane(ai, c):
+                return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+        return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+    def willRollOnPlane(self, ai: Player, plane: Card) -> bool:
+        decideToRoll = False
+        rollInMain1 = False
+        modeName = "never"
+        maxActivations = AiProfileUtil.getIntProperty(ai, AiProps.DEFAULT_MAX_PLANAR_DIE_ROLLS_PER_TURN)
+        chance = AiProfileUtil.getIntProperty(ai, AiProps.DEFAULT_PLANAR_DIE_ROLL_CHANCE)
+        hesitationChance = AiProfileUtil.getIntProperty(ai, AiProps.PLANAR_DIE_ROLL_HESITATION_CHANCE)
+        minTurnToRoll = AiProfileUtil.getIntProperty(ai, AiProps.DEFAULT_MIN_TURN_TO_ROLL_PLANAR_DIE)
+
+        if plane.hasSVar("AIRollPlanarDieParams"):
+            params = plane.getSVar("AIRollPlanarDieParams").lower().strip().split("|")
+            for param in params:
+                paramData = param.split("$")
+                paramName = paramData[0].strip()
+                paramValue = paramData[1].strip()
+
+                if paramName == "mode":
+                    modeName = paramValue
+                elif paramName == "chance":
+                    chance = int(paramValue)
+                elif paramName == "minturn":
+                    minTurnToRoll = int(paramValue)
+                elif paramName == "maxrollsperturn":
+                    maxActivations = int(paramValue)
+                elif paramName == "rollinmain1":
+                    if paramValue == "true":
+                        rollInMain1 = True
+                elif paramName == "lowpriority":
+                    # this is handled in AiController.saComparator at the moment
+                    pass
+                elif paramName == "cardsinhandle":  # num of cards in hand less than or equal to N
+                    if ai.getCardsIn(ZoneType.Hand).size() > int(paramValue):
+                        return False
+                elif paramName == "cardsinhandge":  # num of cards in hand greater than or equal to N
+                    if ai.getCardsIn(ZoneType.Hand).size() < int(paramValue):
+                        return False
+                elif paramName == "cardsingraveyardle":
+                    if ai.getCardsIn(ZoneType.Graveyard).size() > int(paramValue):
+                        return False
+                elif paramName == "cardsingraveyardge":
+                    if ai.getCardsIn(ZoneType.Graveyard).size() < int(paramValue):
+                        return False
+                elif paramName == "hascreatureinplay":  # TODO: All abilities below only test the presence of the option. The value (true/false) is not yet tested.
+                    if not self.detectCreatureInZone(ai, ZoneType.Battlefield):
+                        return False
+                elif paramName == "opphascreatureinplay":
+                    oppHasCreature = False
+                    for op in ai.getOpponents():
+                        oppHasCreature |= self.detectCreatureInZone(op, ZoneType.Battlefield)
+                    if not oppHasCreature:
+                        return False
+                elif paramName == "hascolorcreatureinplay":
+                    if not self.detectColorInZone(ai, paramValue, ZoneType.Battlefield, True):
+                        return False
+                elif paramName == "hascolorinplay":
+                    if not self.detectColorInZone(ai, paramValue, ZoneType.Battlefield, False):
+                        return False
+                elif paramName == "hascoloringraveyard":
+                    if not self.detectColorInZone(ai, paramValue, ZoneType.Graveyard, False):
+                        return False
+                else:
+                    print(TextUtil.concatNoSpace("Unexpected AI hint parameter in card ", plane.getName(), " in RollPlanarDiceAi: ", paramName, "."))
+
+            if modeName == "always":
+                decideToRoll = True
+            elif modeName == "random":
+                if MyRandom.getRandom().nextInt(100) < chance:
+                    decideToRoll = True
+            elif modeName == "never":
+                return False
+            else:
+                return False
+
+            if ai.getGame().getPhaseHandler().getTurn() < minTurnToRoll:
+                decideToRoll = False
+            elif not rollInMain1 and ai.getGame().getPhaseHandler().getPhase().isBefore(PhaseType.MAIN2):
+                decideToRoll = False
+
+            if ai.getGame().getPhaseHandler().getPlanarDiceSpecialActionThisTurn() >= maxActivations:
+                decideToRoll = False
+
+            # check if the AI hesitates
+            if MyRandom.getRandom().nextInt(100) < hesitationChance:
+                decideToRoll = False  # hesitate
+
+        return decideToRoll
+
+    # (non-Javadoc)
+    # @see forge.card.abilityfactory.SpellAiLogic#chkAIDrawback(java.util.Map, forge.card.spellability.SpellAbility, forge.game.player.Player)
+    def chkDrawback(self, aiPlayer: Player, sa: SpellAbility) -> AiAbilityDecision:
+        # for potential implementation of drawback checks?
+        return self.canPlay(aiPlayer, sa)
+
+    def detectColorInZone(self, p: Player, paramValue: str, zone: ZoneType, creaturesOnly: bool) -> bool:
+        hasColorInPlay = False
+        for c in p.getCardsIn(zone):
+            if not creaturesOnly or c.isCreature():
+                if "u" in paramValue and c.isBlue():
+                    hasColorInPlay = True
+                    break
+                if "g" in paramValue and c.isGreen():
+                    hasColorInPlay = True
+                    break
+                if "r" in paramValue and c.isRed():
+                    hasColorInPlay = True
+                    break
+                if "w" in paramValue and c.isWhite():
+                    hasColorInPlay = True
+                    break
+                if "b" in paramValue and c.isBlack():
+                    hasColorInPlay = True
+                    break
+        return hasColorInPlay
+
+    def detectCreatureInZone(self, p: Player, zone: ZoneType) -> bool:
+        hasCreatureInPlay = False
+        for c in p.getCardsIn(zone):
+            if c.isCreature():
+                hasCreatureInPlay = True
+                break
+        return hasCreatureInPlay
+```

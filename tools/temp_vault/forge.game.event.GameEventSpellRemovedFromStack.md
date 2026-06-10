@@ -36,7 +36,7 @@ classDiagram
 
 ## Design Description
 
-`GameEventSpellRemovedFromStack` is an immutable event record that signals a spell has been taken off the game's stack — for instance when a spell is countered, fizzles, or otherwise leaves without resolving normally. It carries a single `SpellAbilityView`, a read-only snapshot identifying the spell involved, keeping the event lightweight and decoupled from mutable game state.
+`GameEventSpellRemovedFromStack` is an immutable event record that signals a spell has been taken off the game's stack â€” for instance when a spell is countered, fizzles, or otherwise leaves without resolving normally. It carries a single `SpellAbilityView`, a read-only snapshot identifying the spell involved, keeping the event lightweight and decoupled from mutable game state.
 
 As an implementation of the `GameEvent` interface, it participates in the engine's event system via the visitor pattern: its `visit` method dispatches to the appropriate `IGameEventVisitor` handler, allowing observers such as UI or AI components to react without the event hierarchy knowing their concrete types. The overridden `toString` yields a concise human-readable form for logging and debugging. Using a `record` makes the event's immutability and value semantics explicit, fitting its role as a transient notification.
 
@@ -63,4 +63,29 @@ public record GameEventSpellRemovedFromStack(SpellAbilityView sa) implements Gam
         return "Stack removed " + sa;
     }
 }
+```
+
+## Python
+`forge/game/event/GameEventSpellRemovedFromStack.py`
+
+```python
+from forge.game.event.GameEvent import GameEvent
+from forge.game.event.IGameEventVisitor import IGameEventVisitor
+from forge.game.spellability.SpellAbilityView import SpellAbilityView
+
+
+class GameEventSpellRemovedFromStack(GameEvent):
+    def __init__(self, sa: SpellAbilityView):
+        self.sa = sa
+
+    def visit(self, visitor: IGameEventVisitor):
+        return visitor.visit(self)
+
+    # (non-Javadoc)
+    # @see java.lang.Object#toString()
+    def toString(self) -> str:
+        return "Stack removed " + str(self.sa)
+
+    def __str__(self) -> str:
+        return "Stack removed " + str(self.sa)
 ```

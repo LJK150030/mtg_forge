@@ -51,7 +51,7 @@ classDiagram
 
 ## Design Description
 
-`DeckSection` is a `forge-core` enumeration that models the distinct compartments of a Magic deck—Main, Sideboard, Commander, and the supplementary zones (Avatar, Planes, Schemes, Conspiracy, Dungeon, Attractions, Contraptions)—while encapsulating the rules that decide which cards belong in each. Every constant binds a localization key to a `Function<PaperCard, Boolean>` predicate (held in the private `Validators` holder), so the enum owns both its user-facing names, exposed through `getLocalizedName`/`getLocalizedShortName` via `Localizer`, and its membership logic, exposed through `validate`.
+`DeckSection` is a `forge-core` enumeration that models the distinct compartments of a Magic deckâ€”Main, Sideboard, Commander, and the supplementary zones (Avatar, Planes, Schemes, Conspiracy, Dungeon, Attractions, Contraptions)â€”while encapsulating the rules that decide which cards belong in each. Every constant binds a localization key to a `Function<PaperCard, Boolean>` predicate (held in the private `Validators` holder), so the enum owns both its user-facing names, exposed through `getLocalizedName`/`getLocalizedShortName` via `Localizer`, and its membership logic, exposed through `validate`.
 
 Its central responsibility is card classification by inspecting a `PaperCard`'s `CardType`. The static `matchingSection` routes a card to its appropriate special section in priority order, defaulting to `Main`, while `smartValueOf` provides lenient, case-insensitive parsing and `NONTRADITIONAL_SECTIONS` flags the non-standard zones. Representing per-section behavior as data-driven function constants keeps the validation cohesive and avoids scattering type checks across callers.
 
@@ -195,4 +195,151 @@ public enum DeckSection {
 
     }
 }
+```
+
+## Python
+`forge/deck/DeckSection.py`
+
+```python
+from forge.card.CardType import CardType
+from forge.item.PaperCard import PaperCard
+from forge.util.Localizer import Localizer
+
+from enum import Enum
+from typing import Callable, Optional
+
+
+class Validators:
+    @staticmethod
+    def DECK_AND_SIDE_VALIDATOR(card: PaperCard) -> bool:
+        t: CardType = card.getRules().getType()
+        # NOTE: Same rules applies to both Deck and Side, despite "Conspiracy cards" are allowed
+        # in the SideBoard (see Rule 313.2)
+        # Those will be matched later, in case (see `Deck::normalizeDeferredSections`)
+        return (not t.isConspiracy() and not t.isDungeon() and not t.isPhenomenon()
+                and not t.isPlane() and not t.isScheme() and not t.isVanguard())
+
+    @staticmethod
+    def COMMANDER_VALIDATOR(card: PaperCard) -> bool:
+        t: CardType = card.getRules().getType()
+        return (card.getRules().canBeCommander() or t.isPlaneswalker()
+                or card.getRules().canBeOathbreaker() or card.getRules().canBeSignatureSpell())
+
+    @staticmethod
+    def PLANES_VALIDATOR(card: PaperCard) -> bool:
+        t: CardType = card.getRules().getType()
+        return t.isPlane() or t.isPhenomenon()
+
+    @staticmethod
+    def DUNGEON_VALIDATOR(card: PaperCard) -> bool:
+        t: CardType = card.getRules().getType()
+        return t.isDungeon()
+
+    @staticmethod
+    def SCHEME_VALIDATOR(card: PaperCard) -> bool:
+        t: CardType = card.getRules().getType()
+        return t.isScheme()
+
+    @staticmethod
+    def CONSPIRACY_VALIDATOR(card: PaperCard) -> bool:
+        t: CardType = card.getRules().getType()
+        return t.isConspiracy()
+
+    @staticmethod
+    def AVATAR_VALIDATOR(card: PaperCard) -> bool:
+        t: CardType = card.getRules().getType()
+        return t.isVanguard()
+
+    @staticmethod
+    def ATTRACTION_VALIDATOR(card: PaperCard) -> bool:
+        t: CardType = card.getRules().getType()
+        return t.isAttraction()
+
+    @staticmethod
+    def CONTRAPTION_VALIDATOR(card: PaperCard) -> bool:
+        t: CardType = card.getRules().getType()
+        return t.isContraption()
+
+
+class DeckSection(Enum):
+    Main = ("lblMainDeck", Validators.DECK_AND_SIDE_VALIDATOR)
+    Sideboard = ("lblSideboard", Validators.DECK_AND_SIDE_VALIDATOR)
+    Commander = ("lblCommander", Validators.COMMANDER_VALIDATOR)
+    Avatar = ("lblAvatar", Validators.AVATAR_VALIDATOR)
+    Planes = ("lblPlanarDeck", Validators.PLANES_VALIDATOR)
+    Schemes = ("lblSchemeDeck", Validators.SCHEME_VALIDATOR)
+    Conspiracy = ("lblConspiracies", Validators.CONSPIRACY_VALIDATOR)
+    Dungeon = ("lblDungeons", Validators.DUNGEON_VALIDATOR)
+    Attractions = ("lblAttractions", Validators.ATTRACTION_VALIDATOR)
+    Contraptions = ("lblContraptions", Validators.CONTRAPTION_VALIDATOR)
+
+    def __init__(self, nameLbl: str, validator: Callable[[PaperCard], bool]):
+        self.nameLbl = nameLbl
+        self.fnValidator = validator
+
+    def getLocalizedName(self) -> str:
+        return Localizer.getInstance().getMessage(self.nameLbl)
+
+    def getLocalizedShortName(self) -> str:
+        if self is DeckSection.Main:
+            shortNameLabel = "lblMain"
+        elif self is DeckSection.Sideboard:
+            shortNameLabel = "lblSide"
+        elif self is DeckSection.Planes:
+            shortNameLabel = "lblPlanes"
+        elif self is DeckSection.Schemes:
+            shortNameLabel = "lblSchemes"
+        else:
+            return self.getLocalizedName()
+        return Localizer.getInstance().getMessage(shortNameLabel)
+
+    def validate(self, card: PaperCard) -> bool:
+        if self.fnValidator is None:
+            return True
+        return self.fnValidator(card)
+
+    # Returns the matching section for "special"/supplementary core types.
+    @staticmethod
+    def matchingSection(card: PaperCard) -> "DeckSection":
+        if DeckSection.Conspiracy.validate(card):
+            return DeckSection.Conspiracy
+        if DeckSection.Schemes.validate(card):
+            return DeckSection.Schemes
+        if DeckSection.Avatar.validate(card):
+            return DeckSection.Avatar
+        if DeckSection.Planes.validate(card):
+            return DeckSection.Planes
+        if DeckSection.Dungeon.validate(card):
+            return DeckSection.Dungeon
+        if DeckSection.Attractions.validate(card):
+            return DeckSection.Attractions
+        if DeckSection.Contraptions.validate(card):
+            return DeckSection.Contraptions
+        return DeckSection.Main  # default
+
+    @staticmethod
+    def smartValueOf(value: str) -> Optional["DeckSection"]:
+        if value is None:
+            return None
+        valToCompare = value.strip()
+        for v in DeckSection.values():
+            if v.name.lower() == valToCompare.lower():
+                return v
+        return None
+
+    @classmethod
+    def values(cls) -> list["DeckSection"]:
+        return list(cls)
+
+
+# Array of DeckSections that contain nontraditional cards.
+DeckSection.NONTRADITIONAL_SECTIONS = [
+    DeckSection.Avatar,
+    DeckSection.Planes,
+    DeckSection.Schemes,
+    DeckSection.Conspiracy,
+    DeckSection.Dungeon,
+    DeckSection.Attractions,
+    DeckSection.Contraptions,
+]
 ```

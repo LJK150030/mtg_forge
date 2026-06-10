@@ -44,7 +44,7 @@ classDiagram
 
 ## Design Description
 
-CreatureEvaluator is a stateless heuristic scorer that assigns a single integer "value" to a Magic creature card so Forge's AI can rank creatures for combat and decision-making. By implementing `Function<Card, Integer>`, it can be passed around as a composable function—its `apply` simply delegates to `evaluateCreature`—while the overloaded `evaluateCreature` methods let callers toggle whether power/toughness and converted mana cost feed into the score. From an `80`-point baseline it incrementally adds or subtracts weighted points by inspecting the card's keywords, counters, static abilities, triggers, and activated abilities (the latter via the private `evaluateSpellAbility`).
+CreatureEvaluator is a stateless heuristic scorer that assigns a single integer "value" to a Magic creature card so Forge's AI can rank creatures for combat and decision-making. By implementing `Function<Card, Integer>`, it can be passed around as a composable functionâ€”its `apply` simply delegates to `evaluateCreature`â€”while the overloaded `evaluateCreature` methods let callers toggle whether power/toughness and converted mana cost feed into the score. From an `80`-point baseline it incrementally adds or subtracts weighted points by inspecting the card's keywords, counters, static abilities, triggers, and activated abilities (the latter via the private `evaluateSpellAbility`).
 
 The design deliberately funnels every adjustment through the `protected` `addValue`/`subValue` hooks, each tagged with a descriptive label, so subclasses can override them to trace or tune how a score is composed without touching the evaluation logic. It collaborates with `Card`, `SpellAbility`, `Trigger`, `GameEntity`, and various cost/static-ability helpers to read game state, and is intentionally null-tolerant so scoring never crashes the AI.
 
@@ -379,4 +379,266 @@ public class CreatureEvaluator implements Function<Card, Integer> {
         return -addValue(-value, text);
     }
 }
+```
+
+## Python
+`forge/ai/CreatureEvaluator.py`
+
+```python
+from forge.game.GameEntity import GameEntity
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.ability.ApiType import ApiType
+from forge.game.card.Card import Card
+from forge.game.card.CounterEnumType import CounterEnumType
+from forge.game.cost.CostPayEnergy import CostPayEnergy
+from forge.game.keyword.Keyword import Keyword
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.staticability.StaticAbilityAssignCombatDamageAsUnblocked import StaticAbilityAssignCombatDamageAsUnblocked
+from forge.game.staticability.StaticAbilityCantAttackBlock import StaticAbilityCantAttackBlock
+from forge.game.staticability.StaticAbilityMustAttack import StaticAbilityMustAttack
+from forge.game.trigger.Trigger import Trigger
+from forge.game.trigger.TriggerType import TriggerType
+from forge.ai.ComputerUtilCard import ComputerUtilCard
+from forge.ai.ComputerUtilCost import ComputerUtilCost
+
+
+class CreatureEvaluator:
+    def apply(self, c: Card) -> int:
+        return self.evaluateCreature(c)
+
+    def evaluateCreature(self, c: Card, considerPT: bool = True, considerCMC: bool = True) -> int:
+        # Card shouldn't be null and AI shouldn't crash since this is just score
+        if c is None:
+            return 0
+        value = 80
+        if not c.isToken():
+            value += self.addValue(20, "non-token")  # tokens should be worth less than actual cards
+        power = c.getNetCombatDamage()
+        toughness = c.getNetToughness()
+
+        # TODO getKeyCards
+
+        # TODO replace with ReplacementEffect checks
+        if (c.hasKeyword("Prevent all combat damage that would be dealt by CARDNAME.")
+                or c.hasKeyword("Prevent all damage that would be dealt by CARDNAME.")
+                or c.hasKeyword("Prevent all combat damage that would be dealt to and dealt by CARDNAME.")
+                or c.hasKeyword("Prevent all damage that would be dealt to and dealt by CARDNAME.")):
+            power = 0
+
+        if considerPT:
+            value += self.addValue(power * 15, "power")
+            # TODO factor in marked damage - but probably not always?
+            value += self.addValue(toughness * 10, "toughness: " + str(toughness))
+
+            # because backside is always stronger the potential makes it better than a single faced card
+            if c.hasKeyword(Keyword.DAYBOUND) and c.isDoubleFaced():
+                value += self.addValue(power * 10, "transforming")
+        if considerCMC:
+            value += self.addValue(c.getCMC() * 5, "cmc")
+
+        # Evasion keywords
+        if c.hasKeyword(Keyword.FLYING):
+            value += self.addValue(power * 10, "flying")
+        if c.hasKeyword(Keyword.HORSEMANSHIP):
+            value += self.addValue(power * 10, "horses")
+
+        if StaticAbilityCantAttackBlock.cantBlockBy(c, None):
+            value += self.addValue(power * 10, "unblockable")
+        else:
+            if (StaticAbilityAssignCombatDamageAsUnblocked.assignCombatDamageAsUnblocked(c)
+                    or StaticAbilityAssignCombatDamageAsUnblocked.assignCombatDamageAsUnblocked(c, False)):
+                value += self.addValue(power * 6, "thorns")
+            if c.hasKeyword(Keyword.FEAR):
+                value += self.addValue(power * 6, "fear")
+            if c.hasKeyword(Keyword.INTIMIDATE):
+                value += self.addValue(power * 6, "intimidate")
+            if c.hasKeyword(Keyword.MENACE):
+                value += self.addValue(power * 4, "menace")
+            if c.hasKeyword(Keyword.SKULK):
+                value += self.addValue(power * 3, "skulk")
+
+        # Other good keywords
+        if power > 0:
+            if c.hasKeyword(Keyword.DOUBLE_STRIKE):
+                value += self.addValue(10 + (power * 15), "ds")
+            elif c.hasKeyword(Keyword.FIRST_STRIKE):
+                value += self.addValue(10 + (power * 5), "fs")
+            if c.hasKeyword(Keyword.DEATHTOUCH):
+                value += self.addValue(25, "dt")
+            if c.hasKeyword(Keyword.LIFELINK):
+                value += self.addValue(power * 10, "lifelink")
+            if power > 1 and c.hasKeyword(Keyword.TRAMPLE):
+                value += self.addValue((power - 1) * 5, "trample")
+            if c.hasKeyword(Keyword.VIGILANCE):
+                value += self.addValue((power * 5) + (toughness * 5), "vigilance")
+            if c.hasKeyword(Keyword.INFECT):
+                value += self.addValue(power * 15, "infect")
+            elif c.hasKeyword(Keyword.WITHER):
+                value += self.addValue(power * 10, "wither")
+            value += self.addValue(c.getKeywordMagnitude(Keyword.TOXIC) * 5, "toxic")
+            value += self.addValue(c.getKeywordMagnitude(Keyword.AFFLICT) * 5, "afflict")
+            value += self.addValue(c.getKeywordMagnitude(Keyword.RAMPAGE), "rampage")
+
+        value += self.addValue(c.getKeywordMagnitude(Keyword.ANNIHILATOR) * 50, "eldrazi")
+        value += self.addValue(c.getKeywordMagnitude(Keyword.ABSORB) * 11, "absorb")
+
+        # Keywords that may produce temporary or permanent buffs over time
+        if c.hasKeyword(Keyword.OUTLAST):
+            value += self.addValue(10, "outlast")
+        value += self.addValue(c.getKeywordMagnitude(Keyword.BUSHIDO) * 16, "bushido")
+        value += self.addValue(c.getAmountOfKeyword(Keyword.FLANKING) * 15, "flanking")
+        value += self.addValue(c.getAmountOfKeyword(Keyword.EXALTED) * 15, "exalted")
+        value += self.addValue(c.getAmountOfKeyword(Keyword.MELEE) * 18, "melee")
+        value += self.addValue(c.getAmountOfKeyword(Keyword.PROWESS) * 5, "prowess")
+
+        # Defensive Keywords
+        if c.hasKeyword(Keyword.REACH) and not c.hasKeyword(Keyword.FLYING):
+            value += self.addValue(5, "reach")
+        if c.hasKeyword("CARDNAME can block creatures with shadow as though they didn't have shadow."):
+            value += self.addValue(3, "shadow-block")
+
+        # Protection
+        if c.hasKeyword(Keyword.INDESTRUCTIBLE):
+            value += self.addValue(70, "darksteel")
+        else:
+            value += self.addValue(20 * c.getCounters(CounterEnumType.SHIELD), "shielded")
+        if c.hasKeyword("Prevent all damage that would be dealt to CARDNAME."):
+            value += self.addValue(60, "cho-manno")
+        elif c.hasKeyword("Prevent all combat damage that would be dealt to CARDNAME."):
+            value += self.addValue(50, "fogbank")
+        if c.hasKeyword(Keyword.HEXPROOF):
+            value += self.addValue(35, "hexproof")
+        elif c.hasKeyword(Keyword.SHROUD):
+            value += self.addValue(30, "shroud")
+        elif c.hasKeyword(Keyword.WARD):
+            value += self.addValue(10, "ward")
+        if c.hasKeyword(Keyword.PROTECTION):
+            value += self.addValue(20, "protection")
+
+        # paired creatures are more valuable because they grant a bonus to the other creature
+        if c.isPaired():
+            value += self.addValue(14, "paired")
+
+        if c.hasEncodedCard():
+            value += self.addValue(24, "encoded")
+
+        if ComputerUtilCard.hasActiveUndyingOrPersist(c):
+            value += self.addValue(30, "revive")
+
+        # Bad keywords
+        if c.hasKeyword(Keyword.DEFENDER) or c.hasKeyword("CARDNAME can't attack."):
+            value -= self.subValue((power * 9) + 40, "defender")
+        elif c.getSVar("SacrificeEndCombat") == "True":
+            value -= self.subValue(40, "sac-end")
+        if c.isDetained():
+            value = self.addValue(50 + (c.getCMC() * 5), "detained")  # reset everything - useless
+        elif c.hasKeyword("CARDNAME can't attack or block."):
+            value = self.addValue(50 + (c.getCMC() * 5), "useless")  # reset everything - useless
+        elif c.hasKeyword("CARDNAME can't block."):
+            value -= self.subValue(10, "cant-block")
+        elif c.isGoaded():
+            value -= self.subValue(5, "goaded")
+        else:
+            # TODO lower the values slightly if they're only temporary
+            mAEnt: list[GameEntity] = StaticAbilityMustAttack.entitiesMustAttack(c)
+            if c in mAEnt:
+                value -= self.subValue(10, "must-attack")
+            elif len(mAEnt) != 0:
+                value -= self.subValue(10, "must-attack-player")
+            # else if (c.hasKeyword("CARDNAME can block only creatures with flying.")) {
+            #     value -= subValue(toughness * 5, "reverse-reach");
+            # }
+
+        if c.hasSVar("DestroyWhenDamaged"):
+            value -= self.subValue((toughness - 1) * 9, "dies-to-dmg")
+        if c.getSVar("Targeting") == "Dies":
+            value -= self.subValue(25, "dies")
+
+        if c.isUntapped():
+            value += self.addValue(1, "untapped")
+
+        if not c.canUntap(c.getController(), True):
+            if c.isTapped():
+                value = self.addValue(50 + (c.getCMC() * 5), "tapped-useless")  # reset everything - useless
+            else:
+                value -= self.subValue(50, "doesnt-untap")
+        else:
+            value -= self.subValue(10 * c.getCounters(CounterEnumType.STUN), "stunned")
+
+        for sa in c.getSpellAbilities():
+            if sa.isAbility():
+                value += self.addValue(self.evaluateSpellAbility(sa), "sa: " + str(sa))
+
+        if len(c.getManaAbilities()) != 0:
+            value += self.addValue(10, "manadork")
+
+        # use scaling because the creature is only available halfway
+        if c.hasKeyword(Keyword.PHASING):
+            value -= self.subValue(max(20, value // 2), "phasing")
+
+        if c.hasSVar("EndOfTurnLeavePlay"):
+            value -= self.subValue(50, "eot-leaves")
+        else:
+            for t in c.getTriggers():
+                if not TriggerType.Phase == t.getMode():
+                    continue
+                if not "Upkeep" == t.getParam("Phase"):
+                    continue
+
+                if t.isKeyword(Keyword.CUMULATIVE_UPKEEP):
+                    value -= self.subValue(30, "cupkeep")
+                elif t.isKeyword(Keyword.ECHO) and c.cameUnderControlSinceLastUpkeep():
+                    value -= self.subValue(10, "echo-unpaid")
+                if t.isKeyword(Keyword.FADING):
+                    value -= self.subValue(20 // (max(1, c.getCounters(CounterEnumType.FADE) if c.isInPlay() else c.getKeywordMagnitude(Keyword.FADING))), "fading")
+                if t.isKeyword(Keyword.VANISHING):
+                    value -= self.subValue(20 // (max(1, c.getCounters(CounterEnumType.TIME) if c.isInPlay() else c.getKeywordMagnitude(Keyword.VANISHING))), "vanishing")
+
+                ab = t.ensureAbility()
+                if ab is None:
+                    continue
+                if ApiType.DealDamage == ab.getApi():
+                    if not "You" == ab.getParamOrDefault("Defined", "You"):
+                        continue
+                    if c.getController().canLoseLife():
+                        value -= self.subValue(20, "upkeep-dmg")
+                elif ApiType.Sacrifice == ab.getApi():
+                    if not ab.hasParam("UnlessCost"):
+                        continue
+                    value -= self.subValue(20, "sac-unless")
+
+        # card-specific evaluation modifier
+        if c.hasSVar("AIEvaluationModifier"):
+            value += AbilityUtils.calculateAmount(c, c.getSVar("AIEvaluationModifier"), None)
+
+        return value
+
+    def evaluateSpellAbility(self, sa: SpellAbility) -> int:
+        # Pump abilities
+        if sa.getApi() == ApiType.Pump:
+            # Pump abilities that grant +X/+X to the card
+            if ("+X" == sa.getParam("NumAtt")
+                    and "+X" == sa.getParam("NumDef")
+                    and not sa.usesTargeting()
+                    and (not sa.hasParam("Defined") or "Self" == sa.getParam("Defined"))):
+                if sa.getPayCosts().hasOnlySpecificCostType(CostPayEnergy):
+                    # Electrostatic Pummeler, can be expanded for similar cards
+                    initPower = sa.getHostCard().getNetPower()
+                    pumpedPower = initPower
+                    energy = sa.getHostCard().getController().getCounters(CounterEnumType.ENERGY)
+                    if energy > 0:
+                        numActivations = energy // 3
+                        for i in range(numActivations):
+                            pumpedPower *= 2
+                        return (pumpedPower - initPower) * 15
+        elif ComputerUtilCost.isSacrificeSelfCost(sa.getPayCosts()):
+            return -10  # can be sacrificed in response to ability or spell, thus, less prioritable
+        # default value
+        return 10
+
+    def addValue(self, value: int, text: str) -> int:
+        return value
+
+    def subValue(self, value: int, text: str) -> int:
+        return -self.addValue(-value, text)
 ```

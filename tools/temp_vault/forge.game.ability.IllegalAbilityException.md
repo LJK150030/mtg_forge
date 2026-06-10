@@ -65,3 +65,26 @@ public class IllegalAbilityException extends RuntimeException {
 
 }
 ```
+
+## Python
+`forge/game/ability/IllegalAbilityException.py`
+
+```python
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.util.TextUtil import TextUtil
+
+
+class IllegalAbilityException(RuntimeException):
+    serialVersionUID = -8638474348184716635
+
+    def __init__(self, sa, effect=None):
+        if effect is None:
+            if isinstance(sa, str):
+                message = sa
+            else:
+                message = sa.toString()
+        else:
+            message = TextUtil.concatWithSpace(sa.toString(), "(effect " + effect.getClass().getName() + ")")
+        super().__init__(message)
+```

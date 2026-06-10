@@ -173,3 +173,102 @@ public class AmassAi extends SpellAbilityAi {
     }
 }
 ```
+
+## Python
+`forge/ai/ability/AmassAi.py`
+
+```python
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.ai.ComputerUtilCard import ComputerUtilCard
+from forge.ai.SpellAbilityAi import SpellAbilityAi
+from forge.game.Game import Game
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CardPredicates import CardPredicates
+from forge.game.card.CounterEnumType import CounterEnumType
+from forge.game.card.token.TokenInfo import TokenInfo
+from forge.game.phase.PhaseHandler import PhaseHandler
+from forge.game.player.Player import Player
+from forge.game.player.PlayerActionConfirmMode import PlayerActionConfirmMode
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+
+
+class AmassAi(SpellAbilityAi):
+    def checkApiLogic(self, ai: Player, sa: SpellAbility) -> AiAbilityDecision:
+        aiArmies = CardLists.getType(ai.getCardsIn(ZoneType.Battlefield), "Army")
+        host = sa.getHostCard()
+        game = ai.getGame()
+
+        if not aiArmies.isEmpty():
+            if aiArmies.anyMatch(CardPredicates.canReceiveCounters(CounterEnumType.P1P1)):
+                # If AI has an Army that can receive counters, play the ability
+                return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+            # AI has Armies but none can receive counters, so don't play
+            return AiAbilityDecision(0, AiPlayDecision.DoesntImpactGame)
+        type = sa.getParam("Type")
+        tokenScript = "b_0_0_" + sa.getOriginalParam("Type").lower() + "_army"
+        amount = AbilityUtils.calculateAmount(host, sa.getParamOrDefault("Num", "1"), sa)
+
+        token = TokenInfo.getProtoType(tokenScript, sa, ai, False)
+
+        if token is None:
+            return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+        token.setController(ai, 0)
+        token.setLastKnownZone(ai.getZone(ZoneType.Battlefield))
+        token.setCreatureTypes([type, "Army"])
+        token.setName(type + " Army Token")
+        token.setTokenSpawningAbility(sa)
+
+        result = True
+
+        # need to check what the cards would be on the battlefield
+        # do not attach yet, that would cause Events
+        preList = CardCollection(token)
+        game.getAction().checkStaticAbilities(False, {token}, preList)
+
+        if token.canReceiveCounters(CounterEnumType.P1P1):
+            token.setCounters(CounterEnumType.P1P1, amount)
+
+        if token.isCreature() and token.getNetToughness() < 1:
+            result = False
+
+        # reset static abilities
+        game.getAction().checkStaticAbilities(False)
+
+        if result:
+            return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+        return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+    def checkPhaseRestrictions(self, ai: Player, sa: SpellAbility, ph: PhaseHandler) -> bool:
+        # TODO: Special check for instant speed logic? Something like Lazotep Plating.
+        """
+        boolean isInstant = sa.getRestrictions().isInstantSpeed();
+        CardCollection aiArmies = CardLists.filter(ai.getCardsIn(ZoneType.Battlefield), CardPredicates.isType("Army"));
+
+        if (isInstant) {
+
+        }
+        """
+
+        return True
+
+    def doTriggerNoCost(self, ai: Player, sa: SpellAbility, mandatory: bool) -> AiAbilityDecision:
+        if mandatory:
+            return AiAbilityDecision(50, AiPlayDecision.MandatoryPlay)
+
+        return self.checkApiLogic(ai, sa)
+
+    def confirmAction(self, player: Player, sa: SpellAbility, mode: PlayerActionConfirmMode, message: str, params: dict[str, object]) -> bool:
+        return True
+
+    def chooseSingleCard(self, ai: Player, sa: SpellAbility, options, isOptional: bool, targetedPlayer: Player, params: dict[str, object]) -> Card:
+        better = CardLists.filter(options, CardPredicates.canReceiveCounters(CounterEnumType.P1P1))
+        if not better:
+            better = options
+        return ComputerUtilCard.getBestAI(better)
+```

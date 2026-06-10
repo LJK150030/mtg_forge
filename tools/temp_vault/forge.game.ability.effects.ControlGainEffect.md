@@ -55,7 +55,7 @@ classDiagram
 
 ControlGainEffect implements the resolution logic for "gain control" abilities in Forge's MTG engine. As a concrete `SpellAbilityEffect` subclass, it overrides `getStackDescription` to build human-readable rules text and `resolve` to apply the control change, assigning each defined or chosen `Card` a timestamped temporary controller drawn from the targeted `Player`. It works through `CardCollection`/`CardCollectionView` to enumerate targets and through `Game` to allocate timestamps, fire `GameEventCardStatsChanged`, and register cleanup hooks.
 
-A key design intent is its duration model: instead of tracking control statically, it wraps the reversal (`doLoseControl`) in `GameCommand` closures registered against the trigger named by the `LoseControl` parameter — end-of-turn, untap, change-of-controller, leaves-play, or static check — so control reverts under the right condition. Optional untap, granted keywords, and remembered targets are layered onto the same timestamp for consistent rollback.
+A key design intent is its duration model: instead of tracking control statically, it wraps the reversal (`doLoseControl`) in `GameCommand` closures registered against the trigger named by the `LoseControl` parameter â€” end-of-turn, untap, change-of-controller, leaves-play, or static check â€” so control reverts under the right condition. Optional untap, granted keywords, and remembered targets are layered onto the same timestamp for consistent rollback.
 
 ## Source
 `forge-game/src/main/java/forge/game/ability/effects/ControlGainEffect.java`
@@ -341,4 +341,233 @@ public class ControlGainEffect extends SpellAbilityEffect {
         return getDefinedCardsOrTargeted(sa);
     }
 }
+```
+
+## Python
+`forge/game/ability/effects/ControlGainEffect.py`
+
+```python
+from forge.GameCommand import GameCommand
+from forge.game.Game import Game
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.card.CardLists import CardLists
+from forge.game.event.GameEventCardStatsChanged import GameEventCardStatsChanged
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.trigger.TriggerType import TriggerType
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.Localizer import Localizer
+
+
+class ControlGainEffect(SpellAbilityEffect):
+
+    def getStackDescription(self, sa):
+        sb = []
+
+        newController = self.getDefinedPlayersOrTargeted(sa, "NewController")
+        if not newController:
+            newController.append(sa.getActivatingPlayer())
+
+        sb.append(str(newController[0]))
+        sb.append(" gains control of")
+
+        tgts = self.getDefinedCards(sa)
+        if not tgts:
+            sb.append(" (nothing)")
+        else:
+            for c in tgts:
+                sb.append(" ")
+                if c.isFaceDown():
+                    sb.append("Face-down creature (")
+                    sb.append(str(c.getId()))
+                    sb.append(')')
+                else:
+                    sb.append(str(c))
+        if sa.hasParam("LoseControl"):
+            loseCont = sa.getParam("LoseControl")
+            if "EOT" in loseCont:
+                sb.append(" until end of turn")
+            elif "Untap" in loseCont:
+                sb.append(" for as long as ")
+                sb.append(str(sa.getHostCard()))
+                sb.append(" remains tapped")
+            elif "LoseControl" in loseCont:
+                sb.append(" for as long as you control ")
+                sb.append(str(sa.getHostCard()))
+            elif "LeavesPlay" in loseCont:
+                sb.append(" for as long as ")
+                sb.append(str(sa.getHostCard()))
+                sb.append("remains on the battlefield")
+            elif loseCont == "StaticCommandCheck":
+                sb.append(" for as long as that creature remains enchanted")
+            elif loseCont == "UntilTheEndOfYourNextTurn":
+                sb.append(" until the end of your next turn")
+        sb.append(".")
+
+        if sa.hasParam("Untap"):
+            sb.append(" Untap it.")
+        keywords = sa.getParam("AddKWs").split(" & ") if sa.hasParam("AddKWs") else None
+        if sa.hasParam("AddKWs"):
+            sb.append(" It gains ")
+            for i in range(len(keywords)):
+                sb.append(keywords[i].lower())
+                sb.append(", " if len(keywords) > 2 and i + 1 != len(keywords) else "")
+                sb.append(" " if len(keywords) == 2 and i == 0 else "")
+                sb.append("and " if i + 2 == len(keywords) else "")
+            sb.append(" until end of turn.")
+
+        return "".join(sb)
+
+    @staticmethod
+    def doLoseControl(c, host, tStamp):
+        if c is None or c.hasKeyword("Other players can't gain control of CARDNAME."):
+            return
+        game = host.getGame()
+        if c.isInPlay():
+            c.removeTempController(tStamp)
+
+            game.getAction().controllerChangeZoneCorrection(c)
+        host.removeGainControlTargets(c)
+
+    def resolve(self, sa):
+        source = sa.getHostCard()
+        activator = sa.getActivatingPlayer()
+
+        bUntap = sa.hasParam("Untap")
+        remember = sa.hasParam("RememberControlled")
+        forget = sa.hasParam("ForgetControlled")
+        keywords = sa.getParam("AddKWs").split(" & ") if sa.hasParam("AddKWs") else None
+        lose = sa.getParam("LoseControl").split(",") if sa.hasParam("LoseControl") else None
+
+        controllers = self.getDefinedPlayersOrTargeted(sa, "NewController")
+
+        newController = activator if not controllers else controllers[0]
+        game = newController.getGame()
+
+        if sa.hasParam("Choices"):
+            chooser = AbilityUtils.getDefinedPlayers(source, sa.getParam("Chooser"), sa)[0] \
+                if sa.hasParam("Chooser") else activator
+            choices = CardLists.getValidCards(game.getCardsIn(ZoneType.Battlefield),
+                    sa.getParam("Choices"), activator, source, sa)
+            if not choices:
+                return
+            title = sa.getParam("ChoiceTitle") if sa.hasParam("ChoiceTitle") else \
+                Localizer.getInstance().getMessage("lblChooseaCard") + " "
+            tgtCards = chooser.getController().chooseCardsForEffect(choices, sa, title, 1, 1, False, None)
+        else:
+            tgtCards = self.getDefinedCards(sa)
+
+        # check for lose control criteria right away
+        if lose is not None and "LeavesPlay" in lose and not source.isInPlay():
+            return
+        if lose is not None and "LoseControl" in lose and source.getController() != sa.getActivatingPlayer():
+            return
+        if lose is not None and "Untap" in lose and not source.isTapped():
+            return
+
+        untapped = CardCollection()
+        for tgtC in tgtCards:
+            if not tgtC.isInPlay() or not tgtC.canBeControlledBy(newController):
+                continue
+            if tgtC.isPhasedOut():
+                continue
+
+            if sa.hasParam("Optional") and not activator.getController().confirmAction(sa, None,
+                    Localizer.getInstance().getMessage("lblGainControlConfirm", newController,
+                            tgtC.getTranslatedName()), None):
+                continue
+
+            if not tgtC.equals(source) and tgtC not in source.getGainControlTargets():
+                source.addGainControlTarget(tgtC)
+
+            tStamp = game.getNextTimestamp()
+            tgtC.addTempController(newController, tStamp)
+
+            if bUntap:
+                if tgtC.untap():
+                    untapped.add(tgtC)
+
+            if keywords is not None:
+                tgtC.addChangedCardKeywords(keywords, [], False, tStamp, None)
+                game.fireEvent(GameEventCardStatsChanged(tgtC))
+
+            if remember and not source.isRemembered(tgtC):
+                source.addRemembered(tgtC)
+
+            if forget and source.isRemembered(tgtC):
+                source.removeRemembered(tgtC)
+
+            if lose is not None:
+                loseControl = self.getLoseControlCommand(tgtC, tStamp, source)
+                if "LeavesPlay" in lose and source != tgtC:  # Only return control if host and target are different cards
+                    source.addLeavesPlayCommand(loseControl)
+                if "Untap" in lose:
+                    source.addUntapCommand(loseControl)
+                if "LoseControl" in lose:
+                    source.addChangeControllerCommand(loseControl)
+                if "EOT" in lose:
+                    game.getEndOfTurn().addUntil(loseControl)
+                    tgtC.addChangedSVars({"SacMe": "6"}, tStamp, 0)
+                if "EndOfCombat" in lose:
+                    game.getEndOfCombat().addUntil(loseControl)
+                    tgtC.addChangedSVars({"SacMe": "6"}, tStamp, 0)
+                if "StaticCommandCheck" in lose:
+                    leftVar = sa.getSVar(sa.getParam("StaticCommandCheckSVar"))
+                    rightVar = sa.getParam("StaticCommandSVarCompare")
+                    source.addStaticCommandList([leftVar, rightVar, tgtC, loseControl])
+                if "UntilSourceUnattached" in lose:
+                    attachment = sa.getTriggeringObject(AbilityKey.Source)
+                    attachment.addLeavesPlayCommand(loseControl)
+                    attachment.addPhaseOutCommand(loseControl)
+                    attachment.addUnattachCommand(loseControl)
+                if "UntilTheEndOfYourNextTurn" in lose:
+                    if game.getPhaseHandler().isPlayerTurn(sa.getActivatingPlayer()):
+                        game.getEndOfTurn().registerUntilEnd(sa.getActivatingPlayer(), loseControl)
+                    else:
+                        game.getEndOfTurn().addUntilEnd(sa.getActivatingPlayer(), loseControl)
+
+            if keywords is not None:
+                # Add keywords only until end of turn
+                class _UntilKeywordEOT(GameCommand):
+                    serialVersionUID = -42244224
+
+                    def run(self):
+                        tgtC.removeChangedCardKeywords(tStamp, 0)
+
+                untilKeywordEOT = _UntilKeywordEOT()
+                game.getEndOfTurn().addUntil(untilKeywordEOT)
+
+            game.getAction().controllerChangeZoneCorrection(tgtC)
+        # end foreach target
+
+        if not untapped.isEmpty():
+            runParams = AbilityKey.newMap()
+            map = {}
+            map[activator] = untapped
+            runParams[AbilityKey.Map] = map
+            game.getTriggerHandler().runTrigger(TriggerType.UntapAll, runParams, False)
+
+    @staticmethod
+    def getLoseControlCommand(c, tStamp, hostCard):
+        class _LoseControl(GameCommand):
+            serialVersionUID = 878543373519872418
+
+            def run(self):
+                ControlGainEffect.doLoseControl(c, hostCard, tStamp)
+                c.removeChangedSVars(tStamp, 0)
+
+        loseControl = _LoseControl()
+
+        return loseControl
+
+    def getDefinedCards(self, sa):
+        game = sa.getHostCard().getGame()
+        if sa.hasParam("AllValid"):
+            return AbilityUtils.filterListByType(game.getCardsIn(ZoneType.Battlefield), sa.getParam("AllValid"), sa)
+        return self.getDefinedCardsOrTargeted(sa)
 ```

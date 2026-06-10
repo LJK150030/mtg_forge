@@ -96,6 +96,12 @@ classDiagram
 - [[forge.game.staticability.StaticAbility|StaticAbility]]
 - [[forge.game.trigger.Trigger|Trigger]]
 
+## Design Description
+
+KeywordInstance is an abstract base class that realizes the `KeywordInterface` contract, modeling a single occurrence of a Magic keyword attached to a host `Card` (or `Player`). It holds the parsed keyword identity (`Keyword`, original text, amount) and owns the four families of game traits a keyword expands intoâ€”`Trigger`s, `ReplacementEffect`s, `SpellAbility`s, and `StaticAbility`s. Through `createTraits`, it delegates to `CardFactoryUtil`/`PlayerFactoryUtil` to lazily synthesize and register those traits, wrapping the work in Sentry breadcrumbs for diagnostics, while leaving parsing and reminder-text formatting to subclasses via abstract hooks.
+
+The design favors composition and uniform propagation: setting the host card or intrinsic flag, copying, or applying traits all fan out across the four trait collections, keeping each owned trait back-linked to its keyword. Generic self-typing (`T extends KeywordInstance<?>`) supports clone-based copying, and SVar lookups are delegated to a fallback (`StaticAbility` or host card) rather than stored locally, with the mutating SVar methods deliberately left as no-ops.
+
 ## Source
 `forge-game/src/main/java/forge/game/keyword/KeywordInstance.java`
 
@@ -541,4 +547,329 @@ public abstract class KeywordInstance<T extends KeywordInstance<?>> implements K
     public void removeSVar(String var) {
     }
 }
+```
+
+## Python
+`forge/game/keyword/KeywordInstance.py`
+
+```python
+from forge.game.IHasSVars import IHasSVars
+from forge.game.card.Card import Card
+from forge.game.card.CardFactoryUtil import CardFactoryUtil
+from forge.game.keyword.Keyword import Keyword
+from forge.game.keyword.KeywordInterface import KeywordInterface
+from forge.game.player.Player import Player
+from forge.game.player.PlayerFactoryUtil import PlayerFactoryUtil
+from forge.game.replacement.ReplacementEffect import ReplacementEffect
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.staticability.StaticAbility import StaticAbility
+from forge.game.trigger.Trigger import Trigger
+from forge.util.Lang import Lang
+from io.sentry.Breadcrumb import Breadcrumb
+from io.sentry.Sentry import Sentry
+
+import copy as _copy
+import re
+from typing import Collection, List, Map
+
+
+class KeywordInstance(KeywordInterface):
+    def __init__(self):
+        self.hostCard: Card = None
+        self.intrinsic: bool = False
+
+        self.keyword: Keyword = None
+        self.original: str = None
+        self.st: StaticAbility = None
+        self.idx: int = -1
+
+        self.triggers: List[Trigger] = []
+        self.replacements: List[ReplacementEffect] = []
+        self.abilities: List[SpellAbility] = []
+        self.staticAbilities: List[StaticAbility] = []
+
+    def getOriginal(self) -> str:
+        return self.original
+
+    def getKeyword(self) -> Keyword:
+        return self.keyword
+
+    def getReminderText(self) -> str:
+        result = self.formatReminderText(self.keyword.reminderText)
+
+        def _repl(m):
+            return Lang.nounWithNumeralExceptOne(m.group(1), m.group(2))
+
+        return re.sub(r"\{(\w+):(.+?)\}", _repl, result)
+
+    def getAmount(self) -> int:
+        return 1
+
+    def getAmountString(self) -> str:
+        return str(self.getAmount())
+
+    def initialize(self, original0: str, keyword0: Keyword, details: str) -> None:
+        self.original = original0
+        self.keyword = keyword0
+        self.parse(details)
+
+    def parse(self, details: str) -> None:
+        raise NotImplementedError
+
+    def formatReminderText(self, reminderText: str) -> str:
+        raise NotImplementedError
+
+    def createTraits(self, *args) -> None:
+        first = args[0]
+        if isinstance(first, Player):
+            player = first
+            clear = args[1] if len(args) > 1 else False
+            if clear:
+                self.triggers.clear()
+                self.replacements.clear()
+                self.abilities.clear()
+                self.staticAbilities.clear()
+            try:
+                msg = "KeywordInstance:createTraits: make Traits for Keyword"
+
+                bread = Breadcrumb(msg)
+                bread.setData("Player", player.getName())
+                bread.setData("Keyword", self.original)
+                Sentry.addBreadcrumb(bread)
+
+                # add Extra for debugging
+                Sentry.setExtra("Player", player.getName())
+                Sentry.setExtra("Keyword", self.original)
+
+                PlayerFactoryUtil.addTriggerAbility(self, player)
+                PlayerFactoryUtil.addReplacementEffect(self, player)
+                PlayerFactoryUtil.addSpellAbility(self, player)
+                PlayerFactoryUtil.addStaticAbility(self, player)
+            except Exception as e:
+                msg = "KeywordInstance:createTraits: failed Traits for Keyword"
+
+                bread = Breadcrumb(msg)
+                bread.setData("Player", player.getName())
+                bread.setData("Keyword", self.original)
+                Sentry.addBreadcrumb(bread)
+
+                # rethrow
+                raise RuntimeError("Error in Keyword " + self.original + " for player " + player.getName(), e)
+            finally:
+                # remove added extra
+                Sentry.removeExtra("Player")
+                Sentry.removeExtra("Keyword")
+        else:
+            host = first
+            intrinsic = args[1]
+            clear = args[2] if len(args) > 2 else False
+
+            self.hostCard = host
+            self.intrinsic = intrinsic
+            if clear:
+                self.triggers.clear()
+                self.replacements.clear()
+                self.abilities.clear()
+                self.staticAbilities.clear()
+
+            try:
+                msg = "KeywordInstance:createTraits: make Traits for Keyword"
+
+                bread = Breadcrumb(msg)
+                bread.setData("Card", host.getName())
+                bread.setData("Keyword", self.original)
+                Sentry.addBreadcrumb(bread)
+
+                # add Extra for debugging
+                Sentry.setExtra("Card", host.getName())
+                Sentry.setExtra("Keyword", self.original)
+
+                CardFactoryUtil.addTriggerAbility(self, host, intrinsic)
+                CardFactoryUtil.addReplacementEffect(self, host.getCurrentState(), intrinsic)
+                CardFactoryUtil.addSpellAbility(self, host.getCurrentState(), intrinsic)
+                CardFactoryUtil.addStaticAbility(self, host.getCurrentState(), intrinsic)
+            except Exception as e:
+                msg = "KeywordInstance:createTraits: failed Traits for Keyword"
+
+                bread = Breadcrumb(msg)
+                bread.setData("Card", host.getName())
+                bread.setData("Keyword", self.original)
+                Sentry.addBreadcrumb(bread)
+
+                # rethrow
+                raise RuntimeError("Error in Keyword " + self.original + " for card " + host.getName(), e)
+            finally:
+                # remove added extra
+                Sentry.removeExtra("Card")
+                Sentry.removeExtra("Keyword")
+
+    def addTrigger(self, trg: Trigger) -> None:
+        trg.setKeyword(self)
+        self.triggers.append(trg)
+
+    def addReplacement(self, trg: ReplacementEffect) -> None:
+        trg.setKeyword(self)
+        self.replacements.append(trg)
+
+    def addSpellAbility(self, s: SpellAbility) -> None:
+        s.setKeyword(self)
+        self.abilities.append(s)
+
+    def addStaticAbility(self, st: StaticAbility) -> None:
+        st.setKeyword(self)
+        self.staticAbilities.append(st)
+
+    def hasTraits(self) -> bool:
+        if len(self.getAbilities()) != 0:
+            return True
+        if len(self.getTriggers()) != 0:
+            return True
+        if len(self.getReplacements()) != 0:
+            return True
+        if len(self.getStaticAbilities()) != 0:
+            return True
+        return False
+
+    def getTriggers(self) -> Collection[Trigger]:
+        return self.triggers
+
+    def getReplacements(self) -> Collection[ReplacementEffect]:
+        return self.replacements
+
+    def getAbilities(self) -> Collection[SpellAbility]:
+        return self.abilities
+
+    def getStaticAbilities(self) -> Collection[StaticAbility]:
+        return self.staticAbilities
+
+    def applySpellAbility(self, list: List[SpellAbility]) -> List[SpellAbility]:
+        list.extend(self.getAbilities())
+        return list
+
+    def applyTrigger(self, list: List[Trigger]) -> List[Trigger]:
+        list.extend(self.getTriggers())
+        return list
+
+    def applyReplacementEffect(self, list: List[ReplacementEffect]) -> List[ReplacementEffect]:
+        list.extend(self.getReplacements())
+        return list
+
+    def applyStaticAbility(self, list: List[StaticAbility]) -> List[StaticAbility]:
+        list.extend(self.getStaticAbilities())
+        return list
+
+    def copy(self, host: Card, lki: bool) -> KeywordInterface:
+        try:
+            result = _copy.copy(self)
+            result.hostCard = host
+            result.abilities = []
+            for sa in self.abilities:
+                copy = sa.copy(host, lki)
+                copy.setKeyword(result)
+                result.abilities.append(copy)
+
+            result.triggers = []
+            for tr in self.triggers:
+                copy = tr.copy(host, lki)
+                copy.setKeyword(result)
+                result.triggers.append(copy)
+
+            result.replacements = []
+            for re_ in self.replacements:
+                copy = re_.copy(host, lki)
+                copy.setKeyword(result)
+                result.replacements.append(copy)
+
+            result.staticAbilities = []
+            for sa in self.staticAbilities:
+                copy = sa.copy(host, lki)
+                copy.setKeyword(result)
+                result.staticAbilities.append(copy)
+
+            return result
+        except Exception as ex:
+            raise RuntimeError("KeywordInstance : clone() error", ex)
+
+    def toString(self) -> str:
+        return self.getOriginal()
+
+    def __str__(self) -> str:
+        return self.getOriginal()
+
+    def redundant(self, list: Collection[KeywordInterface]) -> bool:
+        if not self.keyword.isMultipleRedundant:
+            return False
+        for i in list:
+            if i.getOriginal() == self.getOriginal():
+                return True
+        return False
+
+    def getHostCard(self) -> Card:
+        return self.hostCard
+
+    def setHostCard(self, host: Card) -> None:
+        self.hostCard = host
+        for sa in self.abilities:
+            sa.setHostCard(host)
+
+        for tr in self.triggers:
+            tr.setHostCard(host)
+
+        for re_ in self.replacements:
+            re_.setHostCard(host)
+
+        for sa in self.staticAbilities:
+            sa.setHostCard(host)
+
+    def isIntrinsic(self) -> bool:
+        return self.intrinsic
+
+    def setIntrinsic(self, value: bool) -> None:
+        self.intrinsic = value
+        for sa in self.abilities:
+            sa.setIntrinsic(value)
+
+        for tr in self.triggers:
+            tr.setIntrinsic(value)
+
+        for re_ in self.replacements:
+            re_.setIntrinsic(value)
+
+        for sa in self.staticAbilities:
+            sa.setIntrinsic(value)
+
+    def getStatic(self) -> StaticAbility:
+        return self.st
+
+    def setStatic(self, st: StaticAbility) -> None:
+        self.st = st
+
+    def getIdx(self) -> int:
+        return self.idx
+
+    def setIdx(self, i: int) -> None:
+        self.idx = i
+
+    def getSVarFallback(self) -> IHasSVars:
+        if self.getStatic() is not None:
+            return self.getStatic()
+        return self.getHostCard()
+
+    def getSVar(self, name: str) -> str:
+        return self.getSVarFallback().getSVar(name)
+
+    def hasSVar(self, name: str) -> bool:
+        return self.getSVarFallback().hasSVar(name)
+
+    def setSVar(self, name: str, value: str) -> None:
+        pass
+
+    def getSVars(self) -> Map[str, str]:
+        return self.getSVarFallback().getSVars()
+
+    def setSVars(self, newSVars: Map[str, str]) -> None:
+        pass
+
+    def removeSVar(self, var: str) -> None:
+        pass
 ```

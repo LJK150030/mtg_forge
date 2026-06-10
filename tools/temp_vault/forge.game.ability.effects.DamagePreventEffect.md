@@ -250,3 +250,167 @@ public class DamagePreventEffect extends SpellAbilityEffect {
     }
 }
 ```
+
+## Python
+`forge/game/ability/effects/DamagePreventEffect.py`
+
+```python
+from forge.GameCommand import GameCommand
+from forge.game.Game import Game
+from forge.game.GameEntity import GameEntity
+from forge.game.ability.AbilityFactory import AbilityFactory
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CardUtil import CardUtil
+from forge.game.event.GameEventPlayerStatsChanged import GameEventPlayerStatsChanged
+from forge.game.player.Player import Player
+from forge.game.replacement.ReplacementEffect import ReplacementEffect
+from forge.game.replacement.ReplacementHandler import ReplacementHandler
+from forge.game.spellability.AbilitySub import AbilitySub
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.Aggregates import Aggregates
+from forge.util.TextUtil import TextUtil
+from forge.util.collect.FCollection import FCollection
+
+
+class DamagePreventEffect(SpellAbilityEffect):
+
+    def getStackDescription(self, sa: SpellAbility) -> str:
+        sb = []
+
+        tgts = self.getTargetEntities(sa)
+
+        sb.append("Prevent the next ")
+        sb.append(sa.getParam("Amount"))
+        sb.append(" damage that would be dealt ")
+        if sa.isDividedAsYouChoose():
+            sb.append("between ")
+        else:
+            sb.append("to ")
+        for i in range(len(tgts)):
+            if i != 0:
+                sb.append(" ")
+
+            o = tgts[i]
+            if isinstance(o, Card):
+                tgtC = o
+                if tgtC.isFaceDown():
+                    sb.append("Morph")
+                else:
+                    sb.append(str(tgtC))
+            elif isinstance(o, Player):
+                sb.append(o.toString())
+
+        if sa.hasParam("Radiance") and sa.usesTargeting():
+            sb.append(" and each other ")
+            sb.append(sa.getParam("ValidTgts"))
+            sb.append(" that shares a color with ")
+            if len(tgts) > 1:
+                sb.append("them")
+            else:
+                sb.append("it")
+        sb.append(" this turn.")
+        return "".join(sb)
+
+    # (non-Javadoc)
+    # @see forge.card.abilityfactory.SpellEffect#resolve(java.util.Map, forge.card.spellability.SpellAbility)
+    def resolve(self, sa: SpellAbility) -> None:
+        host = sa.getHostCard()
+        numDam = AbilityUtils.calculateAmount(host, sa.getParam("Amount"), sa)
+
+        tgts = []
+        if sa.hasParam("CardChoices") or sa.hasParam("PlayerChoices"):  # choosing outside Defined/Targeted
+            # only for Whimsy, for more robust version see DamageDealEffect
+            choices = FCollection()
+            if sa.hasParam("CardChoices"):
+                choices.addAll(CardLists.getValidCards(host.getGame().getCardsIn(ZoneType.Battlefield),
+                        sa.getParam("CardChoices"), sa.getActivatingPlayer(), host, sa))
+            if sa.hasParam("PlayerChoices"):
+                choices.addAll(AbilityUtils.getDefinedPlayers(host, sa.getParam("PlayerChoices"), sa))
+            if sa.hasParam("Random"):  # currently everything using Choices is random
+                random = Aggregates.random(choices)
+                tgts.append(random)
+                host.addRemembered(random)  # remember random choices for log
+        else:
+            tgts = self.getTargetEntities(sa)
+
+        untargetedCards = CardUtil.getRadiance(sa)
+
+        for o in tgts:
+            numDam = sa.getDividedValue(o) if (sa.usesTargeting() and sa.isDividedAsYouChoose()) else numDam
+            if isinstance(o, Card):
+                c = o
+                if c.isInPlay():
+                    self.addPreventNextDamage(sa, o, numDam)
+            elif isinstance(o, Player):
+                self.addPreventNextDamage(sa, o, numDam)
+
+        for c in untargetedCards:
+            if c.isInPlay():
+                self.addPreventNextDamage(sa, c, numDam)
+
+    @staticmethod
+    def addPreventNextDamage(sa: SpellAbility, o: GameEntity, numDam: int) -> None:
+        hostCard = sa.getHostCard()
+        game = hostCard.getGame()
+        player = hostCard.getController()
+        name = str(hostCard) + "'s Effect"
+        image = hostCard.getImageKey()
+        sb = ["Event$ DamageDone | ActiveZones$ Command | ValidTarget$ "]
+        sb.append("Card.IsRemembered" if isinstance(o, Card) else "Player.IsRemembered")
+        sb.append(" | PreventionEffect$ NextN | Description$ Prevent the next ")
+        sb.append(str(numDam))
+        sb.append(" damage.")
+        effect = "DB$ ReplaceDamage | Amount$ ShieldAmount"
+
+        eff = SpellAbilityEffect.createEffect(sa, player, name, image)
+        eff.setSVar("ShieldAmount", "Number$" + str(numDam))
+        eff.setSVar("PreventedDamage", "Number$0")
+        eff.addRemembered(o)
+
+        replaceDamage = AbilityFactory.getAbility(effect, eff)
+        if sa.hasParam("PreventionSubAbility"):
+            subAbString = sa.getSVar(sa.getParam("PreventionSubAbility"))
+            if sa.hasParam("ShieldEffectTarget"):
+                effTgts = AbilityUtils.getDefinedEntities(hostCard, sa.getParam("ShieldEffectTarget"), sa)
+                effTgtString = ""
+                for effTgt in effTgts:
+                    if isinstance(effTgt, Card):
+                        effTgtString = "CardUID_" + str(effTgt.getId())
+                    elif isinstance(effTgt, Player):
+                        effTgtString = "PlayerNamed_" + effTgt.getName()
+                subAbString = TextUtil.fastReplace(subAbString, "ShieldEffectTarget", effTgtString)
+            subSA = AbilityFactory.getAbility(subAbString, eff)
+            replaceDamage.setSubAbility(subSA)
+            # Add SpellDescription of PreventionSubAbility to effect description
+            sb.append(" ")
+            sb.append(subSA.getParam("SpellDescription"))
+
+        repeffstr = "".join(sb)
+        re = ReplacementHandler.parseReplacement(repeffstr, eff, True)
+        re.setOverridingAbility(replaceDamage)
+        eff.addReplacementEffect(re)
+        if isinstance(o, Card):
+            SpellAbilityEffect.addForgetOnMovedTrigger(eff, "Battlefield")
+
+        game.getAction().moveToCommand(eff, sa)
+
+        o.getView().updatePreventNextDamage(o)
+        if isinstance(o, Player):
+            game.fireEvent(GameEventPlayerStatsChanged(o, False))
+
+        class _EndOfTurnCommand(GameCommand):
+            serialVersionUID = 1
+
+            def run(self):
+                game.getAction().exileEffect(eff)
+                o.getView().updatePreventNextDamage(o)
+                if isinstance(o, Player):
+                    game.fireEvent(GameEventPlayerStatsChanged(o, False))
+
+        game.getEndOfTurn().addUntil(_EndOfTurnCommand())
+```

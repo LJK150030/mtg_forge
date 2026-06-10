@@ -42,9 +42,9 @@ classDiagram
 
 ## Design Description
 
-BecomesBlockedEffect is a one-shot resolver in Forge's ability-effect layer that marks targeted attacking creatures as blocked outside the normal block-declaration step — the mechanism behind cards and abilities that force a creature to "become blocked." As a concrete subclass of SpellAbilityEffect, it overrides `getStackDescription` to render a readable stack entry and `resolve` to mutate game state.
+BecomesBlockedEffect is a one-shot resolver in Forge's ability-effect layer that marks targeted attacking creatures as blocked outside the normal block-declaration step â€” the mechanism behind cards and abilities that force a creature to "become blocked." As a concrete subclass of SpellAbilityEffect, it overrides `getStackDescription` to render a readable stack entry and `resolve` to mutate game state.
 
-In `resolve` it fetches the active Game's Combat, bailing out early if no combat exists. For each target Card it calls `setBlocked`, and — guarding against duplicate firings via the card's damage history — fires an AttackerBlocked trigger whose AbilityKey parameter map carries the attacker, defender, defending player, and an intentionally empty Blockers collection (no real blocker is assigned). Once any creatures are newly blocked, it raises a single AttackerBlockedOnce trigger for the batch and publishes a GameEventCombatChanged so observers refresh.
+In `resolve` it fetches the active Game's Combat, bailing out early if no combat exists. For each target Card it calls `setBlocked`, and â€” guarding against duplicate firings via the card's damage history â€” fires an AttackerBlocked trigger whose AbilityKey parameter map carries the attacker, defender, defending player, and an intentionally empty Blockers collection (no real blocker is assigned). Once any creatures are newly blocked, it raises a single AttackerBlockedOnce trigger for the batch and publishes a GameEventCombatChanged so observers refresh.
 
 ## Source
 `forge-game/src/main/java/forge/game/ability/effects/BecomesBlockedEffect.java`
@@ -107,4 +107,23 @@ public class BecomesBlockedEffect extends SpellAbilityEffect {
         }
     }
 }
+```
+
+## Python
+`forge/game/ability/effects/BecomesBlockedEffect.py`
+
+```python
+package forge.game.ability.effects;
+
+from typing import List, Map
+
+from forge.game.Game import Game
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.event.GameEventCombatChanged import GameEventCombatChanged
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.trigger.TriggerType import TriggerType
+from forge.util.Lang import Lang
 ```

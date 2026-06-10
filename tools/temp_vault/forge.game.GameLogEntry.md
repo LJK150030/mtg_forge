@@ -59,3 +59,21 @@ public record GameLogEntry(GameLogEntryType type, String message, CardView sourc
     }
 }
 ```
+
+## Python
+`forge/game/GameLogEntry.py`
+
+```python
+from forge.game.GameLogEntryType import GameLogEntryType
+from forge.game.card.CardView import CardView
+
+
+class GameLogEntry:
+    def __init__(self, type: GameLogEntryType, message: str, sourceCard: CardView = None):
+        self.type = type
+        self.message = message
+        self.sourceCard = sourceCard
+
+    def __str__(self) -> str:
+        return self.type.getCaption() + ": " + self.message
+```

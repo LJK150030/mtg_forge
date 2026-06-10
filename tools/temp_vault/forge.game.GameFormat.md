@@ -105,7 +105,7 @@ classDiagram
 
 ## Design Description
 
-GameFormat represents a Magic: the Gathering deck-construction ruleset—Standard, Modern, Commander, and similar—defining which sets, rarities, and individual cards are legal, banned, restricted, or additionally permitted, together with an effective date and a FormatType/FormatSubType classification. Its central responsibility is legality checking: it compiles its rules into reusable `Predicate<PaperCard>` filters (one for printed cards, one looser "rules" variant) and exposes `isDeckLegal`/`getDeckConformanceProblem` to validate a Deck's CardPool against banned cards, set restrictions, and single-copy limits on restricted and restricted-legendary cards.
+GameFormat represents a Magic: the Gathering deck-construction rulesetâ€”Standard, Modern, Commander, and similarâ€”defining which sets, rarities, and individual cards are legal, banned, restricted, or additionally permitted, together with an effective date and a FormatType/FormatSubType classification. Its central responsibility is legality checking: it compiles its rules into reusable `Predicate<PaperCard>` filters (one for printed cards, one looser "rules" variant) and exposes `isDeckLegal`/`getDeckConformanceProblem` to validate a Deck's CardPool against banned cards, set restrictions, and single-copy limits on restricted and restricted-legendary cards.
 
 By implementing `Comparable`, instances sort by format type, subtype, date, and name for ordered display. Design intent is visible in the immutable read-only list views and transient precomputed filters (favoring fast, repeated querying), and in the nested helper classes: a `Reader` that parses format definitions from text files via StaticData, a `Collection` storage providing categorized lookups, and an `InverseDateComparator` for reverse-chronological ordering.
 
@@ -798,4 +798,526 @@ public class GameFormat implements Comparable<GameFormat> {
 
     public final Predicate<CardEdition> editionLegalPredicate = subject -> GameFormat.this.isSetLegal(subject.getCode());
 }
+```
+
+## Python
+`forge/game/GameFormat.py`
+
+```python
+from enum import IntEnum
+from datetime import datetime
+from functools import cmp_to_key
+
+from forge.StaticData import StaticData
+from forge.card.CardDb import CardDb
+from forge.card.CardEdition import CardEdition
+from forge.card.CardEdition.EditionEntry import EditionEntry
+from forge.card.CardRarity import CardRarity
+from forge.deck.CardPool import CardPool
+from forge.deck.Deck import Deck
+from forge.item.PaperCard import PaperCard
+from forge.item.PaperCardPredicates import PaperCardPredicates
+from forge.util.FileSection import FileSection
+from forge.util.FileUtil import FileUtil
+from forge.util.IterableUtil import IterableUtil
+from forge.util.storage.StorageBase import StorageBase
+from forge.util.storage.StorageReaderRecursiveFolderWithUserFolder import StorageReaderRecursiveFolderWithUserFolder
+
+
+class GameFormat:
+    class FormatType(IntEnum):
+        SANCTIONED = 0
+        CASUAL = 1
+        ARCHIVED = 2
+        DIGITAL = 3
+        CUSTOM = 4
+
+    class FormatSubType(IntEnum):
+        BLOCK = 0
+        STANDARD = 1
+        EXTENDED = 2
+        PAUPER = 3
+        PIONEER = 4
+        MODERN = 5
+        LEGACY = 6
+        VINTAGE = 7
+        COMMANDER = 8
+        PLANECHASE = 9
+        VIDEOGAME = 10
+        MTGO = 11
+        ARENA = 12
+        CUSTOM = 13
+
+    DEFAULTDATE = "1990-01-01"
+
+    def __init__(self, fName, effectiveDate=None, sets=None, bannedCards=None,
+                 restrictedCards=None, restrictedLegendary=False, additionalCards=None,
+                 rarities=None, compareIdx=0, formatType=None, formatSubType=None):
+        if formatType is None:
+            formatType = GameFormat.FormatType.CUSTOM
+        if formatSubType is None:
+            formatSubType = GameFormat.FormatSubType.CUSTOM
+
+        self.index = compareIdx
+        self.formatType = formatType
+        self.formatSubType = formatSubType
+        self.name = fName
+        self.effectiveDate = effectiveDate
+
+        if sets is not None:
+            data = StaticData.instance()
+            parsedSets = set()
+            for set_ in sets:
+                if data.getCardEdition(set_) is None:
+                    print("Set " + set_ + " in format " + fName + " does not match any valid editions!")
+                    continue
+                parsedSets.add(set_)
+            self.allowedSetCodes = list(parsedSets)
+        else:
+            self.allowedSetCodes = []
+
+        self.bannedCardNames = [] if bannedCards is None else list(bannedCards)
+        self.restrictedCardNames = [] if restrictedCards is None else list(restrictedCards)
+        self.allowedRarities = [] if rarities is None else rarities
+        self.restrictedLegendary = restrictedLegendary
+        self.additionalCardNames = [] if additionalCards is None else list(additionalCards)
+
+        self.allowedSetCodes_ro = self.allowedSetCodes
+        self.bannedCardNames_ro = self.bannedCardNames
+        self.restrictedCardNames_ro = self.restrictedCardNames
+        self.additionalCardNames_ro = self.additionalCardNames
+
+        self.filterRules = self.buildFilterRules()
+        self.filterPrinted = self.buildFilterPrinted()
+
+        self.editionLegalPredicate = lambda subject: self.isSetLegal(subject.getCode())
+
+    @classmethod
+    def custom(cls, fName, sets, bannedCards):
+        return cls(fName, cls.parseDate(cls.DEFAULTDATE), sets, bannedCards, None, False,
+                   None, None, 0, cls.FormatType.CUSTOM, cls.FormatSubType.CUSTOM)
+
+    def buildFilter(self, printed):
+        p = PaperCardPredicates.names(self.getBannedCardNames()).negate()
+
+        if GameFormat.FormatSubType.ARENA == self.getFormatSubType():
+            p = p.and_(PaperCardPredicates.IS_UNREBALANCED.negate())
+        else:
+            p = p.and_(PaperCardPredicates.IS_REBALANCED.negate())
+
+        if len(self.getAllowedSetCodes()) != 0:
+            if printed:
+                p = p.and_(PaperCardPredicates.printedInSets(self.getAllowedSetCodes(), printed))
+            else:
+                p = p.and_(StaticData.instance().getCommonCards().wasPrintedInSets(self.getAllowedSetCodes()))
+        if len(self.getAllowedRarities()) != 0:
+            crp = []
+            for cr in self.getAllowedRarities():
+                crp.append(StaticData.instance().getCommonCards().wasPrintedAtRarity(cr))
+            p = p.and_(IterableUtil.or_(crp))
+        if len(self.getAdditionalCards()) != 0:
+            p = p.or_(PaperCardPredicates.names(self.getAdditionalCards()))
+        return p
+
+    def buildFilterPrinted(self):
+        return self.buildFilter(True)
+
+    def buildFilterRules(self):
+        return self.buildFilter(False)
+
+    def getName(self):
+        return self.name
+
+    @staticmethod
+    def parseDate(date):
+        if len(date) <= 7:
+            date = date + "-01"
+        try:
+            return datetime.strptime(date, "%Y-%m-%d")
+        except ValueError:
+            return datetime.now()
+
+    def getEffectiveDate(self):
+        return self.effectiveDate
+
+    def getFormatType(self):
+        return self.formatType
+
+    def getFormatSubType(self):
+        return self.formatSubType
+
+    def getAllowedSetCodes(self):
+        return self.allowedSetCodes_ro
+
+    def getBannedCardNames(self):
+        return self.bannedCardNames_ro
+
+    def getRestrictedCards(self):
+        return self.restrictedCardNames_ro
+
+    def isRestrictedLegendary(self):
+        return self.restrictedLegendary
+
+    def getAdditionalCards(self):
+        return self.additionalCardNames_ro
+
+    def getAllowedRarities(self):
+        return self.allowedRarities
+
+    def getAllCards(self):
+        cards = []
+        commonCards = StaticData.instance().getCommonCards()
+        for setCode in self.allowedSetCodes_ro:
+            edition = StaticData.instance().getEditions().get(setCode)
+            if edition is not None:
+                for card in edition.getObtainableCards():
+                    if card.name() not in self.bannedCardNames_ro:
+                        pc = commonCards.getCard(card.name(), setCode, card.collectorNumber())
+                        if pc is not None:
+                            cards.append(pc)
+        return cards
+
+    def getFilterRules(self):
+        return self.filterRules
+
+    def getFilterPrinted(self):
+        return self.filterPrinted
+
+    def isSetLegal(self, setCode):
+        return len(self.getAllowedSetCodes()) == 0 or setCode in self.getAllowedSetCodes()
+
+    def isPoolLegal(self, allCards):
+        return self.getPoolLegalityProblem(allCards) is None
+
+    def isDeckLegal(self, deck):
+        return self.isPoolLegal(deck.getAllCardsInASinglePool())
+
+    def getPoolLegalityProblem(self, allCards):
+        # Check filter rules
+        erroneousCI = []
+        for poolEntry in allCards:
+            if not self.getFilterRules().test(poolEntry.getKey()):
+                erroneousCI.append(poolEntry.getKey())
+        if len(erroneousCI) > 0:
+            sb = "contains the following illegal cards:\n"
+            for cp in erroneousCI:
+                sb += "\n" + cp.getDisplayName()
+            return sb
+        # Check number of restricted and legendary-restricted cards
+        if len(self.getRestrictedCards()) != 0 or self.isRestrictedLegendary():
+            erroneousRestricted = []
+            for poolEntry in allCards:
+                isRestricted = poolEntry.getKey().getName() in self.getRestrictedCards()
+                isLegendaryNonPlaneswalker = (poolEntry.getKey().getRules().getType().isLegendary()
+                                              and not poolEntry.getKey().getRules().getType().isPlaneswalker()
+                                              and self.isRestrictedLegendary())
+                if poolEntry.getValue() > 1 and (isRestricted or isLegendaryNonPlaneswalker):
+                    erroneousRestricted.append(poolEntry.getKey())
+            if len(erroneousRestricted) > 0:
+                sb = "contains more than one copy of the following restricted cards:\n"
+                for cp in erroneousRestricted:
+                    sb += "\n" + cp.getDisplayName()
+                return sb
+        return None
+
+    def getDeckConformanceProblem(self, deck):
+        """
+        Check the conformance of a deck in this GameFormat.
+        Will check each card's set legality, and ensure no banned and max one of each restricted card exists.
+        @param deck The deck to analyse
+        @return An error string describing the errors and associated cards, or null if no errors
+        """
+        if deck is None:
+            return "is not selected"
+        return self.getPoolLegalityProblem(deck.getAllCardsInASinglePool())
+
+    def __str__(self):
+        return self.name
+
+    def toString(self):
+        return self.name
+
+    def compareTo(self, other):
+        if other is None:
+            return 1
+
+        if other.formatType != self.formatType:
+            return self.formatType - other.formatType
+        if other.formatSubType != self.formatSubType:
+            return self.formatSubType - other.formatSubType
+        if self.formatType == GameFormat.FormatType.ARCHIVED:
+            compareDates = ((self.effectiveDate > other.effectiveDate)
+                            - (self.effectiveDate < other.effectiveDate))
+            if compareDates != 0:
+                return compareDates
+            return self.index - other.index
+        return (self.name > other.name) - (self.name < other.name)
+        # return index - other.index
+
+    def getIndex(self):
+        return self.index
+
+    class Reader(StorageReaderRecursiveFolderWithUserFolder):
+        TXT_FILE_FILTER = staticmethod(lambda dir, name: name.endswith(".txt") or dir.isDirectory())
+
+        def __init__(self, forgeFormats, customFormats, includeArchived):
+            super().__init__(forgeFormats, customFormats, GameFormat.getName)
+            self.naturallyOrdered = []
+            self.includeArchived = includeArchived
+            self.coreFormats = []
+            self.coreFormats.append("Standard.txt")
+            self.coreFormats.append("Pioneer.txt")
+            self.coreFormats.append("Historic.txt")
+            self.coreFormats.append("Modern.txt")
+            self.coreFormats.append("Legacy.txt")
+            self.coreFormats.append("Vintage.txt")
+            self.coreFormats.append("Commander.txt")
+            self.coreFormats.append("Extended.txt")
+            self.coreFormats.append("Brawl.txt")
+            self.coreFormats.append("Oathbreaker.txt")
+            self.coreFormats.append("Premodern.txt")
+            self.coreFormats.append("Pauper.txt")
+            self.coreFormats.append("PreDH.txt")
+
+        def read(self, file):
+            if not self.includeArchived and file.getName() not in self.coreFormats:
+                return None
+            contents = FileSection.parseSections(FileUtil.readFile(file))
+            sets = None  # default: all sets allowed
+            bannedCards = None  # default: nothing banned
+            restrictedCards = None  # default: nothing restricted
+            restrictedLegendary = False
+            additionalCards = None  # default: nothing additional
+            rarities = None
+            formatStrings = contents.get("format")
+            if formatStrings is None:
+                return None
+            section = FileSection.parse(formatStrings, FileSection.COLON_KV_SEPARATOR)
+            title = section.get("name")
+            try:
+                formatType = GameFormat.FormatType[section.get("type").upper()]
+            except Exception:
+                if "HISTORIC" == section.get("type").upper():
+                    print("Historic is no longer used as a format Type. Please update "
+                          + file.getAbsolutePath() + " to use 'Archived' instead")
+                    formatType = GameFormat.FormatType.ARCHIVED
+                else:
+                    formatType = GameFormat.FormatType.CUSTOM
+            try:
+                formatsubType = GameFormat.FormatSubType[section.get("subtype").upper()]
+            except Exception:
+                formatsubType = GameFormat.FormatSubType.CUSTOM
+            idx = section.getInt("order")
+            dateStr = section.get("effective")
+            if dateStr is None:
+                dateStr = GameFormat.DEFAULTDATE
+            date = GameFormat.parseDate(dateStr)
+            strSets = section.get("sets")
+            if strSets is not None:
+                sets = strSets.split(", ")
+            strCars = section.get("banned")
+            if strCars is not None:
+                bannedCards = strCars.split("; ")
+
+            strCars = section.get("restricted")
+            if strCars is not None:
+                restrictedCards = strCars.split("; ")
+
+            strRestrictedLegendary = section.getBoolean("restrictedlegendary")
+            if strRestrictedLegendary is not None:
+                restrictedLegendary = strRestrictedLegendary
+
+            strCars = section.get("additional")
+            if strCars is not None:
+                additionalCards = strCars.split("; ")
+
+            strCars = section.get("rarities")
+            if strCars is not None:
+                rarities = []
+                for s in strCars.split(", "):
+                    cr = CardRarity.smartValueOf(s)
+                    if cr.name() != "Unknown":
+                        rarities.append(cr)
+
+            result = GameFormat(title, date, sets, bannedCards, restrictedCards, restrictedLegendary,
+                                additionalCards, rarities, idx, formatType, formatsubType)
+            self.naturallyOrdered.append(result)
+            return result
+
+        def getFileFilter(self):
+            return GameFormat.Reader.TXT_FILE_FILTER
+
+    class Collection(StorageBase):
+        def __init__(self, reader):
+            super().__init__("Format collections", reader)
+            self.formatsTypeMap = None
+            self.naturallyOrdered = reader.naturallyOrdered
+            self.reverseDateOrdered = list(self.naturallyOrdered)
+            self.naturallyOrdered.sort(key=cmp_to_key(GameFormat.compareTo))
+            self.reverseDateOrdered.sort(key=cmp_to_key(GameFormat.InverseDateComparator().compare))
+
+        def getOrderedList(self):
+            return self.naturallyOrdered
+
+        def getReverseDateOrderedList(self):
+            return self.reverseDateOrdered
+
+        def getFormatTypeMap(self):
+            if self.formatsTypeMap is None:
+                self.formatsTypeMap = {}
+                for formatType in GameFormat.FormatType:
+                    self.formatsTypeMap[formatType] = []
+
+                for format in self.naturallyOrdered:
+                    key = format.getFormatType()
+                    formatsOfType = self.formatsTypeMap.get(key)
+                    formatsOfType.append(format)
+            return self.formatsTypeMap
+
+        def getSanctionedList(self):
+            coreList = []
+            for format in self.naturallyOrdered:
+                if format.getFormatType() == GameFormat.FormatType.SANCTIONED:
+                    coreList.append(format)
+            return coreList
+
+        def getFilterList(self):
+            coreList = []
+            for format in self.naturallyOrdered:
+                if (format.getFormatType() != GameFormat.FormatType.ARCHIVED
+                        and format.getFormatType() != GameFormat.FormatType.DIGITAL):
+                    coreList.append(format)
+            return coreList
+
+        def getArchivedList(self):
+            coreList = []
+            for format in self.naturallyOrdered:
+                if format.getFormatType() == GameFormat.FormatType.ARCHIVED:
+                    coreList.append(format)
+            return coreList
+
+        def getCasualList(self):
+            casualList = []
+            for format in self.naturallyOrdered:
+                if format.getFormatType() == GameFormat.FormatType.CASUAL:
+                    casualList.append(format)
+            return casualList
+
+        def getCoreFormatsWithLimitedSets(self):
+            formatsWithLimitedSets = []
+            for format in self.naturallyOrdered:
+                if len(format.getAllowedSetCodes()) > 0:
+                    formatsWithLimitedSets.append(format)
+            return formatsWithLimitedSets
+
+        def getBlockList(self):
+            blockFormats = []
+            for format in self.getArchivedList():
+                if format.getFormatSubType() != GameFormat.FormatSubType.BLOCK:
+                    continue
+                if not format.getName().endswith("Block"):
+                    continue
+                blockFormats.append(format)
+            blockFormats.sort(key=cmp_to_key(GameFormat.compareTo))  # GameFormat will be sorted by Index!
+            return blockFormats
+
+        def getArchivedMap(self):
+            coreList = {}
+            for format in self.naturallyOrdered:
+                if format.getFormatType() == GameFormat.FormatType.ARCHIVED:
+                    alpha = format.getName()[0:1]
+                    if alpha not in coreList:
+                        coreList[alpha] = []
+                    coreList.get(alpha).append(format)
+            return coreList
+
+        def getStandard(self):
+            return self.map.get("Standard")
+
+        def getExtended(self):
+            return self.map.get("Extended")
+
+        def getPioneer(self):
+            return self.map.get("Pioneer")
+
+        def getHistoric(self):
+            return self.map.get("Historic")
+
+        def getModern(self):
+            return self.map.get("Modern")
+
+        def getLegacy(self):
+            return self.map.get("Legacy")
+
+        def getVintage(self):
+            return self.map.get("Vintage")
+
+        def getPremodern(self):
+            return self.map.get("Premodern")
+
+        def getPauper(self):
+            return self.map.get("Pauper")
+
+        def getFormat(self, format):
+            return self.map.get(format)
+
+        def getFormatOfDeck(self, deck):
+            for gf in self.reverseDateOrdered:
+                if gf.isDeckLegal(deck):
+                    return gf
+            return GameFormat.NoFormat
+
+        def getAllFormatsOfCard(self, card):
+            result = set()
+            for gf in self.naturallyOrdered:
+                if gf.getFilterRules().test(card):
+                    result.add(gf)
+            if len(result) == 0:
+                result.add(GameFormat.NoFormat)
+            return result
+
+        def getAllFormatsOfDeck(self, deck, exhaustive=False):
+            result = []
+            coveredTypes = set()
+            allCards = deck.getAllCardsInASinglePool()
+            for gf in self.reverseDateOrdered:
+                if gf.getFormatType() == GameFormat.FormatType.DIGITAL and not exhaustive:
+                    # exclude Digital formats from lists for now
+                    continue
+                if gf.getFormatSubType() == GameFormat.FormatSubType.COMMANDER:
+                    # exclude Commander format as other deck checks are not performed here
+                    continue
+                if (gf.getFormatType() == GameFormat.FormatType.ARCHIVED
+                        and gf.getFormatSubType() in coveredTypes and not exhaustive):
+                    # exclude duplicate formats - only keep first of e.g. Standard archived
+                    continue
+                if gf.isPoolLegal(allCards):
+                    if gf not in result:
+                        result.append(gf)
+                    coveredTypes.add(gf.getFormatSubType())
+            if len(result) == 0:
+                result.append(GameFormat.NoFormat)
+            result.sort(key=cmp_to_key(GameFormat.compareTo))
+            return result
+
+        def add(self, item):
+            self.naturallyOrdered.append(item)
+
+    class InverseDateComparator:
+        def compare(self, gf1, gf2):
+            if (gf1 is None) or (gf2 is None):
+                return 1
+            if gf2.formatType != gf1.formatType:
+                return gf1.formatType - gf2.formatType
+            if gf2.formatSubType != gf1.formatSubType:
+                return gf1.formatSubType - gf2.formatSubType
+            if gf1.formatType == GameFormat.FormatType.ARCHIVED:
+                if gf1.effectiveDate is not gf2.effectiveDate:  # for matching dates or default dates default to name sorting
+                    return ((gf1.effectiveDate > gf2.effectiveDate)
+                            - (gf1.effectiveDate < gf2.effectiveDate))
+            return (gf1.name > gf2.name) - (gf1.name < gf2.name)
+
+
+GameFormat.NoFormat = GameFormat("(none)", GameFormat.parseDate(GameFormat.DEFAULTDATE), None, None, None, False,
+                                 None, None, 0x7fffffff, GameFormat.FormatType.CUSTOM, GameFormat.FormatSubType.CUSTOM)
 ```

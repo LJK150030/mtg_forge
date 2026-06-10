@@ -70,7 +70,7 @@ classDiagram
 
 ## Design Description
 
-CardProperty is a stateless utility class providing a single public static predicate, `cardHasProperty`, that evaluates whether a given `Card` satisfies a named textual property within the current game context. It serves as the central interpreter for Forge's card-scripting property language, translating string tokens (e.g. `YouCtrl`, `attacking`, `SharesColorWith`, `counters_GE9_P1P1`) into concrete checks against game state. Acting as a `Card` query helper, it collaborates broadly with the game model—resolving controllers and zones, consulting `Combat`, `AttackingBand`, and `AttackRequirement` for combat queries, inspecting `ManaCost`/`Mana`/`ColorSet` for cost and color tests, and delegating to `SpellAbility`/`CardTraitBase` and `AbilityUtils` for defined-object and validity resolution.
+CardProperty is a stateless utility class providing a single public static predicate, `cardHasProperty`, that evaluates whether a given `Card` satisfies a named textual property within the current game context. It serves as the central interpreter for Forge's card-scripting property language, translating string tokens (e.g. `YouCtrl`, `attacking`, `SharesColorWith`, `counters_GE9_P1P1`) into concrete checks against game state. Acting as a `Card` query helper, it collaborates broadly with the game modelâ€”resolving controllers and zones, consulting `Combat`, `AttackingBand`, and `AttackRequirement` for combat queries, inspecting `ManaCost`/`Mana`/`ColorSet` for cost and color tests, and delegating to `SpellAbility`/`CardTraitBase` and `AbilityUtils` for defined-object and validity resolution.
 
 Its design intent is a large, ordered if/else chain dispatching on property prefixes, deliberately handling phased-out cards and last-known-information (LKI) up front per the comprehensive rules, with any unrecognized property delegated to the card's current state. A private `hasTimestampMatch` helper supports identity comparisons that respect game timestamps rather than object reference.
 
@@ -2195,4 +2195,1674 @@ public class CardProperty {
         return match;
     }
 }
+```
+
+## Python
+`forge/game/card/CardProperty.py`
+
+```python
+import functools
+import re
+
+from forge.StaticData import StaticData
+from forge.card.CardDb import CardDb
+from forge.card.ColorSet import ColorSet
+from forge.card.MagicColor import MagicColor
+from forge.card.mana.ManaCost import ManaCost
+from forge.card.mana.ManaCostShard import ManaCostShard
+from forge.game.CardTraitBase import CardTraitBase
+from forge.game.EvenOdd import EvenOdd
+from forge.game.Game import Game
+from forge.game.GameEntity import GameEntity
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.combat.AttackRequirement import AttackRequirement
+from forge.game.combat.AttackingBand import AttackingBand
+from forge.game.combat.Combat import Combat
+from forge.game.combat.CombatUtil import CombatUtil
+from forge.game.mana.Mana import Mana
+from forge.game.player.Player import Player
+from forge.game.spellability.OptionalCost import OptionalCost
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.spellability.SpellAbilityStackInstance import SpellAbilityStackInstance
+from forge.game.zone.Zone import Zone
+from forge.game.zone.ZoneType import ZoneType
+from forge.item.PaperCard import PaperCard
+from forge.util.Expressions import Expressions
+from forge.util.IterableUtil import IterableUtil
+from forge.util.TextUtil import TextUtil
+from forge.util.collect.FCollection import FCollection
+from forge.util.collect.FCollectionView import FCollectionView
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CardPredicates import CardPredicates
+from forge.game.card.CardFactoryUtil import CardFactoryUtil
+from forge.game.card.CardUtil import CardUtil
+from forge.game.card.CounterType import CounterType
+
+
+class CardProperty:
+
+    @staticmethod
+    def cardHasProperty(card, property, sourceController, source, spellAbility):
+        game = card.getGame()
+        combat = game.getCombat()
+        # lki can't be null but it does return this
+        lki = game.getChangeZoneLKIInfo(card)
+        controller = lki.getController()
+
+        # CR 702.25b if card is phased out it will not count unless specifically asked for
+        if card.isPhasedOut():
+            if property.startswith("phasedOut"):
+                property = property[9:]
+            else:
+                return False
+
+        if property == "noName":
+            if not card.hasNoName():
+                return False
+        elif property.startswith("named"):
+            # by name can also have color names, so needs to happen before colors.
+            name = TextUtil.fastReplace(property[5:], ";", ",")  # workaround for card name with ","
+            name = TextUtil.fastReplace(name, "_", " ")
+            if not card.sharesNameWith(name):
+                return False
+        elif property == "NamedCard":
+            found = False
+            for name in source.getNamedCards():
+                if card.sharesNameWith(name):
+                    found = True
+                    break
+            return found
+        elif property == "NamedByRememberedPlayer":
+            for o in source.getRemembered():
+                if isinstance(o, Player):
+                    p = o
+                    if not card.sharesNameWith(p.getNamedCard()):
+                        return False
+        elif property.startswith("BorderColor"):
+            if card.borderColor().toString() not in property.upper():
+                return False
+        elif property == "Permanent":
+            if not card.isPermanent():
+                return False
+        elif property == "Historic":
+            if not card.isHistoric():
+                return False
+        elif property.startswith("CardUID_"):  # Protection with "doesn't remove effect"
+            if card.getId() != int(property.split("CardUID_")[1]):
+                return False
+        elif property.startswith("ChosenCard"):
+            chosen = source.getChosenCards()
+            i = chosen.indexOf(card)
+            if i == -1:
+                return False
+            if "Strict" in property and not chosen.get(i).equalsWithGameTimestamp(card):
+                return False
+        elif property == "nonChosenCard":
+            if source.hasChosenCard(card):
+                return False
+        elif property.startswith("ChosenMode"):
+            if card.getChosenMode() != property[10:]:
+                return False
+        elif property == "ChosenSector":
+            if not source.getChosenSector().equals(card.getSector()):
+                return False
+        elif property == "DifferentSector":
+            if source.getSector().equals(card.getSector()):
+                return False
+        elif property == "DoubleFaced":
+            if not card.isDoubleFaced():
+                return False
+        elif property == "FrontSide":
+            if card.isBackSide():
+                return False
+        elif property == "BackSide":
+            if not card.isBackSide():
+                return False
+        elif property == "CanTransform":
+            if not card.isTransformable():
+                return False
+        elif property == "Transformed":
+            if not card.isTransformed():
+                return False
+        elif property == "Flip":
+            if not card.isFlipCard():
+                return False
+        elif property == "Split":
+            if not card.isSplitCard():
+                return False
+        elif property == "AdventureCard":
+            if not card.isAdventureCard():
+                return False
+        elif property == "IsRingbearer":
+            if not card.isRingBearer():
+                return False
+        elif property == "IsTriggerRemembered":
+            found = False
+            for o in spellAbility.getTriggerRemembered():
+                if isinstance(o, Card):
+                    trigRem = o
+                    if trigRem.equalsWithGameTimestamp(card):
+                        found = True
+                        break
+            if not found:
+                return False
+        elif property.startswith("YouCtrl"):
+            if not controller.equals(sourceController):
+                return False
+        elif property.startswith("YourTeamCtrl"):
+            if controller.getTeam() != sourceController.getTeam():
+                return False
+        elif property.startswith("YouDontCtrl"):
+            if controller.equals(sourceController):
+                return False
+        elif property.startswith("OppCtrl"):
+            if not controller.getOpponents().contains(sourceController):
+                return False
+        elif property.startswith("ChosenCtrl"):
+            if not controller.equals(source.getChosenPlayer()):
+                return False
+        elif property.startswith("DefenderCtrl"):
+            if not game.getPhaseHandler().inCombat():
+                return False
+            if property.endswith("ForRemembered"):
+                if not source.hasRemembered():
+                    return False
+                if combat.getDefendingPlayerRelatedTo(source.getFirstRemembered()) != controller:
+                    return False
+            else:
+                if combat.getDefendingPlayerRelatedTo(source) != controller:
+                    return False
+        elif property.startswith("OppProtect"):
+            if card.getProtectingPlayer() is None \
+                    or not sourceController.getOpponents().contains(card.getProtectingPlayer()):
+                return False
+        elif property.startswith("ProtectedBy"):
+            if card.getProtectingPlayer() is None:
+                return False
+            lp = AbilityUtils.getDefinedPlayers(source, property[12:], spellAbility)
+            if not lp.contains(card.getProtectingPlayer()):
+                return False
+        elif property == "Defending":
+            if game.getCombat() is None or not game.getCombat().getAttackersAndDefenders().values().contains(card):
+                return False
+        elif property.startswith("DefendingPlayer"):
+            p = controller if property.endswith("Ctrl") else card.getOwner()
+            if not game.getPhaseHandler().inCombat():
+                return False
+            if not combat.isPlayerAttacked(p):
+                return False
+        elif property.startswith("EnchantedPlayer"):
+            p = controller if property.endswith("Ctrl") else card.getOwner()
+            o = source.getEntityAttachedTo()
+            if isinstance(o, Player):
+                if not p.equals(o):
+                    return False
+            else:  # source not enchanting a player
+                return False
+        elif property.startswith("EnchantedController"):
+            p = controller if property.endswith("Ctrl") else card.getOwner()
+            o = source.getEntityAttachedTo()
+            if isinstance(o, Card):
+                if not p.equals(o.getController()):
+                    return False
+            else:  # source not enchanting a card
+                return False
+        elif property.startswith("RememberedPlayer"):
+            p = controller if property.endswith("Ctrl") else card.getOwner()
+            if not source.hasRemembered():
+                newCard = game.getCardState(source)
+                if not newCard.isRemembered(p):
+                    return False
+            if not source.isRemembered(p):
+                return False
+        elif property == "targetedBy":
+            if not isinstance(spellAbility, SpellAbility):
+                return False
+            sa = spellAbility
+            if not sa.getRootAbility().isTargeting(card):
+                return False
+        elif property == "TargetedPlayerCtrl":
+            if not AbilityUtils.getDefinedPlayers(source, "TargetedPlayer", spellAbility).contains(controller):
+                return False
+        elif property.startswith("ActivePlayerCtrl"):
+            if not game.getPhaseHandler().isPlayerTurn(controller):
+                return False
+        elif property.startswith("YouOwn"):
+            if not card.getOwner().equals(sourceController):
+                return False
+        elif property.startswith("YouDontOwn"):
+            if card.getOwner().equals(sourceController):
+                return False
+        elif property.startswith("OppOwn"):
+            if not card.getOwner().getOpponents().contains(sourceController):
+                return False
+        elif property == "TargetedPlayerOwn":
+            if not AbilityUtils.getDefinedPlayers(source, "TargetedPlayer", spellAbility).contains(card.getOwner()):
+                return False
+        elif property.startswith("OwnedBy"):
+            valid = property[8:]
+            if not card.getOwner().isValid(valid, sourceController, source, spellAbility):
+                lp = AbilityUtils.getDefinedPlayers(source, valid, spellAbility)
+                if not lp.contains(card.getOwner()):
+                    return False
+        elif property.startswith("ControlledBy"):
+            valid = property[13:]
+            if not controller.isValid(valid, sourceController, source, spellAbility):
+                lp = AbilityUtils.getDefinedPlayers(source, valid, spellAbility)
+                if not lp.contains(controller):
+                    return False
+        elif property.startswith("OwnerDoesntControl"):
+            if card.getOwner().equals(controller):
+                return False
+        elif property.startswith("ControllerControls"):
+            type = property[18:]
+            if type.startswith("More"):
+                realType = type.split("More")[1]
+                cards = CardLists.getType(controller.getCardsIn(ZoneType.Battlefield), realType)
+                yours = CardLists.getType(sourceController.getCardsIn(ZoneType.Battlefield), realType)
+                if cards.size() <= yours.size():
+                    return False
+            elif type.startswith("AtLeastAsMany"):
+                realType = type.split("AtLeastAsMany")[1]
+                cards = CardLists.getType(controller.getCardsIn(ZoneType.Battlefield), realType)
+                yours = CardLists.getType(sourceController.getCardsIn(ZoneType.Battlefield), realType)
+                if cards.size() < yours.size():
+                    return False
+            else:
+                cards = controller.getCardsIn(ZoneType.Battlefield)
+                if "_" in type:
+                    parts = type.split("_", 1)
+                    found = CardLists.getType(cards, parts[0])
+                    num = AbilityUtils.calculateAmount(card, parts[1][2:], spellAbility)
+                    if not Expressions.compare(found.size(), parts[1][0:2], num):
+                        return False
+                elif CardLists.getType(cards, type).isEmpty():
+                    return False
+        elif property.startswith("StrictlyOther"):
+            if card.equalsWithGameTimestamp(source):
+                return False
+        elif property.startswith("Other"):
+            if card.equals(source):
+                return False
+        elif property.startswith("StrictlySelf"):
+            if not card.equalsWithGameTimestamp(source):
+                return False
+        elif property.startswith("Self"):
+            if not card.equals(source):
+                return False
+        elif property.startswith("ExiledByYou"):
+            if card.getExiledBy() is None:
+                return False
+            if not card.getExiledBy().equals(sourceController):
+                return False
+        elif property.startswith("ExiledWithSourceLKI"):
+            exiled = card.getZone().getCardsAddedThisTurn(None)
+            exiled.sort(key=functools.cmp_to_key(CardPredicates.compareByGameTimestamp()))
+            idx = (len(exiled) - 1 - exiled[::-1].index(card)) if card in exiled else -1
+            if idx == -1:
+                return False
+            lkiExiled = exiled[idx]
+
+            if lkiExiled.getExiledWith() is None:
+                return False
+
+            host = source
+            # Static Abilities doesn't have spellAbility or OriginalHost
+            if spellAbility is not None:
+                host = spellAbility.getOriginalHost()
+                if host is None:
+                    host = spellAbility.getHostCard()
+            if not lkiExiled.getExiledWith().equalsWithGameTimestamp(host):
+                return False
+        elif property.startswith("ExiledWithSource"):
+            if card.getExiledWith() is None:
+                return False
+
+            host = source
+            # Static Abilities doesn't have spellAbility or OriginalHost
+            if spellAbility is not None:
+                host = spellAbility.getOriginalHost()
+                if host is None:
+                    host = spellAbility.getHostCard()
+            if not source.hasExiledCard(card) or not card.getExiledWith().equalsWithGameTimestamp(host):
+                return False
+        elif property == "ExiledWithEffectSource":
+            if card.getExiledWith() is None:
+                return False
+            if not card.getExiledWith().equalsWithGameTimestamp(source.getEffectSource()):
+                return False
+        elif property == "EncodedWithSource":
+            if not card.getEncodedCards().contains(source):
+                return False
+        elif property == "EffectSource":
+            if not source.isImmutable():
+                return False
+
+            if not card.equals(source.getEffectSource()):
+                return False
+        elif property == "CanBeSacrificedBy" and isinstance(spellAbility, SpellAbility):
+            # used for Emerge and Offering, these are SpellCost, not effect
+            if not card.canBeSacrificedBy(spellAbility, False):
+                return False
+        elif property == "Attached":
+            if not source.hasCardAttachment(card):
+                return False
+        elif property.startswith("AttachedTo"):
+            restriction = property.split("AttachedTo ")[1]
+
+            if not card.isAttachedToEntity():
+                return False
+
+            if not card.getEntityAttachedTo().isValid(restriction, sourceController, source, spellAbility):
+                # only few cases need players
+                coll = AbilityUtils.getDefinedPlayers(source, restriction, spellAbility) if "Player" in restriction \
+                    else AbilityUtils.getDefinedCards(source, restriction, spellAbility)
+                if not coll.contains(card.getEntityAttachedTo()):
+                    return False
+        elif property == "NameNotEnchantingEnchantedPlayer":
+            enchantedPlayer = source.getPlayerAttachedTo()
+            if enchantedPlayer is None or enchantedPlayer.isEnchantedBy(card.getName()):
+                return False
+        elif property.startswith("EnchantedBy"):
+            if property == "EnchantedBy":
+                if not card.isEnchantedBy(source) and not card.equals(source.getEntityAttachedTo()):
+                    return False
+            else:
+                restriction = property.split("EnchantedBy ")[1]
+                if restriction == "Imprinted":
+                    for c in source.getImprintedCards():
+                        if not card.isEnchantedBy(c) and not card.equals(c.getEntityAttachedTo()):
+                            return False
+                elif restriction == "Targeted":
+                    for c in AbilityUtils.getDefinedCards(source, "Targeted", spellAbility):
+                        if not card.isEnchantedBy(c) and not card.equals(c.getEntityAttachedTo()):
+                            return False
+                else:  # EnchantedBy Aura.Other
+                    for aura in card.getEnchantedBy():
+                        if aura.isValid(restriction, sourceController, source, spellAbility):
+                            return True
+                    return False
+        elif property.startswith("Enchanted"):
+            if not source.equals(card.getEntityAttachedTo()):
+                return False
+        elif property.startswith("CanEnchant"):
+            restriction = property[10:]
+            if restriction == "EquippedBy":
+                if not source.isEquipping() or not source.getEquipping().canBeAttached(card, None):
+                    return False
+            if restriction == "Remembered":
+                for rem in source.getRemembered():
+                    if not isinstance(rem, Card) or not rem.canBeAttached(card, None):
+                        return False
+            elif restriction == "Source":
+                if not source.canBeAttached(card, None):
+                    return False
+        elif property.startswith("CanBeEnchantedBy"):
+            if property[16:] == "Targeted":
+                for c in AbilityUtils.getDefinedCards(source, "Targeted", spellAbility):
+                    if not card.canBeAttached(c, None):
+                        return False
+            else:
+                if not card.canBeAttached(source, None):
+                    return False
+        elif property.startswith("EquippedBy") or property.startswith("AttachedBy"):
+            prop = property[10:]
+            if prop and prop.strip():
+                found = False
+                for c in AbilityUtils.getDefinedCards(source, prop, spellAbility):
+                    if card.hasCardAttachment(c):
+                        found = True
+                        break
+                if not found:
+                    return False
+            elif not card.hasCardAttachment(source):
+                return False
+        elif property.startswith("FortifiedBy"):
+            if not card.hasCardAttachment(source):
+                return False
+        elif property.startswith("CanBeAttachedBy"):
+            if not card.canBeAttached(source, None):
+                return False
+        elif property.startswith("CanBeTargetedBy"):
+            def_ = property[15:]
+            targetingSA = AbilityUtils.getDefinedSpellAbilities(source, def_, spellAbility).get(0)
+            while targetingSA is not None:
+                if targetingSA.usesTargeting() and not targetingSA.canTarget(card):
+                    return False
+                targetingSA = targetingSA.getSubAbility()
+        elif property.startswith("HauntedBy"):
+            if not card.isHauntedBy(source):
+                return False
+        elif property.startswith("notTributed"):
+            if card.isTributed():
+                return False
+        elif property.startswith("madness"):
+            if not card.isMadness():
+                return False
+        elif property.startswith("Paired"):
+            if not card.isPaired():
+                return False
+            if property.endswith("With") and card.getPairedWith() != source:
+                return False
+        elif property.startswith("Above"):  # "Are Above" Source
+            cards = card.getOwner().getCardsIn(ZoneType.Graveyard)
+            if cards.indexOf(source) >= cards.indexOf(card):
+                return False
+        elif property.startswith("DirectlyAbove"):  # "Are Directly Above" Source
+            cards = card.getOwner().getCardsIn(ZoneType.Graveyard)
+            if cards.indexOf(card) - cards.indexOf(source) != 1:
+                return False
+        elif property.startswith("TopGraveyardCreature"):
+            cards = CardLists.filter(card.getOwner().getCardsIn(ZoneType.Graveyard), CardPredicates.CREATURES)
+            cards.reverse()
+            if cards.isEmpty() or not card.equals(cards.get(0)):
+                return False
+        elif property.startswith("TopGraveyard"):
+            cards = CardCollection(card.getOwner().getCardsIn(ZoneType.Graveyard))
+            cards.reverse()
+            if re.fullmatch(r"[0-9][0-9]?", property[12:]):
+                n = int(property[12:])
+                num = min(n, cards.size())
+                newlist = CardCollection()
+                for i in range(num):
+                    newlist.add(cards.get(i))
+                if cards.isEmpty() or not newlist.contains(card):
+                    return False
+            else:
+                if cards.isEmpty() or not card.equals(cards.get(0)):
+                    return False
+        elif property.startswith("BottomGraveyard"):
+            cards = card.getOwner().getCardsIn(ZoneType.Graveyard)
+            if cards.isEmpty() or not card.equals(cards.get(0)):
+                return False
+        elif property.startswith("TopLibrary") or property.startswith("BottomLibrary"):
+            cards = card.getOwner().getCardsIn(ZoneType.Library)
+            if property != "TopLibrary":
+                if "_" in property:
+                    cards = CardLists.getValidCards(cards, property.split("_")[1],
+                                                    sourceController, source, spellAbility)
+                if property.startswith("Bottom"):
+                    cards = CardCollection(cards)
+                    cards.reverse()
+            if cards.isEmpty() or not card.equals(cards.get(0)):
+                return False
+        elif property.startswith("Cloned"):
+            if card.getCloneOrigin() is None or not card.getCloneOrigin().equals(source):
+                return False
+        elif property.startswith("SharesCMCWith"):
+            if property == "SharesCMCWith":
+                if not card.sharesCMCWith(source):
+                    return False
+            else:
+                restriction = property.split("SharesCMCWith ")[1]
+                list = AbilityUtils.getDefinedCards(source, restriction, spellAbility)
+                return list.anyMatch(CardPredicates.sharesCMCWith(card))
+        elif property.startswith("SharesColorWith"):
+            # if card is colorless, it can't share colors
+            if card.isColorless():
+                return False
+            if property == "SharesColorWith":
+                if not card.sharesColorWith(source):
+                    return False
+            else:
+                # Special case to prevent list from comparing with itself
+                if property.startswith("SharesColorWithOther"):
+                    restriction = property.split("SharesColorWithOther ")[1]
+                    list = AbilityUtils.getDefinedCards(source, restriction, spellAbility)
+                    list.remove(card)
+                    return list.anyMatch(CardPredicates.sharesColorWith(card))
+
+                restriction = property.split("SharesColorWith ")[1]
+                if restriction == "MostProminentColor":
+                    mask = CardFactoryUtil.getMostProminentColors(game.getCardsIn(ZoneType.Battlefield))
+                    if not card.getColor().hasAnyColor(mask):
+                        return False
+                elif restriction == "LastCastThisTurn":
+                    c = game.getStack().getSpellsCastThisTurn()
+                    if len(c) == 0 or not card.sharesColorWith(c[len(c) - 1]):
+                        return False
+                elif restriction == "ActivationColor":
+                    castSA = game.getStack().getInstanceMatchingSpellAbilityID(spellAbility)
+                    if castSA is None:
+                        return False
+                    payingMana = castSA.getSpellAbility().getPayingMana()
+                    # even if the cost was raised, we only care about mana from activation part
+                    # since this can only be 1 currently with Protective Sphere, let's just assume it's the first shard spent for easy handling
+                    if len(payingMana) == 0 or not card.getColor().hasAnyColor(payingMana[0].getColor()):
+                        return False
+                elif restriction == "TriggeredProduced":
+                    root = spellAbility.getRootAbility()
+                    prod = root.getTriggeringObject(AbilityKey.Produced)
+                    if not isinstance(prod, str):
+                        return False
+                    produced = prod
+                    cs = ColorSet.fromNames(produced.split(" "))
+                    if not card.getColor().hasAnyColor(cs.getColor()):
+                        return False
+                else:
+                    if not AbilityUtils.getDefinedCards(source, restriction, spellAbility).anyMatch(CardPredicates.sharesColorWith(card)):
+                        return False
+        elif property.startswith("MostProminentColor"):
+            # MostProminentColor <color>
+            # e.g. MostProminentColor black
+            props = property.split(" ")
+            if len(props) == 1:
+                print("WARNING! Using MostProminentColor property without a color.")
+                return False
+            color = props[1]
+
+            mostProm = CardFactoryUtil.getMostProminentColors(game.getCardsIn(ZoneType.Battlefield))
+            return ColorSet.fromMask(mostProm).hasAnyColor(MagicColor.fromName(color))
+        elif property.startswith("MostProminentCreatureTypeInLibrary"):
+            list = sourceController.getCardsIn(ZoneType.Library)
+            for s in CardFactoryUtil.getMostProminentCreatureType(list):
+                if not card.getType().hasCreatureType(s):
+                    return False
+        elif property.startswith("sharesCreatureTypeWith"):
+            if property == "sharesCreatureTypeWith":
+                if not card.sharesCreatureTypeWith(source):
+                    return False
+            else:
+                restriction = property.split(" ", 1)[1]
+                if restriction == "Commander":
+                    cmdrs = sourceController.getCommanders()
+                    for cmdr in cmdrs:
+                        cmdr = game.getCardState(cmdr)
+                        # if your commander is in a hidden zone or phased out
+                        # it's considered to have no creature types
+                        if cmdr.getZone().getZoneType().isHidden() or cmdr.isPhasedOut():
+                            continue
+                        if card.sharesCreatureTypeWith(cmdr):
+                            return True
+                    return False
+                else:
+                    def_ = AbilityUtils.getDefinedCards(source, restriction, spellAbility)
+                    if "WithAll" in property:
+                        if not def_.allMatch(CardPredicates.sharesCreatureTypeWith(card)):
+                            return False
+                    elif not def_.anyMatch(CardPredicates.sharesCreatureTypeWith(card)):
+                        return False
+        elif property.startswith("sharesCardTypeWith"):
+            if property == "sharesCardTypeWith":
+                if not card.sharesCardTypeWith(source):
+                    return False
+            else:
+                # Special case to prevent list from comparing with itself
+                if property.startswith("sharesCardTypeWithOther"):
+                    restriction = property.split("sharesCardTypeWithOther ")[1]
+                    list = AbilityUtils.getDefinedCards(source, restriction, spellAbility)
+                    list.remove(card)
+                    return IterableUtil.any(list, CardPredicates.sharesCardTypeWith(card))
+
+                restriction = property.split("sharesCardTypeWith ")[1]
+                if restriction == "Imprinted":
+                    imprinted = source.getImprintedCards()
+                    first = imprinted.get(0) if not imprinted.isEmpty() else None
+                    if not source.hasImprintedCard() or not card.sharesCardTypeWith(first):
+                        return False
+                elif restriction == "EachTopLibrary":
+                    cards = CardCollection()
+                    for p in game.getPlayers():
+                        top = p.getCardsIn(ZoneType.Library).get(0)
+                        cards.add(top)
+                    for c in cards:
+                        if card.sharesCardTypeWith(c):
+                            return True
+                    return False
+                else:
+                    if not AbilityUtils.getDefinedCards(source, restriction, spellAbility).anyMatch(CardPredicates.sharesCardTypeWith(card)):
+                        return False
+        elif property.startswith("sharesAllCardTypesWithOther"):
+            restriction = property.split("sharesAllCardTypesWithOther ")[1]
+            list = AbilityUtils.getDefinedCards(source, restriction, spellAbility)
+            list.remove(card)
+            return list.anyMatch(CardPredicates.sharesAllCardTypesWith(card))
+        elif property.startswith("sharesLandTypeWith"):
+            restriction = property.split("sharesLandTypeWith ")[1]
+            if not AbilityUtils.getDefinedCards(source, restriction, spellAbility).anyMatch(CardPredicates.sharesLandTypeWith(card)):
+                return False
+        elif property == "sharesPermanentTypeWith":
+            if not card.sharesPermanentTypeWith(source):
+                return False
+        elif property == "canProduceSameManaTypeWith":
+            if not card.canProduceSameManaTypeWith(source):
+                return False
+        elif property.startswith("canProduceManaColor"):
+            color = property.split("canProduceManaColor ")[1]
+            for ma in card.getManaAbilities():
+                if ma.canProduce(MagicColor.toShortString(color)):
+                    return True
+            return False
+        elif property == "canProduceMana":
+            return not card.getManaAbilities().isEmpty()
+        elif property.startswith("sameName"):
+            if not card.sharesNameWith(source):
+                return False
+        elif property.startswith("sharesNameWith"):
+            if property == "sharesNameWith":
+                if not card.sharesNameWith(source):
+                    return False
+            else:
+                restriction = property.split("sharesNameWith ")[1]
+                if restriction == "YourGraveyard":
+                    return sourceController.getCardsIn(ZoneType.Graveyard).anyMatch(CardPredicates.sharesNameWith(card))
+                elif restriction == ZoneType.Graveyard.toString():
+                    return game.getCardsIn(ZoneType.Graveyard).anyMatch(CardPredicates.sharesNameWith(card))
+                elif restriction == ZoneType.Battlefield.toString():
+                    return game.getCardsIn(ZoneType.Battlefield).anyMatch(CardPredicates.sharesNameWith(card))
+                elif restriction == "ThisTurnCast":
+                    return any(CardPredicates.sharesNameWith(card)(x) for x in CardUtil.getThisTurnCast("Card", source, spellAbility, sourceController))
+                elif restriction == "MovedToGrave":
+                    if not isinstance(spellAbility, SpellAbility):
+                        root = spellAbility.getRootAbility()
+                        if root is not None and (root.getPaidList("MovedToGrave", True) is not None) \
+                                and not root.getPaidList("MovedToGrave", True).isEmpty():
+                            cards = root.getPaidList("MovedToGrave", True)
+                            for c in cards:
+                                name = c.getName()
+                                if not name:
+                                    name = c.getPaperCard().getName()
+                                if card.getName() == name:
+                                    return True
+                    return False
+                elif restriction == "NonToken":
+                    return not CardLists.filter(game.getCardsIn(ZoneType.Battlefield),
+                                                CardPredicates.NON_TOKEN, CardPredicates.sharesNameWith(card)).isEmpty()
+                elif restriction == "TriggeredCard":
+                    if not isinstance(spellAbility, SpellAbility):
+                        print("Looking at TriggeredCard but no SA?")
+                    else:
+                        triggeredCard = spellAbility.getRootAbility().getTriggeringObject(AbilityKey.Card)
+                        if triggeredCard is not None and card.sharesNameWith(triggeredCard):
+                            return True
+                    return False
+                else:
+                    iterable = AbilityUtils.getDefinedCards(source, restriction, spellAbility)
+                    if not iterable.anyMatch(CardPredicates.sharesNameWith(card)):
+                        return False
+        elif property.startswith("doesNotShareNameWith"):
+            if property == "doesNotShareNameWith":
+                if card.sharesNameWith(source):
+                    return False
+            else:
+                restriction = property.split("doesNotShareNameWith ")[1]
+                if restriction.startswith("Remembered") or restriction.startswith("Imprinted"):
+                    list = AbilityUtils.getDefinedCards(source, restriction, spellAbility)
+                    return not list.anyMatch(CardPredicates.sharesNameWith(card))
+                elif restriction == "YourGraveyard":
+                    return not sourceController.getCardsIn(ZoneType.Graveyard).anyMatch(CardPredicates.sharesNameWith(card))
+                elif restriction == "OtherYourBattlefield":
+                    # Obviously it's going to share a name with itself, so consider that in the
+                    list = CardLists.filter(sourceController.getCardsIn(ZoneType.Battlefield), CardPredicates.sharesNameWith(card))
+
+                    if list.size() == 1:
+                        c = list.getFirst()
+                        if c.equalsWithGameTimestamp(card):
+                            list.remove(card)
+                    return list.isEmpty()
+                else:
+                    list = CardLists.getValidCards(game.getCardsIn(ZoneType.Battlefield), restriction,
+                                                   sourceController, source, spellAbility)
+                    return not list.anyMatch(CardPredicates.sharesNameWith(card))
+        elif property.startswith("sharesControllerWith"):
+            if property == "sharesControllerWith":
+                if not card.sharesControllerWith(source):
+                    return False
+            else:
+                restriction = property.split("sharesControllerWith ")[1]
+                list = AbilityUtils.getDefinedCards(source, restriction, spellAbility)
+                if not list.anyMatch(CardPredicates.sharesControllerWith(card)):
+                    return False
+        elif property.startswith("sharesOwnerWith"):
+            if property == "sharesOwnerWith":
+                if not card.getOwner().equals(source.getOwner()):
+                    return False
+            else:
+                restriction = property.split("sharesOwnerWith ")[1]
+                def_ = AbilityUtils.getDefinedCards(source, restriction, spellAbility)
+                if not def_.allMatch(CardPredicates.isOwner(card.getOwner())):
+                    return False
+        elif property.startswith("SecondSpellCastThisTurn"):
+            cards = CardUtil.getThisTurnCast("Card", source, spellAbility, sourceController)
+            if len(cards) < 2:
+                return False
+            if not cards[1].equalsWithGameTimestamp(card):
+                return False
+        elif property == "ThisTurnCast":
+            for c in CardUtil.getThisTurnCast("Card", source, spellAbility, sourceController):
+                if card.equals(c):
+                    return True
+            return False
+        elif property.startswith("EnteredUnder"):
+            u = card.getTurnInController()
+            if u is None:
+                return False
+            valid = property[13:]
+            if not u.isValid(valid, sourceController, source, spellAbility):
+                lp = AbilityUtils.getDefinedPlayers(source, valid, spellAbility)
+                if not lp.contains(u):
+                    return False
+        elif property == "EnteredSinceYourLastTurn":
+            if card.getTurnInZone() <= sourceController.getLastTurnNr():
+                return False
+        elif property.startswith("ThisTurnEnteredFrom"):
+            restrictions = property.split("ThisTurnEnteredFrom_")[1]
+            res = restrictions.split("_")
+            origin = ZoneType.smartValueOf(res[0])
+
+            if not card.enteredThisTurn():
+                return False
+
+            if not card.getZone().isCardAddedThisTurn(card, origin):
+                return False
+        elif property.startswith("ThisTurnEntered"):
+            # only check if it entered the Zone this turn
+            if not card.enteredThisTurn():
+                return False
+            if property != "ThisTurnEntered":  # to confirm specific zones / player
+                your = "Your" in property
+                where = ZoneType.smartValueOf(property[19:] if your else property[15:])
+                z = sourceController.getZone(where)
+                if card not in z.getCardsAddedThisTurn(None):
+                    return False
+                if your:  # for corner cases of controlling other player
+                    if not card.getOwner().equals(sourceController):
+                        return False
+        elif property == "DiscardedThisTurn":
+            if not card.enteredThisTurn():
+                return False
+            if not card.wasDiscarded():
+                return False
+        elif property == "surveilledThisTurn":
+            if not card.enteredThisTurn():
+                return False
+            if not card.wasSurveilled():
+                return False
+        elif property == "milledThisTurn":
+            if not card.enteredThisTurn():
+                return False
+            if not card.wasMilled():
+                return False
+        elif property == "hasABasicLandType":
+            if not card.hasABasicLandType():
+                return False
+        elif property == "hasANonBasicLandType":
+            if not card.hasANonBasicLandType():
+                return False
+        elif property.startswith("hasKeyword"):
+            # "withFlash" would find Flashback cards, add this to fix Mystical Teachings
+            if not card.hasKeyword(property[10:]):
+                return False
+        elif property.startswith("with"):
+            # ... Card keywords
+            if property.startswith("without") and card.hasStartOfUnHiddenKeyword(property[7:]):
+                return False
+            if not property.startswith("without") and not card.hasStartOfUnHiddenKeyword(property[4:]):
+                return False
+        elif property.startswith("activated"):
+            if not card.activatedThisTurn():
+                return False
+        elif property.startswith("tapped"):
+            if not card.isTapped():
+                return False
+        elif property.startswith("untapped"):
+            if not card.isUntapped():
+                return False
+        elif property.startswith("faceDown"):
+            if not card.isFaceDown():
+                return False
+        elif property.startswith("faceUp"):
+            if card.isFaceDown():
+                return False
+        elif property.startswith("turnedFaceUpThisTurn"):
+            if not card.wasTurnedFaceUpThisTurn():
+                return False
+        elif property.startswith("phasedOut"):
+            if not card.isPhasedOut():
+                return False
+        elif property.startswith("phasedIn"):
+            if card.isPhasedOut():
+                return False
+        elif property == "manifested":
+            if not card.isManifested():
+                return False
+        elif property == "cloaked":
+            if not card.isCloaked():
+                return False
+        elif property.startswith("DrawnThisTurn"):
+            if not card.getDrawnThisTurn():
+                return False
+        elif property.startswith("FoughtThisTurn"):
+            if not card.getFoughtThisTurn():
+                return False
+        elif property.startswith("firstTurnControlled"):
+            if not card.isFirstTurnControlled():
+                return False
+        elif property.startswith("startedTheTurnUntapped"):
+            if not card.hasStartedTheTurnUntapped():
+                return False
+        elif property.startswith("cameUnderControlSinceLastUpkeep"):
+            if not card.cameUnderControlSinceLastUpkeep():
+                return False
+        elif property == "attackedOrBlockedSinceYourLastUpkeep":
+            if not card.getDamageHistory().hasAttackedSinceLastUpkeepOf(sourceController) \
+                    and not card.getDamageHistory().hasBlockedSinceLastUpkeepOf(sourceController):
+                return False
+        elif property == "blockedOrBeenBlockedSinceYourLastUpkeep":
+            if not card.getDamageHistory().hasBeenBlockedSinceLastUpkeepOf(sourceController) \
+                    and not card.getDamageHistory().hasBlockedSinceLastUpkeepOf(sourceController):
+                return False
+        elif property.startswith("DamagedBy"):
+            prop = property[len("DamagedBy"):]
+            def_ = None
+            if prop.startswith(" "):
+                def_ = AbilityUtils.getDefinedCards(source, prop[1:], spellAbility)
+            found = False
+            for p in card.getDamageReceivedThisTurn():
+                dmgSource = game.getDamageLKI(p).getLeft()
+                if def_ is not None:
+                    for c in def_:
+                        if dmgSource.equalsWithGameTimestamp(c):
+                            found = True
+                elif len(prop) == 0 and dmgSource.equalsWithGameTimestamp(source):
+                    found = True
+                elif dmgSource.isValid(prop.split(";"), sourceController, source, spellAbility):
+                    found = True
+                if found:
+                    break
+            if not found:
+                return False
+        elif property == "isDamaged":  # with any damage
+            if card.getDamage() <= 0:
+                return False
+        elif property.startswith("Damaged"):  # gets cards that Damaged source
+            found = False
+            for p in source.getDamageReceivedThisTurn():
+                if game.getDamageLKI(p).getLeft().equalsWithGameTimestamp(card):
+                    found = True
+                    break
+            if not found:
+                return False
+        elif property.startswith("dealtCombatDamageThisCombat"):
+            if card.getDamageHistory().getThisCombatDamaged().isEmpty():
+                return False
+        elif property.startswith("dealtDamageToYouThisTurn"):
+            if card.getDamageHistory().getDamageDoneThisTurn(None, True, None, "You", card, sourceController, spellAbility) == 0:
+                return False
+        elif property.startswith("dealtDamageToOppThisTurn"):
+            if not card.hasDealtDamageToOpponentThisTurn():
+                return False
+        elif property.startswith("dealtCombatDamageThisTurn"):
+            if card.getDamageHistory().getDamageDoneThisTurn(True, True, None, property.split(" ")[1], card, sourceController, spellAbility) == 0:
+                return False
+        elif property.startswith("controllerWasDealtCombatDamageByThisTurn"):
+            if source.getDamageHistory().getDamageDoneThisTurn(True, True, None, "You", card, controller, spellAbility) == 0:
+                return False
+        elif property.startswith("controllerWasDealtDamageByThisTurn"):
+            if source.getDamageHistory().getDamageDoneThisTurn(None, True, None, "You", card, controller, spellAbility) == 0:
+                return False
+        elif property.startswith("wasDealtDamageThisTurn"):
+            if card.getAssignedDamage() == 0:
+                return False
+        elif property == "wasDealtNonCombatDamageThisTurn":
+            if card.getAssignedDamage(False, None) == 0:
+                return False
+        elif property.startswith("wasDealtExcessDamageThisTurn"):
+            if not card.hasBeenDealtExcessDamageThisTurn():
+                return False
+        elif property.startswith("wasDealtDamageByThisGame"):
+            idx = source.getDamageHistory().getThisGameDamaged().indexOf(card)
+            if idx == -1:
+                return False
+            c = source.getDamageHistory().getThisGameDamaged().get(idx)
+            if not c.equalsWithGameTimestamp(game.getCardState(card)):
+                return False
+        elif property.startswith("dealtDamageThisTurn"):
+            if card.getTotalDamageDoneBy() == 0:
+                return False
+        elif property.startswith("dealtDamagetoAny"):
+            return card.getDamageHistory().getHasdealtDamagetoAny()
+        elif property.startswith("attackedThisTurn"):
+            if card.getDamageHistory().getCreatureAttacksThisTurn() == 0:
+                return False
+        elif property.startswith("attackedBattleThisTurn"):
+            if not card.getDamageHistory().hasAttackedBattleThisTurn():
+                return False
+        elif property.startswith("attackedYouThisTurn"):
+            if not card.getDamageHistory().hasAttackedThisTurn(sourceController):
+                return False
+        elif property.startswith("attackedLastTurn"):
+            return card.getDamageHistory().getCreatureAttackedLastTurnOf(controller)
+        elif property.startswith("blockedThisTurn"):
+            if card.getBlockedThisTurn().isEmpty():
+                return False
+        elif property.startswith("notExertedThisTurn"):
+            if card.getExertedThisTurn() > 0:
+                return False
+        elif property.startswith("gotBlockedThisTurn"):
+            if card.getBlockedByThisTurn().isEmpty():
+                return False
+        elif property.startswith("greatestPower"):
+            cards = CardLists.filter(game.getCardsIn(ZoneType.Battlefield), CardPredicates.CREATURES)
+            if "ControlledBy" in property:
+                p = AbilityUtils.getDefinedPlayers(source, property.split("ControlledBy")[1], spellAbility)
+                cards = CardLists.filterControlledBy(cards, p)
+                # Kraven the Hunter LTB trigger
+                if not card.isLKI() and not cards.contains(card):
+                    return False
+            for crd in cards:
+                if crd.getNetPower() > card.getNetPower():
+                    return False
+        elif property.startswith("yardGreatestPower"):
+            cards = CardLists.filter(sourceController.getCardsIn(ZoneType.Graveyard), CardPredicates.CREATURES)
+            for crd in cards:
+                if crd.getNetPower() > card.getNetPower():
+                    return False
+        elif property.startswith("leastPower"):
+            cards = CardLists.filter(game.getCardsIn(ZoneType.Battlefield), CardPredicates.CREATURES)
+            if "ControlledBy" in property:
+                p = AbilityUtils.getDefinedPlayers(source, property.split("ControlledBy")[1], spellAbility)
+                cards = CardLists.filterControlledBy(cards, p)
+                if not cards.contains(card):
+                    return False
+            for crd in cards:
+                if crd.getNetPower() < card.getNetPower():
+                    return False
+        elif property.startswith("leastToughness"):
+            cards = CardLists.filter(game.getCardsIn(ZoneType.Battlefield), CardPredicates.CREATURES)
+            if "ControlledBy" in property:  # 4/25/2023 only used for adventure mode Death Ring
+                p = AbilityUtils.getDefinedPlayers(source, property.split("ControlledBy")[1], spellAbility)
+                cards = CardLists.filterControlledBy(cards, p)
+                if not cards.contains(card):
+                    return False
+            for crd in cards:
+                if crd.getNetToughness() < card.getNetToughness():
+                    return False
+        elif property.startswith("greatestCMC_"):
+            cards = game.getCardsIn(ZoneType.Battlefield)
+            prop = property[len("greatestCMC_"):]
+            if "ControlledBy" in prop:
+                prop = prop.split("ControlledBy")[0]
+                p = AbilityUtils.getDefinedPlayers(source, property.split("ControlledBy")[1], None)
+                cards = CardLists.filterControlledBy(cards, p)
+
+            if "NonLandPermanent" == prop:
+                cards = CardLists.filter(cards, CardPredicates.NONLAND_PERMANENTS)
+            else:
+                cards = CardLists.getType(cards, prop)
+            cards = CardLists.getCardsWithHighestCMC(cards)
+            if not cards.contains(card):
+                return False
+        elif property.startswith("greatestRememberedCMC"):
+            cards = CardCollection()
+            for o in source.getRemembered():
+                if isinstance(o, Card):
+                    cards.add(game.getCardState(o))
+            if not cards.contains(card):
+                return False
+            cards = CardLists.getCardsWithHighestCMC(cards)
+            if not cards.contains(card):
+                return False
+        elif property.startswith("lowestRememberedCMC"):
+            cards = CardCollection()
+            for o in source.getRemembered():
+                if isinstance(o, Card):
+                    cards.add(game.getCardState(o))
+            if not cards.contains(card):
+                return False
+            cards = CardLists.getCardsWithLowestCMC(cards)
+            if not cards.contains(card):
+                return False
+        elif property.startswith("lowestCMC"):
+            cards = game.getCardsIn(ZoneType.Battlefield)
+            for crd in cards:
+                if not crd.isLand() and not crd.isImmutable():
+                    # no check for SplitCard anymore
+                    if crd.getCMC() < card.getCMC():
+                        return False
+        elif property.startswith("enchanted"):
+            if not card.isEnchanted():
+                return False
+        elif property.startswith("enchanting"):
+            if not card.isEnchanting():
+                return False
+        elif property.startswith("equipped"):
+            if not card.isEquipped():
+                return False
+        elif property.startswith("equipping"):
+            if not card.isEquipping():
+                return False
+        elif property.startswith("modified"):
+            if not card.isModified():
+                return False
+        elif property.startswith("token"):
+            if not card.isToken() and not card.isTokenCard():
+                return False
+            # copied spell don't count
+            if "Created" in property and card.getCastSA() is not None:
+                return False
+        elif property.startswith("copiedSpell"):
+            if not card.isCopiedSpell():
+                return False
+        elif property.startswith("hasXCost"):
+            cost = card.getManaCost()
+            if cost is None or cost.countX() <= 0:
+                return False
+        elif property.startswith("suspended"):
+            if not card.hasSuspend():
+                return False
+        elif property.startswith("delved"):
+            if not source.getDelved().contains(card):
+                return False
+        elif property.startswith("convoked"):
+            if not source.getConvoked().contains(card):
+                return False
+        elif property.startswith("exploited"):
+            if not source.getExploited().contains(card):
+                return False
+        elif property.startswith("equalPT"):
+            if card.getNetPower() != card.getNetToughness():
+                return False
+        elif property == "powerGTtoughness":
+            if card.getNetPower() <= card.getNetToughness():
+                return False
+        elif property == "powerGTbasePower":
+            if card.getNetPower() <= card.getCurrentPower():
+                return False
+        elif property == "powerNOTbasePower":
+            if card.getNetPower() == card.getCurrentPower():
+                return False
+        elif property == "powerLTtoughness":
+            if card.getNetPower() >= card.getNetToughness():
+                return False
+        elif property == "cmcEven":
+            if card.getCMC() % 2 != 0:
+                return False
+        elif property == "cmcOdd":
+            if card.getCMC() % 2 != 1:
+                return False
+        elif property == "powerEven":
+            if card.getNetPower() % 2 != 0:
+                return False
+        elif property == "powerOdd":
+            if card.getNetPower() % 2 != 1:
+                return False
+        elif property == "cmcChosenEvenOdd":
+            if not source.hasChosenEvenOdd():
+                return False
+            if (card.getCMC() % 2 == 0) != (source.getChosenEvenOdd() == EvenOdd.Even):
+                return False
+        elif property == "cmcNotChosenEvenOdd":
+            if not source.hasChosenEvenOdd():
+                return False
+            if (card.getCMC() % 2 == 0) == (source.getChosenEvenOdd() == EvenOdd.Even):
+                return False
+        elif (property.startswith("power") or property.startswith("toughness") or property.startswith("cmc")
+              or property.startswith("totalPT") or property.startswith("numColors")
+              or property.startswith("basePower") or property.startswith("baseToughness") or property.startswith("numTypes")):
+            x = 0
+            y = 0
+            rhs = ""
+
+            if property.startswith("power"):
+                rhs = property[7:]
+                y = card.getNetPower()
+            elif property.startswith("basePower"):
+                rhs = property[11:]
+                y = card.getCurrentPower()
+            elif property.startswith("toughness"):
+                rhs = property[11:]
+                y = card.getNetToughness()
+            elif property.startswith("baseToughness"):
+                rhs = property[15:]
+                y = card.getCurrentToughness()
+            elif property.startswith("cmc"):
+                rhs = property[5:]
+                y = card.getCMC()
+            elif property.startswith("totalPT"):
+                rhs = property[10:]
+                y = card.getNetPower() + card.getNetToughness()
+            elif property.startswith("numColors"):
+                rhs = property[11:]
+                y = card.getColor().countColors()
+            elif property.startswith("numTypes"):
+                rhs = property[10:]
+                y = len(list(card.getType().getCoreTypes()))
+            if rhs == "Chosen":
+                if not source.hasChosenNumber():
+                    return False
+                x = source.getChosenNumber()
+            else:
+                x = AbilityUtils.calculateAmount(source, rhs, spellAbility)
+
+            if not Expressions.compare(y, property, x):
+                return False
+        elif property.startswith("ManaCost"):
+            cost = card.getManaCost().getShortString()
+            if (MagicColor.toShortString(property[15:]) not in cost) if "Partial" in property else (cost != property[8:]):
+                return False
+        elif property == "HasCounters":
+            if not card.hasCounters():
+                return False
+        elif property.startswith("counters"):
+            # syntax example: counters_GE9_P1P1 or counters_LT12_TIME
+            splitProperty = property.split("_")
+            strNum = splitProperty[1][2:]
+            comparator = splitProperty[1][0:2]
+            counterType = splitProperty[2]
+            number = AbilityUtils.calculateAmount(source, strNum, spellAbility)
+
+            actualnumber = card.getCounters(CounterType.getType(counterType))
+
+            if not Expressions.compare(actualnumber, comparator, number):
+                return False
+        # These predicated refer to ongoing combat. If no combat happens, they'll return false (meaning not attacking/blocking ATM)
+        elif property.startswith("attacking"):
+            if combat is None:
+                return False
+            # check this always first to make sure lki is only used when the card provides it
+            if not (lki if "LKI" in property else card).isAttacking():
+                return False
+            if property == "attacking":
+                return True
+            if property.endswith("Alone"):
+                return CardLists.count(card.getGame().getLastStateBattlefield(), lambda c: c.isAttacking()) == 1
+            if property == "attackingYou":
+                return combat.isAttacking(card, sourceController)
+            if property == "attackingSame":
+                attacked = combat.getDefenderByAttacker(source)
+                if not combat.isAttacking(card, attacked):
+                    return False
+            if property == "attackingBattle":
+                attacked = combat.getDefenderByAttacker(source)
+                if not isinstance(attacked, Card):
+                    return False
+                if not attacked.isBattle():
+                    return False
+            if property.startswith("attackingYouOrYourPW"):
+                defender = combat.getDefenderByAttacker(card)
+                if isinstance(defender, Card):
+                    # attack on a planeswalker that was removed from combat
+                    if not defender.isPlaneswalker():
+                        return False
+                    defender = defender.getController()
+                if not sourceController.equals(defender):
+                    return False
+            if property.startswith("attacking "):  # generic "attacking [DefinedGameEntity]"
+                defined = AbilityUtils.getDefinedEntities(source, property.split(" ", 1)[1], spellAbility)
+                defender = combat.getDefenderByAttacker(card)
+                if not defined.contains(defender):
+                    return False
+        elif property.startswith("enlistedThisCombat"):
+            if card.getEnlistedThisCombat() == False:
+                return False
+        elif property.startswith("attackedThisCombat"):
+            if combat is None or card.getDamageHistory().getCreatureAttackedThisCombat() == 0:
+                return False
+            if len(property) > 18:
+                x = AbilityUtils.calculateAmount(source, property[21:], spellAbility)
+                if not Expressions.compare(card.getDamageHistory().getCreatureAttackedThisCombat(), property, x):
+                    return False
+        elif property == "blockedThisCombat":
+            if combat is None or not card.getDamageHistory().getCreatureBlockedThisCombat():
+                return False
+        elif property == "attackedBySourceThisCombat":
+            if combat is None:
+                return False
+            defender = combat.getDefenderByAttacker(source)
+            if isinstance(defender, Card) and not card.equals(defender):
+                return False
+        elif property.startswith("blocking"):
+            if combat is None or not combat.isBlocking(card):
+                return False
+            what = property[len("blocking"):]
+            if what.endswith("Alone"):
+                return CardLists.count(card.getGame().getLastStateBattlefield(), lambda c: c.getCombatLKI() is not None and not c.getCombatLKI().isAttacker) == 1
+            if what.startswith("Source"):
+                return combat.isBlocking(card, source)
+            if what.startswith("CreatureYouCtrl"):
+                for c in sourceController.getCreaturesInPlay():
+                    if combat.isBlocking(card, c):
+                        return True
+                return False
+            elif what:
+                for c in AbilityUtils.getDefinedCards(source, what, spellAbility):
+                    if combat.isBlocking(card, c):
+                        return True
+                return False
+        elif property.startswith("sharesBlockingAssignmentWith"):
+            if combat is None:
+                return False
+            if combat.getAttackersBlockedBy(source) is None or combat.getAttackersBlockedBy(card) is None:
+                return False
+
+            if set(combat.getAttackersBlockedBy(source)).isdisjoint(set(combat.getAttackersBlockedBy(card))):
+                return False
+        # Nex predicates refer to past combat and don't need a reference to actual combat
+        elif property == "blocked":
+            return combat is not None and combat.isBlocked(card)
+        elif property.startswith("blockedBySourceThisTurn"):
+            return card.getBlockedByThisTurn().contains(source)
+        elif property.startswith("blockedBySourceLKI"):
+            return combat is not None and combat.isBlocking(game.getChangeZoneLKIInfo(source), card)
+        elif property.startswith("blockedBySource"):
+            return combat is not None and combat.isBlocking(source, card)
+        elif property.startswith("blockedThisTurn"):
+            return not card.getBlockedThisTurn().isEmpty()
+        elif property.startswith("blockedByThisTurn"):
+            return not card.getBlockedByThisTurn().isEmpty()
+        elif property.startswith("blockedValidThisTurn "):
+            blocked = card.getBlockedThisTurn()
+            if blocked.isEmpty():
+                return False
+            valid = property.split(" ")[1]
+            if any(CardPredicates.restriction(valid, card.getController(), source, spellAbility)(c) for c in blocked):
+                return True
+            for c in AbilityUtils.getDefinedCards(source, valid, spellAbility):
+                if blocked.contains(c):
+                    return True
+            return False
+        elif property.startswith("blockedByValidThisTurn "):
+            blocked = card.getBlockedByThisTurn()
+            if blocked.isEmpty():
+                return False
+            valid = property.split(" ")[1]
+            if any(CardPredicates.restriction(valid, card.getController(), source, spellAbility)(c) for c in blocked):
+                return True
+            for c in AbilityUtils.getDefinedCards(source, valid, spellAbility):
+                if blocked.contains(c):
+                    return True
+            return False
+        elif property.startswith("isBlockedByRemembered"):
+            if combat is None:
+                return False
+            for o in source.getRemembered():
+                if isinstance(o, Card) and combat.isBlocking(o, card):
+                    return True
+            return False
+        elif property.startswith("blockedRemembered"):
+            for o in source.getRemembered():
+                if isinstance(o, Card):
+                    rememberedcard = o
+                    if card.getBlockedThisTurn().contains(rememberedcard):
+                        return True
+            return False
+        elif property.startswith("blockedByRemembered"):
+            for o in source.getRemembered():
+                if isinstance(o, Card):
+                    rememberedcard = o
+                    if card.getBlockedByThisTurn().contains(rememberedcard):
+                        return True
+            return False
+        elif property.startswith("unblocked"):
+            if combat is None or not combat.isUnblocked(card):
+                return False
+        elif property == "attackersBandedWith":
+            if card.equals(source):
+                # You don't band with yourself
+                return False
+            band = None if combat is None else combat.getBandOfAttacker(source)
+            if band is None or not band.getAttackers().contains(card):
+                return False
+        elif property == "hadToAttackThisCombat":
+            e = None if combat is None else combat.getAttackConstraints().getRequirements().get(card)
+            if e is None or not e.hasRequirement() or not e.getAttacker().equalsWithGameTimestamp(card):
+                return False
+        elif property == "couldAttackButNotAttacking":
+            if not game.getPhaseHandler().isPlayerTurn(controller):
+                return False
+            return CombatUtil.couldAttackButNotAttacking(combat, card)
+        elif property == "linkedCastSA":
+            if card.getCastSA() is None:
+                return False
+            if AbilityUtils.isUnlinkedFromCastSA(spellAbility, card):
+                return False
+        elif property.startswith("kicked"):
+            # CR 607.2i check cost is linked
+            if AbilityUtils.isUnlinkedFromCastSA(spellAbility, card):
+                return False
+            if property == "kicked":
+                if card.getKickerMagnitude() == 0:
+                    return False
+            else:
+                s = property.split("kicked ")[1]
+                if "1" == s and not card.isOptionalCostPaid(OptionalCost.Kicker1):
+                    return False
+                if "2" == s and not card.isOptionalCostPaid(OptionalCost.Kicker2):
+                    return False
+        elif property == "bargained":
+            if card.getCastSA() is None:
+                return False
+            if AbilityUtils.isUnlinkedFromCastSA(spellAbility, card):
+                return False
+            return card.getCastSA().isBargained()
+        elif property == "surged":
+            if card.getCastSA() is None:
+                return False
+            if AbilityUtils.isUnlinkedFromCastSA(spellAbility, card):
+                return False
+            return card.getCastSA().isSurged()
+        elif property == "blitzed":
+            if card.getCastSA() is None:
+                return False
+            if AbilityUtils.isUnlinkedFromCastSA(spellAbility, card):
+                return False
+            return card.getCastSA().isBlitz()
+        elif property == "dashed":
+            if card.getCastSA() is None:
+                return False
+            if AbilityUtils.isUnlinkedFromCastSA(spellAbility, card):
+                return False
+            return card.getCastSA().isDash()
+        elif property == "escaped":
+            if card.getCastSA() is None:
+                return False
+            return card.getCastSA().isEscape()
+        elif property == "evoked":
+            if card.getCastSA() is None:
+                return False
+            if AbilityUtils.isUnlinkedFromCastSA(spellAbility, card):
+                return False
+            return card.getCastSA().isEvoke()
+        elif property == "PromisedGift":
+            # Do we need this isUnlinked thing like these others?
+            if card.getCastSA() is None:
+                return False
+            return card.getCastSA().isGiftPromised()
+        elif property == "impended":
+            if card.getCastSA() is None:
+                return False
+            if AbilityUtils.isUnlinkedFromCastSA(spellAbility, card):
+                return False
+            return card.getCastSA().isImpending()
+        elif property == "prowled":
+            if card.getCastSA() is None:
+                return False
+            if AbilityUtils.isUnlinkedFromCastSA(spellAbility, card):
+                return False
+            return card.getCastSA().isProwl()
+        elif property == "spectacle":
+            if card.getCastSA() is None:
+                return False
+            if AbilityUtils.isUnlinkedFromCastSA(spellAbility, card):
+                return False
+            return card.getCastSA().isSpectacle()
+        elif property == "sneaked":
+            if card.getCastSA() is None:
+                return False
+            if AbilityUtils.isUnlinkedFromCastSA(spellAbility, card):
+                return False
+            return card.getCastSA().isSneak()
+        elif property == "foretold":
+            if not card.isForetold():
+                return False
+        elif property == "warped":
+            if not card.isWarped():
+                return False
+        elif property == "webSlinged":
+            if not card.isWebSlinged():
+                return False
+        elif property == "CrewedThisTurn":
+            if not CardProperty.hasTimestampMatch(card, source.getCrewedByThisTurn()):
+                return False
+        elif property == "CrewedBySourceThisTurn":
+            if not CardProperty.hasTimestampMatch(source, card.getCrewedByThisTurn()):
+                return False
+        elif property == "HasDevoured":
+            if card.getDevouredCards().isEmpty():
+                return False
+        elif property == "harnessed":
+            if not card.isHarnessed():
+                return False
+        elif property == "IsMonstrous":
+            if not card.isMonstrous():
+                return False
+        elif property == "IsUnearthed":
+            if not card.isUnearthed():
+                return False
+        elif property == "IsRenowned":
+            if not card.isRenowned():
+                return False
+        elif property == "IsSolved":
+            if not card.isSolved():
+                return False
+        elif property == "IsSaddled":
+            if not card.isSaddled():
+                return False
+        elif property == "SaddledThisTurn":
+            if not CardProperty.hasTimestampMatch(card, source.getSaddledByThisTurn()):
+                return False
+        elif property == "VisitedThisTurn":
+            if not card.wasVisitedThisTurn():
+                return False
+        elif property == "IsSuspected":
+            if not card.isSuspected():
+                return False
+        elif property == "IsRemembered":
+            if not source.isRemembered(card):
+                return False
+        elif property == "IsImprinted":
+            if not source.hasImprintedCard(card):
+                return False
+        elif property == "IsGoaded":
+            if not card.isGoaded():
+                return False
+        elif property == "FullyUnlocked":
+            if card.getUnlockedRooms().size() < 2:
+                return False
+        elif property.startswith("canReceiveCounters"):
+            if not card.canReceiveCounters(CounterType.getType(property.split(" ")[1])):
+                return False
+        elif property == "canBeTurnedFaceUp":
+            if not card.canBeTurnedFaceUp():
+                return False
+        elif property == "NoAbilities":
+            if not card.hasNoAbilities():
+                return False
+        elif property == "castKeyword":
+            castSA = card.getCastSA()
+            if castSA is None:
+                return False
+            # intrinsic keyword might be a new one when the zone changes
+            if castSA.isIntrinsic():
+                # so just check if the static is intrinsic too
+                if not spellAbility.isIntrinsic():
+                    return False
+            else:
+                # otherwise check for keyword object
+                return castSA.getKeyword() == spellAbility.getKeyword()
+        elif property == "CastSaSource":
+            castSA = card.getCastSA()
+            if castSA is None:
+                return False
+            if not castSA.equals(source.getCastSA()):
+                return False
+        elif property.startswith("CastSa"):
+            castSA = card.getCastSA()
+            if castSA is None:
+                return False
+            v = property[7:]
+            if not castSA.isValid(v, sourceController, source, spellAbility):
+                return False
+        elif property.startswith("wasCastFrom"):
+            byYou = "ByYou" in property
+            strZone = property[11:]
+            zoneOwner = None
+            if "Your" in property:
+                strZone = strZone[4:]
+                zoneOwner = sourceController
+            if "Their" in property:
+                strZone = strZone[5:]
+                zoneOwner = controller
+            if byYou:
+                strZone = strZone[0:strZone.index("ByYou")]
+            realZone = ZoneType.smartValueOf(strZone)
+            if (card.getCastFrom() is None or card.getCastSA() is None or (zoneOwner is not None and not card.getCastFrom().getPlayer().equals(zoneOwner))
+                    or (byYou and not sourceController.equals(card.getCastSA().getActivatingPlayer()))
+                    or realZone != card.getCastFrom().getZoneType()):
+                return False
+        elif property.startswith("wasCast"):
+            if not card.wasCast():
+                return False
+            if "ByYou" in property and card.getCastSA() is not None and not sourceController.equals(card.getCastSA().getActivatingPlayer()):
+                return False
+        elif property.startswith("set"):
+            setCode = property[3:6]
+            if not card.getName():
+                return False
+            setCard = StaticData.instance().getCommonCards().getCardFromEditions(card.getName(),
+                                                                                CardDb.CardArtPreference.ORIGINAL_ART_ALL_EDITIONS)
+            if setCard is not None and not setCard.getEdition().equals(setCode):
+                return False
+        elif property.startswith("inZone"):
+            strZone = property[6:]
+            realZone = ZoneType.smartValueOf(strZone)
+            # lki last zone does fall back to this zone
+            lkiZone = lki.getLastKnownZone()
+
+            if lkiZone is None or not lkiZone.is_(realZone):
+                return False
+        elif property.startswith("inRealZone"):
+            strZone = property[10:]
+            realZone = ZoneType.smartValueOf(strZone)
+
+            if not card.isInZone(realZone):
+                return False
+        elif property == "IsCommander":
+            if not card.isCommander():
+                return False
+        elif property.startswith("NotedFor"):
+            key = property[len("NotedFor"):]
+            for note in sourceController.getNotesForName(key):
+                if note == "Name:" + card.getName():
+                    return True
+                if note == "Id:" + str(card.getId()):
+                    return True
+            return False
+        elif property == "NotedColor":
+            # Should Regicide be hardcoded here or part of the property?
+            colors = sourceController.getDraftNotes().get("Regicide")
+            if colors is None:
+                return False
+            return (("white" in colors and card.getColor().hasWhite()) or
+                    ("blue" in colors and card.getColor().hasBlue()) or
+                    ("black" in colors and card.getColor().hasBlack()) or
+                    ("red" in colors and card.getColor().hasRed()) or
+                    ("green" in colors and card.getColor().hasGreen()))
+        elif property == "NotedNameNobleBanneret":
+            names = sourceController.getDraftNotes().get("Noble Banneret")
+            if names is None or names == "":
+                return False
+            nameList = list(names.split(";"))
+
+            return card.getName() in nameList
+        elif property == "NotedNameAetherSearcher":
+            names = sourceController.getDraftNotes().get("Aether Searcher")
+            if names is None or names == "":
+                return False
+            nameList = list(names.split(";"))
+
+            return card.getName() in nameList
+        elif property == "NotedNameSmugglerCaptain":
+            names = sourceController.getDraftNotes().get("Smuggler Captain")
+            if names is None or names == "":
+                return False
+            nameList = list(names.split(";"))
+
+            return card.getName() in nameList
+        elif property == "NotedGuessPhantasm":
+            names = sourceController.getDraftNotes().get("Spire Phantasm")
+            return names is not None and names != ""
+        elif property == "NotedTypes":
+            # Should Paliano Vanguard be hardcoded here or part of the property?
+            types = sourceController.getDraftNotes().get("Paliano Vanguard")
+            if types is None or types == "":
+                return False
+            typeList = list(types.split(","))
+
+            return any(t in typeList for t in card.getType().getCreatureTypes())
+        elif property.startswith("Triggered"):
+            if isinstance(spellAbility, SpellAbility):
+                key = property[9:]
+                sa = spellAbility
+                o = sa.getRootAbility().getTriggeringObject(AbilityKey.fromString(key))
+                found = False
+                if o is not None:
+                    if isinstance(o, CardCollection):
+                        found = o.contains(card)
+                    else:
+                        found = card.equals(o)
+                if not found:
+                    return False
+            else:
+                return False
+        elif property.startswith("NotDefined"):
+            key = property[len("NotDefined"):]
+            if AbilityUtils.getDefinedCards(source, key, spellAbility).contains(card):
+                return False
+        elif property == "CanPayManaCost":
+            if not isinstance(spellAbility, SpellAbility):
+                return False
+
+            manaPaid_box = []
+            manaCost_box = []
+
+            # check shards recursively
+            def checkShard(index):
+                if index >= len(manaCost_box):
+                    return True
+                shard = manaCost_box[index]
+                # ignore X cost
+                if shard == ManaCostShard.X:
+                    return checkShard(index + 1)
+                for i in range(len(manaPaid_box)):
+                    mana = manaPaid_box[i]
+                    if shard.isColor(mana.getColor()) or (shard.isSnow() and mana.isSnow()):
+                        del manaPaid_box[i]
+                        if checkShard(index + 1):
+                            return True
+                        manaPaid_box.insert(i, mana)
+                    if shard.isGeneric() and not shard.isSnow():
+                        # Handle 2 generic mana
+                        if shard.getCmc() == 2:
+                            manaCost_box.append(ManaCostShard.GENERIC)
+                        del manaPaid_box[i]
+                        if checkShard(index + 1):
+                            return True
+                        manaPaid_box.insert(i, mana)
+                        if shard.getCmc() == 2:
+                            manaCost_box.pop()
+                return False
+
+            def check():
+                manaPaid_box[:] = list(spellAbility.getPayingMana())
+                manaCost_box[:] = list(card.getManaCost())
+                manaCost_box.sort(key=functools.cmp_to_key(lambda a, b: a.compareTo(b)))
+                # It seems the above codes didn't add generic mana cost ?
+                # Add generic cost below to fix it.
+                genericCost = card.getManaCost().getGenericCost()
+                while genericCost > 0:
+                    manaCost_box.append(ManaCostShard.GENERIC)
+                    genericCost -= 1
+                return checkShard(0)
+
+            return check()
+        elif not card.getCurrentState().hasProperty(property, sourceController, source, spellAbility):
+            return False
+        return True
+
+    @staticmethod
+    def hasTimestampMatch(card, coll):
+        if coll is None:
+            return False
+        match = False
+        for c in coll:
+            if c.equalsWithGameTimestamp(card):
+                match = True
+                break
+        return match
 ```

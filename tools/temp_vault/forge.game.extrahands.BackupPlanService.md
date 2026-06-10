@@ -126,3 +126,65 @@ public class BackupPlanService {
     }
 }
 ```
+
+## Python
+`forge/game/extrahands/BackupPlanService.py`
+
+```python
+from forge.game.card.Card import Card
+from forge.game.player.Player import Player
+from forge.game.zone.PlayerZone import PlayerZone
+from forge.game.zone.ZoneType import ZoneType
+
+
+class BackupPlanService:
+    def __init__(self, p1: Player):
+        self.player = p1
+        self.multipleHands = False
+        self.hands: list[PlayerZone] = []
+        self.hand = None
+
+    def initializeExtraHands(self) -> bool:
+        self.hand = self.player.getZone(ZoneType.Hand)
+        self.hands.append(self.hand)
+
+        # If pl has Backup Plan as a Conspiracy draw that many extra hands
+        if self.player.getExtraZones() is None:
+            return self.multipleHands
+        for extraHand in self.player.getExtraZones():
+            if extraHand.getZoneType() == ZoneType.ExtraHand:
+                self.player.drawCards(7, extraHand)
+                self.multipleHands = True
+                self.hands.append(extraHand)
+                # If we figure out how to render the zone in the UI, do it here
+
+        self.player.updateZoneForView(self.hand)
+        return self.multipleHands
+
+    def chooseHand(self) -> None:
+        if not self.multipleHands:
+            return
+
+        library = self.player.getZone(ZoneType.Library)
+        # Choose one of the starting hands and recycle the rest
+        startingHand = self.player.getController().chooseStartingHand(self.hands)
+        if startingHand is self.hand:
+            for extraHand in self.player.getExtraZones():
+                if extraHand.getZoneType() == ZoneType.ExtraHand:
+                    for c in list(extraHand.getCards()):
+                        self.player.getGame().getAction().moveTo(library, c, None)
+        else:
+            for c in list(self.hand.getCards()):
+                self.player.getGame().getAction().moveTo(library, c, None)
+
+            for extraHand in self.player.getExtraZones():
+                starting = startingHand == extraHand
+                for c in list(extraHand.getCards()):
+                    if starting:
+                        self.player.getGame().getAction().moveTo(self.hand, c, None)
+                    else:
+                        self.player.getGame().getAction().moveTo(library, c, None)
+
+        self.player.resetExtraZones(ZoneType.ExtraHand)
+        self.player.updateZoneForView(self.player.getZone(ZoneType.Hand))
+```

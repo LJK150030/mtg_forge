@@ -79,7 +79,7 @@ classDiagram
 
 CardUtil is a final, non-instantiable utility class providing stateless static helpers for card-related queries and computations across the forge-game engine. It centralizes logic that operates over cards without belonging to any single domain object: keyword classification (which keywords are text-modifiable or stacking), turn-history lookups (cards that entered a zone, spells cast, abilities activated this or last turn), color aggregation, and target/radiance selection. It also synthesizes derived card states such as the 2/2 face-down creature and empty Room characteristics.
 
-As a pure helper, it has no supertype and holds only immutable shared constants (`modifiableKeywords`, `NON_STACKING_LIST`). It collaborates broadly — querying `Game`, `Player`, and `ZoneType` for game state, filtering through `CardLists`/valid expressions, and inspecting `SpellAbility` and `CardTraitBase` for ability context. The notable design intent is the recursive private `getReflectableManaColors`, which threads a `parents` collection to prevent infinite recursion among mutually reflecting mana sources, exposed through a minimal-parameter public entry point.
+As a pure helper, it has no supertype and holds only immutable shared constants (`modifiableKeywords`, `NON_STACKING_LIST`). It collaborates broadly â€” querying `Game`, `Player`, and `ZoneType` for game state, filtering through `CardLists`/valid expressions, and inspecting `SpellAbility` and `CardTraitBase` for ability context. The notable design intent is the recursive private `getReflectableManaColors`, which threads a `parents` collection to prevent infinite recursion among mutually reflecting mana sources, exposed through a minimal-parameter public entry point.
 
 ## Source
 `forge-game/src/main/java/forge/game/card/CardUtil.java`
@@ -477,4 +477,336 @@ public final class CardUtil {
         return choices;
     }
 }
+```
+
+## Python
+`forge/game/card/CardUtil.py`
+
+```python
+from forge.ImageKeys import ImageKeys
+from forge.card.CardStateName import CardStateName
+from forge.card.CardType import CardType
+from forge.card.ColorSet import ColorSet
+from forge.card.MagicColor import MagicColor
+from forge.game.CardTraitBase import CardTraitBase
+from forge.game.Game import Game
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.ability.ApiType import ApiType
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.spellability.SpellAbilityPredicates import SpellAbilityPredicates
+from forge.game.spellability.TargetRestrictions import TargetRestrictions
+from forge.game.trigger.Trigger import Trigger
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.TextUtil import TextUtil
+from forge.util.collect.FCollection import FCollection
+
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CardState import CardState
+
+from typing import Iterable, List, Set
+
+
+class CardUtil:
+    # disable instantiation
+    def __init__(self):
+        pass
+
+    NON_STACKING_LIST: List[str] = []
+
+    # List of all keywords that could be modified by text changes.
+    # Mostly this is caused by them having a variable, like a cost.
+    modifiableKeywords: List[str] = [
+        "Enchant", "Protection", "Cumulative upkeep", "Equip", "Buyback",
+        "Cycling", "Echo", "Kicker", "Flashback", "Madness", "Morph",
+        "Affinity", "Entwine", "Splice", "Ninjutsu",
+        "Transmute", "Replicate", "Recover", "Squad", "Suspend", "Aura swap",
+        "Fortify", "Transfigure", "Champion", "Evoke", "Prowl", "Freerunning",
+        "Reinforce", "Unearth", "Level up", "Miracle", "Overload", "Cleave",
+        "Scavenge", "Encore", "Bestow", "Outlast", "Dash", "Surge", "Emerge", "Hexproof:",
+        "Bands with other", "Landwalk", "Offering",
+        "etbCounter", "Reflect", "Ward",
+    ]
+
+    @staticmethod
+    def isKeywordModifiable(kw: str) -> bool:
+        for modKw in CardUtil.modifiableKeywords:
+            if kw.startswith(modKw):
+                return True
+        return False
+
+    @staticmethod
+    def isStackingKeyword(keyword: str) -> bool:
+        kw = keyword
+        if kw.startswith("HIDDEN"):
+            kw = kw[7:]
+
+        return not kw.startswith("Protection") and kw not in CardUtil.NON_STACKING_LIST
+
+    @staticmethod
+    def getThisTurnEntered(to: ZoneType, from_: ZoneType, valid: str, src: Card, ctb: CardTraitBase, controller: Player) -> List[Card]:
+        """getThisTurnEntered.
+
+        :param to:    zone going to
+        :param from_: zone coming from
+        :param valid: a isValid expression
+        :param src:   a Card object
+        :return: a CardCollection that matches the given criteria
+        """
+        res: List[Card] = []
+        game = src.getGame()
+        if to != ZoneType.Stack:
+            for p in game.getRegisteredPlayers():
+                res.extend(p.getZone(to).getCardsAddedThisTurn(from_))
+        else:
+            res.extend(game.getStackZone().getCardsAddedThisTurn(from_))
+        return CardLists.getValidCardsAsList(res, valid, controller, src, ctb)
+
+    @staticmethod
+    def getLastTurnEntered(to: ZoneType, from_: ZoneType, valid: str, src: Card, ctb: CardTraitBase, controller: Player) -> List[Card]:
+        """getLastTurnEntered.
+
+        :param to:    zone going to
+        :param from_: zone coming from
+        :param valid: a isValid expression
+        :param src:   a Card object
+        :return: a CardCollection that matches the given criteria
+        """
+        res: List[Card] = []
+        game = src.getGame()
+        if to != ZoneType.Stack:
+            for p in game.getPlayers():
+                res.extend(p.getZone(to).getCardsAddedLastTurn(from_))
+        else:
+            res.extend(game.getStackZone().getCardsAddedLastTurn(from_))
+        return CardLists.getValidCardsAsList(res, valid, controller, src, ctb)
+
+    @staticmethod
+    def getThisTurnCast(valid: str, src: Card, ctb: CardTraitBase, controller: Player) -> List[Card]:
+        return CardLists.getValidCardsAsList(src.getGame().getStack().getSpellsCastThisTurn(), valid, controller, src, ctb)
+
+    @staticmethod
+    def getLastTurnCast(valid: str, src: Card, ctb: CardTraitBase, controller: Player) -> List[Card]:
+        return CardLists.getValidCardsAsList(src.getGame().getStack().getSpellsCastLastTurn(), valid, controller, src, ctb)
+
+    @staticmethod
+    def getThisTurnActivated(valid: str, src: Card, ctb: CardTraitBase, controller: Player) -> List[SpellAbility]:
+        predicate = SpellAbilityPredicates.isValid(valid.split(","), controller, src, ctb)
+        return [sa for sa in src.getGame().getStack().getAbilityActivatedThisTurn() if predicate(sa)]
+
+    @staticmethod
+    def getCastSinceBeginningOfYourLastTurn(valid: str, src: Card, ctb: CardTraitBase, controller: Player) -> List[Card]:
+        return CardLists.getValidCardsAsList(controller.getSpellsCastSinceBegOfYourLastTurn(), valid, controller, src, ctb)
+
+    @staticmethod
+    def getRadiance(sa: SpellAbility) -> CardCollection:
+        targetSA = sa.getSATargetingCard()
+        if targetSA is None or not targetSA.usesTargeting() or not targetSA.hasParam("Radiance"):
+            return CardCollection()
+
+        source = targetSA.getHostCard()
+        game = source.getGame()
+        res = CardCollection()
+        valid = targetSA.getParam("ValidTgts").split(",")
+        tgts = targetSA.getTargets().getTargetCards()
+
+        combinedColor = 0
+        for tgt in tgts:
+            cs = tgt.getColor()
+            for color in MagicColor.WUBRG:
+                if not cs.hasAnyColor(color):
+                    continue
+                combinedColor |= color
+        for color in MagicColor.WUBRG:
+            if (combinedColor & color) == 0:
+                continue
+            for c in game.getColoredCardsInPlay(MagicColor.toLongString(color)):
+                if c not in res and c not in tgts and c.isValid(valid, source.getController(), source, targetSA):
+                    res.add(c)
+
+        return res
+
+    @staticmethod
+    def getColorsFromCards(list_: Iterable[Card]) -> ColorSet:
+        b = 0
+        for c in list_:
+            b |= c.getColor().getColor()
+        return ColorSet.fromMask(b)
+
+    @staticmethod
+    def getFaceDownCharacteristic(c: Card, state: CardStateName = None) -> CardState:
+        if state is None:
+            state = CardStateName.FaceDown
+        type_ = CardType(False)
+        type_.add("Creature")
+
+        ret = CardState(c, state)
+        ret.setBasePower(2)
+        ret.setBaseToughness(2)
+
+        ret.setName("")
+        ret.setType(type_)
+
+        # show hidden if exiled facedown
+        if state == CardStateName.FaceDown:
+            ret.setImageKey(ImageKeys.getTokenKey(ImageKeys.HIDDEN_CARD))
+        else:
+            ret.setImageKey(c.getImageKey())
+        return ret
+
+    @staticmethod
+    def getEmptyRoomCharacteristic(c: Card, state: CardStateName = None) -> CardState:
+        if state is None:
+            state = CardStateName.EmptyRoom
+        type_ = CardType(False)
+        type_.add("Enchantment")
+        type_.add("Room")
+        ret = CardState(c, state)
+
+        ret.setName("")
+        ret.setType(type_)
+
+        # find new image key for empty room
+        ret.setImageKey(c.getImageKey())
+
+        return ret
+
+    # a nice entry point with minimum parameters
+    @staticmethod
+    def getReflectableManaColors(*args) -> Set[str]:
+        if len(args) == 1:
+            sa = args[0]
+            return CardUtil._getReflectableManaColors(sa, sa, set(), CardCollection())
+        return CardUtil._getReflectableManaColors(*args)
+
+    @staticmethod
+    def _getReflectableManaColors(abMana: SpellAbility, sa: SpellAbility, colors: Set[str], parents: CardCollection) -> Set[str]:
+        # Here's the problem with reflectable Mana. If more than one is out,
+        # they need to Reflect each other,
+        # so we basically need to have a recursive list that send the parents
+        # so we don't infinite recurse.
+        card = abMana.getHostCard()
+
+        if abMana.getApi() != ApiType.ManaReflected:
+            return colors
+
+        colorOrType = sa.getParam("ColorOrType")
+        # currently Color or Type, Type is colors + colorless
+        reflectProperty = sa.getParam("ReflectProperty")
+        # Produce (Reflecting Pool) or Is (Meteor Crater)
+
+        maxChoices = 5  # Color is the default colorOrType
+        if colorOrType == "Type":
+            maxChoices += 1
+
+        if sa.hasParam("Valid"):
+            validCard = sa.getParam("Valid")
+            # Reuse AF_Defined in a slightly different way
+            if validCard.startswith("Defined."):
+                cards = AbilityUtils.getDefinedCards(card, TextUtil.fastReplace(validCard, "Defined.", ""), abMana)
+            else:
+                if sa.getActivatingPlayer() is None:
+                    sa.setActivatingPlayer(sa.getHostCard().getController())
+                activator = sa.getActivatingPlayer()
+                cards = CardLists.getValidCards(activator.getGame().getCardsIn(ZoneType.Battlefield), validCard, activator, card, sa)
+
+            # remove anything cards that is already in parents
+            cards.removeAll(parents)
+
+            if cards.isEmpty():
+                return colors
+        else:
+            cards = CardCollection()
+
+        if reflectProperty == "Is":  # Meteor Crater
+            for card1 in cards:
+                # For each card, go through all the colors and if the card is that color, add
+                for col in MagicColor.Constant.ONLY_COLORS:
+                    if card1.isOfColor(col):
+                        colors.add(col)
+                        if len(colors) == maxChoices:
+                            break
+        elif reflectProperty == "Produced":
+            # Why is this name so similar to the one below?
+            producedColors = abMana.getRootAbility().getTriggeringObject(AbilityKey.Produced)
+            for col in MagicColor.Constant.ONLY_COLORS:
+                s = MagicColor.toShortString(col)
+                if s in producedColors:
+                    colors.add(col)
+            # TODO Sol Remove production of "1" Generic Mana
+            if maxChoices == 6 and ("1" in producedColors or "C" in producedColors):
+                colors.add(MagicColor.Constant.COLORLESS)
+        elif reflectProperty == "Produce":
+            abilities: FCollection = FCollection()
+            for c in cards:
+                abilities.addAll(c.getSpellAbilities())
+                for trig in c.getTriggers():
+                    abilities.add(trig.ensureAbility())
+
+            reflectAbilities: List[SpellAbility] = []
+
+            for ab in abilities:
+                if ab.isSpell() or ab.isLandAbility():
+                    continue
+                if maxChoices == len(colors):
+                    break
+
+                if ab.getHostCard() not in parents:
+                    parents.add(ab.getHostCard())
+
+                # Recursion! Set Activator to controller for appropriate valid comparison
+                ab.setActivatingPlayer(ab.getHostCard().getController())
+                if ab.getApi() == ApiType.ManaReflected and "Produced" != ab.getParam("ReflectProperty"):
+                    reflectAbilities.append(ab)
+                    continue
+                colors = CardUtil.canProduce(maxChoices, ab, colors)
+
+            for ab in reflectAbilities:
+                if maxChoices == len(colors):
+                    break
+
+                colors = CardUtil._getReflectableManaColors(sa, ab, colors, parents)
+        return colors
+
+    @staticmethod
+    def canProduce(maxChoices: int, sa: SpellAbility, colors: Set[str]) -> Set[str]:
+        if sa is None:
+            return colors
+        for col in MagicColor.Constant.ONLY_COLORS:
+            if sa.canProduce(MagicColor.toShortString(col)):
+                colors.add(col)
+
+        if maxChoices == 6 and sa.canProduce("C"):
+            colors.add(MagicColor.Constant.COLORLESS)
+
+        return colors
+
+    # these have been copied over from CardFactoryUtil as they need two extra
+    # parameters for target selection.
+    # however, due to the changes necessary for SA_Requirements this is much
+    # different than the original
+    @staticmethod
+    def getValidCardsToTarget(ability: SpellAbility) -> CardCollection:
+        tgt = ability.getTargetRestrictions()
+        activatingCard = ability.getHostCard()
+        game = ability.getActivatingPlayer().getGame()
+        zone = tgt.getZone()
+
+        choices = CardLists.getTargetableCards(game.getCardsIn(zone), ability)
+        canTgtStack = ZoneType.Stack in zone
+        if canTgtStack:
+            # Since getTargetableCards doesn't have additional checks if one of the Zones is stack
+            # Remove the activating card from targeting itself if its on the Stack
+            if activatingCard.isInZone(ZoneType.Stack):
+                choices.remove(activatingCard)
+
+        # Remove cards already targeted
+        targeted = list(ability.getTargets().getTargetCards())
+        choices.removeAll(targeted)
+
+        return choices
 ```

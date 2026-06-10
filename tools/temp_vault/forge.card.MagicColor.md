@@ -52,7 +52,7 @@ classDiagram
 
 MagicColor is a final, non-instantiable utility class in `forge.card` that centralizes Magic: The Gathering's color model for the engine. It encodes the five colors plus colorless as single-bit `byte` flags, so multi-color identities (color pairs, all-colors) compose naturally through bitwise OR, and it publishes reusable constant arrays (WUBRG, WUBRGC, COLORPAIR) and canonical string literals via its nested `Constant` class. Its static converters translate freely among names, characters, short codes, symbols, and bytes, making it the engine's single point of truth for color identity.
 
-It delegates richer per-color metadata to the nested `Color` enum, which maps each bitmask to display names, symbols, and basic land types and implements `ITranslatable` (through `Localizer`) for localized labels. This split keeps the lightweight bitmask API stable and fast while the enum carries heavier, translatable data—a deliberate choice favoring compact `byte` flags in performance-sensitive color logic.
+It delegates richer per-color metadata to the nested `Color` enum, which maps each bitmask to display names, symbols, and basic land types and implements `ITranslatable` (through `Localizer`) for localized labels. This split keeps the lightweight bitmask API stable and fast while the enum carries heavier, translatable dataâ€”a deliberate choice favoring compact `byte` flags in performance-sensitive color logic.
 
 ## Source
 `forge-core/src/main/java/forge/card/MagicColor.java`
@@ -279,4 +279,228 @@ public final class MagicColor {
     }
 
 }
+```
+
+## Python
+`forge/card/MagicColor.py`
+
+```python
+from forge.util.ITranslatable import ITranslatable
+from forge.util.Localizer import Localizer
+
+
+class Constant:
+    """The Interface Color."""
+
+    # The White.
+    WHITE = "white"
+
+    # The Blue.
+    BLUE = "blue"
+
+    # The Black.
+    BLACK = "black"
+
+    # The Red.
+    RED = "red"
+
+    # The Green.
+    GREEN = "green"
+
+    # The Colorless.
+    COLORLESS = "colorless"
+
+    # The only colors.
+    ONLY_COLORS = (WHITE, BLUE, BLACK, RED, GREEN)
+    COLORS_AND_COLORLESS = (WHITE, BLUE, BLACK, RED, GREEN, COLORLESS)
+
+    # The Snow.
+    SNOW = "snow"
+
+    # The Basic lands.
+    BASIC_LANDS = ("Plains", "Island", "Swamp", "Mountain", "Forest")
+    SNOW_LANDS = ("Snow-Covered Plains", "Snow-Covered Island", "Snow-Covered Swamp",
+                  "Snow-Covered Mountain", "Snow-Covered Forest")
+
+    ANY_COLOR_CONVERSION = "AnyType->AnyColor"
+    ANY_TYPE_CONVERSION = "AnyType->AnyType"
+
+    def __init__(self):
+        """Private constructor to prevent instantiation."""
+        raise RuntimeError("Constant is non-instantiable")
+
+
+class MagicColor:
+    """Holds byte values for each color magic has."""
+
+    # Colorless value synchronized with value in ManaAtom
+    WHITE = 1 << 0
+    BLUE = 1 << 1
+    BLACK = 1 << 2
+    RED = 1 << 3
+    GREEN = 1 << 4
+    # Colorless values for MagicColor needs to be the absence of any color
+    # Any comparison between colorless cards and colorless mana need to be adjusted appropriately.
+    COLORLESS = 0
+
+    ALL_COLORS = WHITE | BLUE | BLACK | RED | GREEN
+
+    NUMBER_OR_COLORS = 5
+
+    WUBRG = [WHITE, BLUE, BLACK, RED, GREEN]
+    WUBRGC = [WHITE, BLUE, BLACK, RED, GREEN, COLORLESS]
+    COLORPAIR = [WHITE | BLUE, BLUE | BLACK, BLACK | RED, RED | GREEN, GREEN | WHITE,
+                 WHITE | BLACK, BLUE | RED, BLACK | GREEN, RED | WHITE, GREEN | BLUE]
+
+    def __init__(self):
+        """Private constructor to prevent instantiation."""
+        raise RuntimeError("MagicColor is non-instantiable")
+
+    @staticmethod
+    def fromName(s):
+        if isinstance(s, str) and len(s) == 1:
+            # char overload: case-insensitive single character
+            c = s.lower()
+            if c == 'w':
+                return MagicColor.WHITE
+            elif c == 'u':
+                return MagicColor.BLUE
+            elif c == 'b':
+                return MagicColor.BLACK
+            elif c == 'r':
+                return MagicColor.RED
+            elif c == 'g':
+                return MagicColor.GREEN
+            elif c == 'c':
+                return MagicColor.COLORLESS
+            return 0  # unknown means 'colorless'
+        if s is None:
+            return 0
+        if s == "all":
+            return MagicColor.ALL_COLORS
+        if len(s) == 2:  # if name is two characters, check for combination of two colors
+            return MagicColor.fromName(s[0]) | MagicColor.fromName(s[1])
+        s = s.lower()
+        if len(s) == 1:
+            if s == "w":
+                return MagicColor.WHITE
+            elif s == "u":
+                return MagicColor.BLUE
+            elif s == "b":
+                return MagicColor.BLACK
+            elif s == "r":
+                return MagicColor.RED
+            elif s == "g":
+                return MagicColor.GREEN
+            elif s == "c":
+                return MagicColor.COLORLESS
+        else:
+            if s == Constant.WHITE:
+                return MagicColor.WHITE
+            elif s == Constant.BLUE:
+                return MagicColor.BLUE
+            elif s == Constant.BLACK:
+                return MagicColor.BLACK
+            elif s == Constant.RED:
+                return MagicColor.RED
+            elif s == Constant.GREEN:
+                return MagicColor.GREEN
+            elif s == Constant.COLORLESS:
+                return MagicColor.COLORLESS
+        return 0  # colorless
+
+    # This probably should be in ManaAtom since it cares about Mana, not Color.
+    @staticmethod
+    def toShortString(color):
+        if isinstance(color, str):
+            if color.lower() == Constant.SNOW:
+                return "S"
+            # compatibility
+            return MagicColor.toShortString(MagicColor.fromName(color))
+        return Color.fromByte(color).getShortName()
+
+    @staticmethod
+    def toLongString(color):
+        return Color.fromByte(color).getName()
+
+    @staticmethod
+    def toSymbol(color):
+        if isinstance(color, str):
+            return MagicColor.toSymbol(MagicColor.fromName(color))
+        return Color.fromByte(color).getSymbol()
+
+
+class Color(ITranslatable):
+
+    def __init__(self, name0, colormask0, shortName, basicLandType, label):
+        self.name = name0
+        self.colormask = colormask0
+        self.shortName = shortName
+        self.symbol = "{" + shortName + "}"
+        self.basicLandType = basicLandType
+        self.label = label
+
+    @staticmethod
+    def fromByte(color):
+        if color == MagicColor.WHITE:
+            return Color.WHITE
+        elif color == MagicColor.BLUE:
+            return Color.BLUE
+        elif color == MagicColor.BLACK:
+            return Color.BLACK
+        elif color == MagicColor.RED:
+            return Color.RED
+        elif color == MagicColor.GREEN:
+            return Color.GREEN
+        else:
+            return Color.COLORLESS
+
+    @staticmethod
+    def fromName(color):
+        if color is None:
+            return None
+        c = color.lower()
+        if c == Constant.WHITE:
+            return Color.WHITE
+        elif c == Constant.BLUE:
+            return Color.BLUE
+        elif c == Constant.BLACK:
+            return Color.BLACK
+        elif c == Constant.RED:
+            return Color.RED
+        elif c == Constant.GREEN:
+            return Color.GREEN
+        elif c == Constant.COLORLESS:
+            return Color.COLORLESS
+        else:
+            return None
+
+    def getName(self):
+        return self.name
+
+    def getShortName(self):
+        return self.shortName
+
+    def getBasicLandType(self):
+        return self.basicLandType
+
+    def getTranslatedName(self):
+        return Localizer.getInstance().getMessage(self.label)
+
+    def getColorMask(self):
+        return self.colormask
+
+    def getSymbol(self):
+        return self.symbol
+
+
+Color.WHITE = Color(Constant.WHITE, MagicColor.WHITE, "W", "Plains", "lblWhite")
+Color.BLUE = Color(Constant.BLUE, MagicColor.BLUE, "U", "Island", "lblBlue")
+Color.BLACK = Color(Constant.BLACK, MagicColor.BLACK, "B", "Swamp", "lblBlack")
+Color.RED = Color(Constant.RED, MagicColor.RED, "R", "Mountain", "lblRed")
+Color.GREEN = Color(Constant.GREEN, MagicColor.GREEN, "G", "Forest", "lblGreen")
+Color.COLORLESS = Color(Constant.COLORLESS, MagicColor.COLORLESS, "C", None, "lblColorless")
+
+MagicColor.Constant = Constant
+MagicColor.Color = Color
 ```

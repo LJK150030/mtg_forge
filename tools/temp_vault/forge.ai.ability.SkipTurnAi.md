@@ -39,7 +39,7 @@ classDiagram
 
 SkipTurnAi is the AI decision controller for "skip turn" spell abilities, determining whether the Forge AI should cast or activate them. As a concrete subclass of SpellAbilityAi, it overrides the framework's `canPlay` hook and gates the entire decision on the card-scripted `AILogic` parameter: only when that value equals "Always" does it commit (confidence 100, WillPlay); in every other case it declines (CantPlayAi). It reads context from the supplied Player and SpellAbility and reports its verdict as an AiAbilityDecision, which pairs a numeric score with an AiPlayDecision enum.
 
-The design intent is deliberately conservative—forfeiting a turn is rarely advantageous, so the AI refuses unless a card explicitly opts in through scripting rather than relying on heuristic evaluation. `chkDrawback` simply delegates to `canPlay`, applying identical logic whether the effect is a primary spell or a subordinate drawback.
+The design intent is deliberately conservativeâ€”forfeiting a turn is rarely advantageous, so the AI refuses unless a card explicitly opts in through scripting rather than relying on heuristic evaluation. `chkDrawback` simply delegates to `canPlay`, applying identical logic whether the effect is a primary spell or a subordinate drawback.
 
 ## Source
 `forge-ai/src/main/java/forge/ai/ability/SkipTurnAi.java`
@@ -74,4 +74,32 @@ public class SkipTurnAi extends SpellAbilityAi {
         return canPlay(aiPlayer, sa);
     }
 }
+```
+
+## Python
+`forge/ai/ability/SkipTurnAi.py`
+
+```python
+package SkipTurnAi.py
+
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.ai.SpellAbilityAi import SpellAbilityAi
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+
+
+class SkipTurnAi(SpellAbilityAi):
+    # (non-Javadoc)
+    # @see forge.card.abilityfactory.SpellAiLogic#canPlayAI(forge.game.player.Player, java.util.Map, forge.card.spellability.SpellAbility)
+    def canPlay(self, aiPlayer: Player, sa: SpellAbility) -> AiAbilityDecision:
+        if "Always" == sa.getParam("AILogic"):
+            return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+        else:
+            return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+    # (non-Javadoc)
+    # @see forge.card.abilityfactory.SpellAiLogic#chkAIDrawback(java.util.Map, forge.card.spellability.SpellAbility, forge.game.player.Player)
+    def chkDrawback(self, aiPlayer: Player, sa: SpellAbility) -> AiAbilityDecision:
+        return self.canPlay(aiPlayer, sa)
 ```

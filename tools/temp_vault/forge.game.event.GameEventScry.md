@@ -62,3 +62,30 @@ public record GameEventScry(PlayerView player, int toTop, int toBottom) implemen
     }
 }
 ```
+
+## Python
+`forge/game/event/GameEventScry.py`
+
+```python
+from forge.game.event.GameEvent import GameEvent
+from forge.game.event.IGameEventVisitor import IGameEventVisitor
+from forge.game.player.PlayerView import PlayerView
+
+
+class GameEventScry(GameEvent):
+    def __init__(self, player: PlayerView, toTop: int, toBottom: int):
+        self.player = player
+        self.toTop = toTop
+        self.toBottom = toBottom
+
+    def visit(self, visitor: IGameEventVisitor):
+        return visitor.visit(self)
+
+    # (non-Javadoc)
+    # @see java.lang.Object#toString()
+    def toString(self) -> str:
+        return "" + str(self.player) + " scried " + str(self.toTop) + " to top, " + str(self.toBottom) + " to bottom"
+
+    def __str__(self) -> str:
+        return self.toString()
+```

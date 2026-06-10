@@ -79,3 +79,38 @@ public class BranchEffect extends SpellAbilityEffect {
     }
 }
 ```
+
+## Python
+`forge/game/ability/effects/BranchEffect.py`
+
+```python
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Expressions import Expressions
+
+
+class BranchEffect(SpellAbilityEffect):
+    def resolve(self, sa: SpellAbility) -> None:
+        host: Card = sa.getHostCard()
+
+        # TODO Reuse SpellAbilityCondition and areMet() here instead of repeating each
+
+        branchSVar = sa.getParam("BranchConditionSVar")
+        branchCompare = sa.getParamOrDefault("BranchConditionSVarCompare", "GE1")
+
+        operator = branchCompare[0:2]
+        operand = branchCompare[2:]
+
+        svarValue: int = AbilityUtils.calculateAmount(host, branchSVar, sa)
+        operandValue: int = AbilityUtils.calculateAmount(host, operand, sa)
+
+        sub: SpellAbility = None
+        if Expressions.compare(svarValue, operator, operandValue):
+            sub = sa.getAdditionalAbility("TrueSubAbility")
+        else:
+            sub = sa.getAdditionalAbility("FalseSubAbility")
+        if sub is not None:
+            AbilityUtils.resolve(sub)
+```

@@ -83,3 +83,38 @@ public class FogEffect extends SpellAbilityEffect {
     }
 }
 ```
+
+## Python
+`forge/game/ability/effects/FogEffect.py`
+
+```python
+from forge.game.Game import Game
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.replacement.ReplacementEffect import ReplacementEffect
+from forge.game.replacement.ReplacementHandler import ReplacementHandler
+from forge.game.spellability.SpellAbility import SpellAbility
+
+
+class FogEffect(SpellAbilityEffect):
+
+    def getStackDescription(self, sa: SpellAbility) -> str:
+        return str(sa.getHostCard().getController()) + " prevents all combat damage this turn."
+
+    def resolve(self, sa: SpellAbility) -> None:
+        hostCard = sa.getHostCard()
+        game = hostCard.getGame()
+        name = str(hostCard) + "'s Effect"
+        image = hostCard.getImageKey()
+        sb = ["Event$ DamageDone | ActiveZones$ Command | IsCombat$ True"]
+        sb.append(" | Prevent$ True | Description$ Prevent all combat damage this turn.")
+        repeffstr = "".join(sb)
+
+        eff = self.createEffect(sa, hostCard.getController(), name, image)
+        re = ReplacementHandler.parseReplacement(repeffstr, eff, True)
+        eff.addReplacementEffect(re)
+
+        game.getAction().moveToCommand(eff, sa)
+
+        game.getEndOfTurn().addUntil(lambda: game.getAction().exileEffect(eff))
+```

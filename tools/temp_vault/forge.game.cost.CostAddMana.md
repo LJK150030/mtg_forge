@@ -48,7 +48,7 @@ classDiagram
 
 ## Design Description
 
-`CostAddMana` is a concrete cost component that, despite its name, grants rather than consumes mana — it adds a specified quantity of mana of a given type to the paying player's pool. Extending the abstract `CostPart`, it overrides the standard cost contract: `canPay` always returns true since adding mana imposes no precondition, and `payAsDecided` constructs `Mana` objects (colorless for numeric types, otherwise resolved via `ManaAtom.fromName`) sourced from the `SpellAbility`'s host `Card` and deposits them into the player's mana pool. Its low `paymentOrder` of 5 ensures the mana is produced early, before costs that might spend it.
+`CostAddMana` is a concrete cost component that, despite its name, grants rather than consumes mana â€” it adds a specified quantity of mana of a given type to the paying player's pool. Extending the abstract `CostPart`, it overrides the standard cost contract: `canPay` always returns true since adding mana imposes no precondition, and `payAsDecided` constructs `Mana` objects (colorless for numeric types, otherwise resolved via `ManaAtom.fromName`) sourced from the `SpellAbility`'s host `Card` and deposits them into the player's mana pool. Its low `paymentOrder` of 5 ensures the mana is produced early, before costs that might spend it.
 
 It collaborates with `SpellAbility` and `Player` to locate the source and target pool, and with `PaymentDecision` to determine the count. Participating in a visitor pattern, `accept` dispatches to `ICostVisitor`, keeping cost-type-specific handling external to the class hierarchy.
 
@@ -161,4 +161,71 @@ public class CostAddMana extends CostPart {
         return visitor.visit(this);
     }
 }
+```
+
+## Python
+`forge/game/cost/CostAddMana.py`
+
+```python
+from forge.game.cost.CostPart import CostPart
+from forge.card.mana.ManaAtom import ManaAtom
+from forge.game.card.Card import Card
+from forge.game.mana.Mana import Mana
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.cost.ICostVisitor import ICostVisitor
+from forge.game.cost.PaymentDecision import PaymentDecision
+
+from org.apache.commons.lang3.StringUtils import StringUtils
+
+
+class CostAddMana(CostPart):
+    """The Class CostAddMana."""
+
+    serialVersionUID = 1
+
+    def __init__(self, amount: str, type: str, description: str):
+        """
+        CostCostAddMana.
+        :param amount:
+        """
+        super().__init__(amount, type, description)
+
+    def paymentOrder(self) -> int:
+        return 5
+
+    def toString(self) -> str:
+        sb = []
+        i = self.convertAmount()
+        sb.append("Add " + StringUtils.repeat("{" + self.getType() + "}", i))
+        return "".join(sb)
+
+    def canPay(self, ability: SpellAbility, payer: Player, effect: bool) -> bool:
+        return True
+
+    def payAsDecided(self, ai: Player, decision: PaymentDecision, sa: SpellAbility, effect: bool) -> bool:
+        source = sa.getHostCard()
+
+        manaProduced: list[Mana] = []
+        type = self.getType()
+        for n in range(decision.c):
+            if StringUtils.isNumeric(type):
+                i = int(type)
+                while i > 0:
+                    manaProduced.append(Mana(ManaAtom.COLORLESS & 0xFF, source, None, ai))
+                    i -= 1
+            else:
+                attemptedMana = ManaAtom.fromName(type)
+                # Commander rules removed mana generation to avoid colorless abusese
+                #
+                # if cid != None:
+                #     if not cid.hasAnyColor(attemptedMana):
+                #         attemptedMana = ManaAtom.COLORLESS
+                #
+                manaProduced.append(Mana(attemptedMana, source, None, ai))
+        ai.getManaPool().add(manaProduced)
+        return True
+
+    def accept(self, visitor: ICostVisitor):
+        return visitor.visit(self)
 ```

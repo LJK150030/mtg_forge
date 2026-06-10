@@ -38,6 +38,12 @@ classDiagram
 **Extends:**
 - [[forge.util.storage.StorageReaderBase|StorageReaderBase]]
 
+## Design Description
+
+StorageReaderRecursiveFolderWithUserFolder is an abstract base for storage readers that load named objects of type `T` from disk, drawing files from both a built-in item directory and a parallel user directory so bundled and user-supplied content are merged into a single keyed collection. Extending StorageReaderBase, it inherits the key-selector machinery and supplies the file-traversal logic: readAll recursively walks both directory trees, deserializes each matching file via the abstract read method, and keys results through the inherited keySelector, warning on key collisions and recording deserialization failures in objectsThatFailedToLoad rather than aborting.
+
+Subclasses customize behavior by implementing read and getFileFilter, leaving traversal, error tolerance, and user-folder overlay fixed here. The recursive listFileTree and getSubFolders accessors support nested folder layouts, while defensive null checks and directory auto-creation in the constructor make the reader resilient to missing or malformed paths.
+
 ## Source
 `forge-core/src/main/java/forge/util/storage/StorageReaderRecursiveFolderWithUserFolder.java`
 
@@ -196,4 +202,11 @@ public abstract class StorageReaderRecursiveFolderWithUserFolder<T> extends Stor
         return Arrays.asList(list);
     }
 }
+```
+
+## Python
+`forge/util/storage/StorageReaderRecursiveFolderWithUserFolder.py`
+
+```python
+package forge.util.storage ΓåÆ module path forge/util/storage/StorageReaderRecursiveFolderWithUserFolder.py. Dependencies: forge.util.TextUtil, forge.util.storage.StorageReaderBase.
 ```

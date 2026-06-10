@@ -83,3 +83,38 @@ public record GameEventCardChangeZone(CardView card, ZoneView from, ZoneView to)
     }
 }
 ```
+
+## Python
+`forge/game/event/GameEventCardChangeZone.py`
+
+```python
+from forge.game.card.Card import Card
+from forge.game.card.CardView import CardView
+from forge.game.event.GameEvent import GameEvent
+from forge.game.event.IGameEventVisitor import IGameEventVisitor
+from forge.game.zone.Zone import Zone
+from forge.game.zone.ZoneView import ZoneView
+from forge.util.TextUtil import TextUtil
+
+
+class GameEventCardChangeZone(GameEvent):
+    def __init__(self, card, zoneFrom=None, zoneTo=None, *, from_=None, to=None):
+        if isinstance(card, Card) or zoneFrom is not None or zoneTo is not None:
+            self.card = CardView.get(card)
+            self.from_ = None if zoneFrom is None else zoneFrom.getView()
+            self.to = None if zoneTo is None else zoneTo.getView()
+        else:
+            self.card = card
+            self.from_ = from_
+            self.to = to
+
+    def visit(self, visitor):
+        return visitor.visit(self)
+
+    # (non-Javadoc)
+    # @see java.lang.Object#toString()
+    def __str__(self):
+        fromStr = "" + self.from_.zoneType() if self.from_ is not None else "null"
+        toStr = "" + self.to.zoneType() if self.to is not None else "null"
+        return TextUtil.concatWithSpace("" + self.card, ":", TextUtil.enclosedBracket(fromStr), "->", TextUtil.enclosedBracket(toStr))
+```

@@ -51,7 +51,7 @@ classDiagram
 
 ## Design Description
 
-AttackRequirement encapsulates the "must attack" obligations imposed on a single attacking Card during the combat declaration phase. Built from the attacker, a Multimap of cards-that-cause-attacks-with-their-StaticAbilities, and the possible defenders, its constructor consolidates every source of compulsion—goad, MustAttack static abilities, and defender-specific demands—into a per-GameEntity weight map, while pruning defenders that have left an opposing battlefield or belong to players no longer in the game.
+AttackRequirement encapsulates the "must attack" obligations imposed on a single attacking Card during the combat declaration phase. Built from the attacker, a Multimap of cards-that-cause-attacks-with-their-StaticAbilities, and the possible defenders, its constructor consolidates every source of compulsionâ€”goad, MustAttack static abilities, and defender-specific demandsâ€”into a per-GameEntity weight map, while pruning defenders that have left an opposing battlefield or belong to players no longer in the game.
 
 As a plain helper collaborating with Combat, AttackRestriction, and GlobalAttackRestrictions, it exposes query methods rather than enforcing rules itself: hasRequirement reports whether any obligation exists, countViolations scores how badly a proposed attack assignment breaches these requirements (discounting cases neutralized by ONLY_ALONE restrictions, attack costs, or global maximums), and getSortedRequirements ranks defenders by demand. This separation lets the combat AI and validation logic treat requirement-satisfaction as an optimizable cost, keeping legality decisions in the surrounding combat framework.
 
@@ -188,4 +188,111 @@ public class AttackRequirement {
     }
 
 }
+```
+
+## Python
+`forge/game/combat/AttackRequirement.py`
+
+```python
+from typing import List
+
+from forge.game.Game import Game
+from forge.game.GameEntity import GameEntity
+from forge.game.card.Card import Card
+from forge.game.combat.AttackRestriction import AttackRestriction
+from forge.game.combat.AttackRestrictionType import AttackRestrictionType
+from forge.game.combat.Combat import Combat
+from forge.game.combat.CombatUtil import CombatUtil
+from forge.game.combat.GlobalAttackRestrictions import GlobalAttackRestrictions
+from forge.game.player.Player import Player
+from forge.game.staticability.StaticAbility import StaticAbility
+from forge.game.staticability.StaticAbilityMustAttack import StaticAbilityMustAttack
+from forge.util.collect.FCollectionView import FCollectionView
+
+
+class AttackRequirement:
+
+    def __init__(self, attacker: Card, causesToAttack, possibleDefenders: FCollectionView):
+        self.defenderSpecific: dict[GameEntity, int] = {}
+        self.attacker = attacker
+        self.causesToAttack = causesToAttack
+
+        game = attacker.getGame()
+        nAttackAnything = 0
+
+        if attacker.isGoaded():
+            # Goad has two requirements but the other is handled by CombatUtil currently
+            nAttackAnything += len(attacker.getGoaded())
+
+        # MustAttack static check
+        mustAttack = StaticAbilityMustAttack.entitiesMustAttack(attacker)
+        for e in mustAttack:
+            if e == attacker:
+                nAttackAnything += 1
+            else:
+                self.defenderSpecific[e] = self.defenderSpecific.get(e, 0) + 1
+
+        for defender in possibleDefenders:
+            # use put here because we want to always put it, even if the value is 0
+            self.defenderSpecific[defender] = self.defenderSpecific.get(defender, 0) + nAttackAnything
+
+        # Remove GameEntities that are no longer on an opposing battlefield or are
+        # related to Players who have lost the game
+        toRemove: List[GameEntity] = []
+        for entity in self.defenderSpecific.keys():
+            removeThis = False
+            if isinstance(entity, Player):
+                if not entity.isInGame():
+                    removeThis = True
+            elif isinstance(entity, Card):
+                reqPW = entity
+                gamePW = game.getCardState(reqPW, None)
+                if (gamePW is None or not gamePW.getController().isInGame() or not gamePW.equalsWithGameTimestamp(reqPW)
+                        or (not gamePW.isBattle() and not gamePW.getController().isOpponentOf(attacker.getController()))):
+                    removeThis = True
+            if removeThis:
+                toRemove.append(entity)
+        for entity in toRemove:
+            del self.defenderSpecific[entity]
+
+    def getAttacker(self) -> Card:
+        return self.attacker
+
+    def hasRequirement(self) -> bool:
+        return any(i > 0 for i in self.defenderSpecific.values()) or not self.causesToAttack.isEmpty()
+
+    def getCausesToAttack(self):
+        return self.causesToAttack
+
+    def countViolations(self, defender: GameEntity, attackers: dict[Card, GameEntity]) -> int:
+        if not self.hasRequirement():
+            return 0
+
+        isAttacking = defender is not None
+        violations = sum(self.defenderSpecific.values()) \
+            - (self.defenderSpecific.get(defender, 0) if isAttacking else 0)
+        if isAttacking:
+            combat = defender.getGame().getCombat()
+            constraints = combat.getAttackConstraints().getRestrictions()
+
+            # check if a restriction will apply such that the requirement is no longer relevant
+            if len(attackers) != 1 or AttackRestrictionType.ONLY_ALONE not in constraints.get(next(iter(attackers.items()))[0]).getTypes():
+                for mustAttackKey, mustAttackValue in self.causesToAttack.asMap().items():
+                    if AttackRestrictionType.ONLY_ALONE in constraints.get(mustAttackKey).getTypes():
+                        continue
+                    max_ = GlobalAttackRestrictions.getGlobalRestrictions(mustAttackKey.getController(), combat.getDefenders()).getMax()
+                    if max_ is None:
+                        max_ = 2147483647
+
+                    # only count violations if the forced creature can actually attack and has no cost incurred for doing so
+                    if len(attackers) < max_ and mustAttackKey not in attackers and CombatUtil.canAttack(mustAttackKey) and CombatUtil.getAttackCost(defender.getGame(), mustAttackKey, defender) is None:
+                        violations += len(mustAttackValue)
+        return violations
+
+    def getSortedRequirements(self) -> List:
+        entries = []
+        for key, value in self.defenderSpecific.items():
+            entries.append((key, value))
+        entries.sort(key=lambda entry: entry[1])
+        return entries
 ```

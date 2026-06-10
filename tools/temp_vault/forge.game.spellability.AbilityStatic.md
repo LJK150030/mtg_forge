@@ -43,6 +43,12 @@ classDiagram
 - [[forge.game.cost.Cost|Cost]]
 - [[forge.game.spellability.TargetRestrictions|TargetRestrictions]]
 
+## Design Description
+
+Static abilities are mana-cost-bearing activated abilities that resolve continuously rather than through the stack. This abstract class extends `Ability`, the base activated-ability type, and implements `Cloneable` so individual ability instances can be duplicated when cards are copied. It collaborates with `Card` (its host), `ManaCost`, `Cost`, `CardState`, and `TargetRestrictions`, exposing constructors that delegate to the superclass for the common combinations of cost, source state, and targeting.
+
+The class overrides `canPlay()` to layer a static-specific legality checkâ€”rejecting activation when a replacement effect (e.g., Karlov Watchdog) forbids turning a face-down permanent face upâ€”before deferring to the inherited restriction logic. Its `clone()` is declared `final` and wraps the protected `Object.clone()`, converting checked exceptions into a runtime error to guarantee that every subclass remains reliably copyable.
+
 ## Source
 `forge-game/src/main/java/forge/game/spellability/AbilityStatic.java`
 
@@ -125,4 +131,57 @@ public abstract class AbilityStatic extends Ability implements Cloneable {
         }
     }
 }
+```
+
+## Python
+`forge/game/spellability/AbilityStatic.py`
+
+```python
+from forge.game.spellability.Ability import Ability
+from forge.card.mana.ManaCost import ManaCost
+from forge.game.card.Card import Card
+from forge.game.card.CardState import CardState
+from forge.game.cost.Cost import Cost
+from forge.game.spellability.TargetRestrictions import TargetRestrictions
+
+
+class AbilityStatic(Ability):
+    """
+    Abstract Ability_Static class.
+
+    @author Forge
+    @version $Id$
+    """
+
+    def __init__(self, sourceCard: Card, costOrManaCost, stateOrTgt=None):
+        # Constructor for Ability_Static.
+        #
+        # Java overloads:
+        #   AbilityStatic(Card sourceCard, ManaCost manaCost)
+        #   AbilityStatic(Card sourceCard, ManaCost manaCost, CardState state)
+        #   AbilityStatic(Card sourceCard, Cost abCost, TargetRestrictions tgt)
+        if isinstance(costOrManaCost, ManaCost):
+            if stateOrTgt is None:
+                super().__init__(sourceCard, costOrManaCost)
+            else:
+                super().__init__(sourceCard, costOrManaCost, stateOrTgt)
+        else:
+            super().__init__(sourceCard, costOrManaCost)
+            self.setTargetRestrictions(stateOrTgt)
+
+    def canPlay(self) -> bool:
+        c = self.getHostCard()
+
+        # Check if ability can't be attempted because of replacement effect
+        # Initial usage is Karlov Watchdog preventing disguise/morph/cloak/manifest turning face up
+        if self.isTurnFaceUp() and not c.canBeTurnedFaceUp():
+            return False
+
+        return self.getRestrictions().canPlay(c, self)
+
+    def clone(self):
+        try:
+            return super().clone()
+        except Exception as ex:
+            raise RuntimeError("AbilityStatic : clone() error, " + str(ex))
 ```

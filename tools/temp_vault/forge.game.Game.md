@@ -325,7 +325,7 @@ classDiagram
 
 ## Design Description
 
-Represents the complete mutable state of a single Magic: the Gathering game, a fresh instance being created for each game played within a [[forge.game.Match|Match]]. As the central aggregate root of the `forge-game` module, it owns and wires together the game's major subsystems—the [[forge.game.zone.MagicStack|MagicStack]], [[forge.game.phase.PhaseHandler|PhaseHandler]], [[forge.game.trigger.TriggerHandler|TriggerHandler]], [[forge.game.replacement.ReplacementHandler|ReplacementHandler]], and [[forge.game.StaticEffects|StaticEffects]]—and tracks the [[forge.game.player.Player|Player]] collections, turn order, zones, and per-turn histories (counters, damage, cards that left a zone) that rules logic queries.
+Represents the complete mutable state of a single Magic: the Gathering game, a fresh instance being created for each game played within a [[forge.game.Match|Match]]. As the central aggregate root of the `forge-game` module, it owns and wires together the game's major subsystemsâ€”the [[forge.game.zone.MagicStack|MagicStack]], [[forge.game.phase.PhaseHandler|PhaseHandler]], [[forge.game.trigger.TriggerHandler|TriggerHandler]], [[forge.game.replacement.ReplacementHandler|ReplacementHandler]], and [[forge.game.StaticEffects|StaticEffects]]â€”and tracks the [[forge.game.player.Player|Player]] collections, turn order, zones, and per-turn histories (counters, damage, cards that left a zone) that rules logic queries.
 
 It centralizes cross-cutting concerns: card lookup across all zones via lightweight `Visitor` traversals that avoid temporary allocations, last-known-information snapshots, an [[forge.game.GameView|GameView]]/[[forge.trackable.Tracker|Tracker]] facade decoupling presentation from state, and a Guava `EventBus` for decoupled event notification. Notable design intent includes immutable `final` subsystem references established in the constructor, idempotent `synchronized` game-over handling, and detailed rules-citation-driven cleanup when a player leaves.
 
@@ -1051,7 +1051,7 @@ public class Game {
         }
         Card found = visit.getFound();
         if (found == null) {
-            netLog.error("findByView: id={} (zone={}, controller={}) not found in any zone â€” returning null",
+            netLog.error("findByView: id={} (zone={}, controller={}) not found in any zone Ã¢â‚¬â€ returning null",
                     view.getId(), view.getZone(), view.getController());
         }
         return found;
@@ -1697,8 +1697,8 @@ public class Game {
                 if (c.isInZone(ZoneType.Hand)) {
                     c.forceTurnFaceUp();
 
-                    // If an effect allows or instructs a player to reveal the card as itâ€™s being drawn,
-                    // itâ€™s revealed after the spell becomes cast or the ability becomes activated.
+                    // If an effect allows or instructs a player to reveal the card as itÃ¢â‚¬â„¢s being drawn,
+                    // itÃ¢â‚¬â„¢s revealed after the spell becomes cast or the ability becomes activated.
                     final Map<AbilityKey, Object> runParams = AbilityKey.mapFromCard(c);
                     runParams.put(AbilityKey.Number, facedownWhileCasting.get(c));
                     runParams.put(AbilityKey.Player, c.getOwner());
@@ -1754,4 +1754,1162 @@ public class Game {
         return AI_CAN_USE_TIMEOUT;
     }
 }
+```
+
+## Python
+`forge/game/Game.py`
+
+```python
+from collections import defaultdict
+import logging
+import threading
+
+from forge.GameCommand import GameCommand
+from forge.card.CardRarity import CardRarity
+from forge.card.CardStateName import CardStateName
+from forge.game.CardTraitBase import CardTraitBase
+from forge.game.Direction import Direction
+from forge.game.GameAction import GameAction
+from forge.game.GameEndReason import GameEndReason
+from forge.game.GameEntity import GameEntity
+from forge.game.GameEntityCache import GameEntityCache
+from forge.game.GameLog import GameLog
+from forge.game.GameLogEntryType import GameLogEntryType
+from forge.game.GameOutcome import GameOutcome
+from forge.game.GameRules import GameRules
+from forge.game.GameSnapshot import GameSnapshot
+from forge.game.GameStage import GameStage
+from forge.game.GameView import GameView
+from forge.game.Match import Match
+from forge.game.StaticEffects import StaticEffects
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.card.CardCopyService import CardCopyService
+from forge.game.card.CardDamageHistory import CardDamageHistory
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CardPredicates import CardPredicates
+from forge.game.card.CardView import CardView
+from forge.game.card.CardZoneTable import CardZoneTable
+from forge.game.card.CounterType import CounterType
+from forge.game.combat.Combat import Combat
+from forge.game.event.Event import Event
+from forge.game.event.GameEventAddLog import GameEventAddLog
+from forge.game.event.GameEventDayTimeChanged import GameEventDayTimeChanged
+from forge.game.event.GameEventGameOutcome import GameEventGameOutcome
+from forge.game.phase.Phase import Phase
+from forge.game.phase.PhaseHandler import PhaseHandler
+from forge.game.phase.PhaseType import PhaseType
+from forge.game.phase.Untap import Untap
+from forge.game.player.IGameEntitiesFactory import IGameEntitiesFactory
+from forge.game.player.Player import Player
+from forge.game.player.PlayerCollection import PlayerCollection
+from forge.game.player.PlayerView import PlayerView
+from forge.game.player.RegisteredPlayer import RegisteredPlayer
+from forge.game.replacement.ReplacementHandler import ReplacementHandler
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.spellability.SpellAbilityStackInstance import SpellAbilityStackInstance
+from forge.game.staticability.StaticAbilityCantChangeDayTime import StaticAbilityCantChangeDayTime
+from forge.game.trigger.TriggerHandler import TriggerHandler
+from forge.game.trigger.TriggerType import TriggerType
+from forge.game.zone.CostPaymentStack import CostPaymentStack
+from forge.game.zone.MagicStack import MagicStack
+from forge.game.zone.PlayerZoneBattlefield import PlayerZoneBattlefield
+from forge.game.zone.Zone import Zone
+from forge.game.zone.ZoneType import ZoneType
+from forge.trackable.Tracker import Tracker
+from forge.util.Aggregates import Aggregates
+from forge.util.IterableUtil import IterableUtil
+from forge.util.MyRandom import MyRandom
+from forge.util.Visitor import Visitor
+from forge.util.collect.FCollection import FCollection
+
+
+class Game:
+    """Represents the state of a single game, a new instance is created for each game."""
+
+    netLog = logging.getLogger("NETWORK")
+
+    maxId = 0
+
+    @staticmethod
+    def nextId():
+        Game.maxId += 1
+        return Game.maxId
+
+    def __init__(self, players0, rules0, match0, maingame0=None, startingLife=-1):
+        self._lock = threading.RLock()
+
+        self.rules = rules0
+        self.allPlayers = PlayerCollection()
+        self.ingamePlayers = PlayerCollection()
+        self.lostPlayers = PlayerCollection()
+
+        self.activePlanes = None
+
+        self.costPaymentStack = CostPaymentStack()
+        self.staticEffects = StaticEffects()
+        self.triggerHandler = TriggerHandler(self)
+        self.replacementHandler = ReplacementHandler(self)
+        self.events = []  # Guava EventBus("game events")
+        self.gameLog = GameLog()
+
+        self.stackZone = Zone(ZoneType.Stack, self)
+        self.AI_TIMEOUT = 5
+        self.AI_CAN_USE_TIMEOUT = True
+
+        self.EXPERIMENTAL_RESTORE_SNAPSHOT = False
+        # While this is false here, its really set by the Match/Preferences
+
+        # If this merges with LKI In the future, it will need to change forms
+        self.previousGameState = None
+        self.lastStateBattlefield = CardCollection()
+        self.lastStateGraveyard = CardCollection()
+
+        self.untilHostLeavesPlayTriggerList = CardZoneTable()
+
+        # Table<CounterType, Player, List<Pair<Card, Integer>>>
+        self.countersAddedThisTurn = {}
+        # Multimap<CounterType, Pair<GameEntity, Integer>>
+        self.countersRemovedThisTurn = defaultdict(list)
+
+        self.leftBattlefieldThisTurn = []
+        self.leftGraveyardThisTurn = []
+
+        self.globalDamageHistory = FCollection()
+        self.damageThisTurnLKI = {}
+
+        self.topLibsCast = {}
+        self.facedownWhileCasting = {}
+
+        self.initiative = None
+        self.monarch = None
+        self.monarchBeginTurn = None
+        self.startingPlayer = None
+
+        self.turnOrder = Direction.getDefaultDirection()
+
+        self.daytime = None
+
+        self.numPiledGuessedSA = 0
+
+        self.timestamp = 0
+        self.age = GameStage.BeforeMulligan
+        self.outcome = None
+        self.match = match0
+        self.maingame = maingame0
+
+        self.tracker = Tracker()
+
+        self.playerCache = GameEntityCache()
+
+        # methods that deal with saving, retrieving and clearing LKI information about cards on zone change
+        # Table<Integer, Long, Card>
+        self.changeZoneLKIInfo = {}
+
+        self.cardIdCounter = 0
+        self.hiddenCardIdCounter = 0
+
+        self.id = Game.nextId()
+
+        highestTeam = -1
+        for psc in players0:
+            # Track highest team number for auto assigning unassigned teams
+            teamNum = psc.getTeamNumber()
+            if teamNum > highestTeam:
+                highestTeam = teamNum
+
+        # View needs to be done before PlayerController
+        self.view = GameView(self)
+
+        plId = 0
+        for psc in players0:
+            factory = psc.getPlayer()
+            # If the Registered Player already has a pre-assigned ID, use that. Otherwise, assign a new one.
+            id = psc.getId()
+            if id is None:
+                pid = plId
+                plId += 1
+            else:
+                pid = id
+            pl = factory.createIngamePlayer(self, pid)
+            self.allPlayers.add(pl)
+            self.ingamePlayers.add(pl)
+
+            if startingLife != -1:
+                pl.setStartingLife(startingLife)
+            else:
+                pl.setStartingLife(psc.getStartingLife())
+            pl.setMaxHandSize(psc.getStartingHand())
+            pl.setStartingHandSize(psc.getStartingHand())
+
+            if psc.getManaShards() > 0:
+                pl.setNumManaShards(psc.getManaShards())
+            teamNum = psc.getTeamNumber()
+            if teamNum == -1:
+                # RegisteredPlayer doesn't have an assigned team, set it to 1 higher than the highest found team number
+                highestTeam += 1
+                teamNum = highestTeam
+                psc.setTeamNumber(teamNum)
+
+            pl.setTeam(teamNum)
+
+        self.action = GameAction(self)
+        self.stack = MagicStack(self)
+        self.phaseHandler = PhaseHandler(self)
+
+        self.untap = Untap(self)
+        self.upkeep = Phase(PhaseType.UPKEEP)
+        self.beginOfCombat = Phase(PhaseType.COMBAT_BEGIN)
+        self.endOfCombat = Phase(PhaseType.COMBAT_END)
+        self.endOfTurn = Phase(PhaseType.END_OF_TURN)
+        self.cleanup = Phase(PhaseType.CLEANUP)
+
+        self.sbaCheckedCommandList = []
+
+        self.view.updatePlayers(self)
+
+        self.subscribeToEvents(self.gameLog.getEventVisitor())
+
+    def getId(self):
+        return self.id
+
+    def getStartingPlayer(self):
+        return self.startingPlayer
+
+    def setStartingPlayer(self, p):
+        self.startingPlayer = p
+
+    def getMonarch(self):
+        return self.monarch
+
+    def setMonarch(self, p):
+        self.monarch = p
+
+    def getMonarchBeginTurn(self):
+        return self.monarchBeginTurn
+
+    def setMonarchBeginTurn(self, monarchBeginTurn):
+        self.monarchBeginTurn = monarchBeginTurn
+
+    def getHasInitiative(self):
+        return self.initiative
+
+    def setHasInitiative(self, p):
+        self.initiative = p
+
+    def getUntilHostLeavesPlayTriggerList(self):
+        return self.untilHostLeavesPlayTriggerList
+
+    def getLastStateBattlefield(self):
+        return self.lastStateBattlefield
+
+    def getLastStateGraveyard(self):
+        return self.lastStateGraveyard
+
+    def stashGameState(self):
+        # Take a snapshot of the current state to restore to previous state
+        if self.EXPERIMENTAL_RESTORE_SNAPSHOT:
+            self.previousGameState = GameSnapshot(self)
+            self.previousGameState.makeCopy()
+
+    def restoreGameState(self):
+        # Restore game state snapshot
+        if self.previousGameState is None or not self.EXPERIMENTAL_RESTORE_SNAPSHOT:
+            return False
+
+        self.previousGameState.restoreGameState(self)
+        return True
+
+    def copyLastState(self, *args):
+        if not args:
+            self.lastStateBattlefield.clear()
+            self.lastStateGraveyard.clear()
+            cachedMap = {}
+            for p in self.getPlayers():
+                self.lastStateBattlefield.addAll(p.getZone(ZoneType.Battlefield).getLKICopy(cachedMap))
+                self.lastStateGraveyard.addAll(p.getZone(ZoneType.Graveyard).getLKICopy(cachedMap))
+            return None
+
+        type = args[0]
+        result = CardCollection()
+        cachedMap = {}
+        for p in self.getPlayers():
+            result.addAll(p.getZone(type).getLKICopy(cachedMap))
+        return result
+
+    def copyLastStateBattlefield(self):
+        return self.copyLastState(ZoneType.Battlefield)
+
+    def copyLastStateGraveyard(self):
+        return self.copyLastState(ZoneType.Graveyard)
+
+    def updateLastStateForCard(self, c):
+        if c is None or c.getZone() is None:
+            return
+
+        zone = c.getZone().getZoneType()
+        lookup = self.lastStateBattlefield if zone == ZoneType.Battlefield \
+            else self.lastStateGraveyard if zone == ZoneType.Graveyard \
+            else None
+
+        if lookup is not None:
+            self.lastStateBattlefield.remove(c)
+            self.lastStateGraveyard.remove(c)
+            lookup.add(CardCopyService.getLKICopy(c))
+
+    def getPlayer(self, arg):
+        if isinstance(arg, int):
+            for p in self.allPlayers:
+                if p.getId() == arg:
+                    return p
+            return None
+        return self.playerCache.get(arg)
+
+    def addPlayer(self, id, player):
+        self.playerCache.put(id, player)
+
+    def addChangeZoneLKIInfo(self, lki):
+        if lki is None:
+            return
+        self.changeZoneLKIInfo.setdefault(lki.getId(), {})[lki.getGameTimestamp()] = lki
+
+    def getChangeZoneLKIInfo(self, c):
+        if c is None:
+            return None
+        row = self.changeZoneLKIInfo.get(c.getId())
+        val = row.get(c.getGameTimestamp()) if row is not None else None
+        return val if val is not None else c
+
+    def clearChangeZoneLKIInfo(self):
+        self.changeZoneLKIInfo.clear()
+
+    def addLeftBattlefieldThisTurn(self, lki):
+        self.leftBattlefieldThisTurn.append(lki)
+
+    def addLeftGraveyardThisTurn(self, lki):
+        self.leftGraveyardThisTurn.append(lki)
+
+    def getLeftBattlefieldThisTurn(self):
+        return self.leftBattlefieldThisTurn
+
+    def getLeftGraveyardThisTurn(self):
+        return self.leftGraveyardThisTurn
+
+    def clearLeftBattlefieldThisTurn(self):
+        self.leftBattlefieldThisTurn.clear()
+
+    def clearLeftGraveyardThisTurn(self):
+        self.leftGraveyardThisTurn.clear()
+
+    def getView(self):
+        return self.view
+
+    def getTracker(self):
+        return self.tracker
+
+    def getPlayers(self):
+        """Gets the players who are still fighting to win."""
+        return self.ingamePlayers
+
+    def getLostPlayers(self):
+        return self.lostPlayers
+
+    def getPlayersInTurnOrder(self, *args):
+        if not args:
+            if self.getTurnOrder().isDefaultDirection():
+                return self.ingamePlayers
+            players = PlayerCollection(self.ingamePlayers)
+            # Collections.reverse(players)
+            data = list(players)
+            data.reverse()
+            players.clear()
+            players.addAll(data)
+            return players
+
+        p = args[0]
+        players = PlayerCollection(self.getPlayersInTurnOrder())
+
+        i = players.indexOf(p)
+        # Collections.rotate(players, -i)
+        n = len(list(players))
+        if n != 0:
+            i %= n
+            data = list(players)
+            rotated = data[i:] + data[:i]
+            players.clear()
+            players.addAll(rotated)
+        return players
+
+    def getRegisteredPlayers(self):
+        """Gets the players who participated in match (regardless of outcome)."""
+        return self.allPlayers
+
+    def getUntap(self):
+        return self.untap
+
+    def getUpkeep(self):
+        return self.upkeep
+
+    def getBeginOfCombat(self):
+        return self.beginOfCombat
+
+    def getEndOfCombat(self):
+        return self.endOfCombat
+
+    def getEndOfTurn(self):
+        return self.endOfTurn
+
+    def getCleanup(self):
+        return self.cleanup
+
+    def addSBACheckedCommand(self, c):
+        self.sbaCheckedCommandList.append(c)
+
+    def runSBACheckedCommands(self):
+        for c in self.sbaCheckedCommandList:
+            c.run()
+        self.sbaCheckedCommandList.clear()
+
+    def getStaticEffects(self):
+        return self.staticEffects
+
+    def getReplacementHandler(self):
+        return self.replacementHandler
+
+    def getTriggerHandler(self):
+        return self.triggerHandler
+
+    def getPhaseHandler(self):
+        return self.phaseHandler
+
+    def updateTurnForView(self):
+        self.view.updateTurn(self.phaseHandler)
+
+    def updatePhaseForView(self):
+        self.view.updatePhase(self.phaseHandler)
+
+    def updatePlayerTurnForView(self):
+        self.view.updatePlayerTurn(self.phaseHandler)
+
+    def getStack(self):
+        return self.stack
+
+    def updateStackForView(self):
+        self.view.updateStack(self.stack)
+
+    def getCombat(self):
+        return self.getPhaseHandler().getCombat()
+
+    def updateCombatForView(self):
+        self.view.updateCombat(self.getCombat())
+
+    def getGameLog(self):
+        return self.gameLog
+
+    def getStackZone(self):
+        return self.stackZone
+
+    def getCardsPlayerCanActivateInStack(self):
+        def _pred(c):
+            for sa in c.getSpellAbilities():
+                restrictZone = sa.getRestrictions().getZone()
+                if ZoneType.Stack == restrictZone:
+                    return True
+            return False
+        return CardLists.filter(self.stackZone.getCards(), _pred)
+
+    def getTurnOrder(self):
+        """The Direction in which the turn order of this Game currently proceeds."""
+        if self.phaseHandler.getPlayerTurn() is not None and self.phaseHandler.getPlayerTurn().isTurnOrderReversed():
+            return self.turnOrder.getOtherDirection()
+        return self.turnOrder
+
+    def reverseTurnOrder(self):
+        self.turnOrder = self.turnOrder.getOtherDirection()
+
+    def resetTurnOrder(self):
+        self.turnOrder = Direction.getDefaultDirection()
+
+    def getNextTimestamp(self):
+        """Create and return the next timestamp."""
+        self.timestamp = self.getTimestamp() + 1
+        return self.getTimestamp()
+
+    def getTimestamp(self):
+        return self.timestamp
+
+    def dangerouslySetTimestamp(self, timestamp):
+        self.timestamp = timestamp
+
+    def getOutcome(self):
+        return self.outcome
+
+    def getMaingame(self):
+        return self.maingame
+
+    def isGameOver(self):
+        with self._lock:
+            return self.age == GameStage.GameOver
+
+    def setGameOver(self, reason):
+        with self._lock:
+            # early exit in case many events causing a game over have fired
+            if self.isGameOver():
+                return
+
+            for p in self.allPlayers:
+                p.clearController()
+            self.age = GameStage.GameOver
+
+            for p in self.getPlayers():
+                p.onGameOver()
+
+            result = GameOutcome(reason, self.getRegisteredPlayers())
+            result.setTurnsPlayed(self.getPhaseHandler().getTurn())
+
+            self.outcome = result
+            if self.maingame is None:
+                self.match.addGamePlayed(self)
+
+            self.view.updateGameOver(self)
+
+            # The log shall listen to events and generate text internally
+            if self.maingame is None:
+                self.fireEvent(GameEventGameOutcome(result, self.match.getOutcomes()))
+
+    def getZoneOf(self, card):
+        return None if card is None else card.getLastKnownZone()
+
+    def getCardsIn(self, zoneOrZones):
+        if isinstance(zoneOrZones, ZoneType):
+            with self._lock:
+                if zoneOrZones == ZoneType.Stack:
+                    return self.getStackZone().getCards()
+                return self.getPlayers().getCardsIn(zoneOrZones)
+        cards = CardCollection()
+        for z in zoneOrZones:
+            cards.addAll(self.getCardsIn(z))
+        return cards
+
+    def getCardsIncludePhasingIn(self, zone):
+        if zone == ZoneType.Stack:
+            return self.getStackZone().getCards()
+
+        cards = CardCollection()
+        for p in self.getPlayers():
+            cards.addAll(p.getCardsIn(zone, False))
+        return cards
+
+    def getCardsInOwnedBy(self, zones, p):
+        cards = CardCollection()
+        for z in zones:
+            cards.addAll(self.getCardsIncludePhasingIn(z))
+        return CardLists.filter(cards, CardPredicates.isOwner(p))
+
+    def isCardExiled(self, c):
+        return self.getCardsIn(ZoneType.Exile).contains(c)
+
+    def isCardInPlay(self, cardName):
+        return self.getCardsIn(ZoneType.Battlefield).anyMatch(CardPredicates.nameEquals(cardName))
+
+    def isCardInCommand(self, cardName):
+        return self.getCardsIn(ZoneType.Command).anyMatch(CardPredicates.nameEquals(cardName))
+
+    def getColoredCardsInPlay(self, color):
+        cards = CardCollection()
+        for p in self.getPlayers():
+            cards.addAll(p.getColoredCardsInPlay(color))
+        return cards
+
+    class CardStateVisitor(Visitor):
+        def __init__(self, card):
+            self.found = None
+            self.old = card
+
+        def visit(self, object):
+            if object.equals(self.old):
+                self.found = object
+            return self.found is None
+
+        def getFound(self, notFound):
+            return notFound if self.found is None else self.found
+
+    def getCardState(self, card, *args):
+        notFound = args[0] if args else card
+        visit = Game.CardStateVisitor(card)
+        self.forEachCardInGame(visit)
+        return visit.getFound(notFound)
+
+    class CardIdVisitor(Visitor):
+        def __init__(self, id):
+            self.found = None
+            self.id = id
+
+        def visit(self, object):
+            if self.id == object.getId():
+                self.found = object
+            return self.found is None
+
+        def getFound(self):
+            return self.found
+
+    def findByView(self, view):
+        if view is None:
+            return None
+        visit = Game.CardIdVisitor(view.getId())
+        if ZoneType.Stack == view.getZone():
+            visit.visitAll(self.getStackZone())
+        elif view.getController() is not None and view.getZone() is not None:
+            p = self.getPlayer(view.getController())
+            if p is not None:
+                visit.visitAll(p.getZone(view.getZone()))
+        # Zone-specific search may miss if the view has stale zone info
+        # (e.g. IdRef resolved from a tracker that wasn't updated after a
+        # zone change). Fall back to global search.
+        if visit.getFound() is None:
+            self.forEachCardInGame(visit)
+        found = visit.getFound()
+        if found is None:
+            Game.netLog.error("findByView: id=%s (zone=%s, controller=%s) not found in any zone - returning null",
+                              view.getId(), view.getZone(), view.getController())
+        return found
+
+    def findById(self, id):
+        visit = Game.CardIdVisitor(id)
+        self.forEachCardInGame(visit)
+        return visit.getFound()
+
+    # Allows visiting cards in game without allocating a temporary list.
+    def forEachCardInGame(self, visitor, withSideboard=False):
+        for player in self.getPlayers():
+            if not visitor.visitAll(player.getZone(ZoneType.Graveyard).getCards()):
+                return
+            if not visitor.visitAll(player.getZone(ZoneType.Hand).getCards()):
+                return
+            if not visitor.visitAll(player.getZone(ZoneType.Library).getCards()):
+                return
+            if not visitor.visitAll(player.getZone(ZoneType.Battlefield).getCards(False)):
+                return
+            if not visitor.visitAll(player.getZone(ZoneType.Battlefield).getMeldedCards()):
+                return
+            if not visitor.visitAll(player.getZone(ZoneType.Exile).getCards()):
+                return
+            if not visitor.visitAll(player.getCardsIn(ZoneType.PART_OF_COMMAND_ZONE)):
+                return
+            if withSideboard and not visitor.visitAll(player.getZone(ZoneType.Sideboard).getCards()):
+                return
+            if not visitor.visitAll(player.getInboundTokens()):
+                return
+        visitor.visitAll(self.getStackZone().getCards())
+
+    def getCardsInGame(self):
+        all = CardCollection()
+
+        class _Visitor(Visitor):
+            def visit(self, card):
+                all.add(card)
+                return True
+
+        visitor = _Visitor()
+        self.forEachCardInGame(visitor)
+        return all
+
+    def getAction(self):
+        return self.action
+
+    def getMatch(self):
+        return self.match
+
+    def getNextPlayerAfter(self, playerTurn, *args):
+        turnOrder = args[0] if args else self.getTurnOrder()
+
+        iPlayer = self.ingamePlayers.indexOf(playerTurn)
+
+        if self.ingamePlayers.isEmpty():
+            return None
+
+        shift = turnOrder.getShift()
+        if -1 == iPlayer:  # if playerTurn has just lost
+            totalNumPlayers = self.allPlayers.size()
+            iPlayer = self.allPlayers.indexOf(playerTurn)
+            while True:
+                iPlayer = (iPlayer + shift) % totalNumPlayers
+                if iPlayer < 0:
+                    iPlayer += totalNumPlayers
+                iAlive = self.ingamePlayers.indexOf(self.allPlayers.get(iPlayer))
+                if not (iAlive < 0):
+                    break
+            iPlayer = iAlive
+        else:  # for the case playerTurn hasn't died
+            numPlayersInGame = self.ingamePlayers.size()
+            iPlayer = (iPlayer + shift) % numPlayersInGame
+            if iPlayer < 0:
+                iPlayer += numPlayersInGame
+
+        return self.ingamePlayers.get(iPlayer)
+
+    def getPosition(self, player, startingPlayer):
+        startPosition = self.ingamePlayers.indexOf(startingPlayer)
+        myPosition = self.ingamePlayers.indexOf(player)
+        if startPosition > myPosition:
+            myPosition += self.ingamePlayers.size()
+
+        return myPosition - startPosition + 1
+
+    def onPlayerLost(self, p):
+        # set for Avatar
+        p.setHasLost(True)
+        # CR 800.4 Losing a Multiplayer game
+        cards = self.getCardsInGame()
+        planarControllerLost = False
+        planarOwnerLost = False
+        isMultiplayer = self.getPlayers().size() > 2
+        triggerList = CardZoneTable(self.getLastStateBattlefield(), self.getLastStateGraveyard())
+
+        # CR 702.142f & 707.9
+        # If a player leaves the game, all face-down cards that player owns must be revealed to all players.
+        # At the end of each game, all face-down cards must be revealed to all players.
+        if isMultiplayer:
+            p.revealFaceDownCards()
+        else:
+            for pl in self.getPlayers():
+                pl.revealFaceDownCards()
+
+        # TODO free any mindslaves
+
+        for c in cards:
+            # CR 800.4d if card is controlled by opponent, LTB should trigger
+            if c.getOwner().equals(p) and c.getController().equals(p):
+                self.getTriggerHandler().clearActiveTriggers(c, None)
+
+        if self.getActivePlanes() is not None:
+            for c in self.getActivePlanes():
+                if c.getController().equals(p):
+                    planarControllerLost = True
+                if c.getOwner().equals(p):
+                    planarOwnerLost = True
+
+        for c in cards:
+            if isMultiplayer:
+                # unattach all "Enchant Player"
+                c.removeAttachedTo(p)
+                if c.getOwner().equals(p):
+                    # check that it wasn't cleaned up already
+                    if c.getEffectSource() is not None and not c.isEmblem() and p.getZone(ZoneType.Command).contains(c):
+                        c.getZone().remove(c)
+                        # move effect to another player so they continue to work
+                        self.getNextPlayerAfter(p).getZone(ZoneType.Command).add(c)
+                    else:
+                        for cc in cards:
+                            cc.removeImprintedCard(c)
+                            cc.removeEncodedCard(c)
+                            cc.removeRemembered(c)
+                            cc.removeAttachedTo(c)
+                            cc.removeAttachedCard(c)
+                        triggerList.put(c.getZone().getZoneType(), None, c)
+                        self.getAction().ceaseToExist(c, False)
+                else:
+                    # return stolen permanents
+                    if c.isInPlay() and (c.getController().equals(p) or c.getZone().getPlayer().equals(p)):
+                        c.removeTempController(p)
+                        self.getAction().controllerChangeZoneCorrection(c)
+                    c.removeTempController(p)
+                    # return stolen spells
+                    if c.isInZone(ZoneType.Stack):
+                        si = self.getStack().getInstanceMatchingSpellAbilityID(c.getCastSA())
+                        if si is not None:
+                            si.setActivatingPlayer(c.getController())
+                    if c.getController().equals(p) and not (c.isPlane() or c.isPhenomenon()):
+                        self.getAction().exile(c, None, None)
+                        triggerList.put(ZoneType.Battlefield, c.getZone().getZoneType(), c)
+            else:
+                c.forceTurnFaceUp()
+
+        triggerList.triggerChangesZoneAll(self, None)
+
+        # CR 901.6 If the current planar controller would leave the game, instead the next player
+        # in turn order that wouldn't leave the game becomes the planar controller
+        if planarControllerLost:
+            for c in self.getActivePlanes():
+                if not c.getOwner().equals(p):
+                    c.setController(self.getNextPlayerAfter(p), 0)
+                    self.getAction().controllerChangeZoneCorrection(c)
+        # CR 901.10 When a player leaves the game, all objects owned by that player except abilities
+        # from phenomena leave the game. (See rule 800.4a.) If that includes a face-up plane card
+        # or phenomenon card, the planar controller turns the top card of his or her planar deck face up
+        if planarOwnerLost:
+            planarController = self.getPhaseHandler().getPlayerTurn()
+            if planarController.equals(p):
+                planarController = self.getNextPlayerAfter(p)
+            planesLeavingGame = CardCollection()
+            for c in self.getActivePlanes():
+                if c.getOwner().equals(p):
+                    planesLeavingGame.add(c)
+                    planarController.removeCurrentPlane(c)
+            runParams = AbilityKey.newMap()
+            runParams.put(AbilityKey.Cards, planesLeavingGame)
+            self.getTriggerHandler().runTrigger(TriggerType.PlaneswalkedFrom, runParams, False)
+            planarController.planeswalk(None)
+
+        if p.isMonarch():
+            # CR 724.4 if the player who lost was the Monarch, someone else will be the monarch
+            # TODO need to check rules if it should try the next player if able
+            if p.equals(self.getPhaseHandler().getPlayerTurn()):
+                self.getAction().becomeMonarch(self.getNextPlayerAfter(p), p.getMonarchSet())
+            else:
+                self.getAction().becomeMonarch(self.getPhaseHandler().getPlayerTurn(), p.getMonarchSet())
+
+        if p.hasInitiative():
+            # CR 725.4 If the player who has the initiative leaves the game, the active player takes the initiative
+            # If the active player is leaving the game or if there is no active player, the next player in turn order takes the initiative.
+            if p.equals(self.getPhaseHandler().getPlayerTurn()):
+                self.getAction().takeInitiative(self.getNextPlayerAfter(p), p.getInitiativeSet())
+            else:
+                self.getAction().takeInitiative(self.getPhaseHandler().getPlayerTurn(), p.getInitiativeSet())
+
+        # Remove leftover items from
+        self.getStack().removeInstancesControlledBy(p)
+
+        self.ingamePlayers.remove(p)
+        self.lostPlayers.add(p)
+
+        runParams = AbilityKey.mapFromPlayer(p)
+        self.getTriggerHandler().runTrigger(TriggerType.LosesGame, runParams, False)
+
+        self.getTriggerHandler().onPlayerLost(p)
+
+    def fireEvent(self, event):
+        """Fire only the events after they became real for gamestate and won't get replaced."""
+        for subscriber in self.events:
+            if callable(subscriber):
+                subscriber(event)
+
+    def subscribeToEvents(self, subscriber):
+        self.events.append(subscriber)
+
+    def getRules(self):
+        return self.rules
+
+    def getActivePlanes(self):
+        return self.activePlanes
+
+    def setActivePlanes(self, activePlane0):
+        self.activePlanes = activePlane0
+
+    def getAge(self):
+        return self.age
+
+    def setAge(self, value):
+        self.age = value
+
+    def nextCardId(self):
+        self.cardIdCounter += 1
+        return self.cardIdCounter
+
+    def nextHiddenCardId(self):
+        self.hiddenCardIdCounter += 1
+        return self.hiddenCardIdCounter
+
+    def chooseCardsForAnte(self, matchRarity, includeBasicLands):
+        anteed = defaultdict(list)
+
+        if matchRarity:
+            onePlayerHasTimeShifted = False
+
+            validRarities = list(CardRarity.values())
+            for player in self.getPlayers():
+                playerRarity = Game.getValidRarities(player.getCardsIn(ZoneType.Library))
+                if not onePlayerHasTimeShifted:
+                    onePlayerHasTimeShifted = CardRarity.Special in playerRarity
+                validRarities = [r for r in validRarities if r in playerRarity]
+
+            if len(validRarities) == 0:  # If no possible rarity matches were found, use the original method to choose antes
+                for player in self.getPlayers():
+                    self.chooseRandomCardsForAnte(player, anteed, includeBasicLands)
+                return anteed
+
+            # If possible, don't ante basic lands (unless the option to include them is enabled)
+            if not includeBasicLands:
+                if len(validRarities) > 1:
+                    if CardRarity.BasicLand in validRarities:
+                        validRarities.remove(CardRarity.BasicLand)
+                elif len(validRarities) == 1 and validRarities[0] == CardRarity.BasicLand:
+                    for player in self.getPlayers():
+                        self.chooseRandomCardsForAnte(player, anteed, includeBasicLands)
+                    return anteed
+
+            if CardRarity.Special in validRarities:
+                onePlayerHasTimeShifted = False
+
+            anteRarity = validRarities[MyRandom.getRandom().nextInt(len(validRarities))]
+
+            print("Rarity chosen for ante: " + anteRarity.name())
+
+            for player in self.getPlayers():
+                library = CardCollection(player.getCardsIn(ZoneType.Library))
+                toRemove = CardCollection()
+
+                # Remove all cards that aren't of the chosen rarity
+                for card in library:
+                    if onePlayerHasTimeShifted and card.getRarity() == CardRarity.Special:
+                        # Since Time Shifted cards don't have a traditional rarity, they're wildcards
+                        continue
+                    elif anteRarity == CardRarity.MythicRare or anteRarity == CardRarity.Rare:
+                        # Rare and Mythic Rare cards are considered the same rarity, just as in booster packs
+                        # Otherwise it's possible to never lose Mythic Rare cards if you choose opponents carefully
+                        # It also lets you win Mythic Rare cards when you don't have any to ante
+                        if card.getRarity() != CardRarity.MythicRare and card.getRarity() != CardRarity.Rare:
+                            toRemove.add(card)
+                    else:
+                        if card.getRarity() != anteRarity:
+                            toRemove.add(card)
+
+                library.removeAll(toRemove)
+
+                if library.size() > 0:  # Make sure that matches were found. If not, use the original method to choose antes
+                    ante = library.get(MyRandom.getRandom().nextInt(library.size()))
+                    anteed[player].append(ante)
+                else:
+                    self.chooseRandomCardsForAnte(player, anteed, includeBasicLands)
+        else:
+            for player in self.getPlayers():
+                self.chooseRandomCardsForAnte(player, anteed, includeBasicLands)
+        return anteed
+
+    def chooseRandomCardsForAnte(self, player, anteed, includeBasicLands):
+        lib = player.getCardsIn(ZoneType.Library)
+        if includeBasicLands:
+            ante = Aggregates.random(lib)
+            if ante is not None:
+                anteed[player].append(ante)
+            return
+        goodForAnte = CardPredicates.BASIC_LANDS.negate()
+        ante = Aggregates.random(IterableUtil.filter(lib, goodForAnte))
+        if ante is None:
+            self.fireEvent(GameEventAddLog(GameLogEntryType.ANTE, "Only basic lands found. Will ante one of them"))
+            ante = Aggregates.random(lib)
+        anteed[player].append(ante)
+
+    @staticmethod
+    def getValidRarities(cards):
+        rarities = set()
+        for card in cards:
+            if card.getRarity() == CardRarity.Rare or card.getRarity() == CardRarity.MythicRare:
+                # Since both rare and mythic rare are considered the same, adding both rarities
+                # massively increases the odds chances of the game picking rare cards to ante.
+                # This is a little unfair, so we add just one of the two.
+                rarities.add(CardRarity.Rare)
+            else:
+                rarities.add(card.getRarity())
+        return rarities
+
+    def clearCaches(self):
+        self.lastStateBattlefield.clear()
+        self.lastStateGraveyard.clear()
+        # playerCache.clear();
+
+    # Does the player control any cards that care about the order of cards in the graveyard?
+    def isGraveyardOrdered(self, p):
+        for c in p.getAllCards():
+            if c.hasSVar("NeedsOrderedGraveyard"):
+                return True
+            elif c.getOriginalState(CardStateName.Original).hasSVar("NeedsOrderedGraveyard"):
+                return True
+        for c in p.getOpponents().getCardsIn(ZoneType.Battlefield):
+            # Bone Dancer is important when an opponent has it active on the battlefield
+            if "opponent".lower() == (c.getSVar("NeedsOrderedGraveyard") or "").lower():
+                return True
+        return False
+
+    def getControlVote(self):
+        result = None
+        maxValue = 0
+        for p in self.getPlayers():
+            v = p.getHighestControlVote()
+            if v is not None and v > maxValue:
+                maxValue = v
+                result = p
+        return result
+
+    def incPiledGuessedSA(self):
+        self.numPiledGuessedSA += 1
+
+    def getNumPiledGuessedSA(self):
+        return self.numPiledGuessedSA
+
+    def resetNumPiledGuessedSA(self):
+        self.numPiledGuessedSA = 0
+
+    def onCleanupPhase(self):
+        self.resetNumPiledGuessedSA()
+        self.clearLeftBattlefieldThisTurn()
+        self.clearLeftGraveyardThisTurn()
+        self.clearCounterAddedThisTurn()
+        self.clearCounterRemovedThisTurn()
+        self.clearGlobalDamageHistory()
+        # some cards need this info updated even after a player lost, so don't skip them
+        for player in self.getRegisteredPlayers():
+            player.onCleanupPhase()
+        for c in self.getCardsIncludePhasingIn(ZoneType.Battlefield):
+            c.onCleanupPhase(self.getPhaseHandler().getPlayerTurn())
+        for card in self.getCardsInGame():
+            card.resetActivationsPerTurn()
+
+    def addCounterAddedThisTurn(self, putter, cType, card, value):
+        if putter is None or card is None or value <= 0:
+            return
+        row = self.countersAddedThisTurn.get(cType)
+        result = row.get(putter) if row is not None else None
+        if result is None:
+            result = []
+            self.countersAddedThisTurn.setdefault(cType, {})[putter] = result
+        result.append((CardCopyService.getLKICopy(card), value))
+
+    def getCounterAddedThisTurn(self, cType, *args):
+        if len(args) == 5:
+            validPlayer, validCard, source, sourceController, ctb = args
+            result = 0
+            if cType is None:
+                types = self.countersAddedThisTurn.keys()
+            elif cType not in self.countersAddedThisTurn:
+                return result
+            else:
+                types = {cType}
+            for type in types:
+                row = self.countersAddedThisTurn.get(type, {})
+                for player, lst in row.items():
+                    if player.isValid(validPlayer.split(","), sourceController, source, ctb):
+                        for p in lst:
+                            if p[0].isValid(validCard.split(","), sourceController, source, ctb):
+                                result += p[1]
+            return result
+        else:
+            card = args[0]
+            result = 0
+            if cType is None:
+                types = self.countersAddedThisTurn.keys()
+            elif cType not in self.countersAddedThisTurn:
+                return result
+            else:
+                types = {cType}
+            for type in types:
+                row = self.countersAddedThisTurn.get(type, {})
+                for l in row.values():
+                    for p in l:
+                        if p[0].equalsWithGameTimestamp(card):
+                            result += p[1]
+            return result
+
+    def clearCounterAddedThisTurn(self):
+        self.countersAddedThisTurn.clear()
+
+    def addCounterRemovedThisTurn(self, cType, cardOrPlayer, value):
+        if isinstance(cardOrPlayer, Card):
+            self.countersRemovedThisTurn[cType].append((CardCopyService.getLKICopy(cardOrPlayer), value))
+        else:
+            self.countersRemovedThisTurn[cType].append((cardOrPlayer, value))
+
+    def getCounterRemovedThisTurn(self, cType, valid, source, sourceController, ctb):
+        result = 0
+        for p in self.countersRemovedThisTurn.get(cType, []):
+            if p[0].isValid(valid.split(","), sourceController, source, ctb):
+                result += p[1]
+        return result
+
+    def clearCounterRemovedThisTurn(self):
+        self.countersRemovedThisTurn.clear()
+
+    def getDamageDoneThisTurn(self, isCombat, anyIsEnough, validSourceCard, validTargetEntity, source, sourceController, ctb):
+        """Gets the damage instances done this turn."""
+        dmgList = []
+        for cdh in self.globalDamageHistory:
+            dmg = cdh.getDamageDoneThisTurn(isCombat, anyIsEnough, validSourceCard, validTargetEntity, source, sourceController, ctb)
+            if dmg == 0:
+                continue
+
+            dmgList.append(dmg)
+
+            if anyIsEnough:
+                break
+
+        return dmgList
+
+    def getSingleMaxDamageDoneThisTurn(self):
+        return max((dmg.getLeft() for cdh in self.globalDamageHistory for dmg in cdh.getAllDmgInstances()), default=0)
+
+    def addGlobalDamageHistory(self, cdh, dmg, source, target):
+        self.globalDamageHistory.add(cdh)
+        self.damageThisTurnLKI[dmg] = (source, target)
+
+    def clearGlobalDamageHistory(self):
+        self.globalDamageHistory.clear()
+        self.damageThisTurnLKI.clear()
+
+    def getDamageLKI(self, dmg):
+        return self.damageThisTurnLKI.get(dmg)
+
+    def getTopLibForPlayer(self, P):
+        return self.topLibsCast.get(P)
+
+    def setTopLibsCast(self):
+        for p in self.getPlayers():
+            self.topLibsCast[p] = None if p.getTopXCardsFromLibrary(1).isEmpty() else p.getTopXCardsFromLibrary(1).get(0)
+
+    def clearTopLibsCast(self, sa):
+        # if nothing left to pay
+        if sa.getActivatingPlayer().getPaidForSA() is None:
+            self.topLibsCast.clear()
+            for c in self.facedownWhileCasting.keys():
+                # maybe it was discarded as payment?
+                if c.isInZone(ZoneType.Hand):
+                    c.forceTurnFaceUp()
+
+                    # If an effect allows or instructs a player to reveal the card as it's being drawn,
+                    # it's revealed after the spell becomes cast or the ability becomes activated.
+                    runParams = AbilityKey.mapFromCard(c)
+                    runParams.put(AbilityKey.Number, self.facedownWhileCasting.get(c))
+                    runParams.put(AbilityKey.Player, c.getOwner())
+                    runParams.put(AbilityKey.CanReveal, True)
+                    # need to hold trigger to clear list first
+                    self.getTriggerHandler().runTrigger(TriggerType.Drawn, runParams, True)
+            self.facedownWhileCasting.clear()
+
+    def addFacedownWhileCasting(self, c, numDrawn):
+        self.facedownWhileCasting[c] = numDrawn
+
+    def isDay(self):
+        return self.daytime is not None and self.daytime == False
+
+    def isNight(self):
+        return self.daytime is not None and self.daytime == True
+
+    def isNeitherDayNorNight(self):
+        return self.daytime is None
+
+    def getDayTime(self):
+        return self.daytime
+
+    def setDayTime(self, value):
+        if StaticAbilityCantChangeDayTime.cantChangeDay(self, value):
+            return
+        previous = self.daytime
+        self.daytime = value
+
+        if previous is not None and value is not None and previous != value:
+            params = AbilityKey.newMap()
+            self.getTriggerHandler().runTrigger(TriggerType.DayTimeChanges, params, False)
+        if not self.isNeitherDayNorNight():
+            self.fireEvent(GameEventDayTimeChanged(self.isDay()))
+
+    def isVoid(self):
+        return any(not c.isLand() for c in self.getLeftBattlefieldThisTurn()) or \
+            any(s.getCastSA().isWarp() for s in self.getStack().getSpellsCastThisTurn())
+
+    def getAITimeout(self):
+        return self.AI_TIMEOUT
+
+    def canUseTimeout(self):
+        return self.AI_CAN_USE_TIMEOUT
 ```

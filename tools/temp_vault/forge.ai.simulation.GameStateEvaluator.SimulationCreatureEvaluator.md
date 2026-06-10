@@ -34,7 +34,7 @@ classDiagram
 The override adds no scoring behavior of its own; instead it instruments each non-zero value contribution, emitting a `GameSimulator.debugPrint` trace of the amount and its explanatory `text` when `debugging` is enabled, then delegating to `super.addValue`. The design intent is diagnostic transparency: by hooking the single point where partial values are accumulated, it exposes a breakdown of how a creature's score is composed during simulation without altering the result, and its access to the enclosing instance's `debugging` flag keeps the tracing cheap and disabled by default.
 
 ## Source
-`forge-ai/src/main/java/forge/ai/simulation/GameStateEvaluator.java` â€” declaration excerpt
+`forge-ai/src/main/java/forge/ai/simulation/GameStateEvaluator.java` Ã¢â‚¬â€ declaration excerpt
 
 ```java
     private class SimulationCreatureEvaluator extends CreatureEvaluator {
@@ -46,4 +46,19 @@ The override adds no scoring behavior of its own; instead it instruments each no
             return super.addValue(value, text);
         }
     }
+```
+
+## Python
+`forge/ai/simulation/GameStateEvaluator/SimulationCreatureEvaluator.py`
+
+```python
+from forge.ai.CreatureEvaluator import CreatureEvaluator
+from forge.ai.simulation.GameSimulator import GameSimulator
+
+
+class SimulationCreatureEvaluator(CreatureEvaluator):
+    def addValue(self, value: int, text: str) -> int:
+        if self.debugging and value != 0:
+            GameSimulator.debugPrint(str(value) + " via " + text)
+        return super().addValue(value, text)
 ```

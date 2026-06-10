@@ -101,3 +101,48 @@ public class CostBeholdExile extends CostBehold {
     }
 }
 ```
+
+## Python
+`forge/game/cost/CostBeholdExile.py`
+
+```python
+package CostBeholdExile;
+# Note: module path is forge/game/cost/CostBeholdExile.py
+
+from forge.game.cost.CostBehold import CostBehold
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.cost.ICostVisitor import ICostVisitor
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+
+
+class CostBeholdExile(CostBehold):
+
+    serialVersionUID = 1
+
+    def __init__(self, amount: str, type: str, description: str):
+        super().__init__(amount, type, description)
+
+    def toString(self) -> str:
+        return super().toString() + " and exile it"
+
+    def doListPayment(self, payer: Player, ability: SpellAbility, targetCards: CardCollectionView, effect: bool) -> CardCollectionView:
+        result = CardCollection()
+        for targetCard in super().doListPayment(payer, ability, targetCards, effect):
+            moveParams = AbilityKey.newMap()
+            AbilityKey.addCardZoneTableParams(moveParams, self.table)
+
+            newCard = targetCard.getGame().getAction().exile(targetCard, None, moveParams)
+            SpellAbilityEffect.handleExiledWith(newCard, ability)
+            result.add(newCard)
+
+        return result
+
+    # Inputs
+    def accept(self, visitor: ICostVisitor):
+        return visitor.visit(self)
+```

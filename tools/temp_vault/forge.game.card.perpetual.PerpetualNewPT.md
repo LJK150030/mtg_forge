@@ -57,3 +57,25 @@ public record PerpetualNewPT(long timestamp, Integer power, Integer toughness) i
     }
 }
 ```
+
+## Python
+`forge/game/card/perpetual/PerpetualNewPT.py`
+
+```python
+from forge.game.card.perpetual.PerpetualInterface import PerpetualInterface
+from forge.game.card.Card import Card
+
+
+class PerpetualNewPT(PerpetualInterface):
+
+    def __init__(self, timestamp: int, power: int, toughness: int):
+        self.timestamp = timestamp
+        self.power = power
+        self.toughness = toughness
+
+    def getTimestamp(self) -> int:
+        return self.timestamp
+
+    def applyEffect(self, c: Card) -> None:
+        c.addNewPT(self.power, self.toughness, self.timestamp, 0)
+```

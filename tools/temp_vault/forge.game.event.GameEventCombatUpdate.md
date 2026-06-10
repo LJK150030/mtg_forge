@@ -38,7 +38,7 @@ classDiagram
 
 ## Design Description
 
-`GameEventCombatUpdate` is an immutable record that signals a change in the combat state—the current sets of attackers and blockers—so observers can refresh their view of the board. It implements the `GameEvent` interface, participating in the engine's event system, and supports the visitor pattern through its `visit` method, which dispatches to an `IGameEventVisitor` for type-safe, double-dispatch handling alongside other game events.
+`GameEventCombatUpdate` is an immutable record that signals a change in the combat stateâ€”the current sets of attackers and blockersâ€”so observers can refresh their view of the board. It implements the `GameEvent` interface, participating in the engine's event system, and supports the visitor pattern through its `visit` method, which dispatches to an `IGameEventVisitor` for type-safe, double-dispatch handling alongside other game events.
 
 The record stores its participants as presentation-friendly `CardView` lists rather than live `Card` model objects, deliberately decoupling the event from mutable game state and making it safe to hand to the UI layer. The static `fromCards` factory bridges this gap, converting raw `Card` collections into `CardView` instances while null-tolerantly preserving absent attacker or blocker lists.
 
@@ -69,4 +69,37 @@ public record GameEventCombatUpdate(List<CardView> attackers, List<CardView> blo
     }
 
 }
+```
+
+## Python
+`forge/game/event/GameEventCombatUpdate.py`
+
+```python
+package forge.game.event;
+
+from typing import List, Optional, TypeVar
+
+from forge.game.card.Card import Card
+from forge.game.card.CardView import CardView
+from forge.game.event.GameEvent import GameEvent
+from forge.game.event.IGameEventVisitor import IGameEventVisitor
+
+T = TypeVar("T")
+
+
+class GameEventCombatUpdate(GameEvent):
+
+    def __init__(self, attackers: Optional[List[CardView]], blockers: Optional[List[CardView]]):
+        self.attackers = attackers
+        self.blockers = blockers
+
+    @staticmethod
+    def fromCards(attackers: Optional[List[Card]], blockers: Optional[List[Card]]) -> "GameEventCombatUpdate":
+        return GameEventCombatUpdate(
+            None if attackers is None else [CardView.get(c) for c in attackers],
+            None if blockers is None else [CardView.get(c) for c in blockers]
+        )
+
+    def visit(self, visitor: IGameEventVisitor) -> T:
+        return visitor.visit(self)
 ```

@@ -62,7 +62,7 @@ classDiagram
 
 ## Design Description
 
-CardStorageReader discovers and parses Forge's card-definition scripts—plain `.txt` files arranged in a letter-keyed directory tree or bundled in a `cardsfolder.zip`—into in-memory `CardRules` objects. Its constructor validates the supplied folder and transparently selects the zip or loose-file backend. `loadCards()` bulk-loads the entire catalog into a case-insensitively sorted set, while `attemptToLoadCard(String)` resolves a single card by normalizing its display name to a canonical filename, with prefix-matching fallback for double-faced cards.
+CardStorageReader discovers and parses Forge's card-definition scriptsâ€”plain `.txt` files arranged in a letter-keyed directory tree or bundled in a `cardsfolder.zip`â€”into in-memory `CardRules` objects. Its constructor validates the supplied folder and transparently selects the zip or loose-file backend. `loadCards()` bulk-loads the entire catalog into a case-insensitively sorted set, while `attemptToLoadCard(String)` resolves a single card by normalizing its display name to a canonical filename, with prefix-matching fallback for double-faced cards.
 
 The reader delegates actual script interpretation to `CardRules.Reader`, reports progress through an injected `ProgressObserver` (defaulting to a no-op instance when none is supplied), and localizes status messages via `Localizer`. Notable design intent includes optional lazy loading, a hand-optimized single-pass name normalizer that minimizes allocations, and partitioning the expensive parse into ranged `Callable` tasks dispatched across a computing thread pool on multi-core systems, falling back to single-threaded execution otherwise.
 
@@ -488,4 +488,354 @@ public class CardStorageReader {
     }
 
 }
+```
+
+## Python
+`forge/CardStorageReader.py`
+
+```python
+from forge.card.CardRules import CardRules
+from forge.util.BuildInfo import BuildInfo
+from forge.util.FileUtil import FileUtil
+from forge.util.Localizer import Localizer
+from forge.util.ThreadUtil import ThreadUtil
+
+import io
+import os
+import sys
+import time
+import threading
+from pathlib import Path
+from zipfile import ZipFile, ZipInfo
+
+
+# Minimal idiomatic mapping of java.util.concurrent.CountDownLatch.
+class CountDownLatch:
+    def __init__(self, count):
+        self._count = count
+        self._cond = threading.Condition()
+
+    def getCount(self):
+        return self._count
+
+    def countDown(self):
+        with self._cond:
+            if self._count > 0:
+                self._count -= 1
+                if self._count == 0:
+                    self._cond.notify_all()
+
+    def await_(self):
+        with self._cond:
+            while self._count > 0:
+                self._cond.wait()
+
+
+class CardStorageReader:
+    class ProgressObserver:
+        def setOperationName(self, name, usePercents):
+            raise NotImplementedError
+
+        def report(self, current, total):
+            raise NotImplementedError
+
+    CARD_FILE_DOT_EXTENSION = ".txt"
+    UPCOMING = "upcoming"
+
+    # Default charset when loading from files.
+    DEFAULT_CHARSET_NAME = "UTF-8"
+
+    NUMBER_OF_PARTS = 25
+
+    def __init__(self, cardDataDir, progressObserver, loadCardsLazily):
+        self.useThreadPool = ThreadUtil.isMultiCoreSystem()
+
+        self.progressObserver = progressObserver if progressObserver is not None else CardStorageReader.ProgressObserver.emptyObserver
+        self.cardsfolder = Path(cardDataDir)
+
+        self.loadingTokens = "token" in cardDataDir
+
+        self.loadCardsLazily = loadCardsLazily
+
+        self.zip = None
+        self.zipEntriesMap = None
+
+        # These read data for lightweight classes.
+        if not self.cardsfolder.exists():
+            raise RuntimeError("CardReader : constructor error -- " + str(self.cardsfolder.resolve()) + " file/folder not found.")
+
+        if not self.cardsfolder.is_dir():
+            raise RuntimeError("CardReader : constructor error -- not a directory -- " + str(self.cardsfolder.resolve()))
+
+        zipFile = self.cardsfolder / "cardsfolder.zip"
+
+        if zipFile.exists():
+            try:
+                self.zip = ZipFile(str(zipFile))
+            except Exception as exn:
+                print("Error reading zip file \"%s\": %s. Defaulting to txt files in \"%s\"." % (str(zipFile.resolve()), exn, str(self.cardsfolder.resolve())), file=sys.stderr)
+
+        self.charset = CardStorageReader.DEFAULT_CHARSET_NAME
+    # CardReader()
+
+    def loadCardsInRange(self, files, from_, to):
+        rulesReader = CardRules.Reader()
+
+        result = []
+        for i in range(from_, to):
+            cardTxtFile = files[i]
+            result.append(self.loadCard(rulesReader, cardTxtFile))
+        return result
+
+    def loadCardsInRangeFromZip(self, files, from_, to):
+        rulesReader = CardRules.Reader()
+
+        result = []
+        for i in range(from_, to):
+            ze = files[i]
+            # if ze.getName().endsWith(CARD_FILE_DOT_EXTENSION)  // already filtered!
+            result.append(self.loadCard(rulesReader, ze))
+        return result
+
+    # Note: This is custom coded for efficiency, since it allows
+    # to do the relevant transformation in a single pass with just
+    # a single char array allocation.
+    def transformName(self, cardName):
+        chars = [''] * len(cardName)
+        charIndex = 0
+        for i in range(len(cardName)):
+            c = cardName[i].lower()
+            if c == '\'':
+                continue
+            if (c < 'a' or c > 'z') and (c < '0' or c > '9'):
+                if charIndex > 0 and chars[charIndex - 1] == '_':
+                    continue
+                # Comma separator in numbers: "Borrowing 100,000 Arrows"
+                if (c == ',') and (charIndex > 0) and (chars[charIndex - 1] >= '0' or chars[charIndex - 1] <= '9'):
+                    continue
+                c = '_'
+            chars[charIndex] = c
+            charIndex += 1
+        if chars[charIndex - 1] == '_':
+            charIndex -= 1
+        return ''.join(chars[0:charIndex])
+
+    def findZipEntryForCard(self, transformedName):
+        if self.zip is None:
+            return None
+
+        if self.zipEntriesMap is None:
+            self.zipEntriesMap = {}
+            for entry in self.getZipEntries():
+                self.zipEntriesMap[entry.filename] = entry
+
+        transformedName = transformedName[0] + "/" + transformedName
+        entry = self.zipEntriesMap.get(transformedName + CardStorageReader.CARD_FILE_DOT_EXTENSION)
+        if entry is None:
+            # Double faced cards file naming convention currently has both names - so try to prefix match.
+            # TODO: Consider changing the naming convention for DFCs.
+            for fileName in self.zipEntriesMap.keys():
+                if fileName.startswith(transformedName):
+                    entry = self.zipEntriesMap.get(fileName)
+                    break
+        return entry
+
+    def findFileForCard(self, transformedName):
+        folder = str(self.cardsfolder.resolve()) + "/" + transformedName[0]
+        file = Path(folder + "/" + transformedName + CardStorageReader.CARD_FILE_DOT_EXTENSION)
+        if not file.exists():
+            file = None
+            # Double faced cards file naming convention currently has both names - so try to prefix match.
+            # TODO: Consider changing the naming convention for DFCs.
+            fileNames = os.listdir(folder) if os.path.isdir(folder) else None
+            if fileNames is not None:
+                for fileName in os.listdir(folder):
+                    if fileName.startswith(transformedName):
+                        file = Path(folder, fileName)
+                        break
+        return file
+
+    def attemptToLoadCard(self, cardName):
+        transformedName = self.transformName(cardName)
+        rules = None
+
+        # TODO: Should CardRules.Reader object be cached?
+        entry = self.findZipEntryForCard(transformedName)
+        if entry is not None:
+            rules = self.loadCard(CardRules.Reader(), entry)
+        else:
+            file = self.findFileForCard(transformedName)
+            if file is not None:
+                rules = self.loadCard(CardRules.Reader(), file)
+
+        return rules
+
+    def loadCards(self):
+        localizer = Localizer.getInstance()
+
+        self.progressObserver.setOperationName(localizer.getMessage("splash.loading.examining-cards"), True)
+
+        # Iterate through txt files or zip archive.
+        # Report relevant numbers to progress monitor model.
+
+        result = set()
+
+        if self.loadCardsLazily:
+            return result
+
+        allFiles = CardStorageReader.collectCardFiles([], self.cardsfolder)
+        if len(allFiles) != 0:
+            fileParts = CardStorageReader.NUMBER_OF_PARTS if self.zip is None else 1 + CardStorageReader.NUMBER_OF_PARTS // 3
+            if len(allFiles) < fileParts * 100:
+                fileParts = max(1, len(allFiles) // 100)  # to avoid creation of many threads for a dozen of files
+            cdlFiles = CountDownLatch(fileParts)
+            taskFiles = self.makeTaskListForFiles(allFiles, cdlFiles)
+            self.progressObserver.setOperationName(localizer.getMessage("splash.loading.cards-folders"), True)
+            self.progressObserver.report(0, len(taskFiles))
+            sw_start = time.perf_counter()
+            self.executeLoadTask(result, taskFiles, cdlFiles)
+            sw_stop = time.perf_counter()
+            timeOnParse = int(sw_stop - sw_start)
+            print("Read cards: %s files in %d ms (%d parts) %s" % (len(allFiles), timeOnParse, len(taskFiles), "using thread pool" if self.useThreadPool else "in same thread"))
+
+        if self.zip is not None:
+            cdlZip = CountDownLatch(CardStorageReader.NUMBER_OF_PARTS)
+            taskZip = self.makeTaskListForZip(self.getZipEntries(), cdlZip)
+            self.progressObserver.setOperationName(localizer.getMessage("splash.loading.cards-archive"), True)
+            self.progressObserver.report(0, len(taskZip))
+            sw_start = time.perf_counter()
+            self.executeLoadTask(result, taskZip, cdlZip)
+            sw_stop = time.perf_counter()
+            timeOnParse = int(sw_stop - sw_start)
+            print("Read cards: %s archived files in %d ms (%d parts) %s" % (len(self.zip.namelist()), timeOnParse, len(taskZip), "using thread pool" if self.useThreadPool else "in same thread"))
+
+        return result
+
+    def getZipEntries(self):
+        entries = []
+        # zipEnum was initialized in the constructor.
+        for entry in self.zip.infolist():
+            if entry.is_dir() or not entry.filename.endswith(CardStorageReader.CARD_FILE_DOT_EXTENSION):
+                continue
+            entries.append(entry)
+        return entries
+
+    def executeLoadTask(self, result, tasks, cdl):
+        try:
+            if self.useThreadPool:
+                executor = ThreadUtil.getComputingPool(0.5)
+                parts = executor.invokeAll(tasks)
+                executor.shutdown()
+                cdl.await_()
+                for pp in parts:
+                    result.update(pp.get())
+            else:
+                for c in tasks:
+                    result.update(c())
+        except Exception as e:
+            raise RuntimeError(e)
+
+    def makeTaskListForZip(self, entries, cdl):
+        totalFiles = len(entries)
+        maxParts = cdl.getCount()
+        filesPerPart = totalFiles // maxParts
+        tasks = []
+        for iPart in range(maxParts):
+            from_ = iPart * filesPerPart
+            till = totalFiles if iPart == maxParts - 1 else from_ + filesPerPart
+
+            def task(from_=from_, till=till):
+                res = self.loadCardsInRangeFromZip(entries, from_, till)
+                cdl.countDown()
+                self.progressObserver.report(maxParts - cdl.getCount(), maxParts)
+                return res
+
+            tasks.append(task)
+        return tasks
+
+    def makeTaskListForFiles(self, allFiles, cdl):
+        totalFiles = len(allFiles)
+        maxParts = cdl.getCount()
+        filesPerPart = totalFiles // maxParts
+        tasks = []
+        for iPart in range(maxParts):
+            from_ = iPart * filesPerPart
+            till = totalFiles if iPart == maxParts - 1 else from_ + filesPerPart
+
+            def task(from_=from_, till=till):
+                try:
+                    res = self.loadCardsInRange(allFiles, from_, till)
+                    return res
+                except Exception as ex:
+                    raise ex
+                finally:
+                    # make sure to continue loading when using multiple threads
+                    cdl.countDown()
+                    self.progressObserver.report(maxParts - cdl.getCount(), maxParts)
+
+            tasks.append(task)
+        return tasks
+
+    @staticmethod
+    def collectCardFiles(accumulator, startDir):
+        list_ = os.listdir(startDir)
+        for filename in list_:
+            entry = Path(startDir, filename)
+
+            if not entry.is_dir():
+                if entry.name.endswith(CardStorageReader.CARD_FILE_DOT_EXTENSION):
+                    accumulator.append(entry)
+                continue
+            if filename.startswith("."):
+                continue
+
+            if filename.lower() == CardStorageReader.UPCOMING and not BuildInfo.isDevelopmentVersion():
+                # If upcoming folder exits, only load these cards on development builds
+                continue
+
+            CardStorageReader.collectCardFiles(accumulator, entry)
+        return accumulator
+
+    def readScript(self, inputStream):
+        return FileUtil.readAllLines(io.TextIOWrapper(inputStream, encoding=self.charset), True)
+
+    # Load a card from a txt file or from an entry in a zip file.
+    #
+    # @return a new Card instance
+    def loadCard(self, reader, fileOrEntry):
+        if isinstance(fileOrEntry, ZipInfo):
+            entry = fileOrEntry
+            try:
+                with self.zip.open(entry) as zipInputStream:
+                    reader.reset()
+                    rules = reader.readCard(self.readScript(zipInputStream), os.path.splitext(os.path.basename(entry.filename))[0])
+                    rules.setPath(entry.filename)
+                    return rules
+            except IOError as exn:
+                raise RuntimeError(exn)
+        else:
+            file = fileOrEntry
+            try:
+                with open(str(file), 'rb') as fileInputStream:
+                    reader.reset()
+                    lines = self.readScript(fileInputStream)
+                    rules = reader.readCard(lines, os.path.splitext(file.name)[0])
+                    rules.setPath(str(file))
+                    return rules
+            except FileNotFoundError as ex:
+                raise RuntimeError("CardReader : run error -- file not found: " + str(file)) from ex
+            except Exception as ex:
+                raise RuntimeError("Error loading cardscript " + file.name + ". Please close Forge and resolve this.") from ex
+
+
+class _EmptyProgressObserver(CardStorageReader.ProgressObserver):
+    def setOperationName(self, name, usePercents):
+        pass
+
+    def report(self, current, total):
+        pass
+
+
+# does nothing, used when they pass null instead of an instance
+CardStorageReader.ProgressObserver.emptyObserver = _EmptyProgressObserver()
 ```

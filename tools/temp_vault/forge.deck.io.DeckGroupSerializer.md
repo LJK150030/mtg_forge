@@ -49,7 +49,7 @@ classDiagram
 
 ## Design Description
 
-`DeckGroupSerializer` provides disk persistence for `DeckGroup` aggregates—a human deck bundled with its AI opponent decks for draft and sealed play. It extends `StorageReaderFolder<DeckGroup>`, inheriting folder-based scanning and name-keyed loading (configured with `DeckBase::getName`), and implements `IItemSerializer<DeckGroup>` to satisfy the save/read/erase persistence contract. Each group is stored as its own directory containing a fixed `human.dck` plus numbered `ai-1.dck`…`ai-N.dck` files, bounded by `MAX_DRAFT_PLAYERS`.
+`DeckGroupSerializer` provides disk persistence for `DeckGroup` aggregatesâ€”a human deck bundled with its AI opponent decks for draft and sealed play. It extends `StorageReaderFolder<DeckGroup>`, inheriting folder-based scanning and name-keyed loading (configured with `DeckBase::getName`), and implements `IItemSerializer<DeckGroup>` to satisfy the save/read/erase persistence contract. Each group is stored as its own directory containing a fixed `human.dck` plus numbered `ai-1.dck`â€¦`ai-N.dck` files, bounded by `MAX_DRAFT_PLAYERS`.
 
 The design delegates per-deck file I/O to `DeckSerializer` rather than duplicating it, keeping this class focused on group layout. `getFileFilter` admits only visible, non-hidden folders that actually contain a `human.dck`, ensuring read scans recognize valid groups; `read` returns null when the human deck is missing. Because each self-contained group lives in one folder, `getSubFolders` returns an empty list to intentionally prevent recursive drilling.
 
@@ -196,4 +196,92 @@ public class DeckGroupSerializer extends StorageReaderFolder<DeckGroup> implemen
     }
 
 }
+```
+
+## Python
+`forge/deck/io/DeckGroupSerializer.py`
+
+```python
+from forge.deck.Deck import Deck
+from forge.deck.DeckBase import DeckBase
+from forge.deck.DeckGroup import DeckGroup
+from forge.util.IItemSerializer import IItemSerializer
+from forge.util.storage.StorageReaderFolder import StorageReaderFolder
+from forge.deck.io.DeckSerializer import DeckSerializer
+
+import os
+
+
+# TODO: Write javadoc for this type.
+class DeckGroupSerializer(StorageReaderFolder, IItemSerializer):
+    humanDeckFile = "human.dck"
+
+    # The Constant MAX_DRAFT_PLAYERS.
+    MAX_DRAFT_PLAYERS = 8
+
+    def __init__(self, deckDir0, rootDir0):
+        """
+        Instantiates a new deck group serializer.
+
+        :param deckDir0: the deck dir0
+        """
+        super().__init__(deckDir0, DeckBase.getName)
+        self.rootDir = rootDir0
+
+    def save(self, unit):
+        """
+        Write draft Decks.
+
+        :param unit: the unit
+        """
+        f = self.makeFileFor(unit)
+        os.mkdir(f)
+        DeckSerializer.writeDeck(unit.getHumanDeck(), os.path.join(f, DeckGroupSerializer.humanDeckFile))
+        aiDecks = unit.getAiDecks()
+        for i in range(1, len(aiDecks) + 1):
+            DeckSerializer.writeDeck(aiDecks[i - 1], os.path.join(f, "ai-" + str(i) + ".dck"))
+
+    def read(self, file):
+        humanDeck = DeckSerializer.fromFile(os.path.join(file, DeckGroupSerializer.humanDeckFile))
+        if humanDeck is None:
+            return None
+
+        d = DeckGroup(humanDeck.getName())
+        d.setDirectory(os.path.dirname(file)[len(self.rootDir):])
+        d.setHumanDeck(humanDeck)
+        for i in range(1, DeckGroupSerializer.MAX_DRAFT_PLAYERS):
+            theFile = os.path.join(file, "ai-" + str(i) + ".dck")
+            if not os.path.exists(theFile):
+                break
+            d.addAiDeck(DeckSerializer.fromFile(theFile))
+        return d
+
+    def erase(self, unit):
+        dir = self.makeFileFor(unit)
+        files = os.listdir(dir)
+        for f in files:
+            os.remove(os.path.join(dir, f))
+        os.rmdir(dir)
+
+    def makeFileFor(self, decks):
+        """
+        Make file for.
+
+        :param decks: the decks
+        :return: the file
+        """
+        return os.path.join(self.directory, decks.getBestFileName())
+
+    def getFileFilter(self):
+        def _filter(dir, name):
+            testSubject = os.path.join(dir, name)
+            isVisibleFolder = os.path.isdir(testSubject) and not _is_hidden(testSubject)
+            hasGoodName = bool(name) and not name.startswith(".")
+            fileHumanDeck = os.path.join(testSubject, DeckGroupSerializer.humanDeckFile)
+            return isVisibleFolder and hasGoodName and os.path.exists(fileHumanDeck)
+        return _filter
+
+    def getSubFolders(self):
+        # Sealed decks are kept in separate folders, no further drilling possible
+        return []
 ```

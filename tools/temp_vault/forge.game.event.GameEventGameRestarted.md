@@ -55,3 +55,21 @@ public record GameEventGameRestarted(PlayerView whoRestarted) implements GameEve
     }
 }
 ```
+
+## Python
+`forge/game/event/GameEventGameRestarted.py`
+
+```python
+from forge.game.event.GameEvent import GameEvent
+from forge.game.event.IGameEventVisitor import IGameEventVisitor
+from forge.game.player.PlayerView import PlayerView
+
+
+class GameEventGameRestarted(GameEvent):
+
+    def __init__(self, whoRestarted: PlayerView):
+        self.whoRestarted = whoRestarted
+
+    def visit(self, visitor: IGameEventVisitor):
+        return visitor.visit(self)
+```

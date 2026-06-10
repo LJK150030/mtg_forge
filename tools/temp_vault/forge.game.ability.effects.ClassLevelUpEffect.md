@@ -87,3 +87,44 @@ public class ClassLevelUpEffect extends SpellAbilityEffect {
     }
 }
 ```
+
+## Python
+`forge/game/ability/effects/ClassLevelUpEffect.py`
+
+```python
+from typing import Map
+
+from forge.game.Game import Game
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.trigger.TriggerType import TriggerType
+
+
+class ClassLevelUpEffect(SpellAbilityEffect):
+
+    # (non-Javadoc)
+    # @see forge.card.abilityfactory.SpellEffect#resolve(java.util.Map, forge.card.spellability.SpellAbility)
+    def resolve(self, sa: SpellAbility) -> None:
+        host = sa.getHostCard()
+        game = host.getGame()
+        level = host.getClassLevel()
+
+        if not sa.isClassLevelNAbility(level):
+            return
+
+        level += 1
+        host.setClassLevel(level)
+
+        # need to run static ability to get Trigger online
+        game.getAction().checkStaticAbilities()
+
+        # Re-register triggers for target card
+        game.getTriggerHandler().clearActiveTriggers(host, None)
+        game.getTriggerHandler().registerActiveTrigger(host, False)
+
+        runParams = AbilityKey.mapFromCard(host)
+        runParams[AbilityKey.ClassLevel] = level
+        game.getTriggerHandler().runTrigger(TriggerType.ClassLevelGained, runParams, False)
+```

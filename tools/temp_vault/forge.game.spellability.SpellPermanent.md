@@ -37,6 +37,12 @@ classDiagram
 - [[forge.game.card.CardState|CardState]]
 - [[forge.game.cost.Cost|Cost]]
 
+## Design Description
+
+Spell that represents casting a permanent cardâ€”lands, creatures, artifacts, enchantments, and planeswalkersâ€”onto the battlefield. As a concrete extension of `SpellApiBased`, it wires a permanent card into the engine's API-driven ability framework rather than implementing bespoke resolution logic, delegating actual resolution to the inherited API mechanism.
+
+The constructors progressively default the spell's parameters: from a `Card` alone it derives the current `CardState` and builds a `Cost` from the card's mana cost, ultimately funneling into the full constructor. There it inspects the `CardState`'s type to select the appropriate `ApiType`â€”`PermanentCreature` or `PermanentNoncreature`â€”binding the spell to the correct resolution API. It pins the spell to a specific `CardState`, then deliberately clears the stack description and mirrors it into the description, reflecting that a permanent spell carries no rules text of its own on the stack.
+
 ## Source
 `forge-game/src/main/java/forge/game/spellability/SpellPermanent.java`
 
@@ -106,4 +112,40 @@ public class SpellPermanent extends SpellApiBased {
     }
 
 }
+```
+
+## Python
+`forge/game/spellability/SpellPermanent.py`
+
+```python
+from forge.game.ability.ApiType import ApiType
+from forge.game.ability.SpellApiBased import SpellApiBased
+from forge.game.card.Card import Card
+from forge.game.card.CardState import CardState
+from forge.game.cost.Cost import Cost
+
+
+class SpellPermanent(SpellApiBased):
+    serialVersionUID = 2413495058630644447
+
+    def __init__(self, sourceCard: Card, cardstate: CardState = None, cost: Cost = None):
+        if cardstate is None:
+            cardstate = sourceCard.getCurrentState()
+            cost = Cost(sourceCard.getManaCost(), False)
+        elif cost is None:
+            cost = Cost(cardstate.getManaCost(), False)
+
+        super().__init__(
+            ApiType.PermanentCreature if cardstate.getType().isCreature() else ApiType.PermanentNoncreature,
+            sourceCard,
+            cost,
+            None,
+            {},
+        )
+
+        self.setCardState(cardstate)
+
+        # reset StackDescription for something with Text
+        self.setStackDescription("")
+        self.setDescription(self.getStackDescription())
 ```

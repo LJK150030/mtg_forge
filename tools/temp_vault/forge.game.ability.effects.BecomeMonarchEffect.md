@@ -36,9 +36,9 @@ classDiagram
 
 ## Design Description
 
-BecomeMonarchEffect is a concrete `SpellAbilityEffect` that implements the resolution logic for spells and abilities which make one or more players the monarch. It overrides the two extension points its supertype exposes: `getStackDescription`, which produces a human-readable summary—using `Lang.joinHomogenous` and pluralizing "becomes"/"become" by target count—and `resolve`, which applies the state change. Resolution reads the originating card's set code, then iterates the ability's target `Player` list, skipping any player no longer in the game and honoring each player's `canBecomeMonarch` guard before delegating to `Game.getAction().becomeMonarch`.
+BecomeMonarchEffect is a concrete `SpellAbilityEffect` that implements the resolution logic for spells and abilities which make one or more players the monarch. It overrides the two extension points its supertype exposes: `getStackDescription`, which produces a human-readable summaryâ€”using `Lang.joinHomogenous` and pluralizing "becomes"/"become" by target countâ€”and `resolve`, which applies the state change. Resolution reads the originating card's set code, then iterates the ability's target `Player` list, skipping any player no longer in the game and honoring each player's `canBecomeMonarch` guard before delegating to `Game.getAction().becomeMonarch`.
 
-The class holds no state of its own, collaborating transiently with `SpellAbility` for its targets and host and with `Player` as the affected subjects—consistent with the stateless, per-resolution effect pattern shared across the effects package. An inline TODO marks AI handling and corner cases as still unfinished.
+The class holds no state of its own, collaborating transiently with `SpellAbility` for its targets and host and with `Player` as the affected subjectsâ€”consistent with the stateless, per-resolution effect pattern shared across the effects package. An inline TODO marks AI handling and corner cases as still unfinished.
 
 ## Source
 `forge-game/src/main/java/forge/game/ability/effects/BecomeMonarchEffect.java`
@@ -83,4 +83,38 @@ public class BecomeMonarchEffect extends SpellAbilityEffect {
     }
 
 }
+```
+
+## Python
+`forge/game/ability/effects/BecomeMonarchEffect.py`
+
+```python
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Lang import Lang
+
+
+class BecomeMonarchEffect(SpellAbilityEffect):
+
+    def getStackDescription(self, sa: SpellAbility) -> str:
+        sb = []
+
+        tgtPlayers = self.getTargetPlayers(sa)
+
+        sb.append(Lang.joinHomogenous(tgtPlayers))
+        sb.append(" becomes" if len(tgtPlayers) == 1 else " become")
+        sb.append(" the monarch.")
+
+        return "".join(sb)
+
+    def resolve(self, sa: SpellAbility) -> None:
+        # TODO: improve ai and fix corner cases
+        set = sa.getOriginalHost().getSetCode()
+
+        for p in self.getTargetPlayers(sa):
+            if not p.isInGame():
+                continue
+            if p.canBecomeMonarch():
+                p.getGame().getAction().becomeMonarch(p, set)
 ```

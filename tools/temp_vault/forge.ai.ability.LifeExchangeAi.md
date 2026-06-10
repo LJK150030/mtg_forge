@@ -39,7 +39,7 @@ classDiagram
 
 ## Design Description
 
-`LifeExchangeAi` supplies the AI's decision-making for life-exchange spells and abilities, extending the `SpellAbilityAi` base class and overriding its two hooks: `checkApiLogic`, which decides whether to cast proactively, and `doTriggerNoCost`, which handles forced or triggered resolution. It collaborates with `Player` and `PlayerCollection` to survey opponents—filtering to legally targetable ones and selecting the highest-life opponent via `PlayerPredicates`—and returns its verdict as an `AiAbilityDecision` paired with a scored `AiPlayDecision`.
+`LifeExchangeAi` supplies the AI's decision-making for life-exchange spells and abilities, extending the `SpellAbilityAi` base class and overriding its two hooks: `checkApiLogic`, which decides whether to cast proactively, and `doTriggerNoCost`, which handles forced or triggered resolution. It collaborates with `Player` and `PlayerCollection` to survey opponentsâ€”filtering to legally targetable ones and selecting the highest-life opponent via `PlayerPredicates`â€”and returns its verdict as an `AiAbilityDecision` paired with a scored `AiPlayDecision`.
 
 The design encodes a simple value heuristic: the AI always swaps life when its own total is critically low (under 5) against a healthier opponent, and otherwise only when the gain meaningfully exceeds the cost (opponent's life more than eight above its own), reflecting that exchange effects often carry a sacrifice. It deliberately never targets itself during selection, and an inline TODO acknowledges unhandled edge cases (Soul Conduit, Psychic Transfer).
 
@@ -136,4 +136,84 @@ public class LifeExchangeAi extends SpellAbilityAi {
     }
 
 }
+```
+
+## Python
+`forge/ai/ability/LifeExchangeAi.py`
+
+```python
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.ai.SpellAbilityAi import SpellAbilityAi
+from forge.game.player.Player import Player
+from forge.game.player.PlayerCollection import PlayerCollection
+from forge.game.player.PlayerPredicates import PlayerPredicates
+from forge.game.spellability.SpellAbility import SpellAbility
+
+
+class LifeExchangeAi(SpellAbilityAi):
+
+    #
+    # (non-Javadoc)
+    #
+    # @see
+    # forge.card.abilityfactory.AbilityFactoryAlterLife.SpellAiLogic#canPlayAI
+    # (forge.game.player.Player, java.util.Map,
+    # forge.card.spellability.SpellAbility)
+    #
+    def checkApiLogic(self, aiPlayer: Player, sa: SpellAbility) -> AiAbilityDecision:
+        if not aiPlayer.canGainLife():
+            return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+        myLife = aiPlayer.getLife()
+        targetableOpps = aiPlayer.getOpponents().filter(PlayerPredicates.isTargetableBy(sa))
+        opponent = targetableOpps.max(PlayerPredicates.compareByLife())
+        hLife = 0 if opponent is None else opponent.getLife()
+
+        #
+        # TODO - There is one card that takes two targets (Soul Conduit)
+        # and one card that has a conditional (Psychic Transfer) that are
+        # not currently handled
+        #
+        if sa.usesTargeting():
+            sa.resetTargets()
+            if opponent is not None and opponent.canLoseLife():
+                # never target self, that would be silly for exchange
+                sa.getTargets().add(opponent)
+            else:
+                return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+        # if life is in danger, always activate
+        if myLife < 5 and hLife > myLife:
+            return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+        # cost includes sacrifice probably, so make sure it's worth it
+        result = hLife > (myLife + 8)
+
+        return AiAbilityDecision(100, AiPlayDecision.WillPlay) if result else AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+    #
+    # exchangeLifeDoTriggerAINoCost.
+    #
+    # @param sa
+    #            a {@link forge.game.spellability.SpellAbility} object.
+    # @param mandatory
+    #            a boolean.
+    # @param af
+    #            a {@link forge.game.ability.AbilityFactory} object.
+    #
+    # @return a boolean.
+    #
+    def doTriggerNoCost(self, ai: Player, sa: SpellAbility, mandatory: bool) -> AiAbilityDecision:
+        targetableOpps = ai.getOpponents().filter(PlayerPredicates.isTargetableBy(sa))
+        opp = targetableOpps.max(PlayerPredicates.compareByLife())
+        if sa.usesTargeting():
+            sa.resetTargets()
+            if sa.canTarget(opp) and (mandatory or ai.getLife() < opp.getLife()):
+                sa.getTargets().add(opp)
+                if sa.canAddMoreTarget():
+                    sa.getTargets().add(ai)
+            else:
+                return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+        return AiAbilityDecision(100, AiPlayDecision.WillPlay)
 ```

@@ -39,12 +39,12 @@ classDiagram
 
 ## Design Description
 
-The `Arena` class is a static AI-helper bundled inside `SpecialCardAi`, dedicated to deciding when the AI should activate the fight-style ability of *Arena* and *Magus of the Arena*. Its sole `consider` method evaluates the game state through the supplied `Player` and `SpellAbility`, returning an `AiAbilityDecision` that pairs a numeric score with an `AiPlayDecision` verdict—the standard contract the engine's special-card handlers expose.
+The `Arena` class is a static AI-helper bundled inside `SpecialCardAi`, dedicated to deciding when the AI should activate the fight-style ability of *Arena* and *Magus of the Arena*. Its sole `consider` method evaluates the game state through the supplied `Player` and `SpellAbility`, returning an `AiAbilityDecision` that pairs a numeric score with an `AiPlayDecision` verdictâ€”the standard contract the engine's special-card handlers expose.
 
 Treating the ability as targeted removal, it defers play until the end step before the AI's own turn, then collaborates with `Game`, `CardCollection`, and `Card` to scan its creatures for one that can kill every opposing creature unscathed (via `FightAi.canKill`). On finding such a creature it sets the spell's target and reports a high-confidence `Removal` decision; otherwise it signals waiting, missing prerequisites, or non-playability. The design favors safe, guaranteed-value combat over speculative trades.
 
 ## Source
-`forge-ai/src/main/java/forge/ai/SpecialCardAi.java` â€” declaration excerpt
+`forge-ai/src/main/java/forge/ai/SpecialCardAi.java` Ã¢â‚¬â€ declaration excerpt
 
 ```java
     // Arena and Magus of the Arena
@@ -90,4 +90,54 @@ Treating the ability as targeted removal, it defers play until the end step befo
             return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
         }
     }
+```
+
+## Python
+`forge/ai/SpecialCardAi/Arena.py`
+
+```python
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.game.Game import Game
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.ai.FightAi import FightAi
+from forge.game.phase.PhaseType import PhaseType
+
+
+class Arena:
+    @staticmethod
+    def consider(ai: Player, sa: SpellAbility) -> AiAbilityDecision:
+        game = ai.getGame()
+
+        # TODO This is basically removal, so we may want to play this at other times
+        if not game.getPhaseHandler().is_(PhaseType.END_OF_TURN) or game.getPhaseHandler().getNextTurn() != ai:
+            return AiAbilityDecision(0, AiPlayDecision.WaitForEndOfTurn)
+
+        aiCreatures = ai.getCreaturesInPlay()
+        if aiCreatures.isEmpty():
+            return AiAbilityDecision(0, AiPlayDecision.MissingNeededCards)
+
+        for opp in ai.getOpponents():
+            oppCreatures = opp.getCreaturesInPlay()
+            if oppCreatures.isEmpty():
+                continue
+
+            for aiCreature in aiCreatures:
+                canKillAll = True
+                for oppCreature in oppCreatures:
+                    if FightAi.canKill(oppCreature, aiCreature, 0):
+                        canKillAll = False
+                        break
+                    if not FightAi.canKill(aiCreature, oppCreature, 0):
+                        canKillAll = False
+                        break
+                if canKillAll:
+                    sa.getTargets().clear()
+                    sa.getTargets().add(aiCreature)
+                    return AiAbilityDecision(100, AiPlayDecision.Removal)
+
+        return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
 ```

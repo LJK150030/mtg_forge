@@ -164,3 +164,101 @@ public class RearrangeTopOfLibraryEffect extends SpellAbilityEffect {
 
 }
 ```
+
+## Python
+`forge/game/ability/effects/RearrangeTopOfLibraryEffect.py`
+
+```python
+from typing import List
+
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.Lang import Lang
+from forge.util.Localizer import Localizer
+
+
+class RearrangeTopOfLibraryEffect(SpellAbilityEffect):
+
+    # (non-Javadoc)
+    # @see forge.card.abilityfactory.SpellEffect#resolve(java.util.Map, forge.card.spellability.SpellAbility)
+
+    def getStackDescription(self, sa: SpellAbility) -> str:
+        host = sa.getHostCard()
+        tgtPlayers: List[Player] = self.getTargetPlayers(sa)
+        numCards = AbilityUtils.calculateAmount(host, sa.getParam("NumCards"), sa)
+        shuffle = sa.hasParam("MayShuffle")
+
+        ret = []
+        ret.append("Look at the top ")
+        ret.append(str(numCards))
+        ret.append(" cards of ")
+        for p in tgtPlayers:
+            ret.append(Lang.getInstance().getPossesive(p.getName()))
+            ret.append(" & ")
+        ret_str = "".join(ret)
+        ret_str = ret_str[:len(ret_str) - 3]
+
+        ret_str += " library. Then put them back in any order."
+
+        if shuffle:
+            ret_str += "You may have "
+            if len(tgtPlayers) > 1:
+                ret_str += "those"
+            else:
+                ret_str += "that"
+
+            ret_str += " player shuffle their library."
+
+        return ret_str
+
+    # <p>
+    # rearrangeTopOfLibraryResolve.
+    # </p>
+    # @param sa
+    #            a {@link forge.game.spellability.SpellAbility} object.
+    # @param af
+    #            a {@link forge.game.ability.AbilityFactory} object.
+
+    def resolve(self, sa: SpellAbility) -> None:
+        host = sa.getHostCard()
+        numCards = AbilityUtils.calculateAmount(host, sa.getParam("NumCards"), sa)
+        shuffle = sa.hasParam("MayShuffle")
+
+        for p in self.getTargetPlayers(sa):
+            if not p.isInGame():
+                continue
+            RearrangeTopOfLibraryEffect.rearrangeTopOfLibrary(host, p, numCards, shuffle, sa)
+
+    # use this when Human needs to rearrange the top X cards in a player's
+    # library. You may also specify a shuffle when done
+    #
+    # @param src
+    #            the source card
+    # @param player
+    #            the player to target
+    # @param numCards
+    #            the number of cards from the top to rearrange
+    # @param mayshuffle
+    #            a boolean.
+    @staticmethod
+    def rearrangeTopOfLibrary(src: Card, player: Player, numCards: int, mayshuffle: bool, sa: SpellAbility) -> None:
+        activator = (Iterables.getFirst(AbilityUtils.getDefinedPlayers(src, sa.getParam("RearrangePlayer"), sa), None)
+                     if sa.hasParam("RearrangePlayer")
+                     else sa.getActivatingPlayer())
+        if activator is None:
+            return
+
+        topCards: CardCollection = player.getTopXCardsFromLibrary(numCards)
+
+        orderedCards: CardCollectionView = activator.getController().orderMoveToZoneList(topCards, ZoneType.Library, sa)
+        for next in orderedCards:
+            player.getGame().getAction().moveToLibrary(next, 0, sa)
+        if mayshuffle and activator.getController().confirmAction(sa, None, Localizer.getInstance().getMessage("lblDoyouWantShuffleTheLibrary"), None):
+            player.shuffle(sa)
+```

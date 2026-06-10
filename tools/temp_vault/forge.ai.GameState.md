@@ -149,9 +149,9 @@ classDiagram
 
 ## Design Description
 
-GameState is an abstract base class in the `forge.ai` package that serializes a complete Magic: The Gathering game snapshot to and from a flat key/value text format, used by AI dev mode and Puzzle Mode. Its two responsibilities mirror each other: `initFromGame`/`toString` capture a live `Game`—players, zones, and per-card attributes such as counters, damage, attachments, chosen colors, combat assignments, and merged/transformed states—into per-player `PlayerState` records, while `parse` plus `applyToGame`/`applyGameOnThread` rebuild that state back onto a `Game`.
+GameState is an abstract base class in the `forge.ai` package that serializes a complete Magic: The Gathering game snapshot to and from a flat key/value text format, used by AI dev mode and Puzzle Mode. Its two responsibilities mirror each other: `initFromGame`/`toString` capture a live `Game`â€”players, zones, and per-card attributes such as counters, damage, attachments, chosen colors, combat assignments, and merged/transformed statesâ€”into per-player `PlayerState` records, while `parse` plus `applyToGame`/`applyGameOnThread` rebuild that state back onto a `Game`.
 
-It collaborates broadly with the engine model—`Card`, `Player`, `Combat`, `ManaPool`, `SpellAbility`, `ZoneType`, and paper-card/token factories—and structures reconstruction through many focused `handle*` helpers that defer cross-references (attachments, remembered/imprinted IDs, scripted targeting) until every card exists, resolving them via an `idToCard` map. The single abstract `getPaperCard` hook delegates card-database lookup to concrete subclasses, decoupling state logic from card-source resolution, while trigger suppression and stack freezing during application reflect deliberate intent to install state without firing spurious game events.
+It collaborates broadly with the engine modelâ€”`Card`, `Player`, `Combat`, `ManaPool`, `SpellAbility`, `ZoneType`, and paper-card/token factoriesâ€”and structures reconstruction through many focused `handle*` helpers that defer cross-references (attachments, remembered/imprinted IDs, scripted targeting) until every card exists, resolving them via an `idToCard` map. The single abstract `getPaperCard` hook delegates card-database lookup to concrete subclasses, decoupling state logic from card-source resolution, while trigger suppression and stack freezing during application reflect deliberate intent to install state without firing spurious game events.
 
 ## Source
 `forge-ai/src/main/java/forge/ai/GameState.java`
@@ -1593,4 +1593,1208 @@ public abstract class GameState {
         return cl;
     }
 }
+```
+
+## Python
+`forge/ai/GameState.py`
+
+```python
+from forge.StaticData import StaticData
+from forge.card.CardEdition import CardEdition
+from forge.card.CardStateName import CardStateName
+from forge.card.GamePieceType import GamePieceType
+from forge.card.MagicColor import MagicColor
+from forge.card.mana.ManaAtom import ManaAtom
+from forge.game.Game import Game
+from forge.game.GameEntity import GameEntity
+from forge.game.ability.AbilityFactory import AbilityFactory
+from forge.game.ability.ApiType import ApiType
+from forge.game.ability.effects.DetachedCardEffect import DetachedCardEffect
+from forge.game.card.Card import Card
+from forge.game.card.CardCloneStates import CardCloneStates
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.card.CardCopyService import CardCopyService
+from forge.game.card.CardFactory import CardFactory
+from forge.game.card.CounterType import CounterType
+from forge.game.card.token.TokenInfo import TokenInfo
+from forge.game.combat.Combat import Combat
+from forge.game.combat.CombatUtil import CombatUtil
+from forge.game.event.GameEventAttackersDeclared import GameEventAttackersDeclared
+from forge.game.event.GameEventCombatChanged import GameEventCombatChanged
+from forge.game.mana.ManaPool import ManaPool
+from forge.game.phase.PhaseType import PhaseType
+from forge.game.player.Player import Player
+from forge.game.spellability.AbilityManaPart import AbilityManaPart
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.PlayerZone import PlayerZone
+from forge.game.zone.ZoneType import ZoneType
+from forge.item.IPaperCard import IPaperCard
+from forge.item.PaperCard import PaperCard
+from forge.item.PaperToken import PaperToken
+from forge.util.TextUtil import TextUtil
+from forge.util.collect.FCollectionView import FCollectionView
+
+import sys
+from abc import ABC, abstractmethod
+from io import BufferedReader, TextIOWrapper
+
+
+class GameState(ABC):
+    ZONES: dict[ZoneType, str] = {}
+    ZONES[ZoneType.Battlefield] = "battlefield"
+    ZONES[ZoneType.Hand] = "hand"
+    ZONES[ZoneType.Graveyard] = "graveyard"
+    ZONES[ZoneType.Library] = "library"
+    ZONES[ZoneType.Exile] = "exile"
+    ZONES[ZoneType.Command] = "command"
+    ZONES[ZoneType.Sideboard] = "sideboard"
+
+    class PlayerState:
+        def __init__(self):
+            self.life = -1
+            self.counters = ""
+            self.manaPool = ""
+            self.persistentMana = ""
+            self.landsPlayed = 0
+            self.landsPlayedLastTurn = 0
+            self.numRingTemptedYou = 0
+            self.speed = 0
+            self.precast = None
+            self.putOnStack = None
+            self.cardTexts: dict[ZoneType, str] = {}
+
+    def __init__(self):
+        self.playerStates: list[GameState.PlayerState] = []
+
+        self.puzzleCreatorState = False
+
+        self.idToCard: dict[int, Card] = {}
+        self.cardToAttachId: dict[Card, int] = {}
+        self.cardToEnchantPlayerId: dict[Card, Player] = {}
+        self.markedDamage: dict[Card, int] = {}
+        self.cardToChosenClrs: dict[Card, list[str]] = {}
+        self.cardToChosenCards: dict[Card, CardCollection] = {}
+        self.cardToChosenType: dict[Card, str] = {}
+        self.cardToChosenType2: dict[Card, str] = {}
+        self.cardToRememberedId: dict[Card, list[str]] = {}
+        self.cardToImprintedId: dict[Card, list[str]] = {}
+        self.cardToMergedCards: dict[Card, list[str]] = {}
+        self.cardToNamedCard: dict[Card, list[str]] = {}
+        self.cardToExiledWithId: dict[Card, str] = {}
+        self.cardAttackMap: dict[Card, Card] = {}
+
+        self.cardToScript: dict[Card, str] = {}
+
+        self.abilityString: dict[str, str] = {}
+
+        self.cardsReferencedByID: set[Card] = set()
+        self.cardsWithoutETBTrigs: set[Card] = set()
+
+        self.tChangePlayer = "NONE"
+        self.tChangePhase = "NONE"
+
+        self.tAdvancePhase = "NONE"
+
+        self.turn = 1
+
+        self.removeSummoningSickness = False
+
+        # Targeting for precast spells in a game state (mostly used by Puzzle Mode game states)
+        self.TARGET_NONE = -1  # untargeted spell (e.g. Joraga Invocation)
+        self.TARGET_HUMAN = -2
+        self.TARGET_AI = -3
+
+    @abstractmethod
+    def getPaperCard(self, cardName: str, setCode: str, artID: int) -> IPaperCard:
+        ...
+
+    def toString(self) -> str:
+        sb = []
+
+        if self.puzzleCreatorState:
+            # append basic puzzle metadata if we're dumping from the puzzle creator screen
+            sb.append("[metadata]\n")
+            sb.append("Name:New Puzzle\n")
+            sb.append("URL:https://www.cardforge.org\n")
+            sb.append("Goal:Win\n")
+            sb.append("Turns:1\n")
+            sb.append("Difficulty:Common\n")
+            sb.append("Description:Win this turn.\n")
+            sb.append("[state]\n")
+
+        sb.append(TextUtil.concatNoSpace("turn=", str(self.turn), "\n"))
+        sb.append(TextUtil.concatNoSpace("activeplayer=", self.tChangePlayer, "\n"))
+        sb.append(TextUtil.concatNoSpace("activephase=", self.tChangePhase, "\n"))
+
+        playerIndex = 0
+        for p in self.playerStates:
+            prefix = "p" + str(playerIndex)
+            playerIndex += 1
+            sb.append(TextUtil.concatNoSpace(prefix + "life=", str(p.life), "\n"))
+            sb.append(TextUtil.concatNoSpace(prefix + "landsplayed=", str(p.landsPlayed), "\n"))
+            sb.append(TextUtil.concatNoSpace(prefix + "landsplayedlastturn=", str(p.landsPlayedLastTurn), "\n"))
+            sb.append(TextUtil.concatNoSpace(prefix + "numringtemptedyou=", str(p.numRingTemptedYou), "\n"))
+            sb.append(TextUtil.concatNoSpace(prefix + "speed=", str(p.speed), "\n"))
+            if p.counters:
+                sb.append(TextUtil.concatNoSpace(prefix + "counters=", p.counters, "\n"))
+            if p.manaPool:
+                sb.append(TextUtil.concatNoSpace(prefix + "manapool=", p.manaPool, "\n"))
+            if p.persistentMana:
+                sb.append(TextUtil.concatNoSpace(prefix + "persistentmana=", p.persistentMana, "\n"))
+            self.appendCards(p.cardTexts, prefix, sb)
+        return "".join(sb)
+
+    def appendCards(self, cardTexts: dict[ZoneType, str], categoryPrefix: str, sb: list) -> None:
+        for key, value in cardTexts.items():
+            sb.append(TextUtil.concatNoSpace(categoryPrefix, GameState.ZONES.get(key), "=", value, "\n"))
+
+    def initFromGame(self, game: Game) -> None:
+        self.playerStates.clear()
+        for player in game.getPlayers():
+            p = GameState.PlayerState()
+            p.life = player.getLife()
+            p.landsPlayed = player.getLandsPlayedThisTurn()
+            p.landsPlayedLastTurn = player.getLandsPlayedLastTurn()
+            p.counters = self.countersToString(player.getCounters())
+            p.manaPool = self.processManaPool(player.getManaPool())
+            p.numRingTemptedYou = player.getNumRingTemptedYou()
+            p.speed = player.getSpeed()
+            self.playerStates.append(p)
+
+        self.tChangePlayer = "p" + str(game.getPlayers().indexOf(game.getPhaseHandler().getPlayerTurn()))
+        self.tChangePhase = game.getPhaseHandler().getPhase().toString()
+        self.turn = game.getPhaseHandler().getTurn()
+
+        # Mark the cards that need their ID remembered for various reasons
+        self.cardsReferencedByID.clear()
+        for zone in GameState.ZONES.keys():
+            for card in game.getCardsIncludePhasingIn(zone):
+                if card.getExiledWith() is not None:
+                    # Remember the ID of the card that exiled this card
+                    self.cardsReferencedByID.add(card.getExiledWith())
+                if zone == ZoneType.Battlefield:
+                    if not card.getAllAttachedCards().isEmpty():
+                        # Remember the ID of cards that have attachments
+                        self.cardsReferencedByID.add(card)
+                for o in card.getRemembered():
+                    # Remember the IDs of remembered cards
+                    if isinstance(o, Card):
+                        self.cardsReferencedByID.add(o)
+                for i in card.getImprintedCards():
+                    # Remember the IDs of imprinted cards
+                    self.cardsReferencedByID.add(i)
+                for i in card.getChosenCards():
+                    # Remember the IDs of chosen cards
+                    self.cardsReferencedByID.add(i)
+                if game.getCombat() is not None and game.getCombat().isAttacking(card):
+                    # Remember the IDs of attacked planeswalkers
+                    defn = game.getCombat().getDefenderByAttacker(card)
+                    if isinstance(defn, Card):
+                        self.cardsReferencedByID.add(defn)
+
+        for zone in GameState.ZONES.keys():
+            # Init texts to empty, so that restoring will clear the state
+            # if the zone had no cards in it (e.g. empty hand).
+            for p in self.playerStates:
+                p.cardTexts[zone] = ""
+            for card in game.getCardsIncludePhasingIn(zone):
+                if card.getName() == "Puzzle Goal" and "New Puzzle" in card.getOracleText():
+                    self.puzzleCreatorState = True
+                if isinstance(card, DetachedCardEffect):
+                    continue
+                playerIndex = game.getPlayers().indexOf(card.getZone().getPlayer())
+                self.addCard(zone, self.playerStates[playerIndex].cardTexts, card)
+
+    def getPlayerString(self, p: Player) -> str:
+        return "P" + str(p.getGame().getPlayers().indexOf(p))
+
+    def parsePlayerString(self, game: Game, str_: str) -> Player:
+        if str_.lower() == "human":
+            return game.getPlayers().get(0)
+        elif str_.lower() == "ai":
+            return game.getPlayers().get(1)
+        elif str_.startswith("P") and str_[1].isdigit():
+            return game.getPlayers().get(int(str_[1]))
+        else:
+            return game.getPlayers().get(0)
+
+    def addCard(self, zoneType: ZoneType, cardTexts: dict[ZoneType, str], c: Card) -> None:
+        newText = [cardTexts.get(zoneType)]
+        if len("".join(newText)) > 0:
+            newText.append(";")
+        if c.isToken():
+            newText.append("t:")
+            newText.append(str(TokenInfo(c)))
+        else:
+            if c.getPaperCard() is None:
+                return
+
+            if c.hasMergedCard():
+                suffix = "+" if c.getTopMergedCard().hasPaperFoil() else ""
+                # we have to go by the current top card name here
+                newText.append(c.getTopMergedCard().getPaperCard().getName())
+                newText.append(suffix)
+                newText.append("|Set:")
+                newText.append(str(c.getTopMergedCard().getPaperCard().getEdition()))
+                newText.append("|Art:")
+                newText.append(str(c.getTopMergedCard().getPaperCard().getArtIndex()))
+            else:
+                suffix = "+" if c.hasPaperFoil() else ""
+                newText.append(c.getPaperCard().getName())
+                newText.append(suffix)
+                newText.append("|Set:")
+                newText.append(str(c.getPaperCard().getEdition()))
+                newText.append("|Art:")
+                newText.append(str(c.getPaperCard().getArtIndex()))
+        if c.isCommander():
+            newText.append("|IsCommander")
+        if c.isRingBearer():
+            newText.append("|IsRingBearer")
+
+        if c in self.cardsReferencedByID:
+            newText.append("|Id:")
+            newText.append(str(c.getId()))
+
+        if zoneType == ZoneType.Battlefield:
+            if c.getOwner() != c.getController():
+                newText.append("|Owner:")
+                newText.append(self.getPlayerString(c.getOwner()))
+            if c.isTapped():
+                newText.append("|Tapped")
+            if c.isSick():
+                newText.append("|SummonSick")
+            if c.isRenowned():
+                newText.append("|Renowned")
+            if c.isSolved():
+                newText.append("|Solved")
+            if c.isSuspected():
+                newText.append("|Suspected")
+            if c.isMonstrous():
+                newText.append("|Monstrous")
+            if c.isPhasedOut():
+                newText.append("|PhasedOut:")
+                newText.append(self.getPlayerString(c.getPhasedOut()))
+            if c.isFaceDown():
+                newText.append("|FaceDown")
+                if c.isManifested():
+                    newText.append(":Manifested")
+                if c.isCloaked():
+                    newText.append(":Cloaked")
+            if c.getCurrentStateName() == CardStateName.Flipped:
+                newText.append("|Flipped")
+            elif c.getCurrentStateName() == CardStateName.Meld:
+                newText.append("|Meld")
+                if c.getMeldedWith() is not None:
+                    suffix = "+" if c.getMeldedWith().hasPaperFoil() else ""
+                    newText.append(":")
+                    newText.append(c.getMeldedWith().getName())
+                    newText.append(suffix)
+            elif c.getCurrentStateName() == CardStateName.Backside:
+                if c.isModal():
+                    newText.append("|Modal")
+                else:
+                    newText.append("|Transformed")
+
+            if c.getPlayerAttachedTo() is not None:
+                newText.append("|EnchantingPlayer:")
+                newText.append(self.getPlayerString(c.getPlayerAttachedTo()))
+            elif c.isAttachedToEntity():
+                newText.append("|AttachedTo:")
+                newText.append(str(c.getEntityAttachedTo().getId()))
+
+            if c.getDamage() > 0:
+                newText.append("|Damage:")
+                newText.append(str(c.getDamage()))
+
+            if c.hasChosenColor():
+                newText.append("|ChosenColor:")
+                newText.append(TextUtil.join(c.getChosenColors(), ","))
+            if c.hasChosenType():
+                newText.append("|ChosenType:")
+                newText.append(c.getChosenType())
+            if c.hasChosenType2():
+                newText.append("|ChosenType2:")
+                newText.append(c.getChosenType2())
+            if not c.getNamedCard().isEmpty():
+                newText.append("|NamedCard:")
+                newText.append(c.getNamedCard())
+
+            chosenCardIds = []
+            for obj in c.getChosenCards():
+                chosenCardIds.append(str(obj.getId()))
+            if chosenCardIds:
+                newText.append("|ChosenCards:")
+                newText.append(TextUtil.join(chosenCardIds, ","))
+
+            rememberedCardIds = []
+            for obj in c.getRemembered():
+                if isinstance(obj, Card):
+                    id_ = obj.getId()
+                    rememberedCardIds.append(str(id_))
+            if rememberedCardIds:
+                newText.append("|RememberedCards:")
+                newText.append(TextUtil.join(rememberedCardIds, ","))
+
+            imprintedCardIds = []
+            for impr in c.getImprintedCards():
+                id_ = impr.getId()
+                imprintedCardIds.append(str(id_))
+            if imprintedCardIds:
+                newText.append("|Imprinting:")
+                newText.append(TextUtil.join(imprintedCardIds, ","))
+
+            if c.hasMergedCard():
+                mergedCardNames = []
+                for merged in c.getMergedCards():
+                    if c.getTopMergedCard() == merged:
+                        continue
+                    mergedCardNames.append(merged.getPaperCard().getName().replace(",", "^"))
+                newText.append("|MergedCards:")
+                newText.append(TextUtil.join(mergedCardNames, ","))
+
+            if c.getClassLevel() > 1:
+                newText.append("|ClassLevel:")
+                newText.append(str(c.getClassLevel()))
+
+        if zoneType == ZoneType.Exile:
+            if c.getExiledWith() is not None:
+                newText.append("|ExiledWith:")
+                newText.append(str(c.getExiledWith().getId()))
+            if c.isFaceDown():
+                newText.append("|FaceDown")  # Exiled face down
+            if c.isAdventureCard() and c.getZone().is_(ZoneType.Exile):
+                # TODO: this will basically default all exiled cards with Adventure to being "On Adventure".
+                # Need to figure out a better way to detect if it's actually on adventure.
+                newText.append("|OnAdventure")
+            if c.isForetold():
+                newText.append("|Foretold")
+                if c.enteredThisTurn():
+                    newText.append("|ForetoldThisTurn")
+
+        if zoneType == ZoneType.Battlefield or zoneType == ZoneType.Exile:
+            # A card can have counters on the battlefield and in exile (e.g. exiled by Mairsil, the Pretender)
+            counters = c.getCounters()
+            if not counters:
+                pass
+            else:
+                newText.append("|Counters:")
+                newText.append(self.countersToString(counters))
+
+        if c.getGame().getCombat() is not None:
+            if c.getGame().getCombat().isAttacking(c):
+                newText.append("|Attacking")
+                defn = c.getGame().getCombat().getDefenderByAttacker(c)
+                if isinstance(defn, Card):
+                    newText.append(":")
+                    newText.append(str(defn.getId()))
+
+        if not c.getUnlockedRooms().isEmpty():
+            for stateName in c.getUnlockedRooms():
+                newText.append("|UnlockedRoom:")
+                newText.append(stateName.name())
+
+        cardTexts[zoneType] = "".join(newText)
+
+    def countersToString(self, counters: dict[CounterType, int]) -> str:
+        first = True
+        counterString = []
+
+        for key, value in counters.items():
+            if not first:
+                counterString.append(",")
+
+            first = False
+            counterString.append(TextUtil.concatNoSpace(key.toString(), "=", str(value)))
+        return "".join(counterString)
+
+    def splitLine(self, line: str):
+        if line[0] == '#':
+            return None
+        tempData = line.split("=", 1)
+        if len(tempData) >= 2:
+            return tempData
+        if len(tempData) == 1 and line.endswith("="):
+            # Empty value.
+            return [tempData[0], ""]
+        return None
+
+    def parse(self, in_) -> None:
+        if isinstance(in_, list):
+            self.parse_list(in_)
+            return
+        if hasattr(in_, '__iter__') and not hasattr(in_, 'read'):
+            self.parse_stream(in_)
+            return
+        br = BufferedReader(in_) if not isinstance(in_, (BufferedReader, TextIOWrapper)) else in_
+        reader = TextIOWrapper(br) if isinstance(br, BufferedReader) else br
+        self.parse_stream(line.rstrip("\n") for line in reader)
+
+    def parse_list(self, lines: list[str]) -> None:
+        self.parse_stream(iter(lines))
+
+    def parse_stream(self, lines) -> None:
+        self.playerStates.clear()
+        for line in lines:
+            self.parseLine(line)
+
+    def getPlayerStateByIndex(self, index: int) -> 'GameState.PlayerState':
+        while index >= len(self.playerStates):
+            self.playerStates.append(GameState.PlayerState())
+        return self.playerStates[index]
+
+    def getPlayerState(self, key) -> 'GameState.PlayerState':
+        if isinstance(key, int):
+            return self.getPlayerStateByIndex(key)
+        if key.startswith("human"):
+            return self.getPlayerStateByIndex(0)
+        elif key.startswith("ai"):
+            return self.getPlayerStateByIndex(1)
+        elif key.startswith("p") and key[1].isdigit():
+            return self.getPlayerStateByIndex(int(key[1]))
+        else:
+            sys.stderr.write("Unknown player state key: " + key + "\n")
+            return GameState.PlayerState()
+
+    def parseLine(self, line: str) -> None:
+        keyValue = self.splitLine(line)
+        if keyValue is None:
+            return
+
+        categoryName = keyValue[0].lower()
+        categoryValue = keyValue[1]
+
+        if categoryName.startswith("active"):
+            if categoryName.endswith("player"):
+                self.tChangePlayer = categoryValue.strip().lower()
+            elif categoryName.endswith("phase"):
+                self.tChangePhase = categoryValue.strip().upper()
+            elif categoryName.endswith("phaseadvance"):
+                self.tAdvancePhase = categoryValue.strip().upper()
+            return
+
+        if categoryName == "turn":
+            self.turn = int(categoryValue)
+        elif categoryName == "removesummoningsickness":
+            self.removeSummoningSickness = categoryValue.lower() == "true"
+        elif categoryName.endswith("life"):
+            self.getPlayerState(categoryName).life = int(categoryValue)
+        elif categoryName.endswith("counters"):
+            self.getPlayerState(categoryName).counters = categoryValue
+        elif categoryName.endswith("landsplayed"):
+            self.getPlayerState(categoryName).landsPlayed = int(categoryValue)
+        elif categoryName.endswith("landsplayedlastturn"):
+            self.getPlayerState(categoryName).landsPlayedLastTurn = int(categoryValue)
+        elif categoryName.endswith("numringtemptedyou"):
+            self.getPlayerState(categoryName).numRingTemptedYou = int(categoryValue)
+        elif categoryName.endswith("speed"):
+            self.getPlayerState(categoryName).speed = int(categoryValue)
+        elif categoryName.endswith("play") or categoryName.endswith("battlefield"):
+            self.getPlayerState(categoryName).cardTexts[ZoneType.Battlefield] = categoryValue
+        elif categoryName.endswith("hand"):
+            self.getPlayerState(categoryName).cardTexts[ZoneType.Hand] = categoryValue
+        elif categoryName.endswith("graveyard"):
+            self.getPlayerState(categoryName).cardTexts[ZoneType.Graveyard] = categoryValue
+        elif categoryName.endswith("library"):
+            self.getPlayerState(categoryName).cardTexts[ZoneType.Library] = categoryValue
+        elif categoryName.endswith("exile"):
+            self.getPlayerState(categoryName).cardTexts[ZoneType.Exile] = categoryValue
+        elif categoryName.endswith("command"):
+            self.getPlayerState(categoryName).cardTexts[ZoneType.Command] = categoryValue
+        elif categoryName.endswith("sideboard"):
+            self.getPlayerState(categoryName).cardTexts[ZoneType.Sideboard] = categoryValue
+        elif categoryName.startswith("ability"):
+            self.abilityString[categoryName[len("ability"):]] = categoryValue
+        elif categoryName.endswith("precast"):
+            self.getPlayerState(categoryName).precast = categoryValue
+        elif categoryName.endswith("putonstack"):
+            self.getPlayerState(categoryName).putOnStack = categoryValue
+        elif categoryName.endswith("manapool"):
+            self.getPlayerState(categoryName).manaPool = categoryValue
+        elif categoryName.endswith("persistentmana"):
+            self.getPlayerState(categoryName).persistentMana = categoryValue
+        else:
+            sys.stderr.write("Unknown key: " + categoryName + "\n")
+
+    def applyToGame(self, game: Game) -> None:
+        game.getAction().invoke(lambda: self.applyGameOnThread(game))
+
+    def applyGameOnThread(self, game: Game) -> None:
+        if game.getPlayers().size() != len(self.playerStates):
+            raise RuntimeError("Non-matching number of players, (" +
+                str(game.getPlayers().size()) + " vs. " + str(len(self.playerStates)) + ")")
+
+        self.idToCard.clear()
+        self.cardToAttachId.clear()
+        self.cardToEnchantPlayerId.clear()
+        self.cardToRememberedId.clear()
+        self.cardToExiledWithId.clear()
+        self.cardToImprintedId.clear()
+        self.markedDamage.clear()
+        self.cardToChosenClrs.clear()
+        self.cardToChosenCards.clear()
+        self.cardToChosenType.clear()
+        self.cardToChosenType2.clear()
+        self.cardToMergedCards.clear()
+        self.cardToScript.clear()
+        self.cardAttackMap.clear()
+
+        playerTurn = self.playerStates.index(self.getPlayerState(self.tChangePlayer))
+        newPlayerTurn = game.getPlayers().get(playerTurn)
+        newPhase = None if self.tChangePhase.lower() == "none" else PhaseType.smartValueOf(self.tChangePhase)
+        advPhase = None if self.tAdvancePhase.lower() == "none" else PhaseType.smartValueOf(self.tAdvancePhase)
+
+        # Set stack to resolving so things won't trigger/effects be checked right away
+        game.getStack().setResolving(True)
+
+        game.getPhaseHandler().devModeSet(newPhase, newPlayerTurn, self.turn)
+
+        game.getTriggerHandler().setSuppressAllTriggers(True)
+
+        for i in range(len(self.playerStates)):
+            self.setupPlayerState(game.getPlayers().get(i), self.playerStates[i])
+        self.handleCardAttachments()
+        self.handleChosenEntities()
+        self.handleRememberedEntities()
+        self.handleMergedCards()
+        self.handleScriptExecution(game)
+        self.handlePrecastSpells(game)
+        self.handleMarkedDamage()
+
+        game.getTriggerHandler().setSuppressAllTriggers(False)
+
+        # SAs added to stack cause triggers to fire, as if the relevant SAs were cast
+        self.handleAddSAsToStack(game)
+
+        # Combat only works for 1v1 matches for now (which are the only matches dev mode supports anyway)
+        # Note: triggers may fire during combat declarations ("whenever X attacks, ...", etc.)
+        if newPhase == PhaseType.COMBAT_DECLARE_ATTACKERS or newPhase == PhaseType.COMBAT_DECLARE_BLOCKERS:
+            toDeclareBlockers = newPhase == PhaseType.COMBAT_DECLARE_BLOCKERS
+            if newPlayerTurn is not None:
+                self.handleCombat(game, newPlayerTurn, newPlayerTurn.getSingleOpponent(), toDeclareBlockers)
+
+        game.getStack().setResolving(False)
+        game.getStack().unfreezeStack()
+
+        # Advance to a certain phase, activating all triggered abilities
+        if advPhase is not None:
+            game.getPhaseHandler().devAdvanceToPhase(advPhase)
+
+        if self.removeSummoningSickness:
+            for card in game.getCardsInGame():
+                card.setSickness(False)
+
+        game.getAction().checkStateEffects(True)  # ensure state based effects and triggers are updated
+
+        # prevent interactions with objects from old state
+        game.copyLastState()
+
+        # Store snapshot for restoring
+        game.stashGameState()
+
+        # Set negative or zero life after state effects if need be, important for some puzzles that rely on
+        # pre-setting negative life (e.g. PS_NEO4).
+        for i in range(len(self.playerStates)):
+            life = self.playerStates[i].life
+            if life <= 0:
+                game.getPlayers().get(i).setLife(life, None)
+
+    def processManaPool(self, manaPool: ManaPool) -> str:
+        mana = []
+        for c in ManaAtom.MANATYPES:
+            amount = manaPool.getAmountOfColor(c)
+            for i in range(amount):
+                mana.append(MagicColor.toShortString(c))
+                mana.append(" ")
+
+        return "".join(mana).strip()
+
+    def updateManaPool(self, p: Player, manaDef: str, clearPool: bool, persistent: bool) -> None:
+        game = p.getGame()
+        if clearPool:
+            p.getManaPool().clearPool(False)
+
+        if manaDef:
+            dummy = Card(-777777, game)
+            dummy.setOwner(p)
+            produced = {}
+            produced["Produced"] = manaDef
+            if persistent:
+                produced["PersistentMana"] = "True"
+            abMana = AbilityManaPart(dummy, produced)
+            game.getAction().invoke(lambda: abMana.produceMana(None))
+
+    def handleCombat(self, game: Game, attackingPlayer: Player, defendingPlayer: Player, toDeclareBlockers: bool) -> None:
+        # First we need to ensure that all attackers are declared in the Declare Attackers step,
+        # even if proceeding straight to Declare Blockers
+        game.getPhaseHandler().devModeSet(PhaseType.COMBAT_DECLARE_ATTACKERS, attackingPlayer, self.turn)
+
+        if game.getPhaseHandler().getCombat() is None:
+            game.getPhaseHandler().setCombat(Combat(attackingPlayer))
+            game.updateCombatForView()
+
+        combat = game.getPhaseHandler().getCombat()
+        for attacker, attacked in self.cardAttackMap.items():
+            combat.addAttacker(attacker, defendingPlayer if attacked is None else attacked)
+
+        # Run the necessary combat events and triggers to set things up correctly as if the
+        # attack was actually declared by the attacking player
+        from com.google.common.collect.ArrayListMultimap import ArrayListMultimap
+        attackersMap = ArrayListMultimap.create()
+        for ge in combat.getDefenders():
+            attackersMap.putAll(ge, combat.getAttackersOf(ge))
+        game.fireEvent(GameEventAttackersDeclared(attackingPlayer, attackersMap))
+
+        for c in combat.getAttackers():
+            CombatUtil.checkDeclaredAttacker(game, c, combat, False)
+
+        game.updateCombatForView()
+        game.fireEvent(GameEventCombatChanged())
+
+        # Gracefully proceed to Declare Blockers, giving priority to the defending player,
+        # but only if the stack is empty (otherwise the game will crash).
+        game.getStack().addAllTriggeredAbilitiesToStack()
+        if toDeclareBlockers and game.getStack().isEmpty():
+            game.getPhaseHandler().devAdvanceToPhase(PhaseType.COMBAT_DECLARE_BLOCKERS)
+
+    def handleRememberedEntities(self) -> None:
+        # Remembered: X
+        for c, ids in self.cardToRememberedId.items():
+            for id_ in ids:
+                tgt = self.idToCard.get(int(id_))
+                c.addRemembered(tgt)
+
+        # Imprinting: X
+        for c, ids in self.cardToImprintedId.items():
+            for id_ in ids:
+                tgt = self.idToCard.get(int(id_))
+                c.addImprintedCard(tgt)
+
+        # Exiled with X
+        for c, id_ in self.cardToExiledWithId.items():
+            exiledWith = self.idToCard.get(int(id_))
+            if exiledWith is not None:
+                exiledWith.addExiledCard(c)
+                c.setExiledWith(exiledWith)
+                c.setExiledBy(exiledWith.getController())
+
+    def parseTargetInScript(self, tgtDef: str) -> int:
+        if tgtDef.lower() == "human":
+            tgtID = self.TARGET_HUMAN
+        elif tgtDef.lower() == "ai":
+            tgtID = self.TARGET_AI
+        else:
+            tgtID = int(tgtDef)
+
+        return tgtID
+
+    def handleScriptedTargetingForSA(self, game: Game, sa: SpellAbility, tgtID: int) -> None:
+        human = game.getPlayers().get(0)
+        ai = game.getPlayers().get(1)
+
+        if tgtID != self.TARGET_NONE:
+            if tgtID == self.TARGET_HUMAN:
+                sa.getTargets().add(human)
+            elif tgtID == self.TARGET_AI:
+                sa.getTargets().add(ai)
+            else:
+                sa.getTargets().add(self.idToCard.get(tgtID))
+
+        if sa.hasParam("RememberTargets"):
+            sa.getHostCard().addRemembered(sa.getTargets())
+
+    def handleScriptExecution(self, game: Game) -> None:
+        for c, sPtr in self.cardToScript.items():
+            self.executeScript(game, c, sPtr)
+
+    def executeScript(self, game: Game, c: Card, sPtr: str, putOnStack: bool = False) -> None:
+        tgtID = self.TARGET_NONE
+        if "->" in sPtr:
+            tgtDef = sPtr[sPtr.rfind("->") + 2:]
+
+            tgtID = self.parseTargetInScript(tgtDef)
+            sPtr = sPtr[:sPtr.rfind("->")]
+
+        sa = None
+        if sPtr.isdigit():
+            numSA = int(sPtr)
+            if c.getSpellAbilities().size() >= numSA:
+                sa = c.getSpellAbilities().get(numSA)
+            else:
+                sys.stderr.write("ERROR: Unable to find SA with index " + str(numSA) + " on card " + str(c) + " to execute!\n")
+        else:
+            # Special handling for keyworded abilities
+            if sPtr.startswith("KW#"):
+                kwName = sPtr[3:]
+                saList = c.getSpellAbilities()
+
+                if kwName == "Awaken" or kwName == "AwakenOnly":
+                    # AwakenOnly only creates the Awaken effect, while Awaken precasts the whole spell with Awaken
+                    for ab in saList:
+                        if ab.getDescription().startswith("Awaken"):
+                            ab.setActivatingPlayer(c.getController())
+                            # target for Awaken is set in its first subability
+                            self.handleScriptedTargetingForSA(game, ab.getSubAbility(), tgtID)
+                            sa = ab.getSubAbility() if kwName == "AwakenOnly" else ab
+                    if sa is None:
+                        sys.stderr.write("ERROR: Could not locate keyworded ability Awaken in card " + str(c) + " to execute!\n")
+                        return
+            else:
+                # SVar-based script execution
+                svarValue = ""
+
+                if sPtr.startswith("CustomScript:"):
+                    # A custom line defined in the game state file
+                    svarValue = sPtr[sPtr.index(":") + 1:]
+                else:
+                    # A SVar from the card script file
+                    if not c.hasSVar(sPtr):
+                        sys.stderr.write("ERROR: Unable to find SVar " + sPtr + " on card " + str(c) + " + to execute!\n")
+                        return
+
+                    svarValue = c.getSVar(sPtr)
+
+                    if tgtID != self.TARGET_NONE and "| Defined$" in svarValue:
+                        # We want a specific target, so try to undefine a predefined target if possible
+                        svarValue = TextUtil.fastReplace(svarValue, "| Defined$", "| Undefined$")
+                        if tgtID == self.TARGET_HUMAN or tgtID == self.TARGET_AI:
+                            svarValue += " | ValidTgts$ Player"
+                        else:
+                            svarValue += " | ValidTgts$ Card"
+
+                sa = AbilityFactory.getAbility(svarValue, c)
+                if sa is None:
+                    sys.stderr.write("ERROR: Unable to generate ability for SVar " + svarValue + "\n")
+
+        if sa is not None:
+            sa.setActivatingPlayer(c.getController())
+        self.handleScriptedTargetingForSA(game, sa, tgtID)
+
+        if putOnStack:
+            game.getStack().addAndUnfreeze(sa)
+        else:
+            sa.resolve()
+
+            # resolve subabilities
+            subSa = sa.getSubAbility()
+            while subSa is not None:
+                subSa.resolve()
+                subSa = subSa.getSubAbility()
+
+    def handlePrecastSpells(self, game: Game) -> None:
+        for i in range(len(self.playerStates)):
+            if self.playerStates[i].precast is not None:
+                spellList = TextUtil.split(self.playerStates[i].precast, ';')
+                for spell in spellList:
+                    self.precastSpellFromCard(spell, game.getPlayers().get(i), game)
+
+    def handleAddSAsToStack(self, game: Game) -> None:
+        for i in range(len(self.playerStates)):
+            if self.playerStates[i].putOnStack is not None:
+                spellList = TextUtil.split(self.playerStates[i].putOnStack, ';')
+                for spell in spellList:
+                    self.precastSpellFromCard(spell, game.getPlayers().get(i), game, True)
+
+    def precastSpellFromCard(self, spellDef: str, activator: Player, game: Game, putOnStack: bool = False) -> None:
+        tgtID = self.TARGET_NONE
+        scriptID = ""
+
+        if ":" in spellDef:
+            # targeting via -> will be handled in executeScript
+            scriptID = spellDef[spellDef.index(":") + 1:].strip()
+            spellDef = spellDef[:spellDef.index(":")].strip()
+        elif "->" in spellDef:
+            tgtDef = spellDef[spellDef.index("->") + 2:].strip()
+            tgtID = self.parseTargetInScript(tgtDef)
+            spellDef = spellDef[:spellDef.index("->")].strip()
+
+        spellDef = spellDef.replace("^", ":")  # alternate marker for when : is the name of the card
+
+        c = None
+
+        if spellDef.isdigit():
+            # Precast from a specific host
+            c = self.idToCard.get(int(spellDef))
+            if c is None:
+                sys.stderr.write("ERROR: Could not find a card with ID " + spellDef + " to precast!\n")
+                return
+        else:
+            # Precast from a card by name
+            pc = StaticData.instance().getCommonCards().getCard(spellDef)
+
+            if pc is None:
+                sys.stderr.write("ERROR: Could not find a card with name " + spellDef + " to precast!\n")
+                return
+
+            c = Card.fromPaperCard(pc, activator)
+
+        sa = None
+
+        if scriptID:
+            self.executeScript(game, c, scriptID, putOnStack)
+            return
+
+        if c.getName() != spellDef and c.hasAlternateState() and spellDef == c.getAlternateState().getName():
+            sa = c.getAlternateState().getFirstSpellAbility()
+        else:
+            sa = c.getFirstSpellAbility()
+
+        sa.setActivatingPlayer(activator)
+
+        self.handleScriptedTargetingForSA(game, sa, tgtID)
+
+        if putOnStack:
+            game.getStack().addAndUnfreeze(sa)
+        else:
+            sa.resolve()
+
+    def handleMarkedDamage(self) -> None:
+        for c, dmg in self.markedDamage.items():
+            c.setDamage(dmg)
+
+    def handleChosenEntities(self) -> None:
+        # TODO: the AI still gets to choose something (and the notification box pops up) before the
+        # choice is overwritten here. Somehow improve this so that there is at least no notification
+        # about the choice that will be force-changed anyway.
+
+        # Chosen colors
+        for c, colors in self.cardToChosenClrs.items():
+            c.setChosenColors(colors)
+
+        # Chosen type
+        for c, value in self.cardToChosenType.items():
+            c.setChosenType(value)
+
+        # Chosen type 2
+        for c, value in self.cardToChosenType2.items():
+            c.setChosenType2(value)
+
+        # Named card
+        for c, names in self.cardToNamedCard.items():
+            for s in names:
+                c.addNamedCard(s)
+
+        # Chosen cards
+        for c, value in self.cardToChosenCards.items():
+            c.setChosenCards(value)
+
+    def handleCardAttachments(self) -> None:
+        # Unattach all permanents first
+        for c, attachId in self.cardToAttachId.items():
+            attachedTo = self.idToCard.get(attachId)
+            attachedTo.unAttachAllCards(attachedTo)
+
+        # Attach permanents by ID
+        for attacher, attachId in self.cardToAttachId.items():
+            attachedTo = self.idToCard.get(attachId)
+            if attacher.isAttachment():
+                attacher.attachToEntity(attachedTo, None, True)
+
+        # Enchant players
+        for key, value in self.cardToEnchantPlayerId.items():
+            key.attachToEntity(value, None)
+
+    def handleMergedCards(self) -> None:
+        for mergedTo, names in self.cardToMergedCards.items():
+            for mergedCardName in names:
+                pc = StaticData.instance().getCommonCards().getCard(mergedCardName.replace("^", ","))
+                if pc is None:
+                    sys.stderr.write("ERROR: Tried to create a non-existent card named " + mergedCardName + " (as a merged card) when loading game state!\n")
+                    continue
+
+                c = Card.fromPaperCard(pc, mergedTo.getOwner())
+                self.emulateMergeViaMutate(mergedTo, c)
+
+    def emulateMergeViaMutate(self, top: Card, bottom: Card) -> None:
+        if top is None or bottom is None:
+            sys.stderr.write("ERROR: Tried to call emulateMergeViaMutate with a null card!\n")
+            return
+
+        game = top.getGame()
+
+        bottom.setMergedToCard(top)
+        if not top.hasMergedCard():
+            top.addMergedCard(top)
+        top.addMergedCard(bottom)
+
+        top.removeMutatedStates()
+
+        ts = game.getNextTimestamp()
+        top.setMutatedTimestamp(ts)
+        if top.getCurrentStateName() != CardStateName.FaceDown:
+            mutatedStates = CardFactory.getMutatedCloneStates(top, None)  # FIXME
+            top.addCloneState(mutatedStates, ts)
+        bottom.setTapped(top.isTapped())
+        bottom.setFlipped(top.isFlipped())
+        top.setTimesMutated(top.getTimesMutated() + 1)
+        top.updateTokenView()
+
+        # TODO: Merged commanders aren't supported yet
+
+    def applyCountersToGameEntity(self, entity: GameEntity, counterString: str) -> None:
+        entity.setCounters({})
+        allCounterStrings = counterString.split(",")
+        for counterPair in allCounterStrings:
+            pair = counterPair.split("=", 1)
+            entity.addCounterInternal(CounterType.getType(pair[0]), int(pair[1]), None, False, None, None)
+
+    def setupPlayerState(self, p: Player, state: 'GameState.PlayerState') -> None:
+        # Lock check static as we setup player state
+
+        # Clear all zones first, this ensures that any lingering cards and effects (e.g. in command zone) get cleared up
+        # before setting up a new state
+        for zt in GameState.ZONES.keys():
+            p.getZone(zt).removeAllCards(True)
+
+        p.getCommanders().clear()
+        p.clearTheRing()
+
+        playerCards: dict[ZoneType, CardCollectionView] = {}
+        for key, value in state.cardTexts.items():
+            playerCards[key] = self.processCardsForZone([] if not value else value.split(";"), p)
+
+        if state.life >= 0:
+            p.setLife(state.life, None)
+        p.setLandsPlayedThisTurn(state.landsPlayed)
+        p.setLandsPlayedLastTurn(state.landsPlayedLastTurn)
+        p.setNumRingTemptedYou(state.numRingTemptedYou)
+        p.setSpeed(state.speed)
+
+        p.clearPaidForSA()
+
+        for key, value in playerCards.items():
+            zone = p.getZone(key)
+            if key == ZoneType.Battlefield:
+                cards = []
+                for c in value:
+                    if c.isToken():
+                        cards.append(c)
+                zone.setCards(cards)
+                for c in value:
+                    if c.isToken():
+                        continue
+                    tapped = c.isTapped()
+                    sickness = c.hasSickness()
+                    counters = c.getCounters()
+                    # Note: Not clearCounters() since we want to keep the counters var as-is.
+                    c.setCounters({})
+                    if c.isAura():
+                        # dummy "enchanting" to indicate that the card will be force-attached elsewhere
+                        # (will be overridden later, so the actual value shouldn't matter)
+
+                        # FIXME it shouldn't be able to attach itself
+                        c.setEntityAttachedTo(CardCopyService(c).copyCard(True))
+
+                    if c in self.cardsWithoutETBTrigs:
+                        p.getGame().getAction().moveTo(ZoneType.Battlefield, c, None, None)
+                    else:
+                        p.getZone(ZoneType.Hand).add(c)
+                        p.getGame().getAction().moveToPlay(c, None, None)
+
+                    c.setTapped(tapped)
+                    c.setSickness(sickness)
+                    c.setCounters(counters)
+            else:
+                zone.setCards(value)
+        if not p.getCommanders().isEmpty():
+            p.createCommanderEffect()  # Original one was lost, and the one made by addCommander would have been erased by setCards.
+
+        self.updateManaPool(p, state.manaPool, True, False)
+        self.updateManaPool(p, state.persistentMana, False, True)
+
+        if state.counters:
+            self.applyCountersToGameEntity(p, state.counters)
+        if state.numRingTemptedYou > 0:
+            # setup all levels
+            for i in range(1, state.numRingTemptedYou + 1):
+                if i > 4:
+                    break
+                p.setRingLevel(i)
+        if state.speed > 0:
+            p.createSpeedEffect()
+
+    def processCardsForZone(self, data: list[str], player: Player) -> CardCollectionView:
+        """
+        processCardsForZone.
+
+        @param data
+                   an array of String objects.
+        @param player
+                   a Player object.
+        @return a CardCollectionView object.
+        """
+        cl = CardCollection()
+        for element in data:
+            cardinfo = element.strip().split("|")
+
+            setCode = None
+            for info in cardinfo:
+                if info.startswith("Set:"):
+                    setCode = info[info.index(':') + 1:]
+                    break
+
+            artID = -1
+            for info in cardinfo:
+                if info.startswith("Art:"):
+                    try:
+                        artID = int(info[info.index(':') + 1:])
+                    except Exception:
+                        break
+                    break
+
+            c = None
+            hasSetCurSet = False
+            if cardinfo[0].startswith("t:"):
+                # TODO Make sure Game State conversion works with new tokens
+                tokenStr = cardinfo[0][2:]
+                c = TokenInfo(tokenStr).makeOneToken(player)
+            elif cardinfo[0].startswith("T:"):
+                tokenStr = cardinfo[0][2:]
+                token = StaticData.instance().getAllTokens().getToken(tokenStr,
+                        setCode if setCode is not None else CardEdition.UNKNOWN_CODE)
+                if token is None:
+                    sys.stderr.write("ERROR: Tried to create a non-existent token named " + cardinfo[0] + " when loading game state!\n")
+                    continue
+                c = CardFactory.getCard(token, player, player.getGame())
+            else:
+                pc = StaticData.instance().getCommonCards().getCard(cardinfo[0], setCode, artID)
+                if pc is None:
+                    sys.stderr.write("ERROR: Tried to create a non-existent card named " + cardinfo[0] + " (set: " + ("any" if setCode is None else setCode) + ") when loading game state!\n")
+                    continue
+
+                c = Card.fromPaperCard(pc, player)
+                if setCode is not None:
+                    hasSetCurSet = True
+            c.setSickness(False)
+
+            for info in cardinfo:
+                if info.startswith("Tapped"):
+                    c.tap(False, None, None)
+                elif info.startswith("Renowned"):
+                    c.setRenowned(True)
+                elif info.startswith("Solved"):
+                    c.setSolved(True)
+                elif info.startswith("Saddled"):
+                    c.setSaddled(True)
+                elif info.startswith("Suspected"):
+                    c.setSuspected(True)
+                elif info.startswith("Monstrous"):
+                    c.setMonstrous(True)
+                elif info.startswith("PhasedOut"):
+                    tgt = info[info.index(':') + 1:]
+                    c.setPhasedOut(self.parsePlayerString(player.getGame(), tgt))
+                elif info.startswith("Counters:"):
+                    self.applyCountersToGameEntity(c, info[info.index(':') + 1:])
+                elif info.startswith("SummonSick"):
+                    c.setSickness(True)
+                elif info.startswith("FaceDown"):
+                    c.turnFaceDown(True)
+                    if info.endswith("Manifested"):
+                        c.setManifested(SpellAbility.EmptySa(ApiType.Manifest, c))
+                    if info.endswith("Cloaked"):
+                        c.setCloaked(SpellAbility.EmptySa(ApiType.Cloak, c))
+                elif info.startswith("Transformed") or info.startswith("Modal"):
+                    c.setState(CardStateName.Backside, True)
+                    c.setBackSide(True)
+                elif info.startswith("Flipped"):
+                    c.setState(CardStateName.Flipped, True)
+                elif info.startswith("Meld"):
+                    if info.find(':') > 0:
+                        meldCardName = info[info.index(':') + 1:].replace("^", ",")
+                        pc = StaticData.instance().getCommonCards().getCard(meldCardName)
+                        if pc is None:
+                            sys.stderr.write("ERROR: Tried to create a non-existent card named " + meldCardName + " (as a MeldedWith card) when loading game state!\n")
+                            continue
+                        meldTarget = Card.fromPaperCard(pc, c.getOwner())
+                        c.setMeldedWith(meldTarget)
+                    c.setState(CardStateName.Meld, True)
+                    c.setBackSide(True)
+                elif info.startswith("OnAdventure"):
+                    abAdventure = "DB$ Effect | RememberObjects$ Self | StaticAbilities$ Play | ForgetOnMoved$ Exile | Duration$ Permanent | ConditionDefined$ Self | ConditionPresent$ Card.!copiedSpell"
+                    saAdventure = AbilityFactory.getAbility(abAdventure, c)
+                    sbPlay = []
+                    sbPlay.append("Mode$ Continuous | MayPlay$ True | EffectZone$ Command | Affected$ Card.IsRemembered+nonAdventure")
+                    sbPlay.append(" | AffectedZone$ Exile | Description$ You may cast the card.")
+                    saAdventure.setSVar("Play", "".join(sbPlay))
+                    saAdventure.setActivatingPlayer(c.getOwner())
+                    saAdventure.resolve()
+                    c.setExiledWith(c)  # This seems to be the way it's set up internally. Potentially not needed here?
+                    c.setExiledBy(c.getController())
+                elif info.startswith("IsCommander"):
+                    player.addCommander(c)
+                elif info.startswith("IsRingBearer"):
+                    c.setRingBearer(True)
+                    player.setRingBearer(c)
+                elif info.startswith("Id:"):
+                    id_ = int(info[3:])
+                    self.idToCard[id_] = c
+                elif info.startswith("Attaching:") or info.startswith("AttachedTo:"):  # Attaching is deprecated
+                    id_ = int(info[info.index(':') + 1:])
+                    self.cardToAttachId[c] = id_
+                elif info.startswith("EnchantingPlayer:"):
+                    tgt = info[info.index(':') + 1:]
+                    self.cardToEnchantPlayerId[c] = self.parsePlayerString(player.getGame(), tgt)
+                elif info.startswith("Owner:"):
+                    owner = info[info.index(':') + 1:]
+                    controller = c.getController()
+                    c.setOwner(self.parsePlayerString(player.getGame(), owner))
+                    c.setController(controller, c.getGame().getNextTimestamp())
+                elif info.startswith("Ability:"):
+                    abString = info[info.index(':') + 1:].lower()
+                    c.addSpellAbility(AbilityFactory.getAbility(self.abilityString.get(abString), c))
+                elif info.startswith("Damage:"):
+                    dmg = int(info[info.index(':') + 1:])
+                    self.markedDamage[c] = dmg
+                elif info.startswith("ChosenColor:"):
+                    self.cardToChosenClrs[c] = info[info.index(':') + 1:].split(",")
+                elif info.startswith("ChosenType:"):
+                    self.cardToChosenType[c] = info[info.index(':') + 1:]
+                elif info.startswith("ChosenType2:"):
+                    self.cardToChosenType2[c] = info[info.index(':') + 1:]
+                elif info.startswith("ChosenCards:"):
+                    chosen = CardCollection()
+                    idlist = info[info.index(':') + 1:].split(",")
+                    for id_ in idlist:
+                        chosen.add(self.idToCard.get(int(id_)))
+                    self.cardToChosenCards[c] = chosen
+                elif info.startswith("MergedCards:"):
+                    cardNames = info[info.index(':') + 1:].split(",")
+                    self.cardToMergedCards[c] = cardNames
+                elif info.startswith("NamedCard:"):
+                    cardNames = info[info.index(':') + 1:].split(",")
+                    self.cardToNamedCard[c] = cardNames
+                elif info.startswith("ExecuteScript:"):
+                    self.cardToScript[c] = info[info.index(':') + 1:]
+                elif info.startswith("RememberedCards:"):
+                    self.cardToRememberedId[c] = info[info.index(':') + 1:].split(",")
+                elif info.startswith("Imprinting:"):
+                    self.cardToImprintedId[c] = info[info.index(':') + 1:].split(",")
+                elif info.startswith("ExiledWith:"):
+                    self.cardToExiledWithId[c] = info[info.index(':') + 1:]
+                elif info.startswith("Attacking"):
+                    if ":" in info:
+                        id_ = int(info[info.index(':') + 1:])
+                        self.cardAttackMap[c] = self.idToCard.get(id_)
+                    else:
+                        self.cardAttackMap[c] = None
+                elif info == "NoETBTrigs":
+                    self.cardsWithoutETBTrigs.add(c)
+                elif info == "Foretold":
+                    c.setForetold(True)
+                    c.turnFaceDown(True)
+                    c.addMayLookFaceDownExile(c.getOwner())
+                elif info == "ForetoldThisTurn":
+                    c.setTurnInZone(self.turn)
+                elif info == "IsToken":
+                    c.setGamePieceType(GamePieceType.TOKEN)
+                elif info.startswith("ClassLevel:"):
+                    c.setClassLevel(int(info[info.index(':') + 1:]))
+                elif info.startswith("UnlockedRoom:"):
+                    c.unlockRoom(c.getController(), CardStateName.smartValueOf(info[info.index(':') + 1:]))
+
+            if not hasSetCurSet and not c.isToken():
+                c.setSetCode(c.getMostRecentSet())
+
+            cl.add(c)
+        return cl
 ```

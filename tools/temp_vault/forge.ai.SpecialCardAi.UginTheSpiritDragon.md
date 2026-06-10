@@ -44,7 +44,7 @@ Ugin, the Spirit Dragon's AI helper is a small static utility nested within `Spe
 The class is a stateless strategy fragment rather than a type in any inheritance hierarchy; it collaborates with the broader AI evaluation framework (`ComputerUtilCard`, `ComputerUtilCombat`, `AbilityUtils`) and the game model (`Game`, `Player`, `SpellAbility`, `ZoneType`). Notable design intent includes a refinement check: when only a single opponent permanent would be exiled, it defers (returns false) if a cheaper direct-damage ability could instead kill the target or burn a low-loyalty planeswalker, preserving Ugin's loyalty for more impactful turns.
 
 ## Source
-`forge-ai/src/main/java/forge/ai/SpecialCardAi.java` â€” declaration excerpt
+`forge-ai/src/main/java/forge/ai/SpecialCardAi.java` Ã¢â‚¬â€ declaration excerpt
 
 ```java
     // Ugin, the Spirit Dragon
@@ -100,4 +100,60 @@ The class is a stateless strategy fragment rather than a type in any inheritance
             return true;
         }
     }
+```
+
+## Python
+`forge/ai/SpecialCardAi/UginTheSpiritDragon.py`
+
+```python
+from forge.game.Game import Game
+from forge.game.card.Card import Card
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+
+
+class UginTheSpiritDragon:
+    @staticmethod
+    def considerPWAbilityPriority(ai: Player, sa: SpellAbility, origin: ZoneType, oppType: CardCollectionView, computerType: CardCollectionView) -> bool:
+        source = sa.getHostCard()
+        game = source.getGame()
+
+        loyalty = source.getCounters(CounterEnumType.LOYALTY)
+        x, best = -1, 0
+        single = None
+        for i in range(loyalty):
+            sa.setXManaCostPaid(i)
+            oppType = CardLists.filterControlledBy(game.getCardsIn(origin), ai.getOpponents())
+            oppType = AbilityUtils.filterListByType(oppType, sa.getParam("ChangeType"), sa)
+            computerType = AbilityUtils.filterListByType(ai.getCardsIn(origin), sa.getParam("ChangeType"), sa)
+            net = ComputerUtilCard.evaluatePermanentList(oppType) - ComputerUtilCard.evaluatePermanentList(computerType) - i
+            if net > best:
+                x = i
+                best = net
+                if oppType.size() == 1:
+                    single = oppType.getFirst()
+                else:
+                    single = None
+        # check if +1 would be sufficient
+        if single is not None:
+            # TODO use better logic to find the right Deal Damage Effect?
+            ugin_burn = IterableUtil.find(source.getSpellAbilities(), SpellAbilityPredicates.isApi(ApiType.DealDamage), None)
+            if ugin_burn is not None:
+                # basic logic copied from DamageDealAi::dealDamageChooseTgtC
+                if ugin_burn.canTarget(single):
+                    can_kill = single.getSVar("Targeting") == "Dies" \
+                        or (ComputerUtilCombat.getEnoughDamageToKill(single, 3, source, False, False) <= 3) \
+                        and not ComputerUtil.canRegenerate(ai, single) \
+                        and not (len(single.getSVar("SacMe")) > 0)
+                    if can_kill:
+                        return False
+                    # simple check to burn player instead of exiling planeswalker
+                    if single.isPlaneswalker() and single.getCurrentLoyalty() <= 3:
+                        return False
+        if x == -1:
+            return False
+        sa.setXManaCostPaid(x)
+        return True
 ```

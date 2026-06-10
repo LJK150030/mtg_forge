@@ -122,3 +122,65 @@ public class PoisonEffect extends SpellAbilityEffect {
 
 }
 ```
+
+## Python
+`forge/game/ability/effects/PoisonEffect.py`
+
+```python
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.Game import Game
+from forge.game.GameEntityCounterTable import GameEntityCounterTable
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.card.Card import Card
+from forge.game.card.CounterEnumType import CounterEnumType
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Lang import Lang
+
+# TODO: Write javadoc for this type.
+
+
+class PoisonEffect(SpellAbilityEffect):
+
+    # (non-Javadoc)
+    # @see forge.game.ability.SpellAbilityEffect#resolve(forge.game.spellability.SpellAbility)
+    def resolve(self, sa: SpellAbility) -> None:
+        host = sa.getHostCard()
+        game = host.getGame()
+        amount = AbilityUtils.calculateAmount(host, sa.getParam("Num"), sa)
+
+        table = GameEntityCounterTable()
+
+        for p in self.getTargetPlayers(sa):
+            if not p.isInGame():
+                continue
+
+            if amount >= 0:
+                p.addPoisonCounters(amount, sa.getActivatingPlayer(), table)
+            else:
+                p.removePoisonCounters(-amount, sa.getActivatingPlayer())
+        table.replaceCounterEffect(game, sa)
+
+    # (non-Javadoc)
+    # @see forge.game.ability.SpellAbilityEffect#getStackDescription(forge.game.spellability.SpellAbility)
+    def getStackDescription(self, sa: SpellAbility) -> str:
+        sb = []
+        amount = AbilityUtils.calculateAmount(sa.getHostCard(), sa.getParam("Num"), sa)
+
+        tgtPlayers = self.getTargetPlayers(sa)
+
+        sb.append(Lang.joinHomogenous(tgtPlayers))
+        sb.append(" ")
+
+        sb.append("get")
+        if len(tgtPlayers) < 2:
+            sb.append("s")
+
+        type = CounterEnumType.POISON.getName() + " counter"
+
+        sb.append(" ")
+        sb.append(Lang.nounWithAmount(amount, type))
+        sb.append(".")
+
+        return "".join(sb)
+```

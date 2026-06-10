@@ -44,9 +44,9 @@ classDiagram
 
 ## Design Description
 
-`FlipOntoBattlefieldAi` supplies the AI decision logic for spell abilities that flip a card onto the battlefield, extending the `SpellAbilityAi` base class and overriding its hooks. Its `canPlay` method evaluates timing and board state: it defers mana-cost abilities to the end of the turn when not at sorcery speed, and—under the `DamageCreatures` AI logic—scans opponents' creatures via `CardCollectionView`/`CardLists` to confirm a worthwhile target exists below the sub-ability's toughness threshold, otherwise requiring only that opponents hold permanents. Each branch returns an `AiAbilityDecision` pairing a numeric confidence with an `AiPlayDecision` rationale.
+`FlipOntoBattlefieldAi` supplies the AI decision logic for spell abilities that flip a card onto the battlefield, extending the `SpellAbilityAi` base class and overriding its hooks. Its `canPlay` method evaluates timing and board state: it defers mana-cost abilities to the end of the turn when not at sorcery speed, andâ€”under the `DamageCreatures` AI logicâ€”scans opponents' creatures via `CardCollectionView`/`CardLists` to confirm a worthwhile target exists below the sub-ability's toughness threshold, otherwise requiring only that opponents hold permanents. Each branch returns an `AiAbilityDecision` pairing a numeric confidence with an `AiPlayDecision` rationale.
 
-The class collaborates with `PhaseHandler` and `PhaseType` for timing checks and `Player` for opponent and zone queries. `doTriggerNoCost` always plays mandatory triggers and otherwise reuses `canPlay`, while `confirmAction` unconditionally approves prompts—reflecting a design where the costly evaluation is concentrated in `canPlay` and downstream confirmations are trusted.
+The class collaborates with `PhaseHandler` and `PhaseType` for timing checks and `Player` for opponent and zone queries. `doTriggerNoCost` always plays mandatory triggers and otherwise reuses `canPlay`, while `confirmAction` unconditionally approves promptsâ€”reflecting a design where the costly evaluation is concentrated in `canPlay` and downstream confirmations are trusted.
 
 ## Source
 `forge-ai/src/main/java/forge/ai/ability/FlipOntoBattlefieldAi.java`
@@ -114,4 +114,59 @@ public class FlipOntoBattlefieldAi extends SpellAbilityAi {
         return true;
     }
 }
+```
+
+## Python
+`forge/ai/ability/FlipOntoBattlefieldAi.py`
+
+```python
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.ai.SpellAbilityAi import SpellAbilityAi
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.card.CardLists import CardLists
+from forge.game.phase.PhaseHandler import PhaseHandler
+from forge.game.phase.PhaseType import PhaseType
+from forge.game.player.Player import Player
+from forge.game.player.PlayerActionConfirmMode import PlayerActionConfirmMode
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+
+
+class FlipOntoBattlefieldAi(SpellAbilityAi):
+    def canPlay(self, aiPlayer: Player, sa: SpellAbility) -> AiAbilityDecision:
+        ph = sa.getHostCard().getGame().getPhaseHandler()
+        logic = sa.getParamOrDefault("AILogic", "")
+
+        if not self.isSorcerySpeed(sa, aiPlayer) and sa.getPayCosts().hasManaCost():
+            if ph.is_(PhaseType.END_OF_TURN):
+                return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+            else:
+                return AiAbilityDecision(0, AiPlayDecision.WaitForEndOfTurn)
+
+        if "DamageCreatures" == logic:
+            maxToughness = int(sa.getSubAbility().getParam("NumDmg"))
+            rightToughness = CardLists.filter(
+                aiPlayer.getOpponents().getCreaturesInPlay(),
+                lambda card: card.getNetToughness() <= maxToughness and card.canBeDestroyed(),
+            )
+
+            if rightToughness.isEmpty():
+                return AiAbilityDecision(0, AiPlayDecision.MissingNeededCards)
+            else:
+                return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+        if not aiPlayer.getOpponents().getCardsIn(ZoneType.Battlefield).isEmpty():
+            return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+        else:
+            return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+    def doTriggerNoCost(self, aiPlayer: Player, sa: SpellAbility, mandatory: bool) -> AiAbilityDecision:
+        if mandatory:
+            return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+        return self.canPlay(aiPlayer, sa)
+
+    def confirmAction(self, player: Player, sa: SpellAbility, mode: PlayerActionConfirmMode, message: str, params: dict[str, object]) -> bool:
+        return True
 ```

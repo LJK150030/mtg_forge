@@ -42,12 +42,12 @@ classDiagram
 
 ## Design Description
 
-CardArtPreference is a self-contained enum within CardDb that encodes a user's policy for selecting which printing of a card to use when a card appears across multiple editions. Each of its four constants combines two boolean flags—`filterSets`, which restricts selection to regular Core, Expansion, and Reprint sets, and `latestFirst`, which controls whether newer or original printings are preferred—giving the cross product of "latest vs. original art" and "all editions vs. core/expansion/reprint only."
+CardArtPreference is a self-contained enum within CardDb that encodes a user's policy for selecting which printing of a card to use when a card appears across multiple editions. Each of its four constants combines two boolean flagsâ€”`filterSets`, which restricts selection to regular Core, Expansion, and Reprint sets, and `latestFirst`, which controls whether newer or original printings are preferredâ€”giving the cross product of "latest vs. original art" and "all editions vs. core/expansion/reprint only."
 
 By implementing `Comparator<CardEdition>`, the enum serves as a pluggable ordering strategy that callers pass to edition-selection logic: `compare` first segregates allowed set types ahead of irregular ones when filtering is enabled, then orders by release date in the configured direction. The companion `accept` predicate exposes the same filtering rule for membership tests. It collaborates only with `CardEdition` and its `Type`, keeping art-preference policy cohesively expressed as data plus behavior on each constant rather than scattered conditional logic.
 
 ## Source
-`forge-core/src/main/java/forge/card/CardDb.java` â€” declaration excerpt
+`forge-core/src/main/java/forge/card/CardDb.java` Ã¢â‚¬â€ declaration excerpt
 
 ```java
     public enum CardArtPreference implements Comparator<CardEdition> {
@@ -80,4 +80,52 @@ By implementing `Comparator<CardEdition>`, the enum serves as a pluggable orderi
             return (latestFirst ? -1 : 1) * o1.getDate().compareTo(o2.getDate());
         }
     }
+```
+
+## Python
+`forge/card/CardDb/CardArtPreference.py`
+
+```python
+from typing import List
+
+from forge.card.CardEdition import CardEdition
+from forge.card.CardEdition.Type import Type
+
+
+class CardArtPreference:
+    LATEST_ART_ALL_EDITIONS = None
+    LATEST_ART_CORE_EXPANSIONS_REPRINT_ONLY = None
+    ORIGINAL_ART_ALL_EDITIONS = None
+    ORIGINAL_ART_CORE_EXPANSIONS_REPRINT_ONLY = None
+
+    ALLOWED_SET_TYPES = frozenset({Type.CORE, Type.EXPANSION, Type.REPRINT})
+
+    def __init__(self, filterIrregularSets: bool, latestSetFirst: bool):
+        self.filterSets = filterIrregularSets
+        self.latestFirst = latestSetFirst
+
+    def accept(self, ed: CardEdition) -> bool:
+        if ed is None:
+            return False
+        return not self.filterSets or ed.getType() in CardArtPreference.ALLOWED_SET_TYPES
+
+    def compare(self, o1: CardEdition, o2: CardEdition) -> int:
+        if o1 is o2:
+            return 0
+        if self.filterSets and (
+            (o1.getType() in CardArtPreference.ALLOWED_SET_TYPES)
+            != (o2.getType() in CardArtPreference.ALLOWED_SET_TYPES)
+        ):
+            return -1 if o1.getType() in CardArtPreference.ALLOWED_SET_TYPES else 1
+        return (-1 if self.latestFirst else 1) * _cmp(o1.getDate(), o2.getDate())
+
+
+def _cmp(a, b) -> int:
+    return (a > b) - (a < b)
+
+
+CardArtPreference.LATEST_ART_ALL_EDITIONS = CardArtPreference(False, True)
+CardArtPreference.LATEST_ART_CORE_EXPANSIONS_REPRINT_ONLY = CardArtPreference(True, True)
+CardArtPreference.ORIGINAL_ART_ALL_EDITIONS = CardArtPreference(False, False)
+CardArtPreference.ORIGINAL_ART_CORE_EXPANSIONS_REPRINT_ONLY = CardArtPreference(True, False)
 ```

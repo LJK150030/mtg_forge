@@ -95,6 +95,12 @@ classDiagram
 - [[forge.game.zone.Zone|Zone]]
 - [[forge.util.Visitor|Visitor]]
 
+## Design Description
+
+ReplacementHandler is the central engine for Magic's replacement-effect system within a single `Game`, owned per game instance and responsible for intercepting eventsâ€”zone changes, damage, phase and turn skipsâ€”and substituting their outcomes according to applicable `ReplacementEffect`s. Its core `run` loop gathers candidate effects via `getReplacementList`, applies them in `ReplacementLayer` order, lets the affected `Player`'s controller choose among competing effects, and reports the outcome as a `ReplacementResult`. It collaborates with `AbilityKey`-keyed parameter maps, walks every `Card` through a `Visitor`, and delegates execution to each effect's overriding `SpellAbility`.
+
+A notable design intent is the specialized damage pipeline (`runReplaceDamage` and helpers), which buffers replaced abilities and processes prevention, redirection, and shield-division in APNAP order to honor comprehensive-rules timing (e.g. CR 614/615). Static `parseReplacement` factory methods build effects from raw card script, while guard state (`hasRun`, `isReplacing`) prevents re-entrant recursion, and lightweight predicate helpers expose hypothetical queries for the AI.
+
 ## Source
 `forge-game/src/main/java/forge/game/replacement/ReplacementHandler.java`
 
@@ -1039,3 +1045,743 @@ public class ReplacementHandler {
     }
 }
 ```
+
+## Python
+`forge/game/replacement/ReplacementHandler.py`
+
+````python
+forge/game/replacement/ReplacementHandler.py:
+
+```python
+from forge.game.CardTraitBase import CardTraitBase
+from forge.game.Game import Game
+from forge.game.GameEntity import GameEntity
+from forge.game.GameEntityCounterTable import GameEntityCounterTable
+from forge.game.GameLogEntryType import GameLogEntryType
+from forge.game.IHasSVars import IHasSVars
+from forge.game.event.GameEventAddLog import GameEventAddLog
+from forge.game.ability.AbilityFactory import AbilityFactory
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.ability.ApiType import ApiType
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.card.CardCopyService import CardCopyService
+from forge.game.card.CardDamageMap import CardDamageMap
+from forge.game.card.CardState import CardState
+from forge.game.card.CounterType import CounterType
+from forge.game.phase.PhaseType import PhaseType
+from forge.game.player.Player import Player
+from forge.game.player.PlayerCollection import PlayerCollection
+from forge.game.replacement.ReplacementEffect import ReplacementEffect
+from forge.game.replacement.ReplacementLayer import ReplacementLayer
+from forge.game.replacement.ReplacementResult import ReplacementResult
+from forge.game.replacement.ReplacementType import ReplacementType
+from forge.game.spellability.AbilitySub import AbilitySub
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.Zone import Zone
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.Localizer import Localizer
+from forge.util.TextUtil import TextUtil
+from forge.util.Visitor import Visitor
+
+
+_UNSET = object()
+
+
+class ReplacementHandler:
+
+    def __init__(self, gameState: Game):
+        self.game: Game = gameState
+
+        self.hasRun: set[ReplacementEffect] = set()
+
+        # List of all replacement effect candidates for DamageDone event, in APNAP order
+        self.replaceDamageList: list[dict[ReplacementEffect, list[dict[AbilityKey, object]]]] = []
+
+    def getReplacementList(self, event: ReplacementType, runParams: dict[AbilityKey, object], layer: ReplacementLayer) -> list[ReplacementEffect]:
+        preList = CardCollection()
+        affectedLKI = None
+        affectedCard = None
+
+        if ReplacementType.Moved == event and ZoneType.Battlefield == runParams.get(AbilityKey.Destination):
+            # if it was caused by an replacement effect, use the already calculated RE list
+            # otherwise the RIOT card would cause a StackError
+            causeRE = runParams.get(AbilityKey.ReplacementEffect)
+            if (causeRE is not None and not causeRE.getOtherChoices().isEmpty()
+                    and ReplacementType.Moved == causeRE.getMode() and layer == causeRE.getLayer()):
+                # only return for same layer
+                return causeRE.getOtherChoices()
+
+            # CR 614.12 ETB replacements look at what the card would be on the battlefield
+            affectedCard = runParams.get(AbilityKey.Affected)
+            affectedLKI = CardCopyService.getLKICopy(affectedCard)
+            affectedLKI.setLastKnownZone(affectedCard.getController().getZone(ZoneType.Battlefield))
+
+            # need to apply Counters to check its future state on the battlefield
+            etbCounters = runParams.get(AbilityKey.CounterMap)
+            affectedLKI.putEtbCounters(etbCounters)
+            preList.add(affectedLKI)
+            self.game.getAction().checkStaticAbilities(False, set(), preList)
+
+            runParams[AbilityKey.Affected] = affectedLKI
+
+        possibleReplacers: list[ReplacementEffect] = []
+
+        game = self.game
+        hasRun = self.hasRun
+
+        # Round up Static replacement effects
+        class _StaticVisitor(Visitor):
+            def visit(self, crd):
+                c = preList.get(crd)
+                cardZone = game.getZoneOf(c)
+
+                # only when not prelist
+                noLKIstate = (c is not crd or event != ReplacementType.Moved or c.isImmutable()
+                              or runParams.get(AbilityKey.LastStateBattlefield) is None)
+                if not noLKIstate:
+                    lastState = runParams.get(AbilityKey.LastStateBattlefield).get(c)
+                    if lastState is not c:
+                        # use LKI because it has the right RE from the state before the effect started
+                        c = lastState
+                        cardZone = lastState.getLastKnownZone()
+                    elif cardZone is not None and getattr(cardZone, 'is')(ZoneType.Battlefield):
+                        # no LKI found so it shouldn't apply, this can happen during simultaneous zone changes
+                        return True
+
+                for replacementEffect in c.getReplacementEffects():
+                    if (not replacementEffect.hasRun() and replacementEffect not in hasRun
+                            and (layer is None or replacementEffect.getLayer() == layer)
+                            and replacementEffect.modeCheck(event, runParams)
+                            and replacementEffect not in possibleReplacers
+                            and replacementEffect.zonesCheck(cardZone)
+                            and replacementEffect.requirementsCheck(game)
+                            and replacementEffect.canReplace(runParams)):
+                        possibleReplacers.append(replacementEffect)
+                return True
+
+        game.forEachCardInGame(_StaticVisitor(), affectedCard is not None and affectedCard.isInZone(ZoneType.Sideboard))
+
+        if affectedLKI is not None:
+            # need to set the Host Card there so it is not connected to LKI anymore?
+            # need to be done after canReplace check
+            for re in affectedLKI.getReplacementEffects():
+                re.setHostCard(affectedCard)
+            # need to copy stored keywords from lki into real object to prevent the replacement effect from making new ones
+            affectedCard.setStoredKeywords(affectedLKI.getStoredKeywords(), True)
+            affectedCard.setStoredReplacements(affectedLKI.getStoredReplacements())
+            if affectedCard.getCastSA() is not None and affectedCard.getCastSA().getKeyword() is not None:
+                # need to readd the CastSA Keyword into the Card
+                affectedCard.addKeywordForStaticAbility(affectedCard.getCastSA().getKeyword())
+            runParams[AbilityKey.Affected] = affectedCard
+            runParams[AbilityKey.NewCard] = CardCopyService.getLKICopy(affectedLKI)
+
+            self.game.getAction().checkStaticAbilities(False)
+
+        return possibleReplacers
+
+    def cantHappenCheck(self, event: ReplacementType, runParams: dict[AbilityKey, object]) -> bool:
+        return not self.getReplacementList(event, runParams, ReplacementLayer.CantHappen).__len__() == 0 if False else len(self.getReplacementList(event, runParams, ReplacementLayer.CantHappen)) != 0
+
+    def run(self, event: ReplacementType, runParams: dict[AbilityKey, object], layer=_UNSET, decider: Player = None) -> ReplacementResult:
+        if layer is _UNSET:
+            affected = runParams.get(AbilityKey.Affected)
+            decider = None
+
+            # Figure out who decides which of multiple replacements to apply
+            # as well as whether or not to apply optional replacements.
+            if isinstance(affected, Player):
+                decider = affected
+            else:
+                decider = affected.getController()
+
+            # try out all layer
+            for layer_ in ReplacementLayer.values():
+                res = self.run(event, runParams, layer_, decider)
+                if res != ReplacementResult.NotReplaced:
+                    return res
+
+            return ReplacementResult.NotReplaced
+
+        possibleReplacers = self.getReplacementList(event, runParams, layer)
+
+        if not possibleReplacers:
+            return ReplacementResult.NotReplaced
+
+        # "can't" is never a choice
+        if layer == ReplacementLayer.CantHappen:
+            chosenRE = possibleReplacers[0]
+        else:
+            chosenRE = decider.getController().chooseSingleReplacementEffect(possibleReplacers)
+
+        possibleReplacers.remove(chosenRE)
+
+        chosenRE.setHasRun(True)
+        self.hasRun.add(chosenRE)
+        chosenRE.setOtherChoices(possibleReplacers)
+        res = self.executeReplacement(runParams, chosenRE, decider)
+        if res == ReplacementResult.NotReplaced:
+            if possibleReplacers:
+                res = self.run(event, runParams)
+            chosenRE.setHasRun(False)
+            self.hasRun.discard(chosenRE)
+            chosenRE.setOtherChoices(None)
+            return res
+
+        # Log there
+        message = chosenRE.getDescription()
+        if message:
+            self.game.fireEvent(GameEventAddLog(GameLogEntryType.EFFECT_REPLACED, message))
+
+        # if its updated, try to call event again
+        if res == ReplacementResult.Updated:
+            params = AbilityKey.newMap(runParams)
+            params.pop(AbilityKey.ReplacementResult, None)
+
+            # CR 614.16
+            if AbilityKey.EffectOnly in params:
+                params[AbilityKey.EffectOnly] = True
+            result = self.run(event, params)
+            if result == ReplacementResult.NotReplaced or result == ReplacementResult.Updated:
+                runParams.update(params)
+                # effect was updated
+                runParams[AbilityKey.ReplacementResult] = ReplacementResult.Updated
+            else:
+                # effect was replaced with something else
+                res = result
+                runParams[AbilityKey.ReplacementResult] = result
+
+        chosenRE.setHasRun(False)
+        self.hasRun.discard(chosenRE)
+        chosenRE.setOtherChoices(None)
+
+        return res
+
+    def executeReplacement(self, runParams: dict[AbilityKey, object], replacementEffect: ReplacementEffect, decider: Player) -> ReplacementResult:
+        effectSA = None
+
+        host = replacementEffect.getHostCard()
+        # AlternateState for OriginsPlaneswalker
+        # FaceDown for cards like Necropotence
+        if host.hasAlternateState() or host.isFaceDown():
+            host = self.game.getCardState(host)
+
+        # TODO: the source of replacement effect should be the source of the original effect
+        effectSA = replacementEffect.ensureAbility()
+        if effectSA is not None:
+            tailend = effectSA
+            while True:
+                replacementEffect.setReplacingObjects(runParams, tailend)
+                # set original Params to update them later
+                tailend.setReplacingObject(AbilityKey.OriginalParams, runParams)
+                tailend.setReplacingObjectsFrom(runParams, AbilityKey.InternalTriggerTable, AbilityKey.SimultaneousETB)
+                tailend = tailend.getSubAbility()
+                if tailend is None:
+                    break
+
+            lsb = runParams.get(AbilityKey.LastStateBattlefield)
+            effectSA.setLastStateBattlefield(lsb if lsb is not None else self.game.getLastStateBattlefield())
+            lsg = runParams.get(AbilityKey.LastStateGraveyard)
+            effectSA.setLastStateGraveyard(lsg if lsg is not None else self.game.getLastStateGraveyard())
+            if replacementEffect.isIntrinsic():
+                effectSA.setIntrinsic(True)
+                effectSA.changeText()
+            effectSA.setReplacementEffect(replacementEffect)
+
+        # Decider gets to choose whether or not to apply the replacement.
+        if replacementEffect.hasParam("Optional"):
+            optDecider = decider
+            if replacementEffect.hasParam("OptionalDecider") and effectSA is not None:
+                effectSA.setActivatingPlayer(host.getController())
+                optDecider = AbilityUtils.getDefinedPlayers(host,
+                        replacementEffect.getParam("OptionalDecider"), effectSA).get(0)
+
+            forUi = host.getCardForUi() if host.getRenderForUI() else None
+            name = (forUi if forUi is not None else host).getTranslatedName()
+            effectDesc = TextUtil.fastReplace(replacementEffect.getDescription(), "CARDNAME", name)
+            if AbilityKey.Card in runParams:
+                question = Localizer.getInstance().getMessage("lblApplyCardReplacementEffectToCardConfirm", name, str(runParams.get(AbilityKey.Card)), effectDesc)
+            else:
+                question = Localizer.getInstance().getMessage("lblApplyReplacementEffectOfCardConfirm", name, effectDesc)
+            affected = runParams.get(AbilityKey.Affected)
+            confirmed = optDecider.getController().confirmReplacementEffect(replacementEffect, effectSA, affected, question)
+            if not confirmed:
+                return ReplacementResult.NotReplaced
+
+        isPrevent = "True" == replacementEffect.getParam("Prevent")
+        if isPrevent or replacementEffect.hasParam("PreventionEffect"):
+            if runParams.get(AbilityKey.NoPreventDamage) is True:
+                # If can't prevent damage, result is not replaced
+                # But still put "prevented" amount for buffered SA
+                if replacementEffect.hasParam("AlwaysReplace"):
+                    runParams[AbilityKey.PreventedAmount] = runParams.get(AbilityKey.DamageAmount)
+                else:
+                    runParams[AbilityKey.PreventedAmount] = 0
+                return ReplacementResult.NotReplaced
+            if isPrevent:
+                return ReplacementResult.Prevented  # Nothing should replace the event.
+
+        if "True" == replacementEffect.getParam("Skip"):
+            return ReplacementResult.Skipped  # Event is skipped.
+        player = host.getController()
+
+        if effectSA is not None:
+            apiType = effectSA.getApi()
+            if (replacementEffect.getMode() != ReplacementType.DamageDone or
+                    (apiType == ApiType.ReplaceDamage or apiType == ApiType.ReplaceSplitDamage or apiType == ApiType.ReplaceEffect)):
+                player.getController().playSpellAbilityNoStack(effectSA, True)
+            else:
+                # The SA if buffered, but replacement result should be set to Replaced
+                runParams[AbilityKey.ReplacementResult] = ReplacementResult.Replaced
+
+            # these ones are special for updating
+            if apiType == ApiType.ReplaceToken or apiType == ApiType.ReplaceEffect or apiType == ApiType.ReplaceMana:
+                runParams[AbilityKey.ReplacementResult] = ReplacementResult.Updated
+
+        if replacementEffect.hasParam("ReplacementResult"):
+            return ReplacementResult.valueOf(replacementEffect.getParam("ReplacementResult"))  # Event is replaced without SA.
+
+        # if the spellability is a replace effect then its some new logic
+        # if ReplacementResult is set in run params use that instead
+        if AbilityKey.ReplacementResult in runParams:
+            return runParams.get(AbilityKey.ReplacementResult)
+
+        return ReplacementResult.Replaced
+
+    def getPossibleReplaceDamageList(self, players: PlayerCollection, isCombat: bool, damageMap: CardDamageMap, cause: SpellAbility) -> None:
+        for et in damageMap.columnMap().entrySet():
+            target = et.getKey()
+            playerIndex = players.indexOf(target) if isinstance(target, Player) else players.indexOf(target.getController())
+            if playerIndex == -1:
+                continue
+            replaceCandidateMap = self.replaceDamageList[playerIndex]
+            for e in et.getValue().entrySet():
+                source = e.getKey()
+                damage = e.getValue()
+                if damage > 0:
+                    prevention = source.canDamagePrevented(isCombat) and (cause is None or not cause.hasParam("NoPrevention"))
+                    repParams = AbilityKey.mapFromAffected(target)
+                    repParams[AbilityKey.DamageSource] = source
+                    repParams[AbilityKey.DamageAmount] = damage
+                    repParams[AbilityKey.IsCombat] = isCombat
+                    repParams[AbilityKey.NoPreventDamage] = not prevention
+                    if cause is not None:
+                        repParams[AbilityKey.Cause] = cause
+
+                    reList = self.getReplacementList(ReplacementType.DamageDone, repParams, ReplacementLayer.Other)
+                    for re in reList:
+                        if re not in replaceCandidateMap:
+                            replaceCandidateMap[re] = []
+                        runParamList = replaceCandidateMap.get(re)
+                        runParamList.append(repParams)
+
+    def runSingleReplaceDamageEffect(self, re: ReplacementEffect, runParams: dict[AbilityKey, object],
+            replaceCandidateMap: dict[ReplacementEffect, list[dict[AbilityKey, object]]],
+            executedDamageMap: dict[ReplacementEffect, list[dict[AbilityKey, object]]], decider: Player,
+            damageMap: CardDamageMap, preventMap: CardDamageMap) -> None:
+        executedParamList = executedDamageMap.get(re)
+        apiType = re.getOverridingAbility().getApi() if re.getOverridingAbility() is not None else None
+        source = runParams.get(AbilityKey.DamageSource)
+        target = runParams.get(AbilityKey.Affected)
+        damage = int(runParams.get(AbilityKey.DamageAmount))
+        mapParams = re.getMapParams()
+
+        res = self.executeReplacement(runParams, re, decider)
+        newTarget = runParams.get(AbilityKey.Affected)
+        newDamage = int(runParams.get(AbilityKey.DamageAmount))
+
+        # ReplaceSplitDamage will split the damage event into two event, so need to create run params for old event
+        # (original run params is changed for new event)
+        oldParams = None
+
+        if res != ReplacementResult.NotReplaced:
+            # Remove this event from other possible replacers
+            for k in list(replaceCandidateMap.keys()):
+                if k is re:
+                    continue
+                v = replaceCandidateMap[k]
+                if runParams in v:
+                    v.remove(runParams)
+                    if not v:
+                        del replaceCandidateMap[k]
+            # Add updated event to possible replacers
+            if res == ReplacementResult.Updated or apiType == ApiType.ReplaceSplitDamage:
+                newReplaceCandidateMap = replaceCandidateMap
+                if not target.equals(newTarget):
+                    players = self.game.getPlayersInTurnOrder()
+                    playerIndex = players.indexOf(newTarget) if isinstance(newTarget, Player) else players.indexOf(newTarget.getController())
+                    newReplaceCandidateMap = self.replaceDamageList[playerIndex]
+
+                reList = self.getReplacementList(ReplacementType.DamageDone, runParams, ReplacementLayer.Other)
+                for newRE in reList:
+                    # Skip if this has already been executed by given replacement effect
+                    if newRE in executedDamageMap and runParams in executedDamageMap.get(newRE):
+                        continue
+                    if newRE not in newReplaceCandidateMap:
+                        newReplaceCandidateMap[newRE] = []
+                    runParamList = newReplaceCandidateMap.get(newRE)
+                    runParamList.append(runParams)
+            # Add old updated event too for ReplaceSplitDamage
+            if apiType == ApiType.ReplaceSplitDamage and res == ReplacementResult.Updated:
+                oldParams = AbilityKey.newMap(runParams)
+                oldParams[AbilityKey.Affected] = target
+                oldParams[AbilityKey.DamageAmount] = damage - newDamage
+                reList = self.getReplacementList(ReplacementType.DamageDone, oldParams, ReplacementLayer.Other)
+                for newRE in reList:
+                    if newRE not in replaceCandidateMap:
+                        replaceCandidateMap[newRE] = []
+                    runParamList = replaceCandidateMap.get(newRE)
+                    runParamList.append(oldParams)
+
+        resultMap = runParams.get(AbilityKey.ReplacementResultMap)
+        resultMap[re] = res
+
+        # Update damage map and prevent map
+        if res == ReplacementResult.NotReplaced:
+            pass
+        elif res == ReplacementResult.Updated:
+            # check if this is still the affected card or player
+            if target.equals(newTarget):
+                damageMap.put(source, target, newDamage - damage)
+            elif apiType == ApiType.ReplaceSplitDamage:
+                damageMap.put(source, target, -newDamage)
+            if not target.equals(newTarget):
+                if apiType != ApiType.ReplaceSplitDamage:
+                    damageMap.remove(source, target)
+                damageMap.put(source, newTarget, newDamage)
+            if apiType == ApiType.ReplaceDamage:
+                preventMap.put(source, target, damage - newDamage)
+                # Record prevented amount
+                runParams[AbilityKey.PreventedAmount] = damage - newDamage
+        else:
+            damageMap.remove(source, target)
+            if (apiType == ApiType.ReplaceDamage or
+                    ("Prevent" in mapParams and mapParams.get("Prevent") == "True") or
+                    "PreventionEffect" in mapParams):
+                preventMap.put(source, target, damage)
+                # Record prevented amount
+                runParams[AbilityKey.PreventedAmount] = damage
+            if apiType == ApiType.ReplaceSplitDamage:
+                damageMap.put(source, newTarget, newDamage)
+
+        # Put run params into executed param list so this replacement effect won't handle them again
+        # (For example, if the damage is redirected back)
+        executedParamList.append(runParams)
+        if apiType == ApiType.ReplaceSplitDamage:
+            executedParamList.append(oldParams)
+
+        # Log the replacement effect
+        if res != ReplacementResult.NotReplaced:
+            message = re.getDescription()
+            if message:
+                self.game.fireEvent(GameEventAddLog(GameLogEntryType.EFFECT_REPLACED, message))
+
+    def executeReplaceDamageBufferedSA(self, executedDamageMap: dict[ReplacementEffect, list[dict[AbilityKey, object]]]) -> None:
+        for re, executedParamList in executedDamageMap.items():
+            if re.getOverridingAbility() is None:
+                continue
+            bufferedSA = re.getOverridingAbility()
+            apiType = bufferedSA.getApi()
+            if apiType == ApiType.ReplaceDamage or apiType == ApiType.ReplaceSplitDamage or apiType == ApiType.ReplaceEffect:
+                bufferedSA = bufferedSA.getSubAbility()
+                if bufferedSA is None:
+                    continue
+
+            if not executedParamList:
+                continue
+
+            mapParams = re.getMapParams()
+            isPrevention = ("Prevent" in mapParams and mapParams.get("Prevent") == "True") or "PreventionEffect" in mapParams
+            executePerSource = "ExecuteMode" in mapParams and mapParams.get("ExecuteMode") == "PerSource"
+            executePerTarget = "ExecuteMode" in mapParams and mapParams.get("ExecuteMode") == "PerTarget"
+
+            while executedParamList:
+                runParams = AbilityKey.newMap()
+                damageSourceList: list[Card] = []
+                affectedList: list[GameEntity] = []
+                damageSum = 0
+
+                for executedParams in list(executedParamList):
+                    resultMap = executedParams.get(AbilityKey.ReplacementResultMap)
+                    res = resultMap.get(re)
+                    if res == ReplacementResult.NotReplaced and (not isPrevention or executedParams.get(AbilityKey.NoPreventDamage) is False):
+                        executedParamList.remove(executedParams)
+                        continue
+
+                    source = executedParams.get(AbilityKey.DamageSource)
+                    if executePerSource and damageSourceList and source not in damageSourceList:
+                        continue
+
+                    target = executedParams.get(AbilityKey.Affected)
+                    if executePerTarget and affectedList and target not in affectedList:
+                        continue
+
+                    executedParamList.remove(executedParams)
+                    damage = int(executedParams.get(AbilityKey.PreventedAmount if isPrevention else AbilityKey.DamageAmount))
+                    if source not in damageSourceList:
+                        damageSourceList.append(source)
+                    if target not in affectedList:
+                        affectedList.append(target)
+                    damageSum += damage
+
+                if damageSum > 0:
+                    runParams[AbilityKey.DamageSource] = damageSourceList if len(damageSourceList) > 1 else damageSourceList[0]
+                    runParams[AbilityKey.Affected] = affectedList if len(affectedList) > 1 else affectedList[0]
+                    runParams[AbilityKey.DamageAmount] = damageSum
+
+                    re.setReplacingObjects(runParams, re.getOverridingAbility())
+                    bufferedSA.setActivatingPlayer(re.getHostCard().getController())
+                    AbilityUtils.resolve(bufferedSA)
+
+    def runReplaceDamage(self, isCombat: bool, damageMap: CardDamageMap, preventMap: CardDamageMap,
+            counterTable: GameEntityCounterTable, cause: SpellAbility) -> None:
+        players = self.game.getPlayersInTurnOrder()
+        for i in range(players.size()):
+            self.replaceDamageList.append({})
+
+        # Map of all executed replacement effect for DamageDone event, including run params
+        executedDamageMap: dict[ReplacementEffect, list[dict[AbilityKey, object]]] = {}
+
+        # First, gather all possible replacement effects
+        self.getPossibleReplaceDamageList(players, isCombat, damageMap, cause)
+
+        # Next, handle replacement effects in APNAP order
+        # Handle "Prevented this way" and abilities like "Phantom Nomad", by buffer the replaced SA
+        # and only run them after all prevention and redirection effects are processed.
+        while True:
+            decider = None
+            replaceCandidateMap = None
+            for i in range(players.size()):
+                if not self.replaceDamageList[i]:
+                    continue
+                decider = players.get(i)
+                replaceCandidateMap = self.replaceDamageList[i]
+                break
+            if replaceCandidateMap is None:
+                break
+
+            possibleReplacers = list(replaceCandidateMap.keys())
+            # TODO should be able to choose different order for each entity
+            chosenRE = decider.getController().chooseSingleReplacementEffect(possibleReplacers)
+            runParamList = replaceCandidateMap.get(chosenRE)
+
+            if chosenRE not in executedDamageMap:
+                executedDamageMap[chosenRE] = []
+
+            # Run all possible events for chosen replacement effect
+            chosenRE.setHasRun(True)
+            effectSA = chosenRE.getOverridingAbility()
+            apiType = None
+            bufferedSA = effectSA
+            needRestoreSubSA = False
+            needDivideShield = False
+            needChooseSource = False
+            shieldAmount = 0
+            if effectSA is not None:
+                apiType = effectSA.getApi()
+                # Temporary remove sub ability from ReplaceDamage, ReplaceSplitDamage and ReplaceEffect API so they could be run later
+                if apiType == ApiType.ReplaceDamage or apiType == ApiType.ReplaceSplitDamage or apiType == ApiType.ReplaceEffect:
+                    bufferedSA = effectSA.getSubAbility()
+                    if bufferedSA is not None:
+                        needRestoreSubSA = True
+                        effectSA.setSubAbility(None)
+
+                # Determine if need to divide shield among affected entity and
+                # determine if the prevent next N damage shield is large enough to replace all damage
+                if ((chosenRE.hasParam("PreventionEffect") and chosenRE.getParam("PreventionEffect") == "NextN")
+                        or apiType == ApiType.ReplaceSplitDamage):
+                    if apiType == ApiType.ReplaceDamage:
+                        shieldAmount = AbilityUtils.calculateAmount(effectSA.getHostCard(), effectSA.getParamOrDefault("Amount", "1"), effectSA)
+                    elif apiType == ApiType.ReplaceSplitDamage:
+                        shieldAmount = AbilityUtils.calculateAmount(effectSA.getHostCard(), effectSA.getParamOrDefault("VarName", "1"), effectSA)
+                    damageAmount = 0
+                    hasMultipleSource = False
+                    hasMultipleTarget = False
+                    firstSource = None
+                    firstTarget = None
+                    for runParams in runParamList:
+                        # Only count damage that can be prevented
+                        if apiType == ApiType.ReplaceDamage and runParams.get(AbilityKey.NoPreventDamage) is True:
+                            continue
+                        damageAmount += int(runParams.get(AbilityKey.DamageAmount))
+                        if firstSource is None:
+                            firstSource = runParams.get(AbilityKey.DamageSource)
+                        elif not firstSource.equals(runParams.get(AbilityKey.DamageSource)):
+                            hasMultipleSource = True
+                        if firstTarget is None:
+                            firstTarget = runParams.get(AbilityKey.Affected)
+                        elif not firstTarget.equals(runParams.get(AbilityKey.Affected)):
+                            hasMultipleTarget = True
+                    if damageAmount > shieldAmount and len(runParamList) > 1:
+                        if hasMultipleSource:
+                            needChooseSource = True
+                        if effectSA.hasParam("DivideShield") and hasMultipleTarget:
+                            needDivideShield = True
+
+            # Ask the decider to divide shield among affected damage target
+            shieldMap = None
+            if needDivideShield:
+                affected: dict[GameEntity, int] = {}
+                for runParams in runParamList:
+                    target = runParams.get(AbilityKey.Affected)
+                    damage = runParams.get(AbilityKey.DamageAmount)
+                    affected[target] = affected.get(target, 0) + damage
+                shieldMap = decider.getController().divideShield(chosenRE.getHostCard(), affected, shieldAmount)
+
+            # CR 615.7
+            # If damage would be dealt to the shielded permanent or player by two or more applicable sources at the same time,
+            # the player or the controller of the permanent chooses which damage the shield prevents.
+            if needChooseSource:
+                sourcesToChooseFrom = CardCollection()
+                for runParams in runParamList:
+                    if apiType == ApiType.ReplaceDamage and runParams.get(AbilityKey.NoPreventDamage) is True:
+                        continue
+                    sourcesToChooseFrom.add(runParams.get(AbilityKey.DamageSource))
+                choiceTitle = Localizer.getInstance().getMessage("lblChooseSource") + " "
+                while shieldAmount > 0 and not sourcesToChooseFrom.isEmpty():
+                    source = decider.getController().chooseSingleEntityForEffect(sourcesToChooseFrom, effectSA, choiceTitle, None)
+                    sourcesToChooseFrom.remove(source)
+                    for runParams in list(runParamList):
+                        if source.equals(runParams.get(AbilityKey.DamageSource)):
+                            runParamList.remove(runParams)
+                            if shieldMap is not None:
+                                target = runParams.get(AbilityKey.Affected)
+                                if target in shieldMap and shieldMap.get(target) > 0:
+                                    dividedShieldAmount = shieldMap.get(target)
+                                    runParams[AbilityKey.DividedShieldAmount] = dividedShieldAmount
+                                    shieldAmount -= int(dividedShieldAmount)
+                                else:
+                                    continue
+                            else:
+                                shieldAmount -= int(runParams.get(AbilityKey.DamageAmount))
+                            if AbilityKey.ReplacementResultMap not in runParams:
+                                runParams[AbilityKey.ReplacementResultMap] = {}
+                            self.runSingleReplaceDamageEffect(chosenRE, runParams, replaceCandidateMap, executedDamageMap, decider, damageMap, preventMap)
+            else:
+                for runParams in runParamList:
+                    if shieldMap is not None:
+                        target = runParams.get(AbilityKey.Affected)
+                        if target in shieldMap and shieldMap.get(target) > 0:
+                            dividedShieldAmount = shieldMap.get(target)
+                            runParams[AbilityKey.DividedShieldAmount] = dividedShieldAmount
+                        else:
+                            continue
+                    if AbilityKey.ReplacementResultMap not in runParams:
+                        runParams[AbilityKey.ReplacementResultMap] = {}
+                    self.runSingleReplaceDamageEffect(chosenRE, runParams, replaceCandidateMap, executedDamageMap, decider, damageMap, preventMap)
+
+            # Restore temporary removed SA
+            if needRestoreSubSA:
+                effectSA.setSubAbility(bufferedSA)
+            chosenRE.setHasRun(False)
+            replaceCandidateMap.pop(chosenRE, None)
+
+        self.replaceDamageList.clear()
+
+        # Finally, run all buffered SA to finish the replacement processing
+        self.executeReplaceDamageBufferedSA(executedDamageMap)
+
+    @staticmethod
+    def parseReplacement(repParse, host: Card, intrinsic: bool, sVarHolder=_UNSET) -> ReplacementEffect:
+        if sVarHolder is _UNSET:
+            return ReplacementHandler.parseReplacement(repParse, host, intrinsic, host)
+
+        if isinstance(repParse, dict):
+            mapParams = repParse
+            rt = ReplacementType.smartValueOf(mapParams.get("Event"))
+            ret = rt.createReplacement(mapParams, host, intrinsic)
+
+            activeZones = mapParams.get("ActiveZones")
+            if activeZones is not None:
+                ret.setActiveZone(set(ZoneType.listValueOf(activeZones)))
+
+            if "ReplaceWith" in mapParams and sVarHolder is not None:
+                ret.setOverridingAbility(AbilityFactory.getAbility(host, mapParams.get("ReplaceWith"), sVarHolder))
+
+            if isinstance(sVarHolder, CardState):
+                ret.setCardState(sVarHolder)
+            elif isinstance(sVarHolder, CardTraitBase):
+                ret.setCardState(sVarHolder.getCardState())
+            return ret
+
+        return ReplacementHandler.parseReplacement(AbilityFactory.getMapParams(repParse), host, intrinsic, sVarHolder)
+
+    def wouldPhaseBeSkipped(self, player: Player, phase: PhaseType) -> bool:
+        repParams = AbilityKey.mapFromAffected(player)
+        repParams[AbilityKey.Phase] = phase
+        list = self.getReplacementList(ReplacementType.BeginPhase, repParams, ReplacementLayer.Control)
+        if not list:
+            return False
+        return True
+
+    def wouldExtraTurnBeSkipped(self, player: Player) -> bool:
+        repParams = AbilityKey.mapFromAffected(player)
+        repParams[AbilityKey.ExtraTurn] = True
+        list = self.getReplacementList(ReplacementType.BeginTurn, repParams, ReplacementLayer.Other)
+        if not list:
+            return False
+        return True
+
+    def getTotalPreventionShieldAmount(self, o: GameEntity) -> int:
+        list: list[ReplacementEffect] = []
+        game = self.game
+
+        class _ShieldVisitor(Visitor):
+            def visit(self, c):
+                for re in c.getReplacementEffects():
+                    if (re.getMode() == ReplacementType.DamageDone
+                            and re.getLayer() == ReplacementLayer.Other
+                            and re.hasParam("PreventionEffect")
+                            and re.zonesCheck(game.getZoneOf(c))
+                            and re.getOverridingAbility() is not None
+                            and re.getOverridingAbility().getApi() == ApiType.ReplaceDamage
+                            and re.matchesValidParam("ValidTarget", o)):
+                        list.append(re)
+                return True
+
+        game.forEachCardInGame(_ShieldVisitor())
+
+        totalAmount = 0
+        for re in list:
+            sa = re.getOverridingAbility()
+            if sa.hasParam("Amount"):
+                varValue = sa.getParam("Amount")
+                if varValue is not None and len(varValue) > 0 and varValue.isdigit():
+                    totalAmount += int(varValue)
+                else:
+                    varValue = sa.getSVar(varValue)
+                    if varValue.startswith("Number$"):
+                        totalAmount += int(varValue[7:])
+        return totalAmount
+
+    def isPreventCombatDamageThisTurn(self) -> bool:
+        list: list[ReplacementEffect] = []
+        game = self.game
+
+        class _FogVisitor(Visitor):
+            def visit(self, c):
+                for re in c.getReplacementEffects():
+                    if (re.getMode() == ReplacementType.DamageDone
+                            and re.getLayer() == ReplacementLayer.Other
+                            and re.hasParam("Prevent") and re.getParam("Prevent") == "True"
+                            and re.hasParam("IsCombat") and re.getParam("IsCombat") == "True"
+                            and not re.hasParam("ValidSource") and not re.hasParam("ValidTarget")
+                            and re.zonesCheck(game.getZoneOf(c))):
+                        list.append(re)
+                return True
+
+        game.forEachCardInGame(_FogVisitor())
+        return len(list) != 0
+
+    def isReplacing(self) -> bool:
+        return len(self.hasRun) != 0
+```
+
+Note: I cleaned up one awkward line I introduced ΓÇö `cantHappenCheck` should simply be:
+
+```python
+    def cantHappenCheck(self, event: ReplacementType, runParams: dict[AbilityKey, object]) -> bool:
+        return len(self.getReplacementList(event, runParams, ReplacementLayer.CantHappen)) != 0
+````

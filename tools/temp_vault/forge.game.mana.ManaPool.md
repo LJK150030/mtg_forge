@@ -70,6 +70,12 @@ classDiagram
 - [[forge.game.spellability.AbilityManaPart|AbilityManaPart]]
 - [[forge.game.spellability.SpellAbility|SpellAbility]]
 
+## Design Description
+
+The ManaPool class models a player's pool of floating (unspent) mana during a turn, backed by an `ArrayListMultimap` keyed on color byte so multiple Mana of the same color can coexist. It owns the lifecycle of that mana: adding and removing units, reporting amounts and totals, paying mana costs from the pool, refunding mana, and clearing the pool at end of phaseâ€”honoring rules for persistent, combat, and kept mana as well as mana-burn and LoseMana replacement effects.
+
+By extending ManaConversionMatrix it inherits color-substitution logic, which it uses in `canPayForShardWithColor` and `convertManaColor` to determine and apply alternate color payments. It implements `Iterable<Mana>` for convenient traversal of floating mana. It collaborates closely with Player (its owner), Mana, SpellAbility, AbilityManaPart, and ManaCostBeingPaid to resolve payments, and fires GameEventManaPool events through the Game to keep the view synchronizedâ€”reflecting a clear separation between mana state and UI notification.
+
 ## Source
 `forge-game/src/main/java/forge/game/mana/ManaPool.java`
 
@@ -436,4 +442,348 @@ public class ManaPool extends ManaConversionMatrix implements Iterable<Mana> {
     }
 
 }
+```
+
+## Python
+`forge/game/mana/ManaPool.py`
+
+```python
+from forge.game.mana.ManaConversionMatrix import ManaConversionMatrix
+from forge.card.mana.ManaAtom import ManaAtom
+from forge.card.mana.ManaCostShard import ManaCostShard
+from forge.game.Game import Game
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.cost.CostPayment import CostPayment
+from forge.game.event.EventValueChangeType import EventValueChangeType
+from forge.game.event.GameEventManaPool import GameEventManaPool
+from forge.game.phase.PhaseType import PhaseType
+from forge.game.player.Player import Player
+from forge.game.replacement.ReplacementLayer import ReplacementLayer
+from forge.game.replacement.ReplacementType import ReplacementType
+from forge.game.replacement.ReplacementResult import ReplacementResult
+from forge.game.spellability.AbilityManaPart import AbilityManaPart
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.staticability.StaticAbilityUnspentMana import StaticAbilityUnspentMana
+from forge.game.mana.Mana import Mana
+from forge.game.mana.ManaCostBeingPaid import ManaCostBeingPaid
+
+
+class _MultimapView:
+    def __init__(self, backing, key):
+        self._backing = backing
+        self._key = key
+
+    def _list(self):
+        return self._backing.get(self._key, [])
+
+    def __iter__(self):
+        return iter(list(self._list()))
+
+    def __len__(self):
+        return len(self._list())
+
+    def size(self):
+        return len(self._list())
+
+    def contains(self, value):
+        return value in self._list()
+
+    def removeAll(self, values):
+        lst = self._backing.get(self._key)
+        if lst is None:
+            return
+        for v in values:
+            while v in lst:
+                lst.remove(v)
+        if not lst:
+            self._backing.pop(self._key, None)
+
+    def clear(self):
+        if self._key in self._backing:
+            del self._backing[self._key]
+
+    def addAll(self, values):
+        vals = list(values)
+        if vals:
+            self._backing.setdefault(self._key, []).extend(vals)
+
+
+class ArrayListMultimap:
+    def __init__(self):
+        self._map = {}
+
+    @staticmethod
+    def create():
+        return ArrayListMultimap()
+
+    def put(self, key, value):
+        self._map.setdefault(key, []).append(value)
+        return True
+
+    def get(self, key):
+        return _MultimapView(self._map, key)
+
+    def remove(self, key, value):
+        lst = self._map.get(key)
+        if lst is not None and value in lst:
+            lst.remove(value)
+            if not lst:
+                del self._map[key]
+            return True
+        return False
+
+    def clear(self):
+        self._map.clear()
+
+    def isEmpty(self):
+        return len(self._map) == 0
+
+    def keySet(self):
+        return list(self._map.keys())
+
+    def values(self):
+        result = []
+        for lst in self._map.values():
+            result.extend(lst)
+        return result
+
+    def putAll(self, key, values):
+        vals = list(values)
+        if vals:
+            self._map.setdefault(key, []).extend(vals)
+        return bool(vals)
+
+
+class ManaPool(ManaConversionMatrix):
+    def __init__(self, player):
+        self.owner = player
+        self.floatingMana = ArrayListMultimap.create()
+        self.restoreColorReplacements()
+
+    def getAmountOfColor(self, color):
+        ofColor = self.floatingMana.get(color)
+        return 0 if ofColor is None else ofColor.size()
+
+    def addMana(self, mana, updateView=True):
+        self.floatingMana.put(mana.getColor(), mana)
+        if updateView:
+            self.owner.updateManaForView()
+            self.owner.getGame().fireEvent(GameEventManaPool(self.owner, EventValueChangeType.Added, mana))
+
+    def add(self, manaList):
+        for m in manaList:
+            self.addMana(m)
+
+    def willManaBeLostAtEndOfPhase(self):
+        if self.floatingMana.isEmpty():
+            return False
+
+        runParams = AbilityKey.mapFromAffected(self.owner)
+        if self.owner.getGame().getReplacementHandler().getReplacementList(ReplacementType.LoseMana, runParams, ReplacementLayer.Other):
+            return False
+
+        safeMana = 0
+        for c in StaticAbilityUnspentMana.getManaToKeep(self.owner):
+            safeMana += self.getAmountOfColor(c)
+
+        # TODO isPersistentMana
+
+        return self.totalMana() != safeMana  # won't lose floating mana if all mana is of colors that aren't going to be emptied
+
+    def hasBurn(self):
+        game = self.owner.getGame()
+        return game.getRules().hasManaBurn() or StaticAbilityUnspentMana.hasManaBurn(self.owner)
+
+    def resetPool(self):
+        # This should only be used to reset the pool to empty by things like restores.
+        self.floatingMana.clear()
+
+    def clearPool(self, isEndOfPhase):
+        # isEndOfPhase parameter: true = end of phase, false = mana drain effect
+        cleared = []
+        if self.floatingMana.isEmpty():
+            return cleared
+
+        convertTo = None
+
+        # TODO move this lower in case all mana would be persistent
+        runParams = AbilityKey.mapFromAffected(self.owner)
+        runParams[AbilityKey.Mana] = "C"
+        result = self.owner.getGame().getReplacementHandler().run(ReplacementType.LoseMana, runParams)
+        if result == ReplacementResult.NotReplaced:
+            pass
+        elif result == ReplacementResult.Skipped:
+            return cleared
+        else:
+            convertTo = ManaAtom.fromName(runParams.get(AbilityKey.Mana))
+
+        keys = list(self.floatingMana.keySet())
+        if isEndOfPhase:
+            toKeep = set(StaticAbilityUnspentMana.getManaToKeep(self.owner))
+            keys = [k for k in keys if k not in toKeep]
+        if convertTo is not None:
+            if convertTo in keys:
+                keys.remove(convertTo)
+
+        for b in keys:
+            cm = self.floatingMana.get(b)
+            pMana = []
+            if isEndOfPhase and not getattr(self.owner.getGame().getPhaseHandler(), 'is')(PhaseType.CLEANUP):
+                for mana in cm:
+                    if mana.getManaAbility() is not None and mana.getManaAbility().isPersistentMana():
+                        pMana.append(mana)
+                    if mana.getManaAbility() is not None and mana.getManaAbility().isCombatMana() and \
+                            not getattr(self.owner.getGame().getPhaseHandler(), 'is')(PhaseType.COMBAT_END):
+                        pMana.append(mana)
+            cm.removeAll(pMana)
+            if convertTo is not None:
+                self.convertManaColor(b, convertTo)
+                cm.addAll(pMana)
+            else:
+                cleared.extend(cm)
+                cm.clear()
+                self.floatingMana.putAll(b, pMana)
+
+        self.owner.updateManaForView()
+        self.owner.getGame().fireEvent(GameEventManaPool(self.owner, EventValueChangeType.Cleared, None))
+        return cleared
+
+    def convertManaColor(self, originalColor, toColor):
+        convert = []
+        cm = self.floatingMana.get(originalColor)
+        for m in cm:
+            convert.append(Mana(toColor, m.getSourceCard(), m.getManaAbility(), m.getPlayer()))
+        cm.clear()
+        self.floatingMana.putAll(toColor, convert)
+        self.owner.updateManaForView()
+
+    def removeMana(self, mana, updateView=True):
+        result = self.floatingMana.remove(mana.getColor(), mana)
+        if result and updateView:
+            self.owner.updateManaForView()
+            self.owner.getGame().fireEvent(GameEventManaPool(self.owner, EventValueChangeType.Removed, mana))
+        return result
+
+    def payManaFromAbility(self, saPaidFor, manaCost, saPayment):
+        # Mana restriction must be checked before this method is called
+        paidAbs = saPaidFor.getPayingManaAbilities()
+
+        paidAbs.add(saPayment)  # assumes some part on the mana produced by the ability will get used
+
+        # need to get all mana from all ManaAbilities of the SpellAbility
+        for mp in saPayment.getAllManaParts():
+            for mana in mp.getLastManaProduced():
+                if not saPaidFor.allowsPayingWithShard(mp.getSourceCard(), mana.getColor()):
+                    continue
+                if self.tryPayCostWithMana(saPaidFor, manaCost, mana, False):
+                    saPaidFor.getPayingMana().add(mana)
+
+    def tryPayCostWithColor(self, colorCode, saPaidFor, manaCost, manaSpentToPay):
+        manaFound = None
+        cm = self.floatingMana.get(colorCode)
+
+        for mana in cm:
+            if mana.getManaAbility() is not None and not mana.getManaAbility().meetsManaRestrictions(saPaidFor):
+                continue
+
+            if not saPaidFor.allowsPayingWithShard(mana.getSourceCard(), colorCode):
+                continue
+
+            manaFound = mana
+            break
+
+        if manaFound is not None and self.tryPayCostWithMana(saPaidFor, manaCost, manaFound, False):
+            manaSpentToPay.append(manaFound)
+            return True
+        return False
+
+    def tryPayCostWithMana(self, sa, manaCost, mana, test):
+        if not manaCost.isNeeded(mana, self):
+            return False
+        # only pay mana into manaCost when the Mana could be removed from the Mana pool
+        # if the mana wasn't in the mana pool then something is wrong
+        if not self.removeMana(mana):
+            return False
+        manaCost.payMana(mana, self)
+
+        return True
+
+    def isEmpty(self):
+        return self.floatingMana.isEmpty()
+
+    def totalMana(self):
+        return len(self.floatingMana.values())
+
+    # Account for mana part of ability when undoing it
+    def accountFor(self, ma):
+        if ma is None:
+            return False
+        if self.floatingMana.isEmpty():
+            return False
+
+        removeFloating = []
+
+        manaNotAccountedFor = False
+        # loop over mana produced by mana ability
+        for mana in ma.getLastManaProduced():
+            poolLane = self.floatingMana.get(mana.getColor())
+
+            if poolLane is not None and poolLane.contains(mana):
+                removeFloating.append(mana)
+            else:
+                manaNotAccountedFor = True
+                break
+
+        # When is it legitimate for all the mana not to be accountable?
+        # TODO: Does this condition really indicate an bug in Forge?
+        if manaNotAccountedFor:
+            return False
+
+        for m in removeFloating:
+            self.removeMana(m)
+        return True
+
+    def refundMana(self, manaSpent):
+        self.add(manaSpent)
+        manaSpent.clear()
+
+    def canPayForShardWithColor(self, shard, color):
+        if shard.isOfKind(ManaAtom.COLORLESS) and color == ManaAtom.GENERIC:
+            return False  # FIXME: testing Colorless against Generic is a recipe for disaster, but probably there should be a better fix.
+
+        line = self.getPossibleColorUses(color)
+
+        for outColor in ManaAtom.MANATYPES:
+            if (line & outColor) != 0 and shard.canBePaidWithManaOfColor(outColor):
+                return True
+
+        return shard.canBePaidWithManaOfColor(0)
+
+    def payManaCostFromPool(self, cost, sa, test, manaSpentToPay):
+        hasConverge = sa.getHostCard().hasConverge()
+        unpaidShards = cost.getUnpaidShards()
+        unpaidShards.sort()  # most difficult shards must come first
+        for part in unpaidShards:
+            if part != ManaCostShard.X:
+                if cost.isPaid():
+                    continue
+
+                # get a mana of this type from floating, bail if none available
+                mana = CostPayment.getMana(self.owner, part, sa, cost.getColorsPaid() if hasConverge else -1, cost.getXManaCostPaidByColor())
+                if mana is not None:
+                    if self.tryPayCostWithMana(sa, cost, mana, test):
+                        manaSpentToPay.append(mana)
+
+        if cost.isPaid():
+            # refund any mana taken from mana pool when test
+            if test:
+                self.refundMana(manaSpentToPay)
+            return True
+        return False
+
+    def iterator(self):
+        return iter(self.floatingMana.values())
+
+    def __iter__(self):
+        return self.iterator()
 ```

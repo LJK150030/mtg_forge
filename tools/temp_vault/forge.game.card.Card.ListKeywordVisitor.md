@@ -39,7 +39,7 @@ ListKeywordVisitor is a private static helper class nested within `Card` that im
 As a concrete `Visitor`, it participates in the visitor pattern used to walk a card's keyword structure without exposing the underlying collection's representation. The `visit` method unconditionally appends each keyword and returns `true`, signaling that traversal should continue to the end so no keywords are skipped. By encapsulating accumulation behind the visitor contract and keeping the class private and static, the design cleanly separates the act of gathering keywords from the traversal mechanism while limiting its scope strictly to `Card`'s internal use.
 
 ## Source
-`forge-game/src/main/java/forge/game/card/Card.java` â€” declaration excerpt
+`forge-game/src/main/java/forge/game/card/Card.java` Ã¢â‚¬â€ declaration excerpt
 
 ```java
     // Collects all the keywords into a list.
@@ -56,4 +56,25 @@ As a concrete `Visitor`, it participates in the visitor pattern used to walk a c
             return keywords;
         }
     }
+```
+
+## Python
+`forge/game/card/Card/ListKeywordVisitor.py`
+
+```python
+from forge.util.Visitor import Visitor
+from forge.game.keyword.KeywordInterface import KeywordInterface
+
+
+# Collects all the keywords into a list.
+class ListKeywordVisitor(Visitor):
+    def __init__(self):
+        self.keywords: list[KeywordInterface] = []
+
+    def visit(self, kw: KeywordInterface) -> bool:
+        self.keywords.append(kw)
+        return True
+
+    def getKeywords(self) -> list[KeywordInterface]:
+        return self.keywords
 ```

@@ -67,3 +67,30 @@ public record GameEventLandPlayed(PlayerView player, CardView land) implements G
     }
 }
 ```
+
+## Python
+`forge/game/event/GameEventLandPlayed.py`
+
+```python
+package forge.game.event;
+
+from forge.game.card.CardView import CardView
+from forge.game.event.GameEvent import GameEvent
+from forge.game.event.IGameEventVisitor import IGameEventVisitor
+from forge.game.player.PlayerView import PlayerView
+
+
+class GameEventLandPlayed(GameEvent):
+    def __init__(self, player: PlayerView, land: CardView):
+        self.player = player
+        self.land = land
+
+    def visit(self, visitor: IGameEventVisitor):
+        return visitor.visit(self)
+
+    """ (non-Javadoc)
+     * @see java.lang.Object#toString()
+     """
+    def __str__(self) -> str:
+        return "" + str(self.player) + " played " + str(self.land)
+```

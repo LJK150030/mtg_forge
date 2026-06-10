@@ -90,3 +90,41 @@ public class ClaimThePrizeEffect extends SpellAbilityEffect {
     }
 }
 ```
+
+## Python
+`forge/game/ability/effects/ClaimThePrizeEffect.py`
+
+````python
+The task asks to output only the Python source code, so here it is:
+
+```python
+from forge.game.Game import Game
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.trigger.TriggerType import TriggerType
+from forge.util.Lang import Lang
+
+
+class ClaimThePrizeEffect(SpellAbilityEffect):
+
+    def resolve(self, sa: SpellAbility) -> None:
+        host = sa.getHostCard()
+        activator = sa.getActivatingPlayer()
+        game = activator.getGame()
+        attractions = AbilityUtils.getDefinedCards(host, sa.getParamOrDefault("Defined", "Self"), sa)
+
+        for c in attractions:
+            runParams = AbilityKey.mapFromPlayer(activator)
+            runParams[AbilityKey.Card] = c
+            game.getTriggerHandler().runTrigger(TriggerType.ClaimPrize, runParams, False)
+
+    def getStackDescription(self, sa: SpellAbility) -> str:
+        host = sa.getHostCard()
+        attractions = AbilityUtils.getDefinedCards(host, sa.getParamOrDefault("Defined", "Self"), sa)
+        return "Claim the Prize from %s!" % Lang.joinHomogenous(attractions)
+````

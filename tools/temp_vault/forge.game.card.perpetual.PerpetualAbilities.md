@@ -68,3 +68,28 @@ public record PerpetualAbilities(long timestamp, ICardTraitChanges changes) impl
     }
 }
 ```
+
+## Python
+`forge/game/card/perpetual/PerpetualAbilities.py`
+
+```python
+from forge.game.card.Card import Card
+from forge.game.card.CardTraitChanges import CardTraitChanges
+from forge.game.card.ICardTraitChanges import ICardTraitChanges
+from forge.game.card.perpetual.PerpetualInterface import PerpetualInterface
+
+
+class PerpetualAbilities(PerpetualInterface):
+
+    def __init__(self, timestamp: int, changes: ICardTraitChanges):
+        self.timestamp = timestamp
+        self.changes = changes
+
+    def getTimestamp(self) -> int:
+        return self.timestamp
+
+    def applyEffect(self, c: Card) -> None:
+        c.addChangedCardTraits(self.changes.copy(c, False), self.timestamp, 0, True)
+        if isinstance(self.changes, CardTraitChanges) and self.changes.containsCostChange():
+            c.calculatePerpetualAdjustedManaCost()
+```

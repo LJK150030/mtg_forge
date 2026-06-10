@@ -46,7 +46,7 @@ classDiagram
 
 ## Design Description
 
-TapAllAi is the AI strategy that decides whether to play spell abilities tapping all valid permanents on the battlefield. Extending the abstract `SpellAbilityAi`, it overrides `checkApiLogic` for proactive casting and `doTriggerNoCost` for forced or triggered resolution, returning an `AiAbilityDecision` that pairs a score with an `AiPlayDecision` verdict. It collaborates with the game model—querying `Game`, `Player`, and `Card`, and assembling filtered `CardCollectionView`s of untapped, valid targets.
+TapAllAi is the AI strategy that decides whether to play spell abilities tapping all valid permanents on the battlefield. Extending the abstract `SpellAbilityAi`, it overrides `checkApiLogic` for proactive casting and `doTriggerNoCost` for forced or triggered resolution, returning an `AiAbilityDecision` that pairs a score with an `AiPlayDecision` verdict. It collaborates with the game modelâ€”querying `Game`, `Player`, and `Card`, and assembling filtered `CardCollectionView`s of untapped, valid targets.
 
 The design favors asymmetric value: the AI only commits when it would tap more opponent permanents than its own, refuses to act after combat begins, and on its own turn first confirms it has viable attackers before tapping down would-be blockers. When targeting, it selects the highest-life targetable opponent, and the `doTriggerNoCost` path always complies when the effect is mandatory.
 
@@ -172,4 +172,106 @@ public class TapAllAi extends SpellAbilityAi {
         return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
     }
 }
+```
+
+## Python
+`forge/ai/ability/TapAllAi.py`
+
+```python
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.ai.ComputerUtilCombat import ComputerUtilCombat
+from forge.ai.SpellAbilityAi import SpellAbilityAi
+from forge.game.Game import Game
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.card.Card import Card
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CardPredicates import CardPredicates
+from forge.game.combat.CombatUtil import CombatUtil
+from forge.game.phase.PhaseType import PhaseType
+from forge.game.player.Player import Player
+from forge.game.player.PlayerCollection import PlayerCollection
+from forge.game.player.PlayerPredicates import PlayerPredicates
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+
+
+class TapAllAi(SpellAbilityAi):
+    def checkApiLogic(self, ai: Player, sa: SpellAbility) -> AiAbilityDecision:
+        # If tapping all creatures do it either during declare attackers of AIs turn
+        # or during upkeep/begin combat?
+
+        source = sa.getHostCard()
+        opp = ai.getStrongestOpponent()
+        game = ai.getGame()
+
+        if game.getPhaseHandler().getPhase().isAfter(PhaseType.COMBAT_BEGIN):
+            return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+        valid = sa.getParamOrDefault("ValidCards", "")
+
+        validTappables = game.getCardsIn(ZoneType.Battlefield)
+
+        if sa.usesTargeting():
+            sa.resetTargets()
+            sa.getTargets().add(opp)
+            validTappables = opp.getCardsIn(ZoneType.Battlefield)
+
+        validTappables = CardLists.getValidCards(validTappables, valid, source.getController(), source, sa)
+        validTappables = CardLists.filter(validTappables, CardPredicates.UNTAPPED)
+
+        if sa.hasParam("AILogic"):
+            logic = sa.getParam("AILogic")
+            if logic.startswith("AtLeast"):
+                num = AbilityUtils.calculateAmount(source, logic[7:], sa)
+                if validTappables.size() < num:
+                    return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+        if validTappables.isEmpty():
+            return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+        human = CardLists.filterControlledBy(validTappables, opp)
+        compy = CardLists.filterControlledBy(validTappables, ai)
+        if len(human) <= len(compy):
+            return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+        # in AI's turn, check if there are possible attackers, before tapping blockers
+        if game.getPhaseHandler().isPlayerTurn(ai):
+            validTappables = ai.getCardsIn(ZoneType.Battlefield)
+            any = validTappables.anyMatch(lambda c: CombatUtil.canAttack(c) and ComputerUtilCombat.canAttackNextTurn(c))
+            return AiAbilityDecision(100, AiPlayDecision.WillPlay) if any else AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+        return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+    def getTapAllTargets(self, valid: str, source: Card, sa: SpellAbility) -> CardCollectionView:
+        game = source.getGame()
+        tmpList = game.getCardsIn(ZoneType.Battlefield)
+        tmpList = CardLists.getValidCards(tmpList, valid, source.getController(), source, sa)
+        tmpList = CardLists.filter(tmpList, CardPredicates.UNTAPPED)
+        return tmpList
+
+    def doTriggerNoCost(self, ai: Player, sa: SpellAbility, mandatory: bool) -> AiAbilityDecision:
+        source = sa.getHostCard()
+
+        valid = sa.getParamOrDefault("ValidCards", "")
+
+        validTappables = self.getTapAllTargets(valid, source, sa)
+
+        if sa.usesTargeting():
+            targetableOpps = ai.getOpponents().filter(PlayerPredicates.isTargetableBy(sa))
+            target = targetableOpps.max(PlayerPredicates.compareByLife())
+            if target is None and mandatory:
+                target = ai
+            sa.resetTargets()
+            sa.getTargets().add(target)
+            validTappables = target.getCardsIn(ZoneType.Battlefield)
+
+        if mandatory:
+            return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+        if validTappables.size() > 0:
+            human = CardLists.count(validTappables, CardPredicates.isControlledByAnyOf(ai.getYourTeam()))
+            compy = CardLists.count(validTappables, CardPredicates.isControlledByAnyOf(ai.getOpponents()))
+            if human > compy:
+                return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+        return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
 ```

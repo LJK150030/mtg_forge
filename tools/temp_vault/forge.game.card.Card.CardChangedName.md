@@ -25,12 +25,12 @@ classDiagram
 
 ## Design Description
 
-Forge represents Magic cards through the `Card` class, and `CardChangedName` is a private record nested within it that captures a single name-changing effect applied to a card. It holds the replacement `newName` and a flag, `addNonLegendaryCreatureNames`, indicating whether the effect also grants the names of all nonlegendary creatures—a distinction needed for certain MTG mechanics.
+Forge represents Magic cards through the `Card` class, and `CardChangedName` is a private record nested within it that captures a single name-changing effect applied to a card. It holds the replacement `newName` and a flag, `addNonLegendaryCreatureNames`, indicating whether the effect also grants the names of all nonlegendary creaturesâ€”a distinction needed for certain MTG mechanics.
 
 As a Java record, it is an immutable value object, well-suited to being stored among the layered effects that mutate a card's characteristics. Its sole method, `isOverwrite()`, reports whether the effect actually substitutes a name (when `newName` is non-null) versus merely augmenting the existing name set. Being `private` confines it to `Card`'s internal name-management logic, keeping this implementation detail encapsulated from the rest of the game model.
 
 ## Source
-`forge-game/src/main/java/forge/game/card/Card.java` â€” declaration excerpt
+`forge-game/src/main/java/forge/game/card/Card.java` Ã¢â‚¬â€ declaration excerpt
 
 ```java
     private record CardChangedName(String newName, boolean addNonLegendaryCreatureNames) {
@@ -38,4 +38,20 @@ As a Java record, it is an immutable value object, well-suited to being stored a
             return newName != null;
         }
     }
+```
+
+## Python
+`forge/game/card/Card/CardChangedName.py`
+
+```python
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class CardChangedName:
+    newName: str
+    addNonLegendaryCreatureNames: bool
+
+    def isOverwrite(self) -> bool:
+        return self.newName is not None
 ```

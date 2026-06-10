@@ -55,7 +55,7 @@ The description is already written and present in the note. The user's instructi
 
 DigUntilEffect implements the resolution logic for Magic's "dig until" abilities, which reveal or move cards one at a time from a player's library (or other `DigZone`) until a target number of qualifying cards is found or a `MaxRevealed`/`MinTotalCMC` limit is hit. As a concrete `SpellAbilityEffect` subclass, it overrides `getStackDescription` to compose a readable summary and `resolve` to execute the dig, partitioning examined cards into validated "found" matches and the remaining "revealed" pile and routing each to its configured destination zone.
 
-The design is deliberately parameter-driven: a single generic implementation covers many distinct cards by reading optional `SpellAbility` parameters (Amount, FoundDestination, RevealedDestination, Shuffle, Optional, GainControl, AttachedTo, and more). It iterates `getTargetPlayers`, drawing from each player's `PlayerZone`, and collaborates with `Card`/`CardCollection` for the cards and `ZoneType` for routing. A `CardZoneTable` (with `AbilityKey` move-parameters) batches zone-change triggers—handling sequential versus simultaneous moves—while combat additions fire `GameEventCombatChanged` and Cascade keywords invoke replacement effects, keeping game state consistent.
+The design is deliberately parameter-driven: a single generic implementation covers many distinct cards by reading optional `SpellAbility` parameters (Amount, FoundDestination, RevealedDestination, Shuffle, Optional, GainControl, AttachedTo, and more). It iterates `getTargetPlayers`, drawing from each player's `PlayerZone`, and collaborates with `Card`/`CardCollection` for the cards and `ZoneType` for routing. A `CardZoneTable` (with `AbilityKey` move-parameters) batches zone-change triggersâ€”handling sequential versus simultaneous movesâ€”while combat additions fire `GameEventCombatChanged` and Cascade keywords invoke replacement effects, keeping game state consistent.
 
 ## Source
 `forge-game/src/main/java/forge/game/ability/effects/DigUntilEffect.java`
@@ -399,4 +399,277 @@ public class DigUntilEffect extends SpellAbilityEffect {
     }
 
 }
+```
+
+## Python
+`forge/game/ability/effects/DigUntilEffect.py`
+
+```python
+from forge.game.Game import Game
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CardPredicates import CardPredicates
+from forge.game.card.CardZoneTable import CardZoneTable
+from forge.game.event.GameEventCombatChanged import GameEventCombatChanged
+from forge.game.keyword.Keyword import Keyword
+from forge.game.player.Player import Player
+from forge.game.replacement.ReplacementType import ReplacementType
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.PlayerZone import PlayerZone
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.Lang import Lang
+from forge.util.Localizer import Localizer
+from forge.util.MyRandom import MyRandom
+
+
+class DigUntilEffect(SpellAbilityEffect):
+
+    # (non-Javadoc)
+    # @see forge.card.abilityfactory.SpellEffect#getStackDescription(java.util.Map, forge.card.spellability.SpellAbility)
+    def getStackDescription(self, sa: SpellAbility) -> str:
+        sb = []
+
+        desc = sa.getParamOrDefault("ValidDescription", "Card")
+
+        untilAmount = 1
+        isNumeric = True
+        if sa.hasParam("Amount"):
+            isNumeric = sa.getParam("Amount").isdigit()
+            untilAmount = AbilityUtils.calculateAmount(sa.getHostCard(), sa.getParam("Amount"), sa)
+
+        sb.append(Lang.joinHomogenous(self.getTargetPlayers(sa)))
+
+        revealed = ZoneType.smartValueOf(sa.getParam("RevealedDestination"))
+        sb.append("exiles cards from their library until they exile " if ZoneType.Exile == revealed else
+                  "reveals cards from their library until revealing ")
+        noun = " card" if desc == "Card" else desc + " card"
+        sb.append(Lang.nounWithNumeralExceptOne(untilAmount, noun) if isNumeric else "X " + noun)
+        if untilAmount != 1:
+            sb.append("s")
+        if sa.hasParam("MaxRevealed"):
+            untilAmount = AbilityUtils.calculateAmount(sa.getHostCard(), sa.getParam("MaxRevealed"), sa)
+            sb.append(" or " + str(untilAmount) + " card/s")
+        sb.append(".")
+
+        if not sa.hasParam("NoPutDesc"):
+            sb.append(" Put ")
+
+            found = ZoneType.smartValueOf(sa.getParam("FoundDestination"))
+            if found is not None:
+                sb.append("those cards" if untilAmount > 1 or not isNumeric else "that card")
+                sb.append(" ")
+
+                if ZoneType.Hand == found:
+                    sb.append("into their hand ")
+
+                if ZoneType.Battlefield == found:
+                    sb.append("onto the battlefield ")
+                    if sa.hasParam("Tapped"):
+                        sb.append("tapped ")
+
+                if ZoneType.Graveyard == revealed:
+                    sb.append("and all other cards into their graveyard.")
+                if ZoneType.Exile == revealed:
+                    sb.append("and exile all other cards revealed this way.")
+                if ZoneType.Library == revealed:
+                    revealedLibPos = AbilityUtils.calculateAmount(sa.getHostCard(), sa.getParam("RevealedLibraryPosition"), sa)
+                    sb.append("and the rest on " + ("the bottom " if revealedLibPos < 0 else "on top "))
+                    sb.append("of their library" + (" in a random order." if sa.hasParam("RevealRandomOrder") else "."))
+            elif revealed is not None:
+                if ZoneType.Hand == revealed:
+                    sb.append("all cards revealed this way into their hand")
+        return "".join(sb)
+
+    def resolve(self, sa: SpellAbility) -> None:
+        host = sa.getHostCard()
+        game = host.getGame()
+
+        untilAmount = 1
+        if sa.hasParam("Amount"):
+            untilAmount = AbilityUtils.calculateAmount(host, sa.getParam("Amount"), sa)
+            if untilAmount == 0:
+                return
+
+        maxRevealed = None
+        if sa.hasParam("MaxRevealed"):
+            maxRevealed = AbilityUtils.calculateAmount(host, sa.getParam("MaxRevealed"), sa)
+        totalCMC = None
+        if sa.hasParam("MinTotalCMC"):
+            totalCMC = AbilityUtils.calculateAmount(host, sa.getParam("MinTotalCMC"), sa)
+
+        type = ["Card"]
+        if sa.hasParam("Valid"):
+            type = sa.getParam("Valid").split(",")
+
+        remember = sa.hasParam("RememberFound")
+        imprint = sa.hasParam("ImprintFound")
+
+        foundDest = ZoneType.smartValueOf(sa.getParam("FoundDestination"))
+        optionalNoDestination = ZoneType.smartValueOf(sa.getParamOrDefault("OptionalNoDestination", "None"))
+        foundLibPos = AbilityUtils.calculateAmount(host, sa.getParam("FoundLibraryPosition"), sa)
+        revealedDest = ZoneType.smartValueOf(sa.getParam("RevealedDestination"))
+        revealedLibPos = AbilityUtils.calculateAmount(host, sa.getParam("RevealedLibraryPosition"), sa)
+        noneFoundDest = ZoneType.smartValueOf(sa.getParam("NoneFoundDestination"))
+        noneFoundLibPos = AbilityUtils.calculateAmount(host, sa.getParam("NoneFoundLibraryPosition"), sa)
+        digSite = ZoneType.smartValueOf(sa.getParam("DigZone")) if sa.hasParam("DigZone") else ZoneType.Library
+        shuffle = sa.hasParam("Shuffle")
+        optional = sa.hasParam("Optional")
+        optionalFound = sa.hasParam("OptionalFoundMove")
+        sequential = digSite == ZoneType.Library and revealedDest is not None and revealedDest == foundDest
+
+        table = CardZoneTable(game.copyLastStateBattlefield(), game.copyLastStateGraveyard())
+        tableSeq = None
+        if not sequential:
+            tableSeq = CardZoneTable(table.getLastStateBattlefield(), table.getLastStateGraveyard())
+        combatChanged = False
+
+        for p in self.getTargetPlayers(sa):
+            if p is None or not p.isInGame():
+                continue
+            if optional and not p.getController().confirmAction(sa, None, Localizer.getInstance().getMessage("lblDoYouWantDigYourLibrary"), None):
+                continue
+            found = CardCollection()
+            revealed = CardCollection()
+            moved = CardCollection()
+            restCMC = totalCMC
+
+            library = p.getZone(digSite)
+            maxToDig = library.size()
+            if maxRevealed is not None:
+                maxToDig = min(maxRevealed, maxToDig)
+
+            for i in range(maxToDig):
+                c = library.get(i)
+                revealed.add(c)
+                if restCMC is not None:
+                    restCMC -= c.getCMC()
+                    if restCMC <= 0:
+                        break
+                elif c.isValid(type, sa.getActivatingPlayer(), host, sa):
+                    found.add(c)
+                    if sa.hasParam("ForgetOtherRemembered"):
+                        host.clearRemembered()
+                    if remember:
+                        host.addRemembered(c)
+                    if imprint:
+                        host.addImprintedCard(c)
+                    if found.size() == untilAmount:
+                        break
+
+            if shuffle and sa.hasParam("ShuffleCondition"):
+                if sa.getParam("ShuffleCondition") == "NoneFound":
+                    shuffle = found.isEmpty()
+
+            if revealed.size() > 0:
+                game.getAction().reveal(revealed, p, False)
+
+            if foundDest is not None:
+                # is it "change zone until" or "reveal until"?
+                if sequential:
+                    itr = revealed.iterator()
+                else:
+                    itr = found.iterator()
+
+                while itr.hasNext():
+                    c = itr.next()
+
+                    if optionalFound and \
+                            not p.getController().confirmAction(sa, None, Localizer.getInstance().getMessage("lblDoYouWantPutCardToZone", foundDest.getTranslatedName()), None):
+                        if getattr(ZoneType, "None") == optionalNoDestination:
+                            itr.remove()
+                            continue
+                        foundDest = optionalNoDestination
+
+                    if sequential:
+                        tableSeq = CardZoneTable(table.getLastStateBattlefield(), table.getLastStateGraveyard())
+                    moveParams = AbilityKey.newMap()
+                    AbilityKey.addCardZoneTableParams(moveParams, tableSeq)
+
+                    if foundDest == ZoneType.Battlefield:
+                        moveParams.put(AbilityKey.SimultaneousETB, found)
+                        if sa.hasParam("GainControl"):
+                            c.setController(sa.getActivatingPlayer(), game.getNextTimestamp())
+                        if sa.hasParam("AttachedTo"):
+                            list = AbilityUtils.getDefinedCards(c, sa.getParam("AttachedTo"), sa)
+                            if list.isEmpty():
+                                list = CardLists.getValidCards(table.getLastStateBattlefield(), sa.getParam("AttachedTo"), c.getController(), c, sa)
+                            if not list.isEmpty():
+                                list = CardLists.filter(list, CardPredicates.canBeAttached(c, sa))
+                            if not list.isEmpty():
+                                params = {}
+                                params["Attach"] = c
+                                attachedTo = p.getController().chooseSingleEntityForEffect(list, sa, Localizer.getInstance().getMessage("lblSelectACardAttachSourceTo", c.toString()), params)
+                                c.attachToEntity(game.getCardState(attachedTo), sa, True)
+                            elif c.isAura():
+                                continue
+                        if sa.hasParam("Tapped"):
+                            c.setTapped(True)
+                        game.getAction().moveTo(foundDest, c, sa, moveParams)
+                        if self.addToCombat(c, sa, "Attacking", "Blocking"):
+                            combatChanged = True
+                    elif sa.hasParam("NoMoveFound"):
+                        # Don't do anything
+                        pass
+                    else:
+                        c = game.getAction().moveTo(foundDest, c, foundLibPos, sa, moveParams)
+                        moved.add(c)
+                        if foundDest == ZoneType.Exile:
+                            self.handleExiledWith(c, sa)
+
+                    if sequential:
+                        tableSeq.triggerChangesZoneAll(game, sa)
+                revealed.removeAll(found)
+
+            if sa.hasParam("RememberRevealed"):
+                host.addRemembered(revealed)
+            if sa.hasParam("ImprintRevealed"):
+                host.addImprintedCards(revealed)
+
+            if sa.hasParam("RevealRandomOrder"):
+                MyRandom.getRandom().shuffle(revealed)
+
+            if sa.hasParam("NoMoveRevealed") or sequential:
+                # don't do anything
+                pass
+            else:
+                finalDest = revealedDest
+                finalPos = revealedLibPos
+                if sa.hasParam("NoneFoundDestination") and found.size() < untilAmount:
+                    finalDest = noneFoundDest
+                    finalPos = noneFoundLibPos
+
+                # Allow ordering the rest of the revealed cards
+                if (finalDest.isKnown() or (finalDest == ZoneType.Library and not shuffle and not sa.hasParam("RevealRandomOrder"))) and revealed.size() >= 2:
+                    revealed = p.getController().orderMoveToZoneList(revealed, finalDest, sa)
+
+                moveParams = AbilityKey.newMap()
+                AbilityKey.addCardZoneTableParams(moveParams, table)
+
+                for c in revealed:
+                    c = game.getAction().moveTo(finalDest, c, finalPos, sa, moveParams)
+                    if finalDest == ZoneType.Exile:
+                        self.handleExiledWith(c, sa)
+
+            if shuffle:
+                p.shuffle(sa)
+
+            if sa.isKeyword(Keyword.CASCADE):
+                runParams = AbilityKey.mapFromAffected(p)
+                runParams.put(AbilityKey.Cards, moved)
+                game.getReplacementHandler().run(ReplacementType.Cascade, runParams)
+
+                if sa.hasParam("RememberRevealed"):
+                    removeZone = foundDest
+                    host.removeRemembered(moved.filter(lambda c: not c.isInZone(removeZone)))
+        # end foreach player
+        if combatChanged:
+            game.updateCombatForView()
+            game.fireEvent(GameEventCombatChanged())
+        if not sequential:
+            tableSeq.triggerChangesZoneAll(game, sa)
+        table.triggerChangesZoneAll(game, sa)
 ```

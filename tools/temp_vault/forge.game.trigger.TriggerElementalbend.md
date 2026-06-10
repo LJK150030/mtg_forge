@@ -37,6 +37,14 @@ classDiagram
 - [[forge.game.card.Card|Card]]
 - [[forge.game.spellability.SpellAbility|SpellAbility]]
 
+## Design Description
+
+Elementalbend is one of MTG's hidden enchantment triggers. Let me write the SDD.
+
+A concrete trigger that fires in response to a player-related game event, `TriggerElementalbend` extends `Trigger` to implement the three template-method hooks the trigger framework expects. `performTest` gates firing by checking the event's `Player` run-parameter against the trigger's optional `ValidPlayer` restriction, `setTriggeringObjects` copies that player into the resolving `SpellAbility`'s triggering context, and `getImportantStackObjects` produces a localized, human-readable summary naming the triggering player.
+
+The class collaborates with `AbilityKey` to address run-parameter values in a type-safe map, with `Card` as the trigger's host (passed straight to the superclass), and with `SpellAbility` as the effect it parameterizes. Its design intent is minimal and declarative: nearly all behavior is inherited from `Trigger`, and this subclass only specializes the player-matching semantics, keeping per-trigger logic small and data-driven via the `params` map.
+
 ## Source
 `forge-game/src/main/java/forge/game/trigger/TriggerElementalbend.java`
 
@@ -77,4 +85,36 @@ public class TriggerElementalbend extends Trigger {
     }
 
 }
+```
+
+## Python
+`forge/game/trigger/TriggerElementalbend.py`
+
+```python
+from forge.game.trigger.Trigger import Trigger
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Localizer import Localizer
+
+
+class TriggerElementalbend(Trigger):
+
+    def __init__(self, params: dict[str, str], host: Card, intrinsic: bool):
+        super().__init__(params, host, intrinsic)
+
+    def performTest(self, runParams: dict[AbilityKey, object]) -> bool:
+        if not self.matchesValidParam("ValidPlayer", runParams.get(AbilityKey.Player)):
+            return False
+        return True
+
+    def setTriggeringObjects(self, sa: SpellAbility, runParams: dict[AbilityKey, object]) -> None:
+        sa.setTriggeringObjectsFrom(runParams, AbilityKey.Player)
+
+    def getImportantStackObjects(self, sa: SpellAbility) -> str:
+        sb = []
+        sb.append(Localizer.getInstance().getMessage("lblPlayer"))
+        sb.append(": ")
+        sb.append(str(sa.getTriggeringObject(AbilityKey.Player)))
+        return "".join(sb)
 ```

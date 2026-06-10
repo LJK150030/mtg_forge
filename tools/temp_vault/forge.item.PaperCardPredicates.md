@@ -92,6 +92,12 @@ classDiagram
 - [[forge.util.PredicateString|PredicateString]]
 - [[forge.util.PredicateString.StringOp|StringOp]]
 
+## Design Description
+
+PaperCardPredicates is a utility class in `forge.item` that centralizes the construction of `Predicate<PaperCard>` filters used to query and select cards from Forge's card pool. It exposes a large catalog of ready-made constant predicates (rarity, color, land/creature type, rebalanced status, commander eligibility) alongside static factory methods that build parameterized filters for set membership, edition obtainability, foil status, name matching, and rarity.
+
+Declared `abstract` with only static members, it is a stateless namespace rather than an instantiable type. It encapsulates a family of private inner `Predicate<PaperCard>` implementationsâ€”each testing one card attributeâ€”so callers compose filters through the factories without depending on the concrete classes. It delegates rules-based checks to `CardRulesPredicates` via `fromRules`, reuses `PredicateString` for case-aware name comparison, and consults `StaticData` to resolve editions and obtainability, keeping card-selection logic uniform and reusable across the engine.
+
 ## Source
 `forge-core/src/main/java/forge/item/PaperCardPredicates.java`
 
@@ -384,4 +390,236 @@ public abstract class PaperCardPredicates {
     public static final Predicate<PaperCard> IS_CREATURE = fromRules(CardRulesPredicates.IS_CREATURE);
     public static final Predicate<PaperCard> CAN_BE_COMMANDER = fromRules(CardRulesPredicates.CAN_BE_COMMANDER);
 }
+```
+
+## Python
+`forge/item/PaperCardPredicates.py`
+
+```python
+from forge.StaticData import StaticData
+from forge.card.CardType import CardType
+from forge.card.CardRulesPredicates import CardRulesPredicates
+from forge.card.CardEdition.EditionEntry import EditionEntry
+from forge.card.CardRarity import CardRarity
+from forge.card.CardRules import CardRules
+from forge.card.MagicColor import MagicColor
+from forge.card.MagicColor.Color import Color
+from forge.item.PaperCard import PaperCard
+from forge.util.PredicateString import PredicateString
+from forge.util.PredicateString.StringOp import StringOp
+
+
+class PaperCardPredicates:
+    """Filters based on PaperCard values."""
+
+    @staticmethod
+    def printedInSets(value, shouldContain=True):
+        if (value is None) or len(value) == 0:
+            return lambda x: True
+        return PaperCardPredicates.PredicateSets(list(value), shouldContain)
+
+    @staticmethod
+    def printedInSet(value):
+        if not value:
+            return lambda x: True
+        return PaperCardPredicates.PredicateSets([value], True)
+
+    @staticmethod
+    def printedWithRarity(rarity):
+        return PaperCardPredicates.PredicatePrintedWithRarity(rarity)
+
+    @staticmethod
+    def searchableName(op, what):
+        return PaperCardPredicates.PredicateSearchableName(op, what)
+
+    @staticmethod
+    def name(what):
+        return PaperCardPredicates.PredicateName(what)
+
+    @staticmethod
+    def names(what):
+        return PaperCardPredicates.PredicateNames(what)
+
+    @staticmethod
+    def isFoil(isFoil):
+        """Filters on a card foil status"""
+        return PaperCardPredicates.PredicateFoil(isFoil)
+
+    @staticmethod
+    def printedInAnyEditions(editionCodes):
+        """Filters cards that were printed in any of the specified editions."""
+        editions = set(editionCodes)
+
+        def predicate(card):
+            return any(
+                editionCode in editions and
+                StaticData.instance().getCardEdition(editionCode).isCardObtainable(card.getName())
+                for editionCode in (
+                    pc.getEdition()
+                    for pc in StaticData.instance().getCommonCards().getAllCards(card)
+                )
+            )
+        return predicate
+
+    @staticmethod
+    def onlyPrintedInEditions(editionCodes):
+        """Filters cards that were only printed in any of the specified editions."""
+        editions = set(editionCodes)
+
+        def predicate(card):
+            return all(
+                editionCode in editions and
+                StaticData.instance().getCardEdition(editionCode).isCardObtainable(card.getName())
+                for editionCode in (
+                    pc.getEdition()
+                    for pc in StaticData.instance().getCommonCards().getAllCards(card)
+                )
+            )
+        return predicate
+
+    @staticmethod
+    def isObtainableAnyEdition():
+        """Filters cards that are obtainable in any edition."""
+        def predicate(card):
+            return any(
+                StaticData.instance().getCardEdition(editionCode).isCardObtainable(card.getName())
+                for editionCode in (
+                    pc.getEdition()
+                    for pc in StaticData.instance().getCommonCards().getAllCards(card)
+                )
+            )
+        return predicate
+
+    @staticmethod
+    def isObtainableNotRestricted(restrictedEditionCodes):
+        """
+        Returns a predicate that checks whether a card has at least one printing
+        in a non-restricted edition and that printing is obtainable.
+        """
+        restrictedEditions = set(restrictedEditionCodes)
+
+        def predicate(card):
+            return any(
+                editionCode not in restrictedEditions and
+                StaticData.instance().getCardEdition(editionCode).isCardObtainable(card.getName())
+                for editionCode in (
+                    pc.getEdition()
+                    for pc in StaticData.instance().getCommonCards().getAllCards(card)
+                )
+            )
+        return predicate
+
+    class PredicatePrintedWithRarity:
+        def __init__(self, rarity):
+            self.matchingRarity = rarity
+
+        def test(self, card):
+            for ce in StaticData.instance().getEditions():
+                entries = ce.getCardInSet(card.getName())
+                if entries is not None and any(ee.rarity() == self.matchingRarity for ee in entries):
+                    return True
+            return False
+
+    class PredicateColor:
+        def __init__(self, color):
+            self.operand = color
+
+        def test(self, card):
+            if card.getRules().getColor().hasAnyColor(self.operand):
+                return True
+            if card.getRules().getType().hasType(CardType.CoreType.Land) and card.getRules().getColorIdentity().hasAnyColor(self.operand):
+                return True
+            return False
+
+    class PredicateFoil:
+        def __init__(self, isFoil):
+            self.operand = isFoil
+
+        def test(self, card):
+            return card.isFoil() == self.operand
+
+    class PredicateRarity:
+        def __init__(self, rarity):
+            self.operand = rarity
+
+        def test(self, card):
+            return card.getRarity() == self.operand
+
+    class PredicateRarities:
+        def __init__(self, *rarities):
+            self.operand = set(rarities)
+
+        def test(self, card):
+            return card.getRarity() in self.operand
+
+    class PredicateSets:
+        def __init__(self, wantSets, shouldContain):
+            # TreeSet(String.CASE_INSENSITIVE_ORDER): case-insensitive membership.
+            self.sets = set(s.lower() for s in wantSets)
+            self.mustContain = shouldContain
+
+        def test(self, card):
+            return (card.getEdition().lower() in self.sets) == self.mustContain and \
+                StaticData.instance().getCardEdition(card.getEdition()).isCardObtainable(card.getName())
+
+    class PredicateSearchableName(PredicateString):
+        def __init__(self, operator, operand):
+            super().__init__(operator)
+            self.operand = operand
+
+        def test(self, paperCard):
+            return any(self.op(name, self.operand) for name in paperCard.getAllSearchableNames())
+
+    class PredicateName(PredicateString):
+        def __init__(self, operand):
+            super().__init__(StringOp.EQUALS_IC)
+            self.operand = operand
+
+        def test(self, card):
+            return self.op(card.getName(), self.operand)
+
+    class PredicateNames(PredicateString):
+        def __init__(self, operand):
+            super().__init__(StringOp.EQUALS)
+            self.operand = operand
+
+        def test(self, card):
+            cardName = card.getName()
+            for element in self.operand:
+                if self.op(cardName, element):
+                    return True
+            return False
+
+    @staticmethod
+    def fromRules(cardRulesPredicate):
+        return lambda paperCard: cardRulesPredicate.test(paperCard.getRules())
+
+
+PaperCardPredicates.IS_COMMON = PaperCardPredicates.PredicateRarity(CardRarity.Common)
+PaperCardPredicates.IS_UNCOMMON = PaperCardPredicates.PredicateRarity(CardRarity.Uncommon)
+PaperCardPredicates.IS_RARE = PaperCardPredicates.PredicateRarity(CardRarity.Rare)
+PaperCardPredicates.IS_MYTHIC_RARE = PaperCardPredicates.PredicateRarity(CardRarity.MythicRare)
+PaperCardPredicates.IS_RARE_OR_MYTHIC = (lambda card: PaperCardPredicates.IS_RARE.test(card) or PaperCardPredicates.IS_MYTHIC_RARE.test(card))
+PaperCardPredicates.IS_SPECIAL = PaperCardPredicates.PredicateRarity(CardRarity.Special)
+PaperCardPredicates.IS_BASIC_LAND_RARITY = PaperCardPredicates.PredicateRarity(CardRarity.BasicLand)
+PaperCardPredicates.IS_BLACK = PaperCardPredicates.PredicateColor(MagicColor.Color.BLACK)
+PaperCardPredicates.IS_BLUE = PaperCardPredicates.PredicateColor(MagicColor.Color.BLUE)
+PaperCardPredicates.IS_GREEN = PaperCardPredicates.PredicateColor(MagicColor.Color.GREEN)
+PaperCardPredicates.IS_RED = PaperCardPredicates.PredicateColor(MagicColor.Color.RED)
+PaperCardPredicates.IS_WHITE = PaperCardPredicates.PredicateColor(MagicColor.Color.WHITE)
+PaperCardPredicates.IS_COLORLESS = (lambda paperCard: paperCard.getRules().getColor().isColorless())
+PaperCardPredicates.IS_UNREBALANCED = (lambda paperCard: paperCard.isUnRebalanced())
+PaperCardPredicates.IS_REBALANCED = (lambda paperCard: paperCard.isRebalanced())
+
+# Common rules-based predicates.
+PaperCardPredicates.IS_LAND = PaperCardPredicates.fromRules(CardRulesPredicates.IS_LAND)
+PaperCardPredicates.IS_NON_LAND = PaperCardPredicates.fromRules(CardRulesPredicates.IS_NON_LAND)
+PaperCardPredicates.IS_BASIC_LAND = PaperCardPredicates.fromRules(CardRulesPredicates.IS_BASIC_LAND)
+# Matches any card except Plains, Island, Swamp, Mountain, Forest, or Wastes.
+PaperCardPredicates.NOT_BASIC_LAND = PaperCardPredicates.fromRules(CardRulesPredicates.NOT_BASIC_LAND)
+# Matches any card except Plains, Island, Swamp, Mountain, or Forest.
+PaperCardPredicates.NOT_TRUE_BASIC_LAND = PaperCardPredicates.fromRules(CardRulesPredicates.NOT_TRUE_BASIC_LAND)
+PaperCardPredicates.IS_NONBASIC_LAND = PaperCardPredicates.fromRules(CardRulesPredicates.IS_NONBASIC_LAND)
+PaperCardPredicates.IS_CREATURE = PaperCardPredicates.fromRules(CardRulesPredicates.IS_CREATURE)
+PaperCardPredicates.CAN_BE_COMMANDER = PaperCardPredicates.fromRules(CardRulesPredicates.CAN_BE_COMMANDER)
 ```

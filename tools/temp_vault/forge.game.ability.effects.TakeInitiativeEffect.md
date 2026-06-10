@@ -81,3 +81,39 @@ public class TakeInitiativeEffect extends SpellAbilityEffect {
     }
 }
 ```
+
+## Python
+`forge/game/ability/effects/TakeInitiativeEffect.py`
+
+```python
+from typing import List
+
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Lang import Lang
+
+
+class TakeInitiativeEffect(SpellAbilityEffect):
+
+    def getStackDescription(self, sa: SpellAbility) -> str:
+        sb = []
+
+        tgtPlayers: List[Player] = self.getTargetPlayers(sa)
+
+        sb.append(Lang.joinHomogenous(tgtPlayers))
+        sb.append(" takes" if len(tgtPlayers) == 1 else " take")
+        sb.append(" the initiative.")
+
+        return "".join(sb)
+
+    def resolve(self, sa: SpellAbility) -> None:
+        # TODO: improve ai and fix corner cases
+        set = sa.getOriginalHost().getSetCode()
+
+        for p in self.getTargetPlayers(sa):
+            if not p.isInGame():
+                continue
+
+            p.getGame().getAction().takeInitiative(p, set)
+```

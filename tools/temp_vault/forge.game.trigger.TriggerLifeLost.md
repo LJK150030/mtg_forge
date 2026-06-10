@@ -37,6 +37,12 @@ classDiagram
 - [[forge.game.card.Card|Card]]
 - [[forge.game.spellability.SpellAbility|SpellAbility]]
 
+## Design Description
+
+TriggerLifeLost is a concrete trigger type that fires in response to a player losing life during a game. Extending the abstract `Trigger` base class, it implements the standard trigger contract: `performTest` gates activation by validating the losing player against the `ValidPlayer` parameter and optionally restricting to the `FirstTime` life loss in a turn, while `setTriggeringObjects` exposes the affected player and lost life amount to the firing `SpellAbility` via `AbilityKey` entries.
+
+Collaborating with `Card` (its host) and reading/writing run parameters keyed by `AbilityKey`, the class fits Forge's data-driven trigger framework, where each subclass supplies only the condition logic and triggering-object wiring specific to one game event. Its `getImportantStackObjects` override builds a localized, human-readable summary of the player and amount for stack display, reflecting an intent to keep presentation strings localizable and the trigger itself a thin, focused specialization of the shared base.
+
 ## Source
 `forge-game/src/main/java/forge/game/trigger/TriggerLifeLost.java`
 
@@ -124,4 +130,47 @@ public class TriggerLifeLost extends Trigger {
         return sb.toString();
     }
 }
+```
+
+## Python
+`forge/game/trigger/TriggerLifeLost.py`
+
+```python
+from typing import Map  # placeholder; will not use
+
+from forge.game.trigger.Trigger import Trigger
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Localizer import Localizer
+
+
+class TriggerLifeLost(Trigger):
+
+    def __init__(self, params: dict[str, str], host: Card, intrinsic: bool):
+        super().__init__(params, host, intrinsic)
+
+    def performTest(self, runParams: dict[AbilityKey, object]) -> bool:
+        if not self.matchesValidParam("ValidPlayer", runParams.get(AbilityKey.Player)):
+            return False
+
+        if self.hasParam("FirstTime"):
+            if not bool(runParams.get(AbilityKey.FirstTime)):
+                return False
+
+        return True
+
+    def setTriggeringObjects(self, sa: SpellAbility, runParams: dict[AbilityKey, object]) -> None:
+        sa.setTriggeringObjectsFrom(runParams, AbilityKey.LifeAmount, AbilityKey.Player)
+
+    def getImportantStackObjects(self, sa: SpellAbility) -> str:
+        sb = []
+        sb.append(Localizer.getInstance().getMessage("lblPlayer"))
+        sb.append(": ")
+        sb.append(str(sa.getTriggeringObject(AbilityKey.Player)))
+        sb.append(", ")
+        sb.append(Localizer.getInstance().getMessage("lblLostAmount"))
+        sb.append(": ")
+        sb.append(str(sa.getTriggeringObject(AbilityKey.LifeAmount)))
+        return "".join(sb)
 ```

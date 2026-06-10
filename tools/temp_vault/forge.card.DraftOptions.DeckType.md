@@ -31,11 +31,23 @@ DeckType is a small nested enumeration within `DraftOptions` (in the `forge.card
 Its design intent is deliberately minimal: it carries no fields or behavior, serving purely as a discriminator that collaborates with the enclosing `DraftOptions` and downstream deck-selection and construction logic. Nesting it inside `DraftOptions` scopes the concept to where draft/deck configuration is defined, and the inline comments signal that `Commander` triggers special handling, leaving room to extend the set as additional formats are supported.
 
 ## Source
-`forge-core/src/main/java/forge/card/DraftOptions.java` â€” declaration excerpt
+`forge-core/src/main/java/forge/card/DraftOptions.java` Ã¢â‚¬â€ declaration excerpt
 
 ```java
     public enum DeckType {
         Normal, // Standard deck, usually 40 cards
         Commander // Special deck type for Commander format. Important for selection/construction
     }
+```
+
+## Python
+`forge/card/DraftOptions/DeckType.py`
+
+```python
+from enum import Enum
+
+
+class DeckType(Enum):
+    Normal = 1  # Standard deck, usually 40 cards
+    Commander = 2  # Special deck type for Commander format. Important for selection/construction
 ```

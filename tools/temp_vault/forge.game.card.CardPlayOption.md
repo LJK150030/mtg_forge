@@ -60,9 +60,9 @@ classDiagram
 
 ## Design Description
 
-CardPlayOption is an immutable, final value object in the `forge.game.card` package that captures a single permission for a player to play a particular card under non-standard conditions—typically granted by a "may play" StaticAbility. It records who may play (Player), the granting ability (StaticAbility), whether the normal mana cost must be paid (the PayManaCost enum), an optional alternative Cost, and flags for granting flash timing and zone-access permissions.
+CardPlayOption is an immutable, final value object in the `forge.game.card` package that captures a single permission for a player to play a particular card under non-standard conditionsâ€”typically granted by a "may play" StaticAbility. It records who may play (Player), the granting ability (StaticAbility), whether the normal mana cost must be paid (the PayManaCost enum), an optional alternative Cost, and flags for granting flash timing and zone-access permissions.
 
-Acting as a lightweight collaborator rather than part of any inheritance hierarchy, it derives semantics on demand from its StaticAbility—resolving the host Card via `getHost()` and inspecting parameters such as `MayPlayIgnoreColor`/`MayPlayIgnoreType` to drive mana-cost relaxations, including mutating a ManaConversionMatrix in `applyManaConvert`. The dual constructors translate a boolean "without mana cost" into the clearer PayManaCost enum, and the `toString` methods build human-readable descriptions of the play option, reflecting an intent to keep play-permission logic centralized and self-describing.
+Acting as a lightweight collaborator rather than part of any inheritance hierarchy, it derives semantics on demand from its StaticAbilityâ€”resolving the host Card via `getHost()` and inspecting parameters such as `MayPlayIgnoreColor`/`MayPlayIgnoreType` to drive mana-cost relaxations, including mutating a ManaConversionMatrix in `applyManaConvert`. The dual constructors translate a boolean "without mana cost" into the clearer PayManaCost enum, and the `toString` methods build human-readable descriptions of the play option, reflecting an intent to keep play-permission logic centralized and self-describing.
 
 ## Source
 `forge-game/src/main/java/forge/game/card/CardPlayOption.java`
@@ -199,4 +199,117 @@ public final class CardPlayOption {
     }
 
 }
+```
+
+## Python
+`forge/game/card/CardPlayOption.py`
+
+```python
+from enum import Enum
+
+from forge.card.MagicColor import MagicColor
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.card.Card import Card
+from forge.game.cost.Cost import Cost
+from forge.game.mana.ManaConversionMatrix import ManaConversionMatrix
+from forge.game.player.Player import Player
+from forge.game.staticability.StaticAbility import StaticAbility
+
+
+class CardPlayOption:
+    class PayManaCost(Enum):
+        # Indicates the mana cost must be paid.
+        YES = 0
+        # Indicates the mana cost may not be paid.
+        NO = 1
+
+    def __init__(self, player: Player, sta: StaticAbility, withoutManaCost, altManaCost: Cost = None, withFlash: bool = None, grantZonePermissions: bool = None):
+        # Translates the public constructor (boolean withoutManaCost) and the private
+        # constructor (PayManaCost payManaCost) into a single __init__ that accepts either.
+        if isinstance(withoutManaCost, CardPlayOption.PayManaCost):
+            payManaCost = withoutManaCost
+        else:
+            payManaCost = CardPlayOption.PayManaCost.NO if withoutManaCost else CardPlayOption.PayManaCost.YES
+        self.player = player
+        self.sta = sta
+        self.payManaCost = payManaCost
+        self.withFlash = withFlash
+        self.grantsZonePermissions = grantZonePermissions
+        self.altManaCost = altManaCost
+
+    def getPlayer(self) -> Player:
+        return self.player
+
+    def getHost(self) -> Card:
+        return self.sta.getHostCard()
+
+    def getAbility(self) -> StaticAbility:
+        return self.sta
+
+    def getPayManaCost(self) -> 'CardPlayOption.PayManaCost':
+        return self.payManaCost
+
+    def isIgnoreManaCostColor(self) -> bool:
+        return self.sta.hasParam("MayPlayIgnoreColor")
+
+    def isIgnoreManaCostType(self) -> bool:
+        return self.sta.hasParam("MayPlayIgnoreType")
+
+    def isIgnoreSnowSourceManaCostColor(self) -> bool:
+        return self.sta.hasParam("MayPlaySnowIgnoreColor")
+
+    def applyManaConvert(self, matrix: ManaConversionMatrix) -> bool:
+        if self.isIgnoreManaCostType():
+            AbilityUtils.applyManaColorConversion(matrix, MagicColor.Constant.ANY_TYPE_CONVERSION)
+            return True
+        elif self.isIgnoreManaCostColor():
+            AbilityUtils.applyManaColorConversion(matrix, MagicColor.Constant.ANY_COLOR_CONVERSION)
+            return True
+        return False
+
+    def isWithFlash(self) -> bool:
+        return self.withFlash
+
+    def grantsZonePermissions(self) -> bool:
+        return self.grantsZonePermissions
+
+    def getAltManaCost(self) -> Cost:
+        return self.altManaCost
+
+    def getFormattedAltManaCost(self) -> str:
+        return self.altManaCost.toSimpleString()
+
+    def toString(self, withPlayer: bool = True) -> str:
+        sb = []
+        sb.append(self.player.toString() if withPlayer else "")
+
+        if self.getPayManaCost() == CardPlayOption.PayManaCost.YES:
+            if self.altManaCost is not None:
+                insteadCost = self.getFormattedAltManaCost()
+                insteadCost = insteadCost.replace("Pay ", "")
+                sb.append(" (by paying ")
+                sb.append(insteadCost)
+                sb.append(" instead of paying its mana cost")
+                if self.isWithFlash():
+                    sb.append(" and as though it has flash")
+                sb.append(")")
+            if self.isIgnoreManaCostType():
+                sb.append(" (may spend mana as though it were mana of any type to cast it)")
+            elif self.isIgnoreManaCostColor():
+                sb.append(" (may spend mana as though it were mana of any color to cast it)")
+            if self.sta.hasParam("RaiseCost"):
+                desc = self.sta.getParam("Description")
+                sb.append(" (")
+                sb.append(desc[desc.index("by ") + desc.index("pay "):desc.index(".")])
+                sb.append(")")
+        elif self.getPayManaCost() == CardPlayOption.PayManaCost.NO:
+            sb.append(" (without paying its mana cost")
+            if self.isWithFlash():
+                sb.append(" and as though it has flash")
+            sb.append(")")
+
+        return "".join(sb)
+
+    def __str__(self) -> str:
+        return self.toString(True)
 ```

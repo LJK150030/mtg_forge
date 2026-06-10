@@ -343,3 +343,177 @@ public final class GameOutcome implements Iterable<Entry<RegisteredPlayer, Playe
     }
 }
 ```
+
+## Python
+`forge/game/GameOutcome.py`
+
+```python
+from forge.LobbyPlayer import LobbyPlayer
+from forge.game.GameEndReason import GameEndReason
+from forge.game.player.Player import Player
+from forge.game.player.PlayerOutcome import PlayerOutcome
+from forge.game.player.PlayerStatistics import PlayerStatistics
+from forge.game.player.PlayerView import PlayerView
+from forge.game.player.RegisteredPlayer import RegisteredPlayer
+from forge.item.PaperCard import PaperCard
+
+
+class GameOutcome:
+    """
+    GameInfo class.
+
+    @author Forge
+    @version $Id: GameOutcome.java 17608 2012-10-20 22:27:27Z Max mtg $
+    """
+
+    # This class might be divided in two parts: the very summary (immutable with
+    # only getters) and
+    # GameObserver class - who should be notified of any considerable ingame event
+
+    class AnteResult:
+        serialVersionUID = 5087554550408543192
+
+        def __init__(self):
+            self.lostCards: list[PaperCard] = []
+            self.wonCards: list[PaperCard] = []
+
+        def addWon(self, cards: list[PaperCard]) -> None:
+            for c in cards:
+                if c in self.lostCards:
+                    self.lostCards.remove(c)
+                else:
+                    self.wonCards.append(c)
+
+        def addLost(self, cards: list[PaperCard]) -> None:
+            for c in cards:
+                if c in self.wonCards:
+                    self.wonCards.remove(c)
+                else:
+                    self.lostCards.append(c)
+
+    def __init__(self, reason: GameEndReason, players):
+        self.lastTurnNumber = 0
+        self.lifeDelta = 0
+        self.winningTeam = -1
+
+        self.playerRating: dict[RegisteredPlayer, PlayerStatistics] = {}
+        self.playerNames: dict[RegisteredPlayer, str] = {}
+
+        self.anteResult: dict[RegisteredPlayer, GameOutcome.AnteResult] = {}
+        self.winCondition: GameEndReason = reason
+
+        for p in players:
+            self.playerRating[p.getRegisteredPlayer()] = p.getStats()
+            self.playerNames[p.getRegisteredPlayer()] = p.getName()
+
+            if self.winCondition == GameEndReason.AllOpposingTeamsLost and p.getOutcome().hasWon():
+                # Only mark the WinningTeam when "Team mode" is on.
+                self.winningTeam = p.getTeam()
+
+        # Unable to calculate lifeDelta between a winning and losing player whe a draw is in place
+        if self.winCondition == GameEndReason.Draw:
+            return
+
+        self.calculateLifeDelta(players)
+
+    def calculateLifeDelta(self, players) -> None:
+        opponentsHealth = 0
+        winnersHealth = 0
+
+        for p in players:
+            if p.getOutcome().hasWon():
+                winnersHealth += p.getLife()
+            else:
+                opponentsHealth += p.getLife()
+
+        self.lifeDelta = max(0, winnersHealth - opponentsHealth)
+
+    def isDraw(self) -> bool:
+        for stats in self.playerRating.values():
+            if stats.getOutcome().hasWon():
+                return False
+        return True
+
+    def isWinner(self, who) -> bool:
+        if isinstance(who, RegisteredPlayer):
+            for key, value in self.playerRating.items():
+                if value.getOutcome().hasWon() and key == who:
+                    return True
+            return False
+        else:
+            for key, value in self.playerRating.items():
+                if value.getOutcome().hasWon() and key.getPlayer() == who:
+                    return True
+            return False
+
+    def getWinningLobbyPlayer(self) -> LobbyPlayer:
+        for key, value in self.playerRating.items():
+            if value.getOutcome().hasWon():
+                return key.getPlayer()
+        return None
+
+    def getWinningPlayer(self) -> RegisteredPlayer:
+        for key, value in self.playerRating.items():
+            if value.getOutcome().hasWon():
+                return key
+        return None
+
+    def getWinningTeam(self) -> int:
+        return self.winningTeam
+
+    def getWinCondition(self) -> GameEndReason:
+        return self.winCondition
+
+    def getLastTurnNumber(self) -> int:
+        return self.lastTurnNumber
+
+    def getLifeDelta(self) -> int:
+        return self.lifeDelta
+
+    def getWinSpellEffect(self) -> str:
+        for stats in self.playerRating.values():
+            po = stats.getOutcome()
+            if po.hasWon():
+                return po.altWinSourceName
+        return None
+
+    def iterator(self):
+        return iter(self.playerRating.items())
+
+    def __iter__(self):
+        return iter(self.playerRating.items())
+
+    def setTurnsPlayed(self, turnNumber: int) -> None:
+        self.lastTurnNumber = turnNumber
+
+    def getPlayerNames(self) -> dict[RegisteredPlayer, str]:
+        return self.playerNames
+
+    def getOutcomeStrings(self) -> list[str]:
+        outcomes: list[str] = []
+        for player in self.playerNames.keys():
+            outcomes.append(self.getOutcomeString(player))
+        return outcomes
+
+    def getOutcomeString(self, player: RegisteredPlayer) -> str:
+        return str(self.playerNames.get(player)) + " " + str(self.playerRating.get(player).getOutcome())
+
+    def addAnteWon(self, pl: RegisteredPlayer, cards: list[PaperCard]) -> None:
+        if pl not in self.anteResult:
+            self.anteResult[pl] = GameOutcome.AnteResult()
+        self.anteResult[pl].addWon(cards)
+
+    def addAnteLost(self, pl: RegisteredPlayer, cards: list[PaperCard]) -> None:
+        if pl not in self.anteResult:
+            self.anteResult[pl] = GameOutcome.AnteResult()
+        self.anteResult[pl].addLost(cards)
+
+    def getAnteResult(self, pl):
+        if isinstance(pl, PlayerView):
+            for key, value in self.anteResult.items():
+                if pl.isLobbyPlayer(key.getPlayer()):
+                    return value
+            return None
+        else:
+            return self.anteResult.get(pl)
+```

@@ -37,6 +37,12 @@ classDiagram
 - [[forge.game.card.Card|Card]]
 - [[forge.game.spellability.SpellAbility|SpellAbility]]
 
+## Design Description
+
+Trigger that fires when a permanent's controller changes. As a concrete subclass of `Trigger`, it specializes the engine's generic trigger machinery for control-change events, plugging into the rules engine's event-dispatch system rather than being invoked directly.
+
+`performTest` gates firing by matching the affected card against the `ValidCard` and `ValidOriginalController` parameters, using `AbilityKey` lookups into the runtime parameter map. `setTriggeringObjects` exposes the changed `Card` and its original controller to the resulting `SpellAbility`, and `getImportantStackObjects` produces a localized stack description via `Localizer`. The design follows Forge's data-driven trigger pattern: behavior is configured through a `params` map and shared `AbilityKey` constants, keeping each trigger subclass a thin, declarative specialization of the common base.
+
 ## Source
 `forge-game/src/main/java/forge/game/trigger/TriggerChangesController.java`
 
@@ -120,4 +126,40 @@ public class TriggerChangesController extends Trigger {
         return sb.toString();
     }
 }
+```
+
+## Python
+`forge/game/trigger/TriggerChangesController.py`
+
+```python
+from typing import Map  # noqa
+
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Localizer import Localizer
+from forge.game.trigger.Trigger import Trigger
+
+
+class TriggerChangesController(Trigger):
+    def __init__(self, params: dict[str, str], host: Card, intrinsic: bool):
+        super().__init__(params, host, intrinsic)
+
+    def performTest(self, runParams: dict[AbilityKey, object]) -> bool:
+        if not self.matchesValidParam("ValidCard", runParams.get(AbilityKey.Card)):
+            return False
+        if not self.matchesValidParam("ValidOriginalController", runParams.get(AbilityKey.OriginalController)):
+            return False
+
+        return True
+
+    def setTriggeringObjects(self, sa: SpellAbility, runParams: dict[AbilityKey, object]) -> None:
+        sa.setTriggeringObjectsFrom(runParams, AbilityKey.Card, AbilityKey.OriginalController)
+
+    def getImportantStackObjects(self, sa: SpellAbility) -> str:
+        sb = []
+        sb.append(Localizer.getInstance().getMessage("lblChangedController"))
+        sb.append(": ")
+        sb.append(str(sa.getTriggeringObject(AbilityKey.Card)))
+        return "".join(sb)
 ```

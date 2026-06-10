@@ -136,3 +136,78 @@ public class DraftEffect extends SpellAbilityEffect {
     }
 }
 ```
+
+## Python
+`forge/game/ability/effects/DraftEffect.py`
+
+```python
+from forge.StaticData import StaticData
+from forge.game.Game import Game
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardZoneTable import CardZoneTable
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+from forge.item.PaperCard import PaperCard
+from forge.util.Localizer import Localizer
+
+import random
+
+
+class DraftEffect(SpellAbilityEffect):
+    def getStackDescription(self, sa: SpellAbility) -> str:
+        source = sa.getHostCard()
+        player = AbilityUtils.getDefinedPlayers(source, sa.getParam("Defined"), sa)[0]
+
+        sb = []
+
+        sb.append(str(player))
+        sb.append(" drafts a card from ")
+        sb.append(source.getDisplayName())
+        sb.append("'s spellbook.")
+
+        return "".join(sb)
+
+    def resolve(self, sa: SpellAbility) -> None:
+        source = sa.getHostCard()
+        player = AbilityUtils.getDefinedPlayers(source, sa.getParam("Defined"), sa)[0]
+        game = player.getGame()
+        spellbook = sa.getParam("Spellbook").split(",")
+        numToDraft = AbilityUtils.calculateAmount(source, sa.getParamOrDefault("DraftNum", "1"), sa)
+        moveParams = AbilityKey.newMap()
+        moveParams[AbilityKey.LastStateBattlefield] = sa.getLastStateBattlefield()
+        moveParams[AbilityKey.LastStateGraveyard] = sa.getLastStateGraveyard()
+        drafted = CardCollection()
+
+        for i in range(numToDraft):
+            random.shuffle(spellbook)
+            draftOptions = []
+            for name in spellbook[0:3]:
+                # Cardnames that include "," must use ";" instead in Spellbook$ (i.e. Tovolar; Dire Overlord)
+                name = name.replace(";", ",")
+
+                pc = StaticData.instance().getCommonCards().getUniqueByName(name)
+                # Take the balanced version of the card if available.
+                if pc.isUnRebalanced():
+                    pc = StaticData.instance().getCommonCards().getUniqueByName("A-" + name)
+
+                cardOption = Card.fromPaperCard(pc, player)
+                draftOptions.append(cardOption)
+
+            chosenCard = player.getController().chooseSingleCardForZoneChange(ZoneType.None, [], sa, CardCollection(draftOptions), None, Localizer.getInstance().getMessage("lblChooseCardDraft"), False, player)
+            game.getAction().moveTo(ZoneType.None, chosenCard, sa, moveParams)
+            drafted.add(chosenCard)
+
+        triggerList = CardZoneTable()
+        for c in drafted:
+            made = game.getAction().moveToHand(c, sa, moveParams)
+            if c is not None:
+                triggerList.put(ZoneType.None, made.getZone().getZoneType(), made)
+            if sa.hasParam("RememberDrafted"):
+                source.addRemembered(made)
+        triggerList.triggerChangesZoneAll(game, sa)
+```

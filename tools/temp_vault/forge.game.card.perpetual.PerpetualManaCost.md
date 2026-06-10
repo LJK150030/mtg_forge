@@ -61,3 +61,24 @@ public record PerpetualManaCost(long timestamp, ManaCost manaCost) implements Pe
     }
 }
 ```
+
+## Python
+`forge/game/card/perpetual/PerpetualManaCost.py`
+
+```python
+from forge.card.mana.ManaCost import ManaCost
+from forge.game.card.Card import Card
+from forge.game.card.perpetual.PerpetualInterface import PerpetualInterface
+
+
+class PerpetualManaCost(PerpetualInterface):
+    def __init__(self, timestamp: int, manaCost: ManaCost):
+        self.timestamp = timestamp
+        self.manaCost = manaCost
+
+    def getTimestamp(self) -> int:
+        return self.timestamp
+
+    def applyEffect(self, c: Card) -> None:
+        c.addChangedManaCost(self.manaCost, False, self.timestamp, 0)
+```

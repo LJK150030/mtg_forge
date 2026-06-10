@@ -34,6 +34,12 @@ classDiagram
 - [[forge.game.card.Card|Card]]
 - [[forge.game.staticability.StaticAbility|StaticAbility]]
 
+## Design Description
+
+StaticAbilityCantTransform is a stateless utility that enforces "can't transform" continuous static effects within the game's rules engine. Its static `cantTransform` method scans every card in the active static-ability source zones, evaluates each `StaticAbility` whose conditions match the `CantTransform` mode, and reports whether the given `Card` is currently barred from transforming. The companion `applyCantTransformAbility` performs the per-ability match, checking the `ValidCard` filter and honoring an optional `ExceptCause` exemption tied to the originating `CardTraitBase`.
+
+Rather than implementing an interface, the class follows the package's convention of grouping a single static-ability mode into a dedicated final-style helper, collaborating with `Card`, `Game`, and `StaticAbility` to resolve restrictions on demand. Threading `cause` through both methods lets callers exempt the effect that triggered the transformation, keeping the restriction logic centralized and side-effect free.
+
 ## Source
 `forge-game/src/main/java/forge/game/staticability/StaticAbilityCantTransform.java`
 
@@ -74,4 +80,39 @@ public class StaticAbilityCantTransform {
         return true;
     }
 }
+```
+
+## Python
+`forge/game/staticability/StaticAbilityCantTransform.py`
+
+```python
+from forge.game.CardTraitBase import CardTraitBase
+from forge.game.Game import Game
+from forge.game.card.Card import Card
+from forge.game.zone.ZoneType import ZoneType
+from forge.game.staticability.StaticAbility import StaticAbility
+from forge.game.staticability.StaticAbilityMode import StaticAbilityMode
+
+
+class StaticAbilityCantTransform:
+
+    @staticmethod
+    def cantTransform(card: Card, cause: CardTraitBase) -> bool:
+        game = card.getGame()
+        for ca in game.getCardsIn(ZoneType.STATIC_ABILITIES_SOURCE_ZONES):
+            for stAb in ca.getStaticAbilities():
+                if not stAb.checkConditions(StaticAbilityMode.CantTransform):
+                    continue
+                if StaticAbilityCantTransform.applyCantTransformAbility(stAb, card, cause):
+                    return True
+        return False
+
+    @staticmethod
+    def applyCantTransformAbility(stAb: StaticAbility, card: Card, cause: CardTraitBase) -> bool:
+        if not stAb.matchesValidParam("ValidCard", card):
+            return False
+        if stAb.hasParam("ExceptCause"):
+            if stAb.matchesValidParam("ExceptCause", cause):
+                return False
+        return True
 ```

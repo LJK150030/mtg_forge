@@ -106,7 +106,7 @@ public class GoadEffect extends SpellAbilityEffect {
             // 701.38d is handled by getGoaded
             gameCard.addGoad(timestamp, player);
 
-            // currently, only Life of the Party uses Duration$ Ã¢â‚¬â€œ Duration$ Permanent
+            // currently, only Life of the Party uses Duration$ ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“ Duration$ Permanent
             if (!duration.equals("Permanent")) {
                 addUntilCommand(sa, () -> gameCard.removeGoad(timestamp), duration, player);
             }
@@ -118,4 +118,68 @@ public class GoadEffect extends SpellAbilityEffect {
     }
 
 }
+```
+
+## Python
+`forge/game/ability/effects/GoadEffect.py`
+
+```python
+from forge.game.Game import Game
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Lang import Lang
+
+
+class GoadEffect(SpellAbilityEffect):
+
+    def getStackDescription(self, sa: SpellAbility) -> str:
+        player = sa.getActivatingPlayer()
+        tgt = self.getDefinedCardsOrTargeted(sa, "Defined")
+        tgtString = sa.getParamOrDefault("DefinedDesc", Lang.joinHomogenous(tgt))
+        if tgtString == "":
+            return ""
+        else:
+            sb = []
+            sb.append(str(player))
+            sb.append(" goads ")
+            sb.append(tgtString)
+            sb.append(".")
+            return "".join(sb)
+
+    def resolve(self, sa: SpellAbility) -> None:
+        player = sa.getActivatingPlayer()
+        game = player.getGame()
+        timestamp = game.getNextTimestamp()
+        remember = sa.hasParam("RememberGoaded")
+        ungoad = sa.hasParam("NoLonger")
+        duration = sa.getParamOrDefault("Duration", "UntilYourNextTurn")
+
+        for tgtC in self.getDefinedCardsOrTargeted(sa):
+            # only goad things on the battlefield
+            if not tgtC.isInPlay():
+                continue
+
+            if ungoad:
+                tgtC.unGoad()
+                continue
+
+            # check if the object is still in game or if it was moved
+            gameCard = game.getCardState(tgtC, None)
+            # gameCard is LKI in that case, the card is not in game anymore
+            # or the timestamp did change
+            # this should check Self too
+            if gameCard is None or not tgtC.equalsWithGameTimestamp(gameCard):
+                continue
+
+            # 701.38d is handled by getGoaded
+            gameCard.addGoad(timestamp, player)
+
+            # currently, only Life of the Party uses Duration$ ?????????????????? Duration$ Permanent
+            if duration != "Permanent":
+                self.addUntilCommand(sa, lambda gameCard=gameCard, timestamp=timestamp: gameCard.removeGoad(timestamp), duration, player)
+
+            if remember and gameCard.isGoaded():
+                sa.getHostCard().addRemembered(gameCard)
 ```

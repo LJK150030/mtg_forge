@@ -40,6 +40,12 @@ classDiagram
 **Uses:**
 - [[forge.util.ThreadUtil.WorkerThreadFactory|WorkerThreadFactory]]
 
+## Design Description
+
+ThreadUtil is a stateless utility class in the `forge-core` module that centralizes the engine's thread-management concerns behind a set of static helpers and shared executor pools. It maintains distinct pools for different workloadsâ€”a cached "Game" thread pool for game-logic tasks, a scheduled "Delayed" pool for time-deferred input updates, and a work-stealing service poolâ€”and exposes factory and convenience methods such as `getComputingPool`, `invokeInGameThread`, `delay`, and `isGameThread`.
+
+It collaborates with its private inner `WorkerThreadFactory`, which names threads by prefix so callers can identify game threads by inspection. Notable design intent includes sizing the computing pool to the available processor count and a load factor for CPU/IO-bound work like card parsing and image downloads, and providing `limit`/`executeWithTimeout` to run cancellable `Callable` tasks under a timeout, returning null on failure rather than propagating exceptions.
+
 ## Source
 `forge-core/src/main/java/forge/util/ThreadUtil.java`
 
@@ -130,4 +136,122 @@ public class ThreadUtil {
         return result;
     }
 }
+```
+
+## Python
+`forge/util/ThreadUtil.py`
+
+```python
+package forge.util ΓÇö translated to Python module forge/util/ThreadUtil.py
+
+import os
+import sys
+import threading
+import traceback
+from concurrent.futures import (
+    ThreadPoolExecutor,
+    Future,
+    TimeoutError as FuturesTimeoutError,
+)
+
+
+class ThreadUtil:
+    # Static initializer block: Python threads have no priority concept, so we
+    # report Java's default NORM_PRIORITY (5) to preserve the diagnostic intent.
+    print("(ThreadUtil first call): Running with priority %d" % 5)
+
+    class WorkerThreadFactory:
+        def __init__(self, prefix):
+            self.countr = 0
+            self.prefix = prefix
+
+        def newThread(self, r):
+            name = self.prefix + "-" + str(self.countr)
+            self.countr += 1
+            return threading.Thread(target=r, name=name)
+
+    gameThreadPool = ThreadPoolExecutor(thread_name_prefix="Game")
+
+    @staticmethod
+    def getGameThreadPool():
+        return ThreadUtil.gameThreadPool
+
+    scheduledPool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="Delayed")
+
+    @staticmethod
+    def getScheduledPool():
+        return ThreadUtil.scheduledPool
+
+    # This pool is designed to parallel CPU or IO intensive tasks like parse cards or download images, assuming a load factor of 0.5
+    @staticmethod
+    def getComputingPool(loadFactor):
+        return ThreadPoolExecutor(
+            max_workers=int(os.cpu_count() / (1 - loadFactor))
+        )
+
+    @staticmethod
+    def isMultiCoreSystem():
+        return os.cpu_count() > 1
+
+    @staticmethod
+    def invokeInGameThread(toRun):
+        ThreadUtil.getGameThreadPool().submit(toRun)
+
+    @staticmethod
+    def delay(milliseconds, inputUpdater):
+        future = Future()
+
+        def runner():
+            if not future.set_running_or_notify_cancel():
+                return
+            try:
+                result = inputUpdater()
+                future.set_result(result)
+            except Exception as e:
+                future.set_exception(e)
+
+        timer = threading.Timer(milliseconds / 1000.0, runner)
+        timer.daemon = True
+        timer.start()
+        return future
+
+    @staticmethod
+    def isGameThread():
+        return threading.current_thread().name.startswith("Game")
+
+    service = ThreadPoolExecutor()
+
+    @staticmethod
+    def getServicePool():
+        return ThreadUtil.service
+
+    @staticmethod
+    def refreshServicePool():
+        ThreadUtil.service = ThreadPoolExecutor()
+
+    @staticmethod
+    def limit(task, millis):
+        future = None
+        try:
+            future = ThreadUtil.service.submit(task)
+            result = future.result(timeout=millis / 1000.0)
+        except Exception:
+            result = None
+        finally:
+            if future is not None:
+                future.cancel()
+        return result
+
+    @staticmethod
+    def executeWithTimeout(task, milliseconds):
+        executor = ThreadPoolExecutor()
+        future = executor.submit(task)
+        try:
+            result = future.result(timeout=milliseconds / 1000.0)
+        except Exception:  # handle timeout and other exceptions
+            traceback.print_exc()
+            result = None
+        finally:
+            future.cancel()
+        return result
 ```

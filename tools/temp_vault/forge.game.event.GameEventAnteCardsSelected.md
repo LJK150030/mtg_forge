@@ -83,3 +83,38 @@ public record GameEventAnteCardsSelected(Multimap<PlayerView, CardView> cards) i
     }
 }
 ```
+
+## Python
+`forge/game/event/GameEventAnteCardsSelected.py`
+
+```python
+from com.google.common.collect.HashMultimap import HashMultimap
+from com.google.common.collect.Multimap import Multimap
+
+from forge.game.card.Card import Card
+from forge.game.card.CardView import CardView
+from forge.game.event.GameEvent import GameEvent
+from forge.game.event.IGameEventVisitor import IGameEventVisitor
+from forge.game.player.Player import Player
+from forge.game.player.PlayerView import PlayerView
+
+
+class GameEventAnteCardsSelected(GameEvent):
+
+    def __init__(self, cards: "Multimap[PlayerView, CardView]"):
+        self.cards = cards
+
+    @staticmethod
+    def fromCards(cards: "Multimap[Player, Card]") -> "GameEventAnteCardsSelected":
+        return GameEventAnteCardsSelected(GameEventAnteCardsSelected.convertMap(cards))
+
+    @staticmethod
+    def convertMap(map: "Multimap[Player, Card]") -> "Multimap[PlayerView, CardView]":
+        result = HashMultimap.create()
+        for entry in map.entries():
+            result.put(PlayerView.get(entry.getKey()), CardView.get(entry.getValue()))
+        return result
+
+    def visit(self, visitor: "IGameEventVisitor[T]") -> "T":
+        return visitor.visit(self)
+```

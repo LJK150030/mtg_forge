@@ -203,12 +203,12 @@ classDiagram
 
 ## Design Description
 
-The Base class is a no-op default implementation of the `IGameEventVisitor<T>` interface, embedded as a static nested class within `IGameEventVisitor`. As the comment states, it serves as the base class for all visitors in Forge's game-event Visitor pattern. It provides an empty `visit` overload for every concrete `GameEvent` subtype—covering card, combat, player, turn, mana, and game-lifecycle events—each simply returning `null`.
+The Base class is a no-op default implementation of the `IGameEventVisitor<T>` interface, embedded as a static nested class within `IGameEventVisitor`. As the comment states, it serves as the base class for all visitors in Forge's game-event Visitor pattern. It provides an empty `visit` overload for every concrete `GameEvent` subtypeâ€”covering card, combat, player, turn, mana, and game-lifecycle eventsâ€”each simply returning `null`.
 
 Its design intent is convenience: rather than forcing every concrete visitor to implement all ~60 `visit` methods, subclasses extend `Base` and override only the event types they care about, inheriting harmless defaults for the rest. The generic parameter `T` lets each visitor define its own return type, making the hierarchy reusable across both result-producing and side-effecting traversals of game events.
 
 ## Source
-`forge-game/src/main/java/forge/game/event/IGameEventVisitor.java` â€” declaration excerpt
+`forge-game/src/main/java/forge/game/event/IGameEventVisitor.java` Ã¢â‚¬â€ declaration excerpt
 
 ```java
     // This is base class for all visitors.
@@ -272,4 +272,78 @@ Its design intent is convenience: rather than forcing every concrete visitor to 
         public T visit(GameEventSnapshotRestored gameEventSnapshotRestored) { return null; }
         public T visit(GameEventAddLog event) { return null; }
     }
+```
+
+## Python
+`forge/game/event/IGameEventVisitor/Base.py`
+
+```python
+from forge.game.event.IGameEventVisitor import IGameEventVisitor
+from forge.game.event.GameEventAddLog import GameEventAddLog
+from forge.game.event.GameEventAnteCardsSelected import GameEventAnteCardsSelected
+from forge.game.event.GameEventAttackersDeclared import GameEventAttackersDeclared
+from forge.game.event.GameEventBlockersDeclared import GameEventBlockersDeclared
+from forge.game.event.GameEventCardAttachment import GameEventCardAttachment
+from forge.game.event.GameEventCardChangeZone import GameEventCardChangeZone
+from forge.game.event.GameEventCardCounters import GameEventCardCounters
+from forge.game.event.GameEventCardDamaged import GameEventCardDamaged
+from forge.game.event.GameEventCardDestroyed import GameEventCardDestroyed
+from forge.game.event.GameEventCardForetold import GameEventCardForetold
+from forge.game.event.GameEventCardModeChosen import GameEventCardModeChosen
+from forge.game.event.GameEventCardPhased import GameEventCardPhased
+from forge.game.event.GameEventCardPlotted import GameEventCardPlotted
+from forge.game.event.GameEventCardRegenerated import GameEventCardRegenerated
+from forge.game.event.GameEventCardSacrificed import GameEventCardSacrificed
+from forge.game.event.GameEventCardStatsChanged import GameEventCardStatsChanged
+from forge.game.event.GameEventCardTapped import GameEventCardTapped
+from forge.game.event.GameEventCombatChanged import GameEventCombatChanged
+from forge.game.event.GameEventCombatEnded import GameEventCombatEnded
+from forge.game.event.GameEventCombatUpdate import GameEventCombatUpdate
+from forge.game.event.GameEventDayTimeChanged import GameEventDayTimeChanged
+from forge.game.event.GameEventDoorChanged import GameEventDoorChanged
+from forge.game.event.GameEventFlipCoin import GameEventFlipCoin
+from forge.game.event.GameEventGameFinished import GameEventGameFinished
+from forge.game.event.GameEventGameOutcome import GameEventGameOutcome
+from forge.game.event.GameEventGameRestarted import GameEventGameRestarted
+from forge.game.event.GameEventGameStarted import GameEventGameStarted
+from forge.game.event.GameEventLandPlayed import GameEventLandPlayed
+from forge.game.event.GameEventManaBurn import GameEventManaBurn
+from forge.game.event.GameEventManaPool import GameEventManaPool
+from forge.game.event.GameEventMulligan import GameEventMulligan
+from forge.game.event.GameEventPlayerControl import GameEventPlayerControl
+from forge.game.event.GameEventPlayerCounters import GameEventPlayerCounters
+from forge.game.event.GameEventPlayerDamaged import GameEventPlayerDamaged
+from forge.game.event.GameEventPlayerLivesChanged import GameEventPlayerLivesChanged
+from forge.game.event.GameEventPlayerPoisoned import GameEventPlayerPoisoned
+from forge.game.event.GameEventPlayerPriority import GameEventPlayerPriority
+from forge.game.event.GameEventPlayerRadiation import GameEventPlayerRadiation
+from forge.game.event.GameEventPlayerShardsChanged import GameEventPlayerShardsChanged
+from forge.game.event.GameEventPlayerStatsChanged import GameEventPlayerStatsChanged
+from forge.game.event.GameEventRandomLog import GameEventRandomLog
+from forge.game.event.GameEventRollDie import GameEventRollDie
+from forge.game.event.GameEventScry import GameEventScry
+from forge.game.event.GameEventShuffle import GameEventShuffle
+from forge.game.event.GameEventSnapshotRestored import GameEventSnapshotRestored
+from forge.game.event.GameEventSpeedChanged import GameEventSpeedChanged
+from forge.game.event.GameEventSpellAbilityCast import GameEventSpellAbilityCast
+from forge.game.event.GameEventSpellRemovedFromStack import GameEventSpellRemovedFromStack
+from forge.game.event.GameEventSpellResolved import GameEventSpellResolved
+from forge.game.event.GameEventSprocketUpdate import GameEventSprocketUpdate
+from forge.game.event.GameEventSubgameEnd import GameEventSubgameEnd
+from forge.game.event.GameEventSubgameStart import GameEventSubgameStart
+from forge.game.event.GameEventSurveil import GameEventSurveil
+from forge.game.event.GameEventTokenCreated import GameEventTokenCreated
+from forge.game.event.GameEventTurnBegan import GameEventTurnBegan
+from forge.game.event.GameEventTurnEnded import GameEventTurnEnded
+from forge.game.event.GameEventTurnPhase import GameEventTurnPhase
+from forge.game.event.GameEventZone import GameEventZone
+
+
+# This is base class for all visitors.
+class Base(IGameEventVisitor):
+    def visit(self, event):
+        return None
+- Forgeπü½
+
+(Note: The Java `Base<T>` class has 58 overloaded `visit` methods that differ only by the static parameter type. Python does not support method overloading by parameter type ΓÇö all overloads collapse into a single `visit` method. The faithful equivalent is one `visit(self, event)` returning `None`, which is what every Java overload does.)
 ```

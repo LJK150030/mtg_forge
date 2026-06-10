@@ -269,3 +269,177 @@ public class DigAi extends SpellAbilityAi {
     }
 }
 ```
+
+## Python
+`forge/ai/ability/DigAi.py`
+
+```python
+from forge.ai.SpellAbilityAi import SpellAbilityAi
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.ai.AiAttackController import AiAttackController
+from forge.ai.ComputerUtil import ComputerUtil
+from forge.ai.ComputerUtilCost import ComputerUtilCost
+from forge.ai.ComputerUtilCard import ComputerUtilCard
+from forge.ai.ComputerUtilCombat import ComputerUtilCombat
+from forge.ai.ComputerUtilAbility import ComputerUtilAbility
+from forge.ai.SpecialCardAi import SpecialCardAi
+from forge.game.Game import Game
+from forge.game.GameEntity import GameEntity
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardLists import CardLists
+from forge.game.keyword.Keyword import Keyword
+from forge.game.phase.PhaseType import PhaseType
+from forge.game.player.Player import Player
+from forge.game.player.PlayerActionConfirmMode import PlayerActionConfirmMode
+from forge.game.player.PlayerCollection import PlayerCollection
+from forge.game.player.PlayerPredicates import PlayerPredicates
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.TextUtil import TextUtil
+
+from typing import Iterable, Map
+
+
+class DigAi(SpellAbilityAi):
+    # (non-Javadoc)
+    # @see forge.card.abilityfactory.SpellAiLogic#canPlayAI(forge.game.player.Player, java.util.Map, forge.card.spellability.SpellAbility)
+    def checkApiLogic(self, ai: Player, sa: SpellAbility) -> AiAbilityDecision:
+        game = ai.getGame()
+        opp = AiAttackController.choosePreferredDefenderPlayer(ai)
+        host = sa.getHostCard()
+        libraryOwner = ai
+
+        if sa.usesTargeting():
+            sa.resetTargets()
+            if not sa.canTarget(opp):
+                return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+            sa.getTargets().add(opp)
+            libraryOwner = opp
+
+        # return false if nothing to dig into
+        if libraryOwner.getCardsIn(ZoneType.Library).isEmpty():
+            return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+        # don't deck yourself
+        if sa.hasParam("DestinationZone2") and not "Library" == sa.getParam("DestinationZone2"):
+            numToDig = AbilityUtils.calculateAmount(host, sa.getParam("DigNum"), sa)
+            if libraryOwner == ai and ai.getCardsIn(ZoneType.Library).size() <= numToDig + 2:
+                return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+        # Don't use draw abilities before main 2 if possible
+        if (game.getPhaseHandler().getPhase().isBefore(PhaseType.MAIN2) and not sa.hasParam("ActivationPhases")
+                and not sa.hasParam("DestinationZone") and not ComputerUtil.castSpellInMain1(ai, sa)):
+            return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+        num = sa.getParam("DigNum")
+        payXLogic = sa.hasParam("AILogic") and sa.getParam("AILogic").startswith("PayX")
+        if num is not None and (num == "X" and sa.getSVar(num) == "Count$xPaid") or payXLogic:
+            # By default, set PayX here to maximum value.
+            root = sa.getRootAbility()
+            if root.getXManaCostPaid() is None:
+                manaToSave = 0
+
+                # Special logic that asks the AI to conserve a certain amount of mana when paying X
+                if sa.hasParam("AILogic") and sa.getParam("AILogic").startswith("PayXButSaveMana"):
+                    manaToSave = int(TextUtil.split(sa.getParam("AILogic"), '.')[1])
+
+                numCards = ComputerUtilCost.setMaxXValue(sa, ai, sa.isTrigger()) - manaToSave
+                if numCards <= 0:
+                    return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+                root.setXManaCostPaid(numCards)
+
+        if self.playReusable(ai, sa):
+            return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+        if ((not game.getPhaseHandler().getNextTurn() == ai
+                or game.getPhaseHandler().getPhase().isBefore(PhaseType.END_OF_TURN))
+                and not sa.hasParam("PlayerTurn") and not self.isSorcerySpeed(sa, ai)
+                and (ai.getCardsIn(ZoneType.Hand).size() > 1 or game.getPhaseHandler().getPhase().isBefore(PhaseType.DRAW))
+                and not ComputerUtil.activateForCost(sa, ai)):
+            return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+        if "MadSarkhanDigDmg" == sa.getParam("AILogic"):
+            return SpecialCardAi.SarkhanTheMad.considerDig(ai, sa)
+
+        return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+    def chkDrawback(self, aiPlayer: Player, sa: SpellAbility) -> AiAbilityDecision:
+        # TODO: improve this check in ways that may be specific to a subability
+        return self.canPlay(aiPlayer, sa)
+
+    def doTriggerNoCost(self, ai: Player, sa: SpellAbility, mandatory: bool) -> AiAbilityDecision:
+        root = sa.getRootAbility()
+        targetableOpps = ai.getOpponents().filter(PlayerPredicates.isTargetableBy(sa))
+        opp = targetableOpps.min(PlayerPredicates.compareByLife())
+        if sa.usesTargeting():
+            sa.resetTargets()
+            if mandatory and opp is not None:
+                sa.getTargets().add(opp)
+            elif mandatory and sa.canTarget(ai):
+                sa.getTargets().add(ai)
+
+        # Triggers that ask to pay {X} (e.g. Depala, Pilot Exemplar).
+        if sa.hasParam("AILogic") and sa.getParam("AILogic").startswith("PayXButSaveMana"):
+            manaToSave = int(TextUtil.split(sa.getParam("AILogic"), '.')[1])
+            numCards = ComputerUtilCost.setMaxXValue(sa, ai, True) - manaToSave
+            if numCards <= 0:
+                if mandatory:
+                    return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+                return AiAbilityDecision(100, AiPlayDecision.CantPlayAi)
+            root.setXManaCostPaid(numCards)
+
+        return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+    def chooseSingleCard(self, ai: Player, sa: SpellAbility, valid: Iterable[Card], isOptional: bool, relatedPlayer: Player, params: Map[str, object]) -> Card:
+        if "DigForCreature" == sa.getParam("AILogic"):
+            bestChoice = ComputerUtilCard.getBestCreatureAI(valid)
+            if bestChoice is None:
+                # no creatures, but maybe there's a morphable card that can be played as a creature?
+                morphs = CardLists.getKeyword(valid, Keyword.MORPH)
+                if not morphs.isEmpty():
+                    bestChoice = ComputerUtilCard.getBestAI(morphs)
+
+            # still nothing, so return the worst card since it'll be unplayable from exile (e.g. Vivien, Champion of the Wilds)
+            return bestChoice if bestChoice is not None else ComputerUtilCard.getWorstAI(valid)
+        elif "EmulateScry" == sa.getParam("AILogic"):
+            for choice in valid:
+                if ComputerUtil.scryWillMoveCardToBottomOfLibrary(ai, choice):
+                    return choice
+            return None
+
+        if sa.getActivatingPlayer().isOpponentOf(ai) and relatedPlayer.isOpponentOf(ai):
+            return ComputerUtilCard.getWorstPermanentAI(valid, False, True, False, False)
+        return ComputerUtilCard.getBestAI(valid)
+
+    # (non-Javadoc)
+    # @see forge.card.ability.SpellAbilityAi#chooseSinglePlayer(forge.game.player.Player, forge.card.spellability.SpellAbility, java.util.List)
+    def chooseSinglePlayer(self, ai: Player, sa: SpellAbility, options: Iterable[Player], params: Map[str, object]) -> Player:
+        if params is not None and "Attacker" in params:
+            return ComputerUtilCombat.addAttackerToCombat(sa, params.get("Attacker"), options)
+        # an opponent choose a card from
+        return next(iter(options), None)
+
+    def chooseSingleAttackableEntity(self, ai: Player, sa: SpellAbility, options: Iterable[GameEntity], params: Map[str, object]) -> GameEntity:
+        if params is not None and "Attacker" in params:
+            return ComputerUtilCombat.addAttackerToCombat(sa, params.get("Attacker"), options)
+        # should not be reached
+        return super().chooseSingleAttackableEntity(ai, sa, options, params)
+
+    # (non-Javadoc)
+    # @see forge.card.ability.SpellAbilityAi#confirmAction(forge.card.spellability.SpellAbility, forge.game.player.PlayerActionConfirmMode, java.lang.String)
+    def confirmAction(self, player: Player, sa: SpellAbility, mode: PlayerActionConfirmMode, message: str, params: Map[str, object]) -> bool:
+        topc = player.getZone(ZoneType.Library).get(0)
+
+        if ComputerUtilAbility.getAbilitySourceName(sa) == "Explorer's Scope":
+            # for Explorer's Scope, always put a land on the battlefield tapped
+            # (TODO: might not always be a good idea, e.g. when a land ETBing can have detrimental effects)
+            return True
+        elif "AlwaysConfirm" == sa.getParam("AILogic"):
+            return True
+
+        # looks like perfect code for Delver of Secrets, but what about other cards?
+        return topc.isInstant() or topc.isSorcery()
+```

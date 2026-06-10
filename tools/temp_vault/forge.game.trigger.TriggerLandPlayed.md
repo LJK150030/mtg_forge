@@ -37,6 +37,12 @@ classDiagram
 - [[forge.game.card.Card|Card]]
 - [[forge.game.spellability.SpellAbility|SpellAbility]]
 
+## Design Description
+
+Land-played trigger: a concrete `Trigger` subclass that fires whenever a land enters play, supporting Forge's trigger system for cards that react to land plays.
+
+Extending `Trigger`, it overrides `setTriggeringObjects` to expose the played `Card` to the firing `SpellAbility` via the `AbilityKey.Card` slot, and `getImportantStackObjects` to produce a localized stack description. Its core logic lives in `performTest`, which gates the trigger against the declarative parameters of a card's scripted ability â€” checking the land's `Origin` zone, `ValidCard`/`ValidSA` restrictions, and an optional `NotFirstLand` clause (verified through the controller's lands-played count). This keeps trigger behavior fully data-driven, collaborating with `Card`, `SpellAbility`, and `AbilityKey` rather than hard-coding individual card effects.
+
 ## Source
 `forge-game/src/main/java/forge/game/trigger/TriggerLandPlayed.java`
 
@@ -143,4 +149,51 @@ public class TriggerLandPlayed extends Trigger {
     }
 
 }
+```
+
+## Python
+`forge/game/trigger/TriggerLandPlayed.py`
+
+```python
+from forge.game.trigger.Trigger import Trigger
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Localizer import Localizer
+
+
+class TriggerLandPlayed(Trigger):
+
+    def __init__(self, params: dict[str, str], host: Card, intrinsic: bool):
+        super().__init__(params, host, intrinsic)
+
+    def setTriggeringObjects(self, sa: SpellAbility, runParams: dict[AbilityKey, object]) -> None:
+        sa.setTriggeringObjectsFrom(runParams, AbilityKey.Card)
+
+    def getImportantStackObjects(self, sa: SpellAbility) -> str:
+        sb = []
+        sb.append(Localizer.getInstance().getMessage("lblLandPlayed"))
+        sb.append(": ")
+        sb.append(str(sa.getTriggeringObject(AbilityKey.Card)))
+        return "".join(sb)
+
+    def performTest(self, runParams: dict[AbilityKey, object]) -> bool:
+        if self.hasParam("Origin"):
+            if self.getParam("Origin") != "Any":
+                if self.getParam("Origin") is None:
+                    return False
+                if runParams.get(AbilityKey.Origin) not in self.getParam("Origin").split(","):
+                    return False
+
+        if not self.matchesValidParam("ValidCard", runParams.get(AbilityKey.Card)):
+            return False
+
+        if not self.matchesValidParam("ValidSA", runParams.get(AbilityKey.SpellAbility)):
+            return False
+
+        if self.hasParam("NotFirstLand"):
+            land = runParams.get(AbilityKey.Card)
+            if land.getController().getLandsPlayedThisTurn() < 1:
+                return False
+        return True
 ```

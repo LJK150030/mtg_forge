@@ -241,3 +241,122 @@ public class CostRemoveAnyCounter extends CostPart {
     }
 }
 ```
+
+## Python
+`forge/game/cost/CostRemoveAnyCounter.py`
+
+```python
+from forge.game.cost.CostPart import CostPart
+from forge.card.CardType import CardType
+from forge.game.GameEntity import GameEntity
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CounterType import CounterType
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.Lang import Lang
+from forge.game.cost.Cost import Cost
+from forge.game.cost.ICostVisitor import ICostVisitor
+from forge.game.cost.PaymentDecision import PaymentDecision
+
+
+class CostRemoveAnyCounter(CostPart):
+    """
+    The Class CostRemoveAnyCounter.
+    """
+    # Serializables need a version ID.
+    serialVersionUID = 1
+
+    # RemoveAnyCounter<Num/Type/{TypeDescription}>
+    # things like "Remove a counter from a permanent you control"
+    # or "Remove one or more +1/+1 counters from among artifacts you control"
+
+    def __init__(self, amount: str, counter: CounterType, type: str, description: str, oneOrMore: bool):
+        """
+        Instantiates a new cost CostRemoveAnyCounter.
+
+        :param amount: the amount
+        """
+        super().__init__(amount, type, description)
+        self.counter = counter
+        self.oneOrMore = oneOrMore
+
+    def paymentOrder(self) -> int:
+        return 8
+
+    def getMaxAmountX(self, ability: SpellAbility, payer: Player, effect: bool):
+        source = ability.getHostCard()
+
+        if self.payCostFromSource():
+            validCards = CardCollection(source)
+        else:
+            validCards = CardLists.getValidCards(payer.getCardsIn(ZoneType.Battlefield), self.getType().split(";"), payer, source, ability)
+        if self.counter is not None:
+            return sum(c.getCounters(self.counter) if c.canRemoveCounters(self.counter) else 0 for c in validCards)
+        # use flatMap instead of mapMulti for Android 13 and below
+        # https://developer.android.com/reference/java/util/stream/Stream#mapMulti
+        total = 0
+        for c in validCards:
+            for k, v in c.getCounters().items():
+                if c.canRemoveCounters(k):
+                    total += v
+        return total
+
+    def canPay(self, ability: SpellAbility, payer: Player, effect: bool) -> bool:
+        return AbilityUtils.calculateAmount(ability.getHostCard(), self.getAmount(), ability) <= self.getMaxAmountX(ability, payer, effect)
+
+    def toString(self) -> str:
+        sb = []
+
+        counters = "counter" if self.counter is None else self.counter.getName().lower() + " counter"
+        multiple = "1" != self.getAmount()
+
+        sb.append("Remove ")
+        if self.oneOrMore:
+            sb.append("one or more ")
+            sb.append(Lang.getPlural(counters))
+        else:
+            sb.append(Cost.convertAmountTypeToWords(self.convertAmount(), self.getAmount(), counters))
+        sb.append(" from ")
+        if self.payCostFromSource():  # TODO use THISTYPE
+            sb.append(self.getDescriptiveType(multiple))
+        else:
+            if multiple:
+                sb.append(" among ")
+            sb.append(self.getDescriptiveType(multiple))
+            sb.append(" you control")
+
+        return "".join(sb)
+
+    def payAsDecided(self, ai: Player, decision: PaymentDecision, ability: SpellAbility, effect: bool) -> bool:
+        removed = 0
+        for entity, counterMap in decision.counterTable.row(None).items():
+            for k, v in counterMap.items():
+                removed += v
+                entity.subtractCounter(k, v, ai)
+            if isinstance(entity, Card):
+                entity.getGame().updateLastStateForCard(entity)
+
+        ability.setSVar("CostCountersRemoved", str(removed))
+        return True
+
+    def getDescriptiveType(self, multiple: bool) -> str:
+        typeDesc = self.getTypeDescription()
+        if typeDesc is None:
+            if self.payCostFromSource():
+                return self.getType()
+            types = self.getType().split(";")
+            if multiple:
+                types = [CardType.getPluralType(t) for t in types]
+            typeDesc = Lang.getInstance().buildValidDesc(types, multiple)
+        if not multiple and not typeDesc.startswith("an"):  # skip adding to "another"
+            typeDesc = ("an " if Lang.startsWithVowel(typeDesc) else "a ") + typeDesc
+        return typeDesc
+
+    def accept(self, visitor: ICostVisitor):
+        return visitor.visit(self)
+```

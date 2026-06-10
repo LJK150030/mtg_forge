@@ -105,3 +105,54 @@ public class PermanentNoncreatureAi extends PermanentAi {
     }
 }
 ```
+
+## Python
+`forge/ai/ability/PermanentNoncreatureAi.py`
+
+```python
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.ai.ComputerUtilAbility import ComputerUtilAbility
+from forge.game.Game import Game
+from forge.game.ability.AbilityFactory import AbilityFactory
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardLists import CardLists
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+from forge.ai.ability.PermanentAi import PermanentAi
+
+
+class PermanentNoncreatureAi(PermanentAi):
+    """
+    AbilityFactory for Creature Spells.
+    """
+
+    def checkApiLogic(self, ai: Player, sa: SpellAbility) -> AiAbilityDecision:
+        """
+        The rest of the logic not covered by the canPlayAI template is defined
+        here
+        """
+        decision = super().checkApiLogic(ai, sa)
+        if not decision.willingToPlay():
+            return decision
+
+        host = sa.getHostCard()
+        sourceName = ComputerUtilAbility.getAbilitySourceName(sa)
+        game = ai.getGame()
+
+        # Check for valid targets before casting
+        if host.hasSVar("OblivionRing"):
+            # TODO: only the "may" case wouldn't fail checkETBEffects - replace with NeedsToPlay SVar?
+            effectExile = AbilityFactory.getAbility(host.getSVar("TrigExile"), host)
+            origin = ZoneType.listValueOf(effectExile.getParamOrDefault("Origin", "Battlefield")).get(0)
+            effectExile.setActivatingPlayer(ai)
+            targets = CardLists.getTargetableCards(game.getCardsIn(origin), effectExile)
+            if sourceName == "Suspension Field" or sourceName == "Detention Sphere":
+                # existing "exile until leaves" enchantments only target opponent's permanents
+                targets = CardLists.filterControlledBy(targets, ai.getOpponents())
+            if targets.isEmpty():
+                return AiAbilityDecision(0, AiPlayDecision.TargetingFailed)
+        return decision
+```

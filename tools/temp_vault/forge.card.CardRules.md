@@ -141,9 +141,9 @@ classDiagram
 
 ## Design Description
 
-`CardRules` is the immutable, fully-resolved model of a Magic card's metadata and gameplay rules. It aggregates one or more `ICardFace` parts—main, other, and the W/U/B/R/G specialize faces—under a `CardSplitType` whose aggregation method governs how their names, types, mana costs, colors, and oracle text combine into a single view. By implementing `ICardCharacteristics`, it exposes that unified card-level interface while delegating per-face data to its `ICardFace` collaborators, and it derives higher-order properties such as color identity, deckbuilding colors, and the many commander/format-eligibility predicates (Brawl, Oathbreaker, partner, Background, Doctor).
+`CardRules` is the immutable, fully-resolved model of a Magic card's metadata and gameplay rules. It aggregates one or more `ICardFace` partsâ€”main, other, and the W/U/B/R/G specialize facesâ€”under a `CardSplitType` whose aggregation method governs how their names, types, mana costs, colors, and oracle text combine into a single view. By implementing `ICardCharacteristics`, it exposes that unified card-level interface while delegating per-face data to its `ICardFace` collaborators, and it derives higher-order properties such as color identity, deckbuilding colors, and the many commander/format-eligibility predicates (Brawl, Oathbreaker, partner, Background, Doctor).
 
-Construction is funneled through the nested reusable `Reader`, which parses line-based scripts into `CardFace`, `CardAiHints`, `DeckHints`, and `ManaCost` instances, separating parsing from the rules model. Design intent shows in its deferred initialization—`CopyFaceFrom` placeholder faces and lazily recomputed color identity let cards cross-reference before all scripts load—and in hand-tuned loops that avoid `toCharArray`/`toUnmodifiableList` for allocation cost and Android compatibility.
+Construction is funneled through the nested reusable `Reader`, which parses line-based scripts into `CardFace`, `CardAiHints`, `DeckHints`, and `ManaCost` instances, separating parsing from the rules model. Design intent shows in its deferred initializationâ€”`CopyFaceFrom` placeholder faces and lazily recomputed color identity let cards cross-reference before all scripts loadâ€”and in hand-tuned loops that avoid `toCharArray`/`toUnmodifiableList` for allocation cost and Android compatibility.
 
 ## Source
 `forge-core/src/main/java/forge/card/CardRules.java`
@@ -1084,4 +1084,764 @@ public final class CardRules implements ICardCharacteristics {
         return deckbuildingColors;
     }
 }
+```
+
+## Python
+`forge/card/CardRules.py`
+
+```python
+from forge.card.ICardCharacteristics import ICardCharacteristics
+from forge.card.CardAiHints import CardAiHints
+from forge.card.CardFace import CardFace
+from forge.card.CardSplitType import CardSplitType
+from forge.card.CardStateName import CardStateName
+from forge.card.CardType import CardType
+from forge.card.ColorSet import ColorSet
+from forge.card.DeckHints import DeckHints
+from forge.card.ICardFace import ICardFace
+from forge.card.MagicColor import MagicColor
+from forge.card.mana.ManaCost import ManaCost
+from forge.util.TextUtil import TextUtil
+
+import re
+
+# Sentinel used to distinguish "face argument not provided" from an explicit None.
+_FACE_NOT_PROVIDED = object()
+
+
+class CardRules(ICardCharacteristics):
+    """
+    A collection of methods containing full
+    meta and gameplay properties of a card.
+    """
+
+    def __init__(self, faces, altMode, cah):
+        self.normalizedName = None
+        self.specializedParts = {}
+        self.deckbuildingColors = None
+        self.meldWith = ""
+        self.partnerWith = ""
+        self.partnerType = ""
+        self.setColorID = 0
+        self.custom = False
+        self.unsupported = False
+        self.placeholderFaces = None
+        self.path = None
+        # vanguard card fields, they don't use sides.
+        self.deltaHand = 0
+        self.deltaLife = 0
+        self.tokens = []
+        self.supportedFunctionalVariants = None
+
+        self.splitType = altMode
+        self.mainPart = faces[0]
+        self.otherPart = faces[1]
+
+        if CardSplitType.Specialize == self.splitType:
+            self.specializedParts[CardStateName.SpecializeW] = faces[2]
+            self.specializedParts[CardStateName.SpecializeU] = faces[3]
+            self.specializedParts[CardStateName.SpecializeB] = faces[4]
+            self.specializedParts[CardStateName.SpecializeR] = faces[5]
+            self.specializedParts[CardStateName.SpecializeG] = faces[6]
+
+        # Android doesn't support toUnmodifiableList
+        self.allFaces = [f for f in faces if f is not None]
+
+        self.aiHints = cah
+        self.meldWith = ""
+        self.partnerWith = ""
+        self.partnerType = ""
+        self.setColorID = 0
+
+        self.colorIdentity = CardRules.calculateColorIdentity(self)
+
+    def reinitializeFromRules(self, newRules):
+        if newRules.getName() != self.getName():
+            raise RuntimeError("You cannot rename the card using the same CardRules object")
+
+        self.splitType = newRules.splitType
+        self.mainPart = newRules.mainPart
+        self.otherPart = newRules.otherPart
+        self.specializedParts = dict(newRules.specializedParts)
+        self.allFaces = newRules.allFaces
+        self.aiHints = newRules.aiHints
+        self.colorIdentity = newRules.colorIdentity
+        self.meldWith = newRules.meldWith
+        self.partnerWith = newRules.partnerWith
+        self.setColorID = newRules.setColorID
+        self.tokens = newRules.tokens
+
+    @staticmethod
+    def calculateColorIdentity(arg):
+        if isinstance(arg, CardRules):
+            rules = arg
+            colMask = CardRules.calculateColorIdentity(rules.mainPart)
+            if rules.otherPart is not None:
+                colMask |= CardRules.calculateColorIdentity(rules.otherPart)
+            return ColorSet.fromMask(colMask)
+
+        face = arg
+        if face is None:
+            return 0  # Still initializing; filled in during supplyPlaceholderFaces
+        res = face.getColor().getColor()
+        isReminder = False
+        isSymbol = False
+        oracleText = face.getOracleText()
+        # CR 903.4 colors defined by its characteristic-defining abilities
+        for staticAbility in face.getStaticAbilities():
+            if "CharacteristicDefining$ True" in staticAbility and "SetColor$ All" in staticAbility:
+                return MagicColor.ALL_COLORS
+        # no need to check oracle if it is already all colors
+        if res == MagicColor.ALL_COLORS:
+            return res
+        length = len(oracleText)
+        for i in range(length):
+            c = oracleText[i]  # This is to avoid needless allocations performed by toCharArray()
+            if c == '(':
+                isReminder = i > 0  # if oracle has only reminder, consider it valid rules (basic and true lands need this)
+            elif c == ')':
+                isReminder = False
+            elif c == '{':
+                isSymbol = True
+            elif c == '}':
+                isSymbol = False
+            else:
+                if isSymbol and not isReminder:
+                    if c == 'W':
+                        res |= MagicColor.WHITE
+                    elif c == 'U':
+                        res |= MagicColor.BLUE
+                    elif c == 'B':
+                        res |= MagicColor.BLACK
+                    elif c == 'R':
+                        res |= MagicColor.RED
+                    elif c == 'G':
+                        res |= MagicColor.GREEN
+        return res
+
+    def isVariant(self):
+        if self.placeholderFaces is not None and (self.mainPart is None or self.splitType.getAggregationMethod() == CardSplitType.FaceSelectionMethod.COMBINE):
+            return False  # Type line isn't fully generated, and we need it to determine if this is a variant type
+        t = self.getType()
+        return (t.isVanguard() or t.isScheme() or t.isPlane() or t.isPhenomenon()
+                or t.isConspiracy() or t.isDungeon() or t.isAttraction() or t.isContraption())
+
+    def getSplitType(self):
+        return self.splitType
+
+    def getMainPart(self):
+        return self.mainPart
+
+    def getOtherPart(self):
+        return self.otherPart
+
+    def getSpecializeParts(self):
+        return self.specializedParts
+
+    def getAllFaces(self):
+        return self.allFaces
+
+    def isTransformable(self):
+        return CardSplitType.Transform == self.getSplitType() or CardSplitType.Modal == self.getSplitType()
+
+    def getWSpecialize(self):
+        return self.specializedParts.get(CardStateName.SpecializeW)
+
+    def getUSpecialize(self):
+        return self.specializedParts.get(CardStateName.SpecializeU)
+
+    def getBSpecialize(self):
+        return self.specializedParts.get(CardStateName.SpecializeB)
+
+    def getRSpecialize(self):
+        return self.specializedParts.get(CardStateName.SpecializeR)
+
+    def getGSpecialize(self):
+        return self.specializedParts.get(CardStateName.SpecializeG)
+
+    def getName(self):
+        if self.splitType.getAggregationMethod() == CardSplitType.FaceSelectionMethod.COMBINE:
+            return self.mainPart.getName() + " // " + self.otherPart.getName()
+        return self.mainPart.getName()
+
+    def getPreInitName(self):
+        """
+        Similar to `getName`, but goes through some extra steps to figure out the card's name in the event that
+        one or more of the card faces isn't fully initialized yet. This should never be necessary outside of
+        CardDB initialization.
+        """
+        if self.placeholderFaces is None:
+            return self.getName()
+        mainName = self.placeholderFaces.get(0) if self.mainPart is None else self.mainPart.getName()
+        if self.splitType.getAggregationMethod() == CardSplitType.FaceSelectionMethod.COMBINE:
+            otherName = self.placeholderFaces.get(1) if self.otherPart is None else self.otherPart.getName()
+            return mainName + " // " + otherName
+        return mainName
+
+    def getNormalizedName(self):
+        return self.normalizedName
+
+    def getPath(self):
+        return self.path
+
+    def setPath(self, path):
+        self.path = path
+
+    def getAiHints(self):
+        return self.aiHints
+
+    def isCustom(self):
+        return self.custom
+
+    def setCustom(self):
+        self.custom = True
+
+    def isUnsupported(self):
+        return self.unsupported
+
+    def getType(self):
+        if self.mainPart is None:
+            return CardType(False)  # Still initializing; filled in during supplyPlaceholderFaces
+        if self.splitType.getAggregationMethod() == CardSplitType.FaceSelectionMethod.COMBINE:
+            # no cards currently have different types
+            if self.otherPart is None:
+                return self.mainPart.getType()
+            return CardType.combine(self.mainPart.getType(), self.otherPart.getType())
+        return self.mainPart.getType()
+
+    def getManaCost(self):
+        if self.splitType.getAggregationMethod() == CardSplitType.FaceSelectionMethod.COMBINE:
+            return ManaCost.combine(self.mainPart.getManaCost(), self.otherPart.getManaCost())
+        return self.mainPart.getManaCost()
+
+    def getColor(self):
+        if self.splitType.getAggregationMethod() == CardSplitType.FaceSelectionMethod.COMBINE:
+            return ColorSet.combine(self.mainPart.getColor(), self.otherPart.getColor())
+        return self.mainPart.getColor()
+
+    @staticmethod
+    def canCastFace(face, colorCode):
+        if face.getManaCost().isNoCost():
+            # if card face has no cost, assume castable only by mana of its defined color
+            return face.getColor().hasNoColorsExcept(colorCode)
+        return face.getManaCost().canBePaidWithAvailable(colorCode)
+
+    def canCastWithAvailable(self, colorCode):
+        if self.splitType.getAggregationMethod() == CardSplitType.FaceSelectionMethod.COMBINE:
+            return CardRules.canCastFace(self.mainPart, colorCode) or CardRules.canCastFace(self.otherPart, colorCode)
+        return CardRules.canCastFace(self.mainPart, colorCode)
+
+    def getIntPower(self):
+        return self.mainPart.getIntPower()
+
+    def getIntToughness(self):
+        return self.mainPart.getIntToughness()
+
+    def getPower(self):
+        return self.mainPart.getPower()
+
+    def getToughness(self):
+        return self.mainPart.getToughness()
+
+    def getInitialLoyalty(self):
+        return self.mainPart.getInitialLoyalty()
+
+    def getDefense(self):
+        return self.mainPart.getDefense()
+
+    def getAttractionLights(self):
+        return self.mainPart.getAttractionLights()
+
+    def getOracleText(self):
+        if self.splitType.getAggregationMethod() == CardSplitType.FaceSelectionMethod.COMBINE:
+            return self.mainPart.getOracleText() + "\r\n\r\n" + self.otherPart.getOracleText()
+        return self.mainPart.getOracleText()
+
+    def isEnterableDungeon(self):
+        if "You can't enter this dungeon unless" in self.mainPart.getOracleText():
+            return False
+        return self.getType().isDungeon()
+
+    def canBeCommander(self):
+        if "can be your commander" in self.mainPart.getOracleText() or self.canBeBackground():
+            return True
+        type = self.mainPart.getType()
+        if not type.isLegendary():
+            return False
+        if self.canBeCreature() or type.isVehicle() or (type.isSpacecraft() and self.getPower() is not None):
+            # Spacecraft need printed PT
+            return True
+        return False
+
+    def canBePartnerCommanders(self, b):
+        if not (self.canBePartnerCommander() and b.canBePartnerCommander()):
+            return False
+        if self.hasKeyword("Partner") and b.hasKeyword("Partner"):
+            return True  # normal partner commander
+        if self.getName() == b.getPartnerWith() and b.getName() == self.getPartnerWith():
+            return True  # paired partner commander
+
+        if self.partnerType != "" and self.partnerType == b.partnerType:
+            return True
+
+        if (self.hasKeyword("Choose a Background") and b.canBeBackground()
+                or b.hasKeyword("Choose a Background") and self.canBeBackground()):
+            return True  # commander with background
+        if (self.isDoctor() and b.hasKeyword("Doctor's companion")
+                or self.hasKeyword("Doctor's companion") and b.isDoctor()):
+            return True  # Doctor Who partner commander
+        return False
+
+    def canBePartnerCommander(self):
+        if self.canBeBackground():
+            return True
+        if not self.canBeCommander():
+            return False
+        return (self.hasKeyword("Partner") or self.partnerWith != "" or self.partnerType != ""
+                or self.hasKeyword("Choose a Background") or self.hasKeyword("Doctor's companion") or self.isDoctor())
+
+    def canBeBackground(self):
+        return self.mainPart.getType().hasSubtype("Background")
+
+    def isDoctor(self):
+        subtypes = set()
+        for type in self.mainPart.getType().getSubtypes():
+            subtypes.add(type)
+
+        return (len(subtypes) == 2
+                and "Time Lord" in subtypes
+                and "Doctor" in subtypes)
+
+    def canBeOathbreaker(self):
+        type = self.mainPart.getType()
+        if "can be your commander" in self.mainPart.getOracleText():
+            return True
+        return type.isPlaneswalker()
+
+    def canBeSignatureSpell(self):
+        type = self.mainPart.getType()
+        return type.isInstant() or type.isSorcery()
+
+    def canBeBrawlCommander(self):
+        type = self.mainPart.getType()
+        if not type.isLegendary():
+            return False
+        if self.canBeCreature() or type.isPlaneswalker():
+            return True
+        return False
+
+    def canBeTinyLeadersCommander(self):
+        type = self.mainPart.getType()
+        if not type.isLegendary():
+            return False
+        if self.canBeCreature() or type.isPlaneswalker():
+            return True
+        return False
+
+    def canBeCreature(self):
+        type = self.mainPart.getType()
+        if type.isCreature():
+            return True
+        for staticAbility in self.mainPart.getStaticAbilities():  # Check for Grist
+            if "CharacteristicDefining$ True" in staticAbility and "AddType$ Creature" in staticAbility:
+                return True
+        return False
+
+    def getMeldWith(self):
+        return self.meldWith
+
+    def getPartnerWith(self):
+        return self.partnerWith
+
+    def getAddsWildCardColor(self):
+        return " is your commander, choose a color before the game begins." in self.mainPart.getOracleText()
+
+    def getSetColorID(self):
+        # Could someday generalize this to support other kinds of markings.
+        return self.setColorID
+
+    def getTokens(self):
+        return self.tokens
+
+    def getHand(self):
+        return self.deltaHand
+
+    def getLife(self):
+        return self.deltaLife
+
+    def setVanguardProperties(self, pt):
+        slashPos = -1 if pt is None else pt.find('/')
+        if slashPos == -1:
+            raise RuntimeError("Vanguard '" + self.getName() + "' has bad hand/life stats")
+        self.deltaHand = int(TextUtil.fastReplace(pt[0:slashPos], "+", ""))
+        self.deltaLife = int(TextUtil.fastReplace(pt[slashPos + 1:], "+", ""))
+
+    def hasFunctionalVariants(self):
+        return self.supportedFunctionalVariants is not None
+
+    def getSupportedFunctionalVariants(self):
+        return self.supportedFunctionalVariants
+
+    def getDisplayNameForVariant(self, variantName):
+        if self.supportedFunctionalVariants is None or variantName not in self.supportedFunctionalVariants:
+            return self.getName()
+
+        mainFace = self.mainPart.getFunctionalVariant(variantName)
+        if mainFace is None:
+            mainFace = self.mainPart
+        mainPartName = mainFace.getDisplayName()
+
+        if self.splitType.getAggregationMethod() == CardSplitType.FaceSelectionMethod.COMBINE:
+            otherFace = self.otherPart.getFunctionalVariant(variantName)
+            if otherFace is None:
+                otherFace = self.otherPart
+            otherPartName = otherFace.getDisplayName()
+            return mainPartName + " // " + otherPartName
+        else:
+            return mainPartName
+
+    def findOrCreateVariantForFlavorName(self, flavorName, suggestedVariantName):
+        if flavorName is None:
+            raise TypeError()
+        nameParts = re.split(r'\s*//\s*', flavorName.strip())
+        flavorName = " // ".join(nameParts)  # Normalize this just in case.
+        if self.otherPart is not None and len(nameParts) < 2:
+            raise ValueError("Tried to assign a single flavor name to a multi-faced card. Use ' // ' as a separator in the flavorName parameter.")
+        if self.supportedFunctionalVariants is None:
+            self.supportedFunctionalVariants = set()
+        for variantName in self.supportedFunctionalVariants:
+            if self.getDisplayNameForVariant(variantName) == flavorName:
+                return variantName
+        variantName = suggestedVariantName if suggestedVariantName is not None else "FlavorName" + str(hash(flavorName))
+        if variantName in self.supportedFunctionalVariants:
+            variantName = variantName + str(hash(flavorName))
+
+        variantMain = self.mainPart.getOrCreateFunctionalVariant(variantName)
+        variantMain.setFlavorName(nameParts[0])
+        self.mainPart.assignMissingFieldsToVariant(variantMain)
+
+        if self.otherPart is not None:
+            variantOther = self.otherPart.getOrCreateFunctionalVariant(variantName)
+            variantOther.setFlavorName(nameParts[1])
+            self.otherPart.assignMissingFieldsToVariant(variantOther)
+
+        self.supportedFunctionalVariants.add(variantName)
+
+        return variantName
+
+    def hasPlaceholderFaces(self):
+        """
+        A card has placeholder faces if its script uses `CopyFaceFrom` to reference another card.
+        These will be filled in via `supplyPlaceholderFaces` after all scripts have been processed.
+        """
+        return self.placeholderFaces is not None
+
+    def supplyPlaceholderFaces(self, facesByName):
+        if self.placeholderFaces is None:
+            return
+        newFaceList = list(self.allFaces)
+        for index, neededName in self.placeholderFaces.items():
+            face = facesByName.get(neededName)
+            if face is None:
+                raise LookupError("Missing placeholder face for '" + self.normalizedName + "'; Cannot find '" + neededName + "'!")
+            newFaceList.insert(index, face)
+            if index == 0:
+                self.mainPart = face
+            elif index == 1:
+                self.otherPart = face
+        self.allFaces = newFaceList
+
+        # Recalculate color identity now that we have all the faces.
+        self.colorIdentity = CardRules.calculateColorIdentity(self)
+
+        self.placeholderFaces = None
+
+    def getColorIdentity(self):
+        return self.colorIdentity
+
+    @staticmethod
+    def fromScript(script):
+        """Instantiates class, reads a card. For batch operations better create you own reader instance."""
+        crr = CardRules.Reader()
+        for line in script:
+            crr.parseLine(line)
+        return crr.getCard()
+
+    # Reads cardname.txt
+    class Reader:
+        def __init__(self):
+            self.faces = [None, None, None, None, None, None, None]
+            self.reset()
+
+        def reset(self):
+            """Reset all fields to parse next card (to avoid allocating new CardRulesReader N times)"""
+            self.setColorID = 0
+            self.curFace = 0
+            self.faces[0] = None
+            self.faces[1] = None
+            self.faces[2] = None
+            self.faces[3] = None
+            self.faces[4] = None
+            self.faces[5] = None
+            self.faces[6] = None
+
+            self.handLife = None
+            self.altMode = getattr(CardSplitType, "None")
+
+            self.removedFromAIDecks = False
+            self.removedFromRandomDecks = False
+            self.removedFromNonCommanderDecks = False
+            self.needs = None
+            self.hints = None
+            self.has = None
+            self.meldWith = ""
+            self.partnerWith = ""
+            self.partnerType = ""
+            self.normalizedName = ""
+            self.supportedFunctionalVariants = None
+            self.placeholderFaces = None
+            self.tokens = []
+
+        def getCard(self):
+            """Gets the card."""
+            cah = CardAiHints(self.removedFromAIDecks, self.removedFromRandomDecks, self.removedFromNonCommanderDecks, self.hints, self.needs, self.has)
+            if self.faces[0] is not None:
+                self.faces[0].assignMissingFields()
+            else:
+                assert self.placeholderFaces is not None
+            if self.faces[1] is not None:
+                self.faces[1].assignMissingFields()
+            if self.faces[2] is not None:
+                self.faces[2].assignMissingFields()
+            if self.faces[3] is not None:
+                self.faces[3].assignMissingFields()
+            if self.faces[4] is not None:
+                self.faces[4].assignMissingFields()
+            if self.faces[5] is not None:
+                self.faces[5].assignMissingFields()
+            if self.faces[6] is not None:
+                self.faces[6].assignMissingFields()
+            result = CardRules(self.faces, self.altMode, cah)
+
+            result.normalizedName = self.normalizedName
+            result.meldWith = self.meldWith
+            result.partnerWith = self.partnerWith
+            result.partnerType = self.partnerType
+            result.setColorID = self.setColorID
+            if len(self.tokens) != 0:
+                result.tokens = self.tokens
+            if self.handLife is not None and self.handLife.strip() != "":
+                result.setVanguardProperties(self.handLife)
+            result.supportedFunctionalVariants = self.supportedFunctionalVariants
+            result.placeholderFaces = self.placeholderFaces
+            return result
+
+        def readCard(self, script, filename=None):
+            self.reset()
+            for line in script:
+                if len(line) == 0 or line[0] == '#':
+                    continue
+                self.parseLine(line, self.faces[self.curFace])
+            self.normalizedName = filename
+            return self.getCard()
+
+        def parseLine(self, line, face=_FACE_NOT_PROVIDED):
+            """Parses a single line of a card script."""
+            if face is _FACE_NOT_PROVIDED:
+                face = self.faces[self.curFace]
+
+            colonPos = line.find(':')
+            key = line[0:colonPos] if colonPos > 0 else line
+            value = line[1 + colonPos:].strip() if colonPos > 0 else None
+
+            if value is not None:
+                tokIdx = value.find("TokenScript$")
+                if tokIdx > 0:
+                    tokenParam = value[tokIdx + 12:].strip()
+                    endIdx = tokenParam.find("|")
+                    if endIdx > 0:
+                        tokenParam = tokenParam[0:endIdx].strip()
+                    self.tokens.extend(tokenParam.split(","))
+
+            c0 = key[0]
+            if c0 == 'A':
+                if key == "A":
+                    face.addAbility(value)
+                elif key == "AI":
+                    colonPos = value.find(':')
+                    variable = value[0:colonPos] if colonPos > 0 else value
+                    value = value[1 + colonPos:] if colonPos > 0 else None
+
+                    if variable == "RemoveDeck":
+                        self.removedFromAIDecks = self.removedFromAIDecks or (value is not None and value.lower() == "all".lower())
+                        self.removedFromRandomDecks = self.removedFromRandomDecks or (value is not None and value.lower() == "random".lower())
+                        self.removedFromNonCommanderDecks = self.removedFromNonCommanderDecks or (value is not None and value.lower() == "noncommander".lower())
+                elif key == "AlternateMode":
+                    self.altMode = CardSplitType.smartValueOf(value)
+                elif key == "ALTERNATE":
+                    self.curFace = 1
+
+            elif c0 == 'C':
+                if key == "Colors":
+                    newCol = ColorSet.fromNames(value.split(","))
+                    face.setColor(newCol)
+                elif key == "CopyFaceFrom":
+                    if self.placeholderFaces is None:
+                        self.placeholderFaces = {}
+                    assert self.faces[self.curFace] is None
+                    self.placeholderFaces[self.curFace] = value
+
+            elif c0 == 'D':
+                if key == "DeckHints":
+                    self.hints = DeckHints(value)
+                elif key == "DeckNeeds":
+                    self.needs = DeckHints(value)
+                elif key == "DeckHas":
+                    self.has = DeckHints(value)
+                elif key == "Defense":
+                    face.setDefense(value)
+                elif key == "Draft":
+                    face.addDraftAction(value)
+
+            elif c0 == 'F' or c0 == 'H':
+                # case 'F' falls through to case 'H' in the original Java
+                if c0 == 'F':
+                    if key == "FlavorName":
+                        face.setFlavorName(value)
+                if key == "HandLifeModifier":
+                    self.handLife = value
+
+            elif c0 == 'K':
+                if key == "K":
+                    face.addKeyword(value)
+                    if value.startswith("Partner with:"):
+                        self.partnerWith = value.split(":")[1]
+                    if value.startswith("Partner:"):
+                        self.partnerType = value.split(":")[1]
+
+            elif c0 == 'L':
+                if key == "Loyalty":
+                    face.setInitialLoyalty(value)
+                if key == "Lights":
+                    face.setAttractionLights(value)
+
+            elif c0 == 'M':
+                if key == "ManaCost":
+                    face.setManaCost(ManaCost.NO_COST if value == "no cost" else ManaCost(value))
+                elif key == "MeldPair":
+                    self.meldWith = value
+
+            elif c0 == 'N':
+                if key == "Name":
+                    assert self.placeholderFaces is None or self.curFace not in self.placeholderFaces
+                    self.faces[self.curFace] = CardFace(value)
+
+            elif c0 == 'O':
+                if key == "Oracle":
+                    face.setOracleText(value)
+
+            elif c0 == 'P':
+                if key == "PT":
+                    face.setPtText(value)
+
+            elif c0 == 'R':
+                if key == "R":
+                    face.addReplacementEffect(value)
+
+            elif c0 == 'S':
+                if key == "S":
+                    face.addStaticAbility(value)
+                elif key.startswith("SPECIALIZE"):
+                    if value == "WHITE":
+                        self.curFace = 2
+                    elif value == "BLUE":
+                        self.curFace = 3
+                    elif value == "BLACK":
+                        self.curFace = 4
+                    elif value == "RED":
+                        self.curFace = 5
+                    elif value == "GREEN":
+                        self.curFace = 6
+                elif key == "SVar":
+                    if value is None:
+                        raise ValueError("SVar has no variable name")
+
+                    colonPos = value.find(':')
+                    variable = value[0:colonPos] if colonPos > 0 else value
+                    value = value[1 + colonPos:] if colonPos > 0 else None
+
+                    face.addSVar(variable, value)
+                elif key.startswith("SETCOLORID"):
+                    self.setColorID = int(value)
+
+            elif c0 == 'T':
+                if key == "T":
+                    face.addTrigger(value)
+                elif key == "Types":
+                    face.setType(CardType.parse(value, False))
+                elif key == "Text" and value is not None and value.strip() != "":
+                    face.setNonAbilityText(value)
+
+            elif c0 == 'V':
+                if key == "Variant":
+                    if value is None:
+                        value = ""
+                    colonPos = value.find(':')
+                    if colonPos <= 0:
+                        raise ValueError("Missing variant name")
+                    variantName = value[0:colonPos]
+                    varFace = face.getOrCreateFunctionalVariant(variantName)
+                    variantLine = value[1 + colonPos:]
+                    self.parseLine(variantLine, varFace)
+                    if self.supportedFunctionalVariants is None:
+                        self.supportedFunctionalVariants = set()
+                    self.supportedFunctionalVariants.add(variantName)
+
+    @staticmethod
+    def getUnsupportedCardNamed(name):
+        cah = CardAiHints(True, True, True, None, None, None)
+        faces = [CardFace(name), None, None, None, None, None, None]
+        faces[0].setColor(ColorSet.fromMask(0))
+        faces[0].setType(CardType.parse("", False))
+        faces[0].setOracleText("This card is not supported by Forge. Whenever you start a game with this card, it will be bugged.")
+        faces[0].setNonAbilityText("This card is not supported by Forge.\nWhenever you start a game with this card, it will be bugged.")
+        faces[0].assignMissingFields()
+        result = CardRules(faces, getattr(CardSplitType, "None"), cah)
+
+        result.unsupported = True
+
+        return result
+
+    def hasKeyword(self, k):
+        return k in self.mainPart.getKeywords()
+
+    def hasStartOfKeyword(self, k, cf=_FACE_NOT_PROVIDED):
+        if cf is _FACE_NOT_PROVIDED:
+            cf = self.mainPart
+        for inst in cf.getKeywords():
+            if inst.startswith(k):
+                return True
+        return False
+
+    def getKeywordMagnitude(self, k):
+        for inst in self.mainPart.getKeywords():
+            parts = inst.split(":")
+            if parts[0] == k and parts[1].isdigit():
+                return int(parts[1])
+        return None
+
+    def getDeckbuildingColors(self):
+        if self.deckbuildingColors is None:
+            colors = 0
+            if self.mainPart.getType().isLand():
+                colors = self.getColorIdentity().getColor()
+                for i in range(5):
+                    if MagicColor.Constant.BASIC_LANDS[i].lower() in self.mainPart.getOracleText().lower():
+                        colors |= 1 << i
+            else:
+                colors = self.getColor().getColor()
+                if self.getOtherPart() is not None:
+                    colors |= self.getOtherPart().getManaCost().getColorProfile()
+            self.deckbuildingColors = ColorSet.fromMask(colors)
+        return self.deckbuildingColors
 ```

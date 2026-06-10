@@ -64,3 +64,30 @@ public class PermanentCreatureEffect extends PermanentEffect {
     }
 }
 ```
+
+## Python
+`forge/game/ability/effects/PermanentCreatureEffect.py`
+
+```python
+from forge.game.ability.effects.PermanentEffect import PermanentEffect
+from forge.game.card.CardState import CardState
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.CardTranslation import CardTranslation
+from forge.util.Localizer import Localizer
+
+
+# TODO: Write javadoc for this type.
+class PermanentCreatureEffect(PermanentEffect):
+
+    def getStackDescription(self, sa: SpellAbility) -> str:
+        source: CardState = sa.getCardState()
+        sb = []
+        sb.append(CardTranslation.getTranslatedName(source.getName()))
+        sb.append(" - ")
+        sb.append(Localizer.getInstance().getMessage("lblCreature"))
+        sb.append(" ")
+        sb.append(sa.getParamOrDefault("SetPower", source.getBasePowerString()))
+        sb.append(" / ")
+        sb.append(sa.getParamOrDefault("SetToughness", source.getBaseToughnessString()))
+        return "".join(sb)
+```

@@ -45,7 +45,7 @@ classDiagram
 
 ## Design Description
 
-TwoPilesAi is the AI decision component for "two piles" division abilities, where one player partitions a card pool into two groups and an opponent selects which to keep. Extending `SpellAbilityAi`, it overrides `canPlay` to judge whether the computer should activate the ability, returning an `AiAbilityDecision` that couples a score with an `AiPlayDecision` verdict. It resolves the target player and card pool from the ability's `Zone`, `Defined`, `DefinedCards`, and `ValidCards` parameters—preferring an opponent via `AiAttackController` when targeting is used—then filters the pool through `CardLists`.
+TwoPilesAi is the AI decision component for "two piles" division abilities, where one player partitions a card pool into two groups and an opponent selects which to keep. Extending `SpellAbilityAi`, it overrides `canPlay` to judge whether the computer should activate the ability, returning an `AiAbilityDecision` that couples a score with an `AiPlayDecision` verdict. It resolves the target player and card pool from the ability's `Zone`, `Defined`, `DefinedCards`, and `ValidCards` parametersâ€”preferring an opponent via `AiAttackController` when targeting is usedâ€”then filters the pool through `CardLists`.
 
 The heuristic is intentionally minimal and stateless: it commits to play (score 100, `WillPlay`) only when more than two cards qualify, since splitting a smaller pool yields no meaningful advantage. Collaborations with `Card`, `Player`, `CardCollectionView`, `ZoneType`, and `FCollection` are limited to reading game state and assigning targets.
 
@@ -113,4 +113,58 @@ public class TwoPilesAi extends SpellAbilityAi {
         }
     }
 }
+```
+
+## Python
+`forge/ai/ability/TwoPilesAi.py`
+
+```python
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiAttackController import AiAttackController
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.ai.SpellAbilityAi import SpellAbilityAi
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.card.Card import Card
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.card.CardLists import CardLists
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.collect.FCollection import FCollection
+
+
+class TwoPilesAi(SpellAbilityAi):
+    def canPlay(self, ai: Player, sa: SpellAbility) -> AiAbilityDecision:
+        card = sa.getHostCard()
+        zone = None
+
+        if sa.hasParam("Zone"):
+            zone = ZoneType.smartValueOf(sa.getParam("Zone"))
+
+        valid = sa.getParamOrDefault("ValidCards", "")
+
+        opp = AiAttackController.choosePreferredDefenderPlayer(ai)
+
+        if sa.usesTargeting():
+            sa.resetTargets()
+            if sa.canTarget(opp):
+                sa.getTargets().add(opp)
+            else:
+                return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+        tgtPlayers = (FCollection(sa.getTargets().getTargetPlayers())
+                      if sa.usesTargeting() and not sa.hasParam("Defined")
+                      else AbilityUtils.getDefinedPlayers(card, sa.getParam("Defined"), sa))
+
+        p = tgtPlayers[0]
+        if sa.hasParam("DefinedCards"):
+            pool = AbilityUtils.getDefinedCards(card, sa.getParam("DefinedCards"), sa)
+        else:
+            pool = p.getCardsIn(zone)
+        pool = CardLists.getValidCards(pool, valid, card.getController(), card, sa)
+        size = pool.size()
+        if size > 2:
+            return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+        else:
+            return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
 ```

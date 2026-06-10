@@ -48,6 +48,12 @@ classDiagram
 - [[forge.item.PaperCard|PaperCard]]
 - [[forge.item.SealedTemplate|SealedTemplate]]
 
+## Design Description
+
+SealedProduct is an abstract base for sealed Magic products (booster packs and similar) within the `forge.item` package, modeling a named, set-bound collection of cards that can be opened to yield a concrete card list. As an `InventoryItemFromSet` it exposes identity and edition metadata, deriving its name, edition, and description from an immutable `SealedTemplate` that defines the product's contents. It collaborates with `PaperCard` as the cards it produces and delegates actual pack generation to `BoosterGenerator`.
+
+Notable design intent: the card list is lazily generated and cached on first access via `getCards()`, while `equals`/`hashCode` rest on the immutable name and template with a precomputed hash. Subclasses customize behavior through the protected `generate()` hook and basic-land helpers, and a static `specialSets` list enumerates the mono-color special sets.
+
 ## Source
 `forge-core/src/main/java/forge/item/SealedProduct.java`
 
@@ -168,4 +174,96 @@ public abstract class SealedProduct implements InventoryItemFromSet {
                 .collect(StreamUtil.random(count));
     }
 }
+```
+
+## Python
+`forge/item/SealedProduct.py`
+
+```python
+from forge.StaticData import StaticData
+from forge.item.generation.BoosterGenerator import BoosterGenerator
+from forge.util.StreamUtil import StreamUtil
+
+from forge.item.InventoryItemFromSet import InventoryItemFromSet
+from forge.item.PaperCard import PaperCard
+from forge.item.SealedTemplate import SealedTemplate
+from forge.item.PaperCardPredicates import PaperCardPredicates
+
+
+class SealedProduct(InventoryItemFromSet):
+
+    specialSets: list[str] = []
+
+    def __init__(self, name0: str, boosterData: SealedTemplate):
+        if name0 is None:
+            raise ValueError("name0 must not be null")
+        if boosterData is None:
+            raise ValueError("boosterData for " + name0 + " must not be null")
+        self.contents = boosterData
+        self.name = name0
+        self.cards: list[PaperCard] = None
+        self.hash = hash(self.name) ^ hash(self.__class__) ^ hash(self.contents)
+
+    def getName(self) -> str:
+        return self.name + " " + self.getItemType()
+
+    def getDescription(self) -> str:
+        return str(self.contents)
+
+    def getEdition(self) -> str:
+        return self.contents.getEdition()
+
+    def getCards(self) -> list[PaperCard]:
+        if self.cards is None:
+            self.cards = self.generate()
+
+        return self.cards
+
+    def getTotalCards(self) -> int:
+        return self.contents.getNumberOfCardsExpected()
+
+    def equals(self, o: object) -> bool:
+        if self is o:
+            return True
+        if o is None or self.__class__ != o.__class__:
+            return False
+
+        other = o
+
+        return self.contents.equals(other.contents) and self.name == other.name
+
+    def __eq__(self, o: object) -> bool:
+        return self.equals(o)
+
+    def hashCode(self) -> int:
+        return self.hash
+
+    def __hash__(self) -> int:
+        return self.hashCode()
+
+    def toString(self) -> str:
+        return self.getName()
+
+    def __str__(self) -> str:
+        return self.toString()
+
+    def generate(self) -> list[PaperCard]:
+        return BoosterGenerator.getBoosterPack(self.contents)
+
+    def getRandomBasicLand(self, setCode: str) -> PaperCard:
+        return self.getRandomBasicLands(setCode, 1)[0]
+
+    def getRandomBasicLands(self, setCode: str, count: int) -> list[PaperCard]:
+        return StaticData.instance().getCommonCards().streamAllCards() \
+            .filter(PaperCardPredicates.printedInSet(setCode)) \
+            .filter(PaperCardPredicates.IS_BASIC_LAND) \
+            .collect(StreamUtil.random(count))
+
+
+specialSets.append("Black")
+specialSets.append("Blue")
+specialSets.append("Green")
+specialSets.append("Red")
+specialSets.append("White")
+specialSets.append("Colorless")
 ```

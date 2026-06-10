@@ -37,6 +37,12 @@ classDiagram
 - [[forge.game.card.Card|Card]]
 - [[forge.game.spellability.SpellAbility|SpellAbility]]
 
+## Design Description
+
+TriggerAttackerUnblockedOnce is a concrete trigger that fires when an attacking creature goes unblocked, encapsulating the matching and event-binding logic for that combat condition. As a subclass of Trigger, it overrides `performTest` to gate firing on the optional `ValidDefenders` and `ValidAttackingPlayer` parameters, and `setTriggeringObjects` to expose the attacking player and defenders to the resulting SpellAbility through AbilityKey-keyed run parameters.
+
+Its design follows the engine's data-driven trigger pattern: behavior is configured from a string parameter map and a host Card supplied at construction, while AbilityKey provides a typed vocabulary for combat state. The overridden `getImportantStackObjects` builds a localized, human-readable summary of the attacking player and defenders for stack display, keeping presentation concerns within the trigger and delegating validation to the inherited `matchesValidParam` helper.
+
 ## Source
 `forge-game/src/main/java/forge/game/trigger/TriggerAttackerUnblockedOnce.java`
 
@@ -120,4 +126,42 @@ public class TriggerAttackerUnblockedOnce extends Trigger {
         return sb.toString();
     }
 }
+```
+
+## Python
+`forge/game/trigger/TriggerAttackerUnblockedOnce.py`
+
+```python
+from typing import Map  # placeholder removed below
+
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.trigger.Trigger import Trigger
+from forge.util.Localizer import Localizer
+
+
+class TriggerAttackerUnblockedOnce(Trigger):
+    def __init__(self, params: dict[str, str], host: Card, intrinsic: bool):
+        super().__init__(params, host, intrinsic)
+
+    def performTest(self, runParams: dict[AbilityKey, object]) -> bool:
+        if not self.matchesValidParam("ValidDefenders", runParams.get(AbilityKey.Defenders)):
+            return False
+        if not self.matchesValidParam("ValidAttackingPlayer", runParams.get(AbilityKey.AttackingPlayer)):
+            return False
+        return True
+
+    def setTriggeringObjects(self, sa: SpellAbility, runParams: dict[AbilityKey, object]) -> None:
+        sa.setTriggeringObjectsFrom(runParams, AbilityKey.AttackingPlayer, AbilityKey.Defenders)
+
+    def getImportantStackObjects(self, sa: SpellAbility) -> str:
+        sb = []
+        sb.append(Localizer.getInstance().getMessage("lblAttackingPlayer"))
+        sb.append(": ")
+        sb.append(str(sa.getTriggeringObject(AbilityKey.AttackingPlayer)))
+        sb.append(Localizer.getInstance().getMessage("lblDefenders"))
+        sb.append(": ")
+        sb.append(str(sa.getTriggeringObject(AbilityKey.Defenders)))
+        return "".join(sb)
 ```

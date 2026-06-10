@@ -48,7 +48,7 @@ classDiagram
 
 ## Design Description
 
-VoteEffect implements the resolution logic for vote-based card abilities within Forge's ability-effect framework, extending SpellAbilityEffect and overriding `getStackDescription` to summarize the vote and `resolve` to conduct it. It supports several vote subjects—predefined choices, valid cards in a zone, or players (including "vote for another player")—and orchestrates polling each targeted player in turn (starting from the activator), honoring additional and optional votes, secret ballots, and a delegated controller of the vote.
+VoteEffect implements the resolution logic for vote-based card abilities within Forge's ability-effect framework, extending SpellAbilityEffect and overriding `getStackDescription` to summarize the vote and `resolve` to conduct it. It supports several vote subjectsâ€”predefined choices, valid cards in a zone, or players (including "vote for another player")â€”and orchestrates polling each targeted player in turn (starting from the activator), honoring additional and optional votes, secret ballots, and a delegated controller of the vote.
 
 Tallying votes into a `ListMultimap<Object, Player>`, it broadcasts results, fires a `GameEventRandomLog`, and triggers `TriggerType.Vote`. The private `getMostVotes` helper determines the winning option(s), driving downstream behavior: per-vote sub-abilities, tie-handling, winner resolution, or stored vote counts. This data-driven, parameter-heavy design lets a single effect express Magic's diverse voting cards declaratively through `SpellAbility` parameters rather than bespoke code.
 
@@ -255,4 +255,171 @@ public class VoteEffect extends SpellAbilityEffect {
         return most;
     }
 }
+```
+
+## Python
+`forge/game/ability/effects/VoteEffect.py`
+
+```python
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.Game import Game
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.card.Card import Card
+from forge.game.card.CardLists import CardLists
+from forge.game.event.GameEventRandomLog import GameEventRandomLog
+from forge.game.player.Player import Player
+from forge.game.spellability.AbilitySub import AbilitySub
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.trigger.TriggerType import TriggerType
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.Lang import Lang
+from forge.util.Localizer import Localizer
+
+from collections import defaultdict
+
+
+class VoteEffect(SpellAbilityEffect):
+
+    # (non-Javadoc)
+    # @see forge.card.abilityfactory.SpellEffect#getStackDescription(java.util.Map, forge.card.spellability.SpellAbility)
+    def getStackDescription(self, sa: SpellAbility) -> str:
+        sb = []
+        sb.append(Lang.joinHomogenous(self.getDefinedPlayersOrTargeted(sa)))
+        sb.append(" vote ")
+        if sa.hasParam("Choices"):
+            sb.append("for ")
+            sb.append(" or ".join(str(x) for x in sa.getAdditionalAbilityList("Choices")))
+        elif sa.hasParam("VoteMessage"):
+            sb.append(sa.getParam("VoteMessage"))
+        sb.append(".")
+        return "".join(sb)
+
+    # (non-Javadoc)
+    # @see forge.card.abilityfactory.SpellEffect#resolve(java.util.Map, forge.card.spellability.SpellAbility)
+    def resolve(self, sa: SpellAbility) -> None:
+        tgtPlayers = self.getDefinedPlayersOrTargeted(sa)
+        voteType: list[object] = []
+        host = sa.getHostCard()
+        game = host.getGame()
+        activator = sa.getActivatingPlayer()
+
+        secret = sa.hasParam("Secretly")
+        other = sa.hasParam("VotePlayer") and sa.getParam("VotePlayer") == "Other"
+        record: list[str] = []
+
+        if sa.hasParam("Choices"):
+            voteType.extend(sa.getAdditionalAbilityList("Choices"))
+        elif sa.hasParam("VoteCard"):
+            zone = ZoneType.smartValueOf(sa.getParam("Zone")) if sa.hasParam("Zone") else ZoneType.Battlefield
+            voteType.extend(CardLists.getValidCards(game.getCardsIn(zone), sa.getParam("VoteCard"), activator, host, sa))
+        elif sa.hasParam("VotePlayer"):
+            param = "Player" if other else sa.getParam("VotePlayer")
+            voteType.extend(AbilityUtils.getDefinedPlayers(host, param, sa))
+        if not voteType:
+            return
+
+        # starting with the activator
+        aidx = tgtPlayers.index(activator) if activator in tgtPlayers else -1
+        if aidx != -1:
+            tgtPlayers[:] = tgtPlayers[aidx:] + tgtPlayers[:aidx]
+
+        votes: dict[object, list[Player]] = defaultdict(list)
+        voter = game.getControlVote()
+
+        for p in tgtPlayers:
+            if not p.isInGame():
+                continue
+            voteOpts = list(voteType)
+            voteAmount = p.getAdditionalVotesAmount() + 1
+            optionalVotes = p.getAdditionalOptionalVotesAmount()
+            realVoter = p if voter is None else voter
+
+            if other:
+                if realVoter in voteOpts:
+                    voteOpts.remove(realVoter)
+                if not voteOpts:
+                    continue
+
+            params = {}
+            params["Voter"] = realVoter
+            voteAmount += p.getController().chooseNumber(sa, Localizer.getInstance().getMessage("lblHowManyAdditionalVotesDoYouWant"), 0, optionalVotes, params)
+
+            for i in range(voteAmount):
+                result = realVoter.getController().vote(sa, host + " " + Localizer.getInstance().getMessage("lblVote") + ":", voteOpts, votes, p, sa.hasParam("UpTo"))
+
+                if result is not None:
+                    votes[result].append(p)
+                    if not secret:
+                        game.getAction().notifyOfValue(sa, p, str(result) + "\r\n" +
+                                Localizer.getInstance().getMessage("lblCurrentVote") + ":" + str(votes), p)
+                    if len(record) > 0:
+                        record.append("\r\n")
+                    record.append(str(p))
+                    record.append(" ")
+                    record.append(Localizer.getInstance().getMessage("lblVotedFor", result))
+
+        voteResult = "".join(record)
+        if secret:
+            game.getAction().notifyOfValue(sa, host, voteResult, None)
+        game.fireEvent(GameEventRandomLog(voteResult))
+
+        runParams = AbilityKey.newMap()
+        runParams[AbilityKey.AllVotes] = votes
+        game.getTriggerHandler().runTrigger(TriggerType.Vote, runParams, False)
+
+        if sa.hasParam("EachVote"):
+            for key, value in votes.items():
+                action = key
+
+                action.setActivatingPlayer(sa.getActivatingPlayer())
+                action.setParent(sa)
+
+                for p in value:
+                    host.addRemembered(p)
+                    AbilityUtils.resolve(action)
+                    host.removeRemembered(p)
+        else:
+            subAbs: list[SpellAbility] = []
+            if sa.hasParam("StoreVoteNum") and sa.hasParam("Choices"):
+                for type in voteType:
+                    subAb = type
+                    subAb.setSVar("VoteNum", "Number$" + str(len(votes[type])))
+                    subAbs.append(type)
+            else:
+                mostVotes = self.getMostVotes(votes)
+                if sa.hasAdditionalAbility("VoteTiedAbility") and len(mostVotes) > 1:
+                    subAbs.append(sa.getAdditionalAbility("VoteTiedAbility"))
+                elif sa.hasAdditionalAbility("VoteSubAbility"):
+                    host.addRemembered(mostVotes)
+                    subAbs.append(sa.getAdditionalAbility("VoteSubAbility"))
+                elif sa.hasParam("Choices"):
+                    for type in mostVotes:
+                        subAbs.append(type)
+            if sa.hasParam("StoreVoteNum") and not sa.hasParam("Choices"):
+                for type in voteType:
+                    sa.setSVar("VoteNum" + str(type), "Number$" + str(len(votes[type])))
+            else:
+                for subAb in subAbs:
+                    subAb.setActivatingPlayer(sa.getActivatingPlayer())
+                    subAb.setParent(sa)
+                    AbilityUtils.resolve(subAb)
+            if sa.hasParam("VoteSubAbility"):
+                host.clearRemembered()
+            if sa.hasParam("RememberVotedObjects"):
+                host.addRemembered(votes.keys())
+
+    @staticmethod
+    def getMostVotes(votes: dict[object, list[Player]]) -> list[object]:
+        most: list[object] = []
+        amount = 0
+        for voteType in list(votes.keys()):
+            voteAmount = len(votes[voteType])
+            if voteAmount == amount:
+                most.append(voteType)
+            elif voteAmount > amount:
+                amount = voteAmount
+                most.clear()
+                most.append(voteType)
+        return most
 ```

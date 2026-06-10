@@ -56,9 +56,9 @@ classDiagram
 
 ## Design Description
 
-SacrificeAi is the AI decision handler for sacrifice-based abilities in Forge's automated player. Extending `SpellAbilityAi`, it overrides the standard hooks—`canPlay`, `chkDrawback`, and `doTriggerNoCost`—delegating to the private `sacrificeTgtAI` helper that returns an `AiAbilityDecision` weighing whether the AI should activate the effect. Its logic branches on whether the ability targets, destroys versus sacrifices, and whom it affects, consulting `SacMe`/`SacValid` parameters and `ComputerUtilCard` creature evaluations to spare valuable permanents while forcing favorable trades against opponents.
+SacrificeAi is the AI decision handler for sacrifice-based abilities in Forge's automated player. Extending `SpellAbilityAi`, it overrides the standard hooksâ€”`canPlay`, `chkDrawback`, and `doTriggerNoCost`â€”delegating to the private `sacrificeTgtAI` helper that returns an `AiAbilityDecision` weighing whether the AI should activate the effect. Its logic branches on whether the ability targets, destroys versus sacrifices, and whom it affects, consulting `SacMe`/`SacValid` parameters and `ComputerUtilCard` creature evaluations to spare valuable permanents while forcing favorable trades against opponents.
 
-Collaborating with core game types—`Player`, `Card`, `CardCollection`, `Cost`, and `SpellAbility`—it selects targets by life total or board value (e.g., picking the strongest opponent's matching permanents, or the AI's own worst creature). The static `doSacOneEachLogic` supports symmetric "each player sacrifices" effects, prioritizing opponents' best and the AI's worst, and sacrificing the host only as a last resort. `confirmAction` and `willPayUnlessCost` round out cost/confirmation prompts, the latter guarding cooperative "pay unless" effects so the AI only assists teammates.
+Collaborating with core game typesâ€”`Player`, `Card`, `CardCollection`, `Cost`, and `SpellAbility`â€”it selects targets by life total or board value (e.g., picking the strongest opponent's matching permanents, or the AI's own worst creature). The static `doSacOneEachLogic` supports symmetric "each player sacrifices" effects, prioritizing opponents' best and the AI's worst, and sacrificing the host only as a last resort. `confirmAction` and `willPayUnlessCost` round out cost/confirmation prompts, the latter guarding cooperative "pay unless" effects so the AI only assists teammates.
 
 ## Source
 `forge-ai/src/main/java/forge/ai/ability/SacrificeAi.java`
@@ -287,4 +287,186 @@ public class SacrificeAi extends SpellAbilityAi {
         return super.willPayUnlessCost(payer, sa, cost, alreadyPaid, payers);
     }
 }
+```
+
+## Python
+`forge/ai/ability/SacrificeAi.py`
+
+```python
+from typing import List, Map
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.ai.ComputerUtilCard import ComputerUtilCard
+from forge.ai.ComputerUtilCost import ComputerUtilCost
+from forge.ai.SpellAbilityAi import SpellAbilityAi
+from forge.game.Game import Game
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CardPredicates import CardPredicates
+from forge.game.cost.Cost import Cost
+from forge.game.keyword.Keyword import Keyword
+from forge.game.player.Player import Player
+from forge.game.player.PlayerActionConfirmMode import PlayerActionConfirmMode
+from forge.game.player.PlayerCollection import PlayerCollection
+from forge.game.player.PlayerPredicates import PlayerPredicates
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.collect.FCollectionView import FCollectionView
+
+
+class SacrificeAi(SpellAbilityAi):
+
+    def canPlay(self, ai: Player, sa: SpellAbility) -> AiAbilityDecision:
+        return self.sacrificeTgtAI(ai, sa, False)
+
+    def chkDrawback(self, ai: Player, sa: SpellAbility) -> AiAbilityDecision:
+        # AI should only activate this during Human's turn
+
+        return self.sacrificeTgtAI(ai, sa, False)
+
+    def doTriggerNoCost(self, ai: Player, sa: SpellAbility, mandatory: bool) -> AiAbilityDecision:
+        decision = self.sacrificeTgtAI(ai, sa, mandatory)
+        if decision.willingToPlay():
+            return decision
+
+        if mandatory:
+            return AiAbilityDecision(50, AiPlayDecision.MandatoryPlay)
+        return decision
+
+    def sacrificeTgtAI(self, ai: Player, sa: SpellAbility, mandatory: bool) -> AiAbilityDecision:
+        source = sa.getHostCard()
+        destroy = sa.hasParam("Destroy")
+        aiLogic = sa.getParamOrDefault("AILogic", "")
+        valid = sa.getParamOrDefault("SacValid", "Self")
+
+        if sa.usesTargeting():
+            targetableOpps = ai.getOpponents().filter(PlayerPredicates.isTargetableBy(sa))
+            if targetableOpps.isEmpty():
+                # TODO also check if own SacMe makes this a reasonable (or even better) choice
+                if mandatory and sa.canTarget(ai):
+                    sa.resetTargets()
+                    sa.getTargets().add(ai)
+                    return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+                return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+            opp = targetableOpps.max(PlayerPredicates.compareByLife())
+            sa.resetTargets()
+            sa.getTargets().add(opp)
+            if mandatory:
+                return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+            num = sa.getParamOrDefault("Amount", "1")
+            amount = AbilityUtils.calculateAmount(source, num, sa)
+
+            list = CardLists.getValidCards(opp.getCardsIn(ZoneType.Battlefield), valid, sa.getActivatingPlayer(), source, sa)
+
+            for c in list:
+                if c.hasSVar("SacMe") and int(c.getSVar("SacMe")) > 3:
+                    return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+            if not destroy:
+                list = CardLists.filter(list, CardPredicates.canBeSacrificedBy(sa, True))
+            else:
+                if not CardLists.getKeyword(list, Keyword.INDESTRUCTIBLE).isEmpty():
+                    # human can choose to destroy indestructibles
+                    return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+            if not list:
+                return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+            if num == "X" and sa.getSVar(num) == "Count$xPaid":
+                sa.setXManaCostPaid(min(ComputerUtilCost.setMaxXValue(sa, ai, sa.isTrigger()), amount))
+
+            half = (amount // 2) + (amount % 2)  # Half of amount rounded up
+
+            # If the Human has at least half rounded up of the amount to be
+            # sacrificed, cast the spell
+            if not sa.isTrigger() and len(list) < half:
+                return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+        defined = sa.getParamOrDefault("Defined", "You")
+        targeted = sa.getParamOrDefault("ValidTgts", "")
+        if valid == "Self":
+            # Self Sacrifice.
+            pass
+        elif (defined == "Player" or targeted == "Player" or targeted == "Opponent"
+                or ((defined == "Player.Opponent" or defined == "Opponent") and not sa.isTrigger())):
+            # is either "Defined$ Player.Opponent" or "Defined$ Opponent" obsolete?
+
+            # If Sacrifice hits both players:
+            # Only cast it if Human has the full amount of valid
+            # Only cast it if AI doesn't have the full amount of Valid
+            # TODO: Cast if the type is favorable: my "worst" valid is worse than his "worst" valid
+            num = sa.getParamOrDefault("Amount", "1")
+            amount = AbilityUtils.calculateAmount(source, num, sa)
+
+            if num == "X" and sa.getSVar(num) == "Count$xPaid":
+                amount = min(ComputerUtilCost.setMaxXValue(sa, ai, sa.isTrigger()), amount)
+
+            humanList = CardLists.getValidCards(ai.getStrongestOpponent().getCardsIn(ZoneType.Battlefield), valid, sa.getActivatingPlayer(), source, sa)
+
+            # Since all of the cards have AI:RemoveDeck:All, I enabled 1 for 1
+            # (or X for X) trades for special decks
+            return AiAbilityDecision(100, AiPlayDecision.WillPlay) if len(humanList) >= amount else AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+        elif defined == "You":
+            computerList = CardLists.getValidCards(ai.getCardsIn(ZoneType.Battlefield), valid, sa.getActivatingPlayer(), source, sa)
+            for c in computerList:
+                if "Lethal" == aiLogic:
+                    isLethal = False
+                    for opp in ai.getOpponents():
+                        if opp.canLoseLife() and not opp.cantLoseForZeroOrLessLife() and c.getNetPower() >= opp.getLife():
+                            isLethal = True
+                            break
+                    for creature in ai.getOpponents().getCreaturesInPlay():
+                        if creature.canBeDestroyed() and c.getNetPower() >= creature.getNetToughness():
+                            isLethal = True
+                            break
+
+                    if c.hasSVar("SacMe") or isLethal:
+                        return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+                    return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+                if c.hasSVar("SacMe") or ComputerUtilCard.evaluateCreature(c) <= 135:
+                    return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+            return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+        return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+    def confirmAction(self, player: Player, sa: SpellAbility, mode: PlayerActionConfirmMode, message: str, params: Map[str, object]) -> bool:
+        return True
+
+    @staticmethod
+    def doSacOneEachLogic(ai: Player, sa: SpellAbility) -> AiAbilityDecision:
+        game = ai.getGame()
+        sa.resetTargets()
+        for p in game.getPlayers():
+            targetable = CardLists.filter(p.getCardsIn(ZoneType.Battlefield), CardPredicates.isTargetableBy(sa))
+            if not targetable.isEmpty():
+                priorityTgts = CardCollection()
+                if p.isOpponentOf(ai):
+                    priorityTgts.addAll(CardLists.filter(targetable, CardPredicates.canBeSacrificedBy(sa, True)))
+                    if not priorityTgts.isEmpty():
+                        sa.getTargets().add(ComputerUtilCard.getBestAI(priorityTgts))
+                    else:
+                        sa.getTargets().add(ComputerUtilCard.getBestAI(targetable))
+                else:
+                    for c in targetable:
+                        if c.canBeSacrificedBy(sa, True) and (c.hasSVar("SacMe") or (c.isCreature() and ComputerUtilCard.evaluateCreature(c) <= 135)) and not c.equals(sa.getHostCard()):
+                            priorityTgts.add(c)
+                    if not priorityTgts.isEmpty():
+                        sa.getTargets().add(ComputerUtilCard.getWorstPermanentAI(priorityTgts, False, False, False, False))
+                    else:
+                        targetable.remove(sa.getHostCard())
+                        if not targetable.isEmpty():
+                            sa.getTargets().add(ComputerUtilCard.getWorstPermanentAI(targetable, True, True, True, False))
+                        else:
+                            sa.getTargets().add(sa.getHostCard())  # sac self only as a last resort
+        return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+    def willPayUnlessCost(self, payer: Player, sa: SpellAbility, cost: Cost, alreadyPaid: bool, payers: FCollectionView[Player]) -> bool:
+        # Icy Prison
+        if payers.size() > 1:
+            p = sa.getActivatingPlayer()
+            # not me or team mate
+            if not p.sameTeam(payer):
+                return False
+
+        return super().willPayUnlessCost(payer, sa, cost, alreadyPaid, payers)
 ```

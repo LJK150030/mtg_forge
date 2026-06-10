@@ -30,6 +30,12 @@ classDiagram
 **Extends:**
 - [[forge.game.player.actions.PlayerAction|PlayerAction]]
 
+## Design Description
+
+ColorChoiceAction is a lightweight, immutable command object that records a player's selection of a single Magic color during gameplay. It captures the chosen color as a compact `byte` (Forge's bitmask color encoding) supplied at construction, exposes it through `getColor()`, and fixes the human-readable label "Choose color" via its superclass constructor.
+
+As a concrete subclass of `PlayerAction`, it fits into the engine's hierarchy of discrete, describable player decisions. It contributes its color-specific detail by overriding the protected `appendDetails` hook, delegating to `MagicColor.toShortString` so the action renders the color symbolically. This template-method arrangement lets `PlayerAction` own the common formatting flow while each action type augments only its own state, and the `final` field reflects the intent that a chosen color, once made, is immutable.
+
 ## Source
 `forge-game/src/main/java/forge/game/player/actions/ColorChoiceAction.java`
 
@@ -55,4 +61,24 @@ public class ColorChoiceAction extends PlayerAction {
         sb.append(" color=").append(MagicColor.toShortString(color));
     }
 }
+```
+
+## Python
+`forge/game/player/actions/ColorChoiceAction.py`
+
+```python
+from forge.game.player.actions.PlayerAction import PlayerAction
+from forge.card.MagicColor import MagicColor
+
+
+class ColorChoiceAction(PlayerAction):
+    def __init__(self, color: int):
+        super().__init__(None, "Choose color")
+        self.color = color
+
+    def getColor(self) -> int:
+        return self.color
+
+    def appendDetails(self, sb) -> None:
+        sb.append(" color=").append(MagicColor.toShortString(self.color))
 ```

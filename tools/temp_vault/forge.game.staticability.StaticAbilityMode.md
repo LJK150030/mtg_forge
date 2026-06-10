@@ -107,6 +107,12 @@ classDiagram
     }
 ```
 
+## Design Description
+
+Continuous serves as the base mode for ongoing, layer-applied effects, while the remaining constants enumerate the discrete restriction, cost-modification, combat, and replacement behaviors that the rules engine recognizesâ€”each grouped by the dedicated `StaticAbility*` handler class that interprets it.
+
+As the central vocabulary of the `forge.game.staticability` subsystem, this enum lets static abilities declare their effect category in card scripts, which the parser resolves via the case-insensitive `smartValueOf` lookup and the delimiter-splitting `setValueOf` factory that builds an `EnumSet` of modes. Using `EnumSet` and a single canonical enum keeps mode dispatch type-safe and memory-compact, and the extensive comment-grouped membership reflects a deliberate one-mode-per-handler design that scales as new MTG mechanics are added.
+
 ## Source
 `forge-game/src/main/java/forge/game/staticability/StaticAbilityMode.java`
 
@@ -339,4 +345,233 @@ public enum StaticAbilityMode {
         return result;
     }
 }
+```
+
+## Python
+`forge/game/staticability/StaticAbilityMode.py`
+
+```python
+from enum import Enum
+from typing import Optional, Set
+
+
+class StaticAbilityMode(Enum):
+    Continuous = "Continuous"
+
+    # StaticAbility
+    CantAttackUnless = "CantAttackUnless"
+    CantBlockUnless = "CantBlockUnless"
+    OptionalAttackCost = "OptionalAttackCost"
+
+    # GameActionUtil
+    OptionalCost = "OptionalCost"
+
+    # StaticAbilityAlternativeCost
+    AlternativeCost = "AlternativeCost"
+
+    # StaticAbilityCantBeCast
+    CantBeCast = "CantBeCast"
+    CantBeActivated = "CantBeActivated"
+    CantPlayLand = "CantPlayLand"
+    # StaticAbilityDisableTriggers
+    DisableTriggers = "DisableTriggers"
+
+    # StaticAbilityPanharmonicon
+    Panharmonicon = "Panharmonicon"
+
+    # StaticAbilityMustTarget
+    MustTarget = "MustTarget"
+
+    # StaticAbilityCantAttackBlock
+    CantAttack = "CantAttack"
+    CanAttackDefender = "CanAttackDefender"
+    CantBlock = "CantBlock"
+    CantBlockBy = "CantBlockBy"
+    CanAttackIfHaste = "CanAttackIfHaste"
+    CanBlockIfReach = "CanBlockIfReach"
+    MinMaxBlocker = "MinMaxBlocker"
+    BlockTapped = "BlockTapped"
+    AttackVigilance = "AttackVigilance"
+
+    # StaticAbilityMustAttack
+    MustAttack = "MustAttack"
+    PlayerMustAttack = "PlayerMustAttack"
+    # StaticAbilityMustBlock
+    MustBlock = "MustBlock"
+
+    # StaticAbilityAssignCombatDamageAsUnblocked
+    AssignCombatDamageAsUnblocked = "AssignCombatDamageAsUnblocked"
+
+    # StaticAbilityCombatDamageToughness
+    CombatDamageToughness = "CombatDamageToughness"
+
+    # StaticAbilityColorlessDamageSource
+    ColorlessDamageSource = "ColorlessDamageSource"
+
+    # StaticAbilityNoCleanupDamage
+    NoCleanupDamage = "NoCleanupDamage"
+
+    # StaticAbilityBlockRestrict
+    BlockRestrict = "BlockRestrict"
+
+    # StaticAbilityCantGainLosePayLife
+    CantGainLife = "CantGainLife"
+    CantLoseLife = "CantLoseLife"
+    CantChangeLife = "CantChangeLife"
+    CantPayLife = "CantPayLife"
+
+    # CostAdjustment
+    RaiseCost = "RaiseCost"
+    ReduceCost = "ReduceCost"
+    SetCost = "SetCost"
+
+    # StaticAbilityIgnoreHexproofShroud
+    IgnoreHexproof = "IgnoreHexproof"
+    IgnoreShroud = "IgnoreShroud"
+
+    # StaticAbilityAttackRestrict
+    AttackRestrict = "AttackRestrict"
+
+    # StaticAbilityAssignNoCombatDamage
+    AssignNoCombatDamage = "AssignNoCombatDamage"
+
+    # StaticAbilityAdapt
+    CanAdapt = "CanAdapt"
+
+    # StaticAbilityExhaust
+    CanExhaust = "CanExhaust"
+
+    # StaticAbilityCantBeCopied
+    CantBeCopied = "CantBeCopied"
+
+    # StaticAbilityCantBeSuspected
+    CantBeSuspected = "CantBeSuspected"
+
+    # StaticAbilityCantBecomeMonarch
+    CantBecomeMonarch = "CantBecomeMonarch"
+
+    # StaticAbilityCantAttach
+    CantAttach = "CantAttach"
+
+    # StaticAbilityCantCrew
+    CantCrew = "CantCrew"
+
+    # StaticAbilityCantDraw
+    CantDraw = "CantDraw"
+
+    # StaticAbilityCantDiscard
+    CantDiscard = "CantDiscard"
+
+    # StaticAbilityCantExile
+    CantExile = "CantExile"
+
+    # StaticAbilityCantPhase
+    CantPhaseIn = "CantPhaseIn"
+    CantPhaseOut = "CantPhaseOut"
+
+    # StaticAbilityCantPreventDamage
+    CantPreventDamage = "CantPreventDamage"
+
+    # StaticAbilityCantPutCounter
+    CantPutCounter = "CantPutCounter"
+
+    # StaticAbilityCantRegenerate
+    CantRegenerate = "CantRegenerate"
+
+    # StaticAbilityCantSacrifice
+    CantSacrifice = "CantSacrifice"
+
+    # StaticAbilityCantTarget
+    CantTarget = "CantTarget"
+
+    # StaticAbilityCantTransform
+    CantTransform = "CantTransform"
+
+    # StaticAbilityCantVenture
+    CantVenture = "CantVenture"
+
+    # StaticAbilityCantChangeDayTime
+    CantChangeDayTime = "CantChangeDayTime"
+
+    # StaticAbilityActivateAbilityAsIfHaste
+    ActivateAbilityAsIfHaste = "ActivateAbilityAsIfHaste"
+
+    # StaticAbilityCastWithFlash
+    CastWithFlash = "CastWithFlash"
+
+    # StaticAbilityIgnoreLandwalk
+    IgnoreLandwalk = "IgnoreLandwalk"
+    # StaticAbilityIgnoreLegendRule
+    IgnoreLegendRule = "IgnoreLegendRule"
+
+    # StaticAbilityMaxCounter
+    MaxCounter = "MaxCounter"
+
+    # StaticAbilityInfectDamage
+    InfectDamage = "InfectDamage"
+    # StaticAbilityWitherDamage
+    WitherDamage = "WitherDamage"
+
+    # StaticAbilityFlipCoinMod
+    FlipCoinMod = "FlipCoinMod"
+    FlipCoinDoubler = "FlipCoinDoubler"
+
+    # StaticAbilityPlotZone
+    PlotZone = "PlotZone"
+
+    # StaticAbilityNumLoyaltyAct
+    NumLoyaltyAct = "NumLoyaltyAct"
+
+    # StaticAbilityDevotion
+    Devotion = "Devotion"
+    # StaticAbilityGainLifeRadiation
+    GainLifeRadiation = "GainLifeRadiation"
+
+    # StaticAbilitySurveilNum
+    SurveilNum = "SurveilNum"
+
+    # StaticAbilityTapPowerValue
+    TapPowerValue = "TapPowerValue"
+
+    # StaticAbilityUnspentMana
+    UnspentMana = "UnspentMana"
+    ManaBurn = "ManaBurn"
+
+    # StaticAbilityManaConvert
+    ManaConvert = "ManaConvert"
+
+    # StaticAbilityUntapOtherPlayer
+    UntapOtherPlayer = "UntapOtherPlayer"
+
+    # StaticAbilityTurnPhaseReversed
+    TurnReversed = "TurnReversed"
+    PhaseReversed = "PhaseReversed"
+
+    # StaticAbilityAttackRequirement
+    AttackRequirement = "AttackRequirement"
+
+    # StaticAbilityCountersRemain
+    CountersRemain = "CountersRemain"
+
+    @staticmethod
+    def smartValueOf(value: Optional[str]) -> Optional["StaticAbilityMode"]:
+        if value is None:
+            return None
+        valToCompate = value.strip()
+        for v in StaticAbilityMode:
+            if v.name.lower() == valToCompate.lower():
+                return v
+        raise ValueError("No element named " + value + " in enum StaticAbilityMode")
+
+    @staticmethod
+    def setValueOf(values: str) -> Set["StaticAbilityMode"]:
+        result: Set["StaticAbilityMode"] = set()
+        for s in re.split(r"[, ]+", values):
+            zt = StaticAbilityMode.smartValueOf(s)
+            if zt is not None:
+                result.add(zt)
+        return result
+
+
+import re
 ```

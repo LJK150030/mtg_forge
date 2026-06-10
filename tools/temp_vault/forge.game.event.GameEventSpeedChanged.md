@@ -63,3 +63,29 @@ public record GameEventSpeedChanged(PlayerView player, int oldValue, int newValu
     }
 }
 ```
+
+## Python
+`forge/game/event/GameEventSpeedChanged.py`
+
+```python
+from forge.game.player.Player import Player
+from forge.game.player.PlayerView import PlayerView
+from forge.game.event.GameEvent import GameEvent
+from forge.game.event.IGameEventVisitor import IGameEventVisitor
+
+
+class GameEventSpeedChanged(GameEvent):
+
+    def __init__(self, player, oldValue: int, newValue: int):
+        # Canonical record component stores a PlayerView; the convenience
+        # constructor accepts a Player and converts it via PlayerView.get.
+        if isinstance(player, Player):
+            self.player = PlayerView.get(player)
+        else:
+            self.player = player
+        self.oldValue = oldValue
+        self.newValue = newValue
+
+    def visit(self, visitor: IGameEventVisitor):
+        return visitor.visit(self)
+```

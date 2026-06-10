@@ -2467,3 +2467,1697 @@ public class ComputerUtilCard {
     }
 }
 ```
+
+## Python
+`forge/ai/ComputerUtilCard.py`
+
+```python
+from forge.StaticData import StaticData
+from forge.ai.simulation.GameStateEvaluator import GameStateEvaluator
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiAttackController import AiAttackController
+from forge.ai.AiBlockController import AiBlockController
+from forge.ai.AiCardMemory import AiCardMemory
+from forge.ai.AiController import AiController
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.ai.AiProfileUtil import AiProfileUtil
+from forge.ai.AiProps import AiProps
+from forge.ai.ComputerUtil import ComputerUtil
+from forge.ai.ComputerUtilAbility import ComputerUtilAbility
+from forge.ai.ComputerUtilCombat import ComputerUtilCombat
+from forge.ai.ComputerUtilCost import ComputerUtilCost
+from forge.ai.ComputerUtilMana import ComputerUtilMana
+from forge.ai.CreatureEvaluator import CreatureEvaluator
+from forge.ai.PlayerControllerAi import PlayerControllerAi
+from forge.ai.SpecialCardAi import SpecialCardAi
+from forge.ai.SpellAbilityAi import SpellAbilityAi
+from forge.card.CardRules import CardRules
+from forge.card.CardStateName import CardStateName
+from forge.card.CardType import CardType
+from forge.card.CardType.CoreType import CoreType
+from forge.card.ColorSet import ColorSet
+from forge.card.MagicColor import MagicColor
+from forge.card.MagicColor.Constant import Constant
+from forge.card.mana.ManaCost import ManaCost
+from forge.deck.CardPool import CardPool
+from forge.deck.Deck import Deck
+from forge.deck.DeckSection import DeckSection
+from forge.game.Game import Game
+from forge.game.GameObject import GameObject
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.ability.ApiType import ApiType
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.card.CardCopyService import CardCopyService
+from forge.game.card.CardFactoryUtil import CardFactoryUtil
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CardPredicates import CardPredicates
+from forge.game.card.CounterEnumType import CounterEnumType
+from forge.game.combat.Combat import Combat
+from forge.game.combat.CombatUtil import CombatUtil
+from forge.game.cost.Cost import Cost
+from forge.game.cost.CostPayEnergy import CostPayEnergy
+from forge.game.cost.CostRemoveCounter import CostRemoveCounter
+from forge.game.cost.CostSacrifice import CostSacrifice
+from forge.game.cost.CostUntap import CostUntap
+from forge.game.keyword.Keyword import Keyword
+from forge.game.keyword.KeywordCollection import KeywordCollection
+from forge.game.keyword.KeywordInterface import KeywordInterface
+from forge.game.phase.PhaseHandler import PhaseHandler
+from forge.game.phase.PhaseType import PhaseType
+from forge.game.player.Player import Player
+from forge.game.replacement.ReplacementEffect import ReplacementEffect
+from forge.game.replacement.ReplacementLayer import ReplacementLayer
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.staticability.StaticAbility import StaticAbility
+from forge.game.staticability.StaticAbilityMode import StaticAbilityMode
+from forge.game.trigger.Trigger import Trigger
+from forge.game.trigger.TriggerType import TriggerType
+from forge.game.zone.MagicStack import MagicStack
+from forge.game.zone.ZoneType import ZoneType
+from forge.item.PaperCard import PaperCard
+from forge.util.Aggregates import Aggregates
+from forge.util.Expressions import Expressions
+from forge.util.IterableUtil import IterableUtil
+from forge.util.MyRandom import MyRandom
+from forge.util.TextUtil import TextUtil
+
+import functools
+import sys
+
+
+class ComputerUtilCard:
+
+    class LandEvaluator:
+        def apply(self, card):
+            return GameStateEvaluator.evaluateLand(card)
+
+    creatureEvaluator = CreatureEvaluator()
+    landEvaluator = LandEvaluator()
+
+    @staticmethod
+    def getMostExpensivePermanentAI(all, spell=None, targeted=False):
+        if targeted:
+            all = CardLists.filter(all, lambda c: c.canBeTargetedBy(spell))
+
+        biggest = None
+        bigCMC = -1
+        for card in all:
+            # TODO when PlayAi can consider MDFC this should also look at the back face (if not on stack or battlefield)
+            curCMC = card.getCMC()
+
+            # Add all cost of all auras with the same controller
+            if card.isEnchanted():
+                auras = CardLists.filterControlledBy(card.getEnchantedBy(), card.getController())
+                curCMC += Aggregates.sum(auras, lambda a: a.getCMC()) + len(auras)
+
+            if curCMC >= bigCMC:
+                bigCMC = curCMC
+                biggest = card
+
+        return biggest
+
+    @staticmethod
+    def sortByEvaluateCreature(list):
+        comparator = ComputerUtilCard.getCachedCreatureComparator()
+        list.sort(key=functools.cmp_to_key(lambda a, b: comparator(b, a)))
+
+    @staticmethod
+    def getBestArtifactAI(list):
+        # get biggest Artifact
+        return max((c for c in list if CardPredicates.ARTIFACTS(c)),
+                   key=lambda c: c.getCMC(), default=None)
+
+    @staticmethod
+    def getBestPlaneswalkerAI(list):
+        # no AI logic, just return most expensive
+        return max((c for c in list if CardPredicates.PLANESWALKERS(c)),
+                   key=lambda c: c.getCMC(), default=None)
+
+    @staticmethod
+    def getWorstPlaneswalkerAI(list):
+        # no AI logic, just return least expensive
+        return min((c for c in list if CardPredicates.PLANESWALKERS(c)),
+                   key=lambda c: c.getCMC(), default=None)
+
+    @staticmethod
+    def getBestPlaneswalkerToDamage(pws):
+        bestTgt = None
+
+        # As of right now, ranks planeswalkers by their Current Loyalty * 10 + Big buff if close to "Ultimate"
+        bestScore = 0
+        for pw in pws:
+            curLoyalty = pw.getCounters(CounterEnumType.LOYALTY)
+            pwScore = curLoyalty * 10
+
+            for sa in pw.getSpellAbilities():
+                if sa.hasParam("Ultimate"):
+                    loyaltyCost = 0
+                    remLoyalty = sa.getPayCosts().getCostPartByType(CostRemoveCounter)
+                    if remLoyalty is not None:
+                        # if remLoyalty is null, generally there's an AddCounter<0/LOYALTY> cost, like for Gideon Jura.
+                        loyaltyCost = remLoyalty.convertAmount()
+
+                    if loyaltyCost is not None and loyaltyCost != 0 and loyaltyCost - curLoyalty <= 1:
+                        # Will ultimate soon
+                        pwScore += 10000
+
+                    if pwScore > bestScore:
+                        bestScore = pwScore
+                        bestTgt = pw
+
+        return bestTgt
+
+    @staticmethod
+    def getWorstPlaneswalkerToDamage(pws):
+        bestTgt = None
+
+        bestScore = float('inf')
+        for pw in pws:
+            curLoyalty = pw.getCounters(CounterEnumType.LOYALTY)
+
+            if curLoyalty < bestScore:
+                bestScore = curLoyalty
+                bestTgt = pw
+
+        return bestTgt
+
+    # The AI doesn't really pick the best enchantment, just the most expensive.
+    @staticmethod
+    def getBestEnchantmentAI(list, spell, targeted):
+        cardStream = (c for c in list if CardPredicates.ENCHANTMENTS(c))
+        if targeted:
+            cardStream = (c for c in cardStream if c.canBeTargetedBy(spell))
+
+        # get biggest Enchantment
+        return max(cardStream, key=lambda c: c.getCMC(), default=None)
+
+    @staticmethod
+    def getBestLandAI(list):
+        land = CardLists.filter(list, CardPredicates.LANDS)
+        if land.isEmpty():
+            return None
+
+        # prefer to target non basic lands
+        nbLand = CardLists.filter(land, CardPredicates.NONBASIC_LANDS)
+
+        if not nbLand.isEmpty():
+            # TODO - Improve ranking various non-basic lands depending on context
+
+            # Urza's Mine/Tower/Power Plant
+            aiAvailable = nbLand.get(0).getController().getCardsIn([ZoneType.Battlefield, ZoneType.Hand])
+            if IterableUtil.any(list, CardPredicates.nameEquals("Urza's Mine")):
+                if CardLists.filter(aiAvailable, CardPredicates.nameEquals("Urza's Mine")).isEmpty():
+                    return CardLists.filter(nbLand, CardPredicates.nameEquals("Urza's Mine")).getFirst()
+            if IterableUtil.any(list, CardPredicates.nameEquals("Urza's Tower")):
+                if CardLists.filter(aiAvailable, CardPredicates.nameEquals("Urza's Tower")).isEmpty():
+                    return CardLists.filter(nbLand, CardPredicates.nameEquals("Urza's Tower")).getFirst()
+            if IterableUtil.any(list, CardPredicates.nameEquals("Urza's Power Plant")):
+                if CardLists.filter(aiAvailable, CardPredicates.nameEquals("Urza's Power Plant")).isEmpty():
+                    return CardLists.filter(nbLand, CardPredicates.nameEquals("Urza's Power Plant")).getFirst()
+
+            return Aggregates.random(nbLand)
+
+        # if no non-basic lands, target the least represented basic land type
+        sminBL = ""
+        iminBL = float('inf')
+        n = 0
+        for name in MagicColor.Constant.BASIC_LANDS:
+            n = CardLists.getType(land, name).size()
+            if n < iminBL and n > 0:
+                iminBL = n
+                sminBL = name
+        if iminBL == float('inf'):
+            # All basic lands have no basic land type. Just return something
+            return next((c for c in land if CardPredicates.UNTAPPED(c)), land.get(0))
+
+        bLand = CardLists.getType(land, sminBL)
+
+        result = next((c for c in bLand if CardPredicates.UNTAPPED(c)), None)
+        # TODO potentially risky if simulation mode currently able to reach this from triggers
+        return result if result is not None else Aggregates.random(bLand)  # random tapped land of least represented type
+
+    @staticmethod
+    def getBestLandToRemoveAI(ai, list, removal):
+        lands = CardLists.filter(list, CardPredicates.LANDS)
+        if lands.isEmpty():
+            return None
+
+        return max(lands, key=lambda c: ComputerUtilCard.evaluateLandRemovalPriority(ai, c, removal), default=None)
+
+    @staticmethod
+    def evaluateLandRemovalPriority(ai, land, removal, includeLandDestruction=True):
+        if land is None or not land.isLand():
+            return 0
+
+        # Start with the existing land valuation and convert it into a
+        # removal priority baseline. A normal one-mana land is worth about 100
+        # in LandEvaluator, so subtract that off to keep basics and simple
+        # MDFC lands low while preserving high scores for Gaea's Cradle,
+        # Tolarian Academy, Serra's Sanctum, Cabal Coffers, etc.
+        score = max(0, ComputerUtilCard.landEvaluator.apply(land) - 100)
+
+        hasAnimationAbility = False
+        for ability in land.getNonManaAbilities():
+            if ability.isLandAbility():
+                continue
+            cost = ability.getPayCosts()
+            if includeLandDestruction and ComputerUtilCard.isLandDestructionAbility(ability):
+                # High priority only when it cannot answer immediately:
+                # a tapped Strip Mine or Wasteland matters if the AI controls
+                # something worth protecting, but an untapped one can respond.
+                if land.isTapped() and ComputerUtilCard.aiHasHighPriorityLand(ai):
+                    score += 170
+                continue
+            if ComputerUtilCard.isHomewardPathAbility(ability):
+                # Usually low priority: Homeward Path matters if the AI has
+                # stolen creatures that it could lose, but otherwise it is
+                # mostly just a colorless land with a narrow political button.
+                if ComputerUtilCard.aiControlsStolenCreature(ai):
+                    score += 100
+                else:
+                    score = max(0, score - 50)
+                continue
+            if ComputerUtilCard.isLandAnimationAbility(ability):
+                hasAnimationAbility = True
+                # Medium priority: manlands like Mishra's Factory and Mutavault.
+                # They become much more urgent while attacking the AI.
+                score += 140 if ComputerUtilCard.isAttackingAi(land, ai) else 70
+            elif cost is not None and cost.hasSpecificCostType(CostSacrifice):
+                # Medium priority: one-shot utility lands such as Scavenger
+                # Grounds or Blast Zone are relevant, but usually not urgent.
+                score += 40
+            if ability.getApi() == ApiType.Mana or ability.findSubAbilityByType(ApiType.Mana) is not None:
+                # High priority: non-mana root abilities that create mana,
+                # such as Nykthos-style choose-color abilities implemented in
+                # a sub-DB. LandEvaluator sees these as utility, not big mana.
+                score += 100
+
+        if land.isCreature() and not hasAnimationAbility:
+            # Medium priority: already-animated manlands and lands that are
+            # naturally creatures. Manlands with their own animation ability
+            # were already scored above; this catches external animation.
+            score += 140 if ComputerUtilCard.isAttackingAi(land, ai) else 55
+
+        if land.hasSVar("AILandRemovalMinScore"):
+            # Card-specific floor for lands whose danger is hard to infer from
+            # their generic ability shape, like Dark Depths or Nykthos. Keep it
+            # removal-specific so regular land play does not overvalue them.
+            score = max(score, AbilityUtils.calculateAmount(land,
+                        land.getSVar("AILandRemovalMinScore"), None))
+
+        for aura in land.getEnchantedBy():
+            # High priority: an opponent's land enhanced by Wild Growth,
+            # Utopia Sprawl, Overgrowth, or similar mana-boosting Auras.
+            if aura.getController().equals(land.getController()) and ComputerUtilCard.hasManaBoostingText(aura):
+                score += 160
+            # High priority: remove the land hosting an On Thin Ice-style Aura
+            # when that Aura has removed one of this AI's permanents.
+            if ComputerUtilCard.hasRemovedAiPermanent(ai, aura):
+                score += 180
+
+        return score
+
+    @staticmethod
+    def hasManaBoostingText(aura):
+        for value in aura.getSVars().values():
+            if "DB$ Mana" in value or "TapsForMana" in value or "ManaReflected" in value:
+                return True
+        for trigger in aura.getTriggers():
+            if TriggerType.TapsForMana.equals(trigger.getMode()):
+                return True
+        return False
+
+    @staticmethod
+    def hasRemovedAiPermanent(ai, card):
+        for exiled in card.getExiledCards():
+            if exiled.getOwner().equals(ai) and exiled.isPermanent():
+                return True
+        for remembered in card.getRemembered():
+            if isinstance(remembered, Card) and remembered.getOwner().equals(ai) and remembered.isPermanent():
+                return True
+        return False
+
+    @staticmethod
+    def isLandDestructionAbility(ability):
+        if ability.getApi() != ApiType.Destroy and ability.getApi() != ApiType.ChangeZone:
+            return False
+        valid = ability.getParamOrDefault("ValidTgts", "")
+        if valid == "":
+            valid = ability.getParamOrDefault("ValidCards", "")
+        return "Land" in valid
+
+    @staticmethod
+    def isHomewardPathAbility(ability):
+        return ability.getApi() == ApiType.GainControlVariant \
+            and "GainControlOwns" == ability.getParam("AILogic")
+
+    @staticmethod
+    def aiControlsStolenCreature(ai):
+        for creature in ai.getCreaturesInPlay():
+            if not creature.getOwner().equals(ai):
+                return True
+        return False
+
+    @staticmethod
+    def isLandAnimationAbility(ability):
+        if ability.getApi() == ApiType.Animate:
+            return True
+        description = ability.getDescription()
+        return description is not None and "becomes" in description and "creature" in description
+
+    @staticmethod
+    def isAttackingAi(land, ai):
+        combat = None if land.getGame() is None else land.getGame().getCombat()
+        return combat is not None and combat.isAttacking(land, ai)
+
+    @staticmethod
+    def aiHasHighPriorityLand(ai):
+        for aiLand in ai.getLandsInPlay():
+            if ComputerUtilCard.evaluateLandRemovalPriority(ai, aiLand, None, False) >= 150:
+                return True
+        return False
+
+    @staticmethod
+    def getWorstLand(lands):
+        worstLand = None
+        maxScore = float('-inf')
+        # first, check for tapped, basic lands
+        for tmp in lands:
+            score = 2 if tmp.isTapped() else 0
+            score += 1 if tmp.isBasicLand() else 0
+            score -= 4 if tmp.isCreature() else 0
+            for aura in tmp.getEnchantedBy():
+                if aura.getController().isOpponentOf(tmp.getController()):
+                    score += 5
+                else:
+                    score -= 5
+            if score == maxScore and \
+                    CardLists.count(lands, CardPredicates.sharesNameWith(tmp)) > CardLists.count(lands, CardPredicates.sharesNameWith(worstLand)):
+                worstLand = tmp
+            if score > maxScore:
+                worstLand = tmp
+                maxScore = score
+        return worstLand
+
+    @staticmethod
+    def getBestLandToAnimate(lands):
+        land = None
+        maxScore = float('-inf')
+        # first, check for tapped, basic lands
+        for tmp in lands:
+            score = 0 if tmp.isTapped() else 2
+            score += 2 if tmp.isBasicLand() else 0
+            score -= 4 if tmp.isCreature() else 0
+            score -= 5 * tmp.getEnchantedBy().size()
+
+            if score == maxScore and \
+                    CardLists.count(lands, CardPredicates.sharesNameWith(tmp)) > CardLists.count(lands, CardPredicates.sharesNameWith(land)):
+                land = tmp
+            if score > maxScore:
+                land = tmp
+                maxScore = score
+        return land
+
+    @staticmethod
+    def getCheapestPermanentAI(all, spell, targeted):
+        if targeted:
+            all = CardLists.filter(all, lambda c: c.canBeTargetedBy(spell))
+        allCards = [c for c in all]
+        if not allCards:
+            return None
+
+        # get cheapest card:
+        cheapest = None
+
+        for c in allCards:
+            if cheapest is None or c.getManaCost().getCMC() <= cheapest.getManaCost().getCMC():
+                cheapest = c
+
+        return cheapest
+
+    # returns null if list.size() == 0
+    @staticmethod
+    def getBestAI(list):
+        cards = [c for c in list]
+        # Get Best will filter by appropriate getBest list if ALL of the list is of that type
+        if IterableUtil.all(cards, CardPredicates.CREATURES):
+            return ComputerUtilCard.getBestCreatureAI(cards)
+        if IterableUtil.all(cards, CardPredicates.LANDS):
+            return ComputerUtilCard.getBestLandAI(cards)
+        # TODO - Once we get an EvaluatePermanent this should call getBestPermanent()
+        return ComputerUtilCard.getMostExpensivePermanentAI(cards)
+
+    @staticmethod
+    def getBestRemovalTargetAI(ai, list):
+        cards = [c for c in list]
+        if not cards:
+            return None
+        return Aggregates.itemWithMax(cards, lambda c: ComputerUtilCard.evaluateRemovalTargetPriority(ai, c))
+
+    @staticmethod
+    def evaluateRemovalTargetPriority(ai, c):
+        if c.isCreature():
+            value = ComputerUtilCard.evaluateCreature(c)
+        elif c.isLand():
+            value = ComputerUtilCard.evaluateLandRemovalPriority(ai, c, None, False)
+        else:
+            value = 50 + 30 * c.getCMC()
+            if c.isPlaneswalker():
+                value += c.getCounters(CounterEnumType.LOYALTY) * 10
+
+        # tokens are slightly better since they'll be gone forever
+        if c.isToken():
+            value += 30
+
+        if c.getController().isOpponentOf(ai):
+            value += ComputerUtil.evaluateBoardPosition(ai, c.getController()) // 4
+        return value
+
+    @staticmethod
+    def getBestCreatureAI(list):
+        cards = [c for c in list]
+        if len(cards) == 1:
+            return cards[0]
+        return Aggregates.itemWithMax(IterableUtil.filter(cards, CardPredicates.CREATURES), ComputerUtilCard.creatureEvaluator.apply)
+
+    @staticmethod
+    def getBestLandToPlayAI(list):
+        cards = [c for c in list]
+        if len(cards) == 1:
+            return cards[0]
+        return Aggregates.itemWithMax(IterableUtil.filter(cards, lambda c: c.hasPlayableLandFace()), ComputerUtilCard.landEvaluator.apply)
+
+    @staticmethod
+    def getWorstCreatureAI(list):
+        cards = [c for c in list]
+        if len(cards) == 1:
+            return cards[0]
+        return Aggregates.itemWithMin(IterableUtil.filter(cards, CardPredicates.CREATURES), ComputerUtilCard.creatureEvaluator.apply)
+
+    # For ability of Oracle en-Vec, return the first card that are going to attack next turn
+    @staticmethod
+    def getBestCreatureToAttackNextTurnAI(aiPlayer, list):
+        aic = aiPlayer.getController().getAi()
+        for card in list:
+            if aic.getPredictedCombatNextTurn().isAttacking(card):
+                return card
+        return None
+
+    @staticmethod
+    def getWorstAI(list):
+        return ComputerUtilCard.getWorstPermanentAI(list, False, False, False, False)
+
+    @staticmethod
+    def getWorstPermanentAI(list, biasEnch, biasLand, biasArt, biasCreature):
+        items = [c for c in list]
+        if not items:
+            return None
+
+        hasEnchantmants = IterableUtil.any(items, CardPredicates.ENCHANTMENTS)
+        if biasEnch and hasEnchantmants:
+            return ComputerUtilCard.getCheapestPermanentAI(CardLists.filter(items, CardPredicates.ENCHANTMENTS), None, False)
+
+        hasArtifacts = IterableUtil.any(items, CardPredicates.ARTIFACTS)
+        if biasArt and hasArtifacts:
+            return ComputerUtilCard.getCheapestPermanentAI(CardLists.filter(items, CardPredicates.ARTIFACTS), None, False)
+
+        if biasLand and IterableUtil.any(items, CardPredicates.LANDS):
+            return ComputerUtilCard.getWorstLand(CardLists.filter(items, CardPredicates.LANDS))
+
+        hasCreatures = IterableUtil.any(items, CardPredicates.CREATURES)
+        if biasCreature and hasCreatures:
+            return ComputerUtilCard.getWorstCreatureAI(CardLists.filter(items, CardPredicates.CREATURES))
+
+        lands = CardLists.filter(items, CardPredicates.LANDS)
+        if lands.size() > 6 or lands.size() == len(items):
+            return ComputerUtilCard.getWorstLand(lands)
+
+        if hasEnchantmants or hasArtifacts:
+            ae = CardLists.filter(items,
+                    (CardPredicates.ARTIFACTS.or_(CardPredicates.ENCHANTMENTS))
+                    .and_(lambda card: not card.hasSVar("DoNotDiscardIfAble")))
+            return ComputerUtilCard.getCheapestPermanentAI(ae, None, False)
+
+        if hasCreatures:
+            return ComputerUtilCard.getWorstCreatureAI(CardLists.filter(items, CardPredicates.CREATURES))
+
+        # Planeswalkers fall through to here, lands will fall through if there aren't very many
+        return ComputerUtilCard.getCheapestPermanentAI(items, None, False)
+
+    @staticmethod
+    def getCheapestSpellAI(list):
+        cards = [c for c in list]
+        if cards:
+            cc = CardLists.filter(cards, CardPredicates.INSTANTS_AND_SORCERIES)
+
+            if cc.isEmpty():
+                return None
+
+            cc.sort(key=functools.cmp_to_key(CardLists.CmcComparatorInv))
+
+            cheapest = cc.getLast()
+            if cheapest.hasSVar("DoNotDiscardIfAble"):
+                for i in range(cc.size() - 1, -1, -1):
+                    if not cc.get(i).hasSVar("DoNotDiscardIfAble"):
+                        cheapest = cc.get(i)
+                        break
+
+            return cheapest
+
+        return None
+
+    @staticmethod
+    def getCachedCreatureComparator():
+        cache = {}
+
+        def comparator(a, b):
+            if id(a) not in cache:
+                cache[id(a)] = ComputerUtilCard.creatureEvaluator.apply(a)
+            if id(b) not in cache:
+                cache[id(b)] = ComputerUtilCard.creatureEvaluator.apply(b)
+            return cache[id(a)] - cache[id(b)]
+
+        return comparator
+
+    @staticmethod
+    def EvaluateCreatureSpellComparator(a, b):
+        # TODO ideally we could reuse the value from the previous pass with false
+        return ComputerUtilAbility.saEvaluator.compareEvaluator(a, b, True)
+
+    @staticmethod
+    def evaluateCreature(c, considerPT=None, considerCMC=None):
+        if isinstance(c, SpellAbility):
+            sa = c
+            host = sa.getHostCard()
+
+            if sa.getApi() != ApiType.PermanentCreature:
+                print("Warning: tried to evaluate a non-creature spell with evaluateCreature for card " + str(host) + " via SA " + str(sa), file=sys.stderr)
+                return 0
+
+            # switch to the needed card face
+            currentState = host.getCurrentStateName() if (sa.getCardState() is not None and host.getCurrentStateName() != sa.getCardStateName() and not host.isInPlay()) else None
+            if currentState is not None:
+                host.setState(sa.getCardStateName(), False)
+
+            eval = ComputerUtilCard.evaluateCreature(host, True, False)
+
+            if currentState is not None:
+                host.setState(currentState, False)
+
+            return eval
+
+        if considerPT is None:
+            return ComputerUtilCard.creatureEvaluator.evaluateCreature(c)
+        return ComputerUtilCard.creatureEvaluator.evaluateCreature(c, considerPT, considerCMC)
+
+    @staticmethod
+    def evaluatePermanentList(list):
+        value = 0
+        for i in range(list.size()):
+            value += list.get(i).getCMC() + 1
+        return value
+
+    @staticmethod
+    def evaluateCreatureList(list):
+        return Aggregates.sum(list, ComputerUtilCard.creatureEvaluator.apply)
+
+    @staticmethod
+    def evaluateCreatureListByName(list):
+        # Compute value for each possible target
+        result = {}
+        for c in list:
+            result[c.getName()] = result.get(c.getName(), 0) + ComputerUtilCard.evaluateCreature(c)
+        return result
+
+    @staticmethod
+    def doesCreatureAttackAI(aiPlayer, card):
+        aic = aiPlayer.getController().getAi()
+        return aic.getPredictedCombat().isAttacking(card)
+
+    @staticmethod
+    def doesSpecifiedCreatureAttackAI(ai, card):
+        aiAtk = AiAttackController(ai, card)
+        combat = Combat(ai)
+        aiAtk.declareAttackers(combat)
+        return combat.isAttacking(card)
+
+    @staticmethod
+    def getLikelyBlockers(ai, blockers):
+        aiBlk = AiBlockController(ai, False)
+        opp = AiAttackController.choosePreferredDefenderPlayer(ai)
+        combat = Combat(opp)
+        # Use actual attackers if available, else consider all possible attackers
+        currentCombat = ai.getGame().getCombat()
+        if currentCombat is not None and currentCombat.getAttackingPlayer() != ai:
+            for c in currentCombat.getAttackers():
+                combat.addAttacker(c, ai)
+        else:
+            for c in opp.getCreaturesInPlay():
+                if ComputerUtilCombat.canAttackNextTurn(c, ai):
+                    combat.addAttacker(c, ai)
+        if blockers is None or blockers.isEmpty():
+            aiBlk.assignBlockersForCombat(combat)
+        else:
+            aiBlk.assignAdditionalBlockers(combat, blockers)
+        return combat.getAllBlockers()
+
+    @staticmethod
+    def doesSpecifiedCreatureBlock(ai, blocker):
+        return ComputerUtilCard.getLikelyBlockers(ai, CardCollection(blocker)).contains(blocker)
+
+    @staticmethod
+    def canBeBlockedProfitably(ai, attacker, checkingOther):
+        aiBlk = AiBlockController(ai, checkingOther)
+        combat = Combat(ai)
+        # avoid removing original attacker
+        attacker.setCombatLKI(None)
+        combat.addAttacker(attacker, ai)
+        attackers = [attacker]
+        aiBlk.assignBlockersGivenAttackers(combat, attackers)
+        return ComputerUtilCombat.attackerWouldBeDestroyed(ai, attacker, combat)
+
+    @staticmethod
+    def canBeKilledByRoyalAssassin(ai, card):
+        wasTapped = card.isTapped()
+        for opp in ai.getOpponents():
+            for c in opp.getCardsIn(ZoneType.Battlefield):
+                for sa in c.getSpellAbilities():
+                    if sa.getApi() != ApiType.Destroy:
+                        continue
+                    if not ComputerUtilCost.canPayCost(sa, opp, sa.isTrigger()):
+                        continue
+                    sa.setActivatingPlayer(opp)
+                    if sa.canTarget(card):
+                        continue
+                    # check whether the ability can only target tapped creatures
+                    card.setTapped(True)
+                    if not sa.canTarget(card):
+                        card.setTapped(wasTapped)
+                        continue
+                    card.setTapped(wasTapped)
+                    return True
+        return False
+
+    @staticmethod
+    def getMostProminentCardName(list):
+        if list.size() == 0:
+            return ""
+
+        counts = {}
+        for c in list:
+            counts[c.getName()] = counts.get(c.getName(), 0) + 1
+        return max(counts.items(), key=lambda e: e[1], default=("", 0))[0]
+
+    @staticmethod
+    def getMostProminentType(list, valid, includeTokens=True):
+        if list.isEmpty():
+            return ""
+
+        typesInDeck = {}
+
+        for c in list:
+            if not includeTokens and c.isToken():
+                continue
+            # Changeling are all creature types, they are not interesting for
+            # counting creature types
+            if c.getType().hasAllCreatureTypes():
+                continue
+            # ignore cards that does enter the battlefield as clones
+            isClone = False
+            for re in c.getReplacementEffects():
+                if re.getLayer() == ReplacementLayer.Copy:
+                    isClone = True
+                    break
+            if isClone:
+                continue
+
+            # Cards in hand and commanders are worth double, as they are more likely to be played.
+            weight = 1
+            if c.isInZone(ZoneType.Hand) or c.isRealCommander():
+                weight = 2
+
+            cardCreatureTypes = c.getType().getCreatureTypes()
+            for type in cardCreatureTypes:
+                typesInDeck[type] = typesInDeck.get(type, 0) + weight
+
+            # also take into account abilities that generate tokens
+            if includeTokens:
+                if c.getRules() is not None:
+                    for token in c.getRules().getTokens():
+                        tokenCR = StaticData.instance().getAllTokens().getToken(token).getRules()
+                        if tokenCR is None:
+                            continue
+                        for type in tokenCR.getType().getCreatureTypes():
+                            typesInDeck[type] = typesInDeck.get(type, 0) + 1
+
+                # special rule for Fabricate and Servo
+                if c.hasKeyword(Keyword.FABRICATE):
+                    typesInDeck["Servo"] = typesInDeck.get("Servo", 0) + weight
+
+        max_ = 0
+        maxType = ""
+
+        # Iterate through typesInDeck and consider only valid types
+        for type, count in typesInDeck.items():
+            # consider the types that are in the valid list
+            if (len(valid) == 0 or type in valid) and max_ < count:
+                max_ = count
+                maxType = type
+
+        return maxType
+
+    @staticmethod
+    def getMostProminentCardType(list, valid):
+        if list.isEmpty() or len(valid) == 0:
+            return None
+
+        counts = {}
+        for c in list:
+            for s in c.getType().getCoreTypes():
+                if s in valid:
+                    counts[s] = counts.get(s, 0) + 1
+        if not counts:
+            return None  # Map.entry doesn't like null key
+        return max(counts.items(), key=lambda e: e[1])[0]
+
+    @staticmethod
+    def getMostProminentColor(list, restrictedToColors=None):
+        if restrictedToColors is None:
+            colors = CardFactoryUtil.getMostProminentColors(list)
+            for c in MagicColor.WUBRG:
+                if (colors & c) != 0:
+                    return MagicColor.toLongString(c)
+            return MagicColor.Constant.WHITE  # no difference, there was no prominent color
+
+        colors = CardFactoryUtil.getMostProminentColorsFromList(list, restrictedToColors)
+        for c in MagicColor.WUBRG:
+            if (colors & c) != 0:
+                return MagicColor.toLongString(c)
+        return Iterables_get(restrictedToColors, 0)  # no difference, there was no prominent color
+
+    @staticmethod
+    def getColorByProminence(list):
+        cntColors = len(MagicColor.WUBRG)
+        map = []
+        for i in range(cntColors):
+            map.append([MagicColor.WUBRG[i], 0])
+
+        for crd in list:
+            color = crd.getColor()
+            if color.hasWhite(): map[0][1] += 1
+            if color.hasBlue(): map[1][1] += 1
+            if color.hasBlack(): map[2][1] += 1
+            if color.hasRed(): map[3][1] += 1
+            if color.hasGreen(): map[4][1] += 1
+
+        map.sort(key=lambda p: p[1], reverse=True)
+
+        # will this part be once dropped?
+        result = []
+        for idx in map:  # fetch color names in the same order
+            result.append(MagicColor.toLongString(idx[0]))
+        # reverse to get indices for most prominent colors first.
+        return result
+
+    @staticmethod
+    def AI_KNOWS_HOW_TO_PLAY_ALL_CARDS(d):
+        for cp in d:
+            for e in cp.getValue():
+                if e.getKey().getRules().getAiHints().getRemAIDecks():
+                    return False
+        return True
+
+    @staticmethod
+    def chooseColor(sa, min, max, colorChoices):
+        chosen = []
+        ai = sa.getActivatingPlayer()
+        game = ai.getGame()
+        opp = ai.getStrongestOpponent()
+        if sa.hasParam("AILogic"):
+            logic = sa.getParam("AILogic")
+
+            if logic == "MostProminentInHumanDeck":
+                chosen.append(ComputerUtilCard.getMostProminentColor(CardLists.filterControlledBy(game.getCardsInGame(), opp), colorChoices))
+            elif logic == "MostProminentInComputerDeck":
+                chosen.append(ComputerUtilCard.getMostProminentColor(CardLists.filterControlledBy(game.getCardsInGame(), ai), colorChoices))
+            elif logic == "MostProminentDualInComputerDeck":
+                prominence = ComputerUtilCard.getColorByProminence(CardLists.filterControlledBy(game.getCardsInGame(), ai))
+                chosen.append(prominence[0])
+                chosen.append(prominence[1])
+            elif logic == "MostProminentInGame":
+                chosen.append(ComputerUtilCard.getMostProminentColor(game.getCardsInGame(), colorChoices))
+            elif logic == "MostProminentHumanCreatures":
+                list = opp.getCreaturesInPlay()
+                if list.isEmpty():
+                    list = CardLists.filter(CardLists.filterControlledBy(game.getCardsInGame(), opp), CardPredicates.CREATURES)
+                chosen.append(ComputerUtilCard.getMostProminentColor(list, colorChoices))
+            elif logic == "MostProminentComputerControls":
+                chosen.append(ComputerUtilCard.getMostProminentColor(ai.getCardsIn(ZoneType.Battlefield), colorChoices))
+            elif logic == "MostProminentHumanControls":
+                chosen.append(ComputerUtilCard.getMostProminentColor(opp.getCardsIn(ZoneType.Battlefield), colorChoices))
+            elif logic == "MostProminentPermanent":
+                chosen.append(ComputerUtilCard.getMostProminentColor(game.getCardsIn(ZoneType.Battlefield), colorChoices))
+            elif logic == "MostProminentAttackers" and game.getPhaseHandler().inCombat():
+                chosen.append(ComputerUtilCard.getMostProminentColor(game.getCombat().getAttackers(), colorChoices))
+            elif logic == "MostProminentInActivePlayerHand":
+                chosen.append(ComputerUtilCard.getMostProminentColor(game.getPhaseHandler().getPlayerTurn().getCardsIn(ZoneType.Hand), colorChoices))
+            elif logic == "MostProminentInComputerDeckButGreen":
+                prominence = ComputerUtilCard.getColorByProminence(CardLists.filterControlledBy(game.getCardsInGame(), ai))
+                if prominence[0] == MagicColor.Constant.GREEN:
+                    chosen.append(prominence[1])
+                else:
+                    chosen.append(prominence[0])
+            elif logic == "MostExcessOpponentControls":
+                maxExcess = 0
+                bestColor = Constant.GREEN
+                for color in MagicColor.WUBRG:
+                    ailist = ai.getColoredCardsInPlay(color)
+                    opplist = opp.getColoredCardsInPlay(color)
+
+                    excess = ComputerUtilCard.evaluatePermanentList(opplist) - ComputerUtilCard.evaluatePermanentList(ailist)
+                    if excess > maxExcess:
+                        maxExcess = excess
+                        bestColor = MagicColor.toLongString(color)
+                chosen.append(bestColor)
+            elif logic == "MostProminentKeywordInComputerDeck":
+                list = ai.getAllCards()
+                m1 = 0
+                chosenColor = MagicColor.Constant.WHITE
+
+                for c in MagicColor.Constant.ONLY_COLORS:
+                    cmp = CardLists.filter(list, CardPredicates.containsKeyword(c)).size()
+                    if cmp > m1:
+                        m1 = cmp
+                        chosenColor = c
+                chosen.append(chosenColor)
+            elif logic == "HighestDevotionToColor":
+                curDevotion = 0
+                chosenColor = MagicColor.Constant.WHITE
+                hand = ai.getCardsIn(ZoneType.Hand)
+                for c in MagicColor.WUBRG:
+                    devotionCode = "Count$Devotion." + MagicColor.toLongString(c)
+
+                    devotion = AbilityUtils.calculateAmount(sa.getHostCard(), devotionCode, sa)
+                    if devotion > curDevotion and hand.anyMatch(CardPredicates.isColor(c)):
+                        curDevotion = devotion
+                        chosenColor = MagicColor.toLongString(c)
+                chosen.append(chosenColor)
+
+        if not chosen:
+            # chosen.add(MagicColor.Constant.GREEN);
+            chosen.append(ComputerUtilCard.getMostProminentColor(ai.getAllCards(), colorChoices))
+        return chosen
+
+    @staticmethod
+    def useRemovalNow(sa, c, dmg, destination):
+        ai = sa.getActivatingPlayer()
+        game = ai.getGame()
+        ph = game.getPhaseHandler()
+        phaseType = ph.getPhase()
+        opp = ph.getPlayerTurn() if ph.getPlayerTurn().isOpponentOf(ai) else ai.getStrongestOpponent()
+
+        costRemoval = sa.getHostCard().getCMC()
+        costTarget = c.getCMC()
+
+        if not sa.isSpell():
+            return True
+
+        # Check for cards that profit from spells - for example Prowess or Threshold
+        if phaseType == PhaseType.MAIN1 and ComputerUtil.castSpellInMain1(ai, sa):
+            return True
+
+        # interrupt 1: Check whether a possible blocker will be killed for the AI to make a bigger attack
+        if ph.is_(PhaseType.MAIN1) and ph.isPlayerTurn(ai) and c.isCreature():
+            aiAtk = AiAttackController(ai)
+            combat = Combat(ai)
+            aiAtk.removeBlocker(c)
+            aiAtk.declareAttackers(combat)
+            if not combat.getAttackers().isEmpty():
+                aiAtk2 = AiAttackController(ai)
+                combat2 = Combat(ai)
+                aiAtk2.declareAttackers(combat2)
+                if combat.getAttackers().size() > combat2.getAttackers().size():
+                    return True
+
+        # interrupt 2: remove blocker to save my attacker
+        if ph.is_(PhaseType.COMBAT_DECLARE_BLOCKERS) and not ph.isPlayerTurn(ai):
+            currCombat = game.getCombat()
+            if currCombat is not None and not currCombat.getAllBlockers().isEmpty() and currCombat.getAllBlockers().contains(c):
+                for attacker in currCombat.getAttackersBlockedBy(c):
+                    if attacker.getShieldCount() == 0 and ComputerUtilCombat.attackerWouldBeDestroyed(ai, attacker, currCombat):
+                        blockers = currCombat.getBlockers(attacker)
+                        ComputerUtilCard.sortByEvaluateCreature(blockers)
+                        combat = Combat(ai)
+                        combat.addAttacker(attacker, opp)
+                        for blocker in blockers:
+                            if blocker == c:
+                                continue
+                            combat.addBlocker(attacker, blocker)
+                        if not ComputerUtilCombat.attackerWouldBeDestroyed(ai, attacker, combat):
+                            return True
+
+        # interrupt 3:  two for one = good
+        if c.isEnchanted():
+            myEnchants = False
+            for enc in c.getEnchantedBy():
+                if enc.getOwner().equals(ai):
+                    myEnchants = True
+                    break
+            if not myEnchants:
+                return True  # card advantage > tempo
+
+        # interrupt 4: opponent pumping target (only works if the pump target is the chosen best target to begin with)
+        stack = game.getStack()
+        if not stack.isEmpty():
+            topStack = stack.peekAbility()
+            if topStack.getActivatingPlayer().equals(opp) and c.equals(topStack.getTargetCard()) and topStack.isSpell():
+                return True
+
+        # burn and curse spells
+        valueBurn = 0.0
+        if dmg > 0:
+            if "would die, exile it instead" in sa.getDescription():
+                destination = ZoneType.Exile
+            valueBurn = 1.0 * c.getNetToughness() / dmg
+            valueBurn *= valueBurn
+            if sa.getTargetRestrictions().canTgtPlayer():
+                valueBurn /= 2  # preserve option to burn to the face
+            if valueBurn >= 0.8 and phaseType.isBefore(PhaseType.COMBAT_END):
+                return True
+
+        # evaluate tempo gain
+        valueTempo = max(0.1 * costTarget / costRemoval, valueBurn)
+        if c.isEquipped():
+            valueTempo *= 2
+        if SpellAbilityAi.isSorcerySpeed(sa, ai):
+            valueTempo *= 2  # sorceries have less usage opportunities
+        if not c.canBeDestroyed():
+            valueTempo *= 2  # deal with annoying things
+        if (not destination.equals(ZoneType.Graveyard) and  # TODO:boat-load of "when blah dies" triggers
+                c.hasKeyword(Keyword.PERSIST)) or c.hasKeyword(Keyword.UNDYING) or c.hasKeyword(Keyword.MODULAR):
+            valueTempo *= 2
+        if destination.equals(ZoneType.Hand) and not c.isToken():
+            valueTempo /= 2  # bouncing non-tokens for tempo is less valuable
+        if c.isLand():
+            valueTempo += 0.5 / opp.getLandsInPlay().size()  # set back opponent's mana
+            if "Land" == sa.getParam("ValidTgts") and ph.getPhase().isAfter(PhaseType.COMBAT_END):
+                valueTempo += 0.5  # especially when nothing else can be targeted
+        if not ph.isPlayerTurn(ai) and ph.getPhase().equals(PhaseType.END_OF_TURN):
+            valueTempo *= 2  # prefer to cast at opponent EOT
+        if valueTempo >= 0.8 and ph.getPhase().isBefore(PhaseType.COMBAT_END):
+            return True
+
+        # evaluate threat of targeted card
+        threat = 0.0
+        if c.isCreature():
+            # the base value for evaluate creature is 100
+            threat += (-1 + 1.0 * ComputerUtilCard.evaluateCreature(c) / 100) / costRemoval
+            if ai.getLife() > 0 and ComputerUtilCombat.canAttackNextTurn(c):
+                combat = game.getCombat()
+                threat += 1.0 * ComputerUtilCombat.damageIfUnblocked(c, ai, combat, True) / ai.getLife()
+                # TODO:add threat from triggers and other abilities (ie. Master of Cruelties)
+            if ph.isPlayerTurn(ai) and phaseType.isAfter(PhaseType.COMBAT_DECLARE_BLOCKERS):
+                threat *= 0.1
+            if not ph.isPlayerTurn(ai) and \
+                    (phaseType.isBefore(PhaseType.COMBAT_BEGIN) or phaseType.isAfter(PhaseType.COMBAT_DECLARE_BLOCKERS)):
+                threat *= 0.1
+        elif c.isPlaneswalker():
+            threat = 1
+        elif AiProfileUtil.getBoolProperty(ai, AiProps.ACTIVELY_DESTROY_ARTS_AND_NONAURA_ENCHS) and ((c.isArtifact() and not c.isCreature()) or (c.isEnchantment() and not c.isAura())):
+            # non-creature artifacts and global enchantments with suspicious intrinsic abilities
+            priority = False
+            if c.getOwner().isOpponentOf(ai) and c.getController().isOpponentOf(ai):
+                # if this thing is both owned and controlled by an opponent and it has a continuous ability,
+                # assume it either benefits the player or disrupts the opponent
+                for stAb in c.getStaticAbilities():
+                    if stAb.checkMode(StaticAbilityMode.Continuous) and stAb.isIntrinsic():
+                        priority = True
+                        break
+                if not priority:
+                    for t in c.getTriggers():
+                        if t.isIntrinsic():
+                            # has a triggered ability, could be benefitting the opponent or disrupting the AI
+                            priority = True
+                            break
+                # if this thing has AILogic set to "Curse", it's probably meant as some form of disruption
+                if not priority:
+                    for value in c.getSVars().values():
+                        if "AILogic$ Curse" in value:
+                            # this is a curse ability, so prioritize its removal
+                            priority = True
+                            break
+                # if it's a priority object, set its threat level to high
+                if priority:
+                    threat = 1.0
+        else:
+            for stAb in c.getStaticAbilities():
+                # continuous buffs
+                if stAb.checkMode(StaticAbilityMode.Continuous) and "Creature.YouCtrl" == stAb.getParam("Affected"):
+                    bonusPT = 0
+                    if stAb.hasParam("AddPower"):
+                        bonusPT += AbilityUtils.calculateAmount(c, stAb.getParam("AddPower"), stAb)
+                    if stAb.hasParam("AddToughness"):
+                        bonusPT += AbilityUtils.calculateAmount(c, stAb.getParam("AddPower"), stAb)
+                    kws = stAb.getParam("AddKeyword")
+                    if kws is not None:
+                        bonusPT += 4 * (1 + kws.count("&"))  # treat each added keyword as a +2/+2 for now
+                    if bonusPT > 0:
+                        threat = bonusPT * (1 + opp.getCreaturesInPlay().size()) / 10.0
+            # TODO:add threat from triggers and other abilities (ie. Bident of Thassa)
+        if not c.getManaAbilities().isEmpty():
+            threat += 0.5 * costTarget / opp.getLandsInPlay().size()  # set back opponent's mana
+
+        valueNow = max(valueTempo, threat)
+        if valueNow < 0.2:  # hard floor to reduce ridiculous odds for instants over time
+            return False
+        chance = MyRandom.getRandom().nextFloat()
+        return chance < valueNow
+
+    @staticmethod
+    def shouldPumpCard(ai, sa, c, toughness, power, keywords, immediately=False):
+        game = ai.getGame()
+        phase = game.getPhaseHandler()
+        combat = phase.getCombat()
+        main1Preferred = "Main1IfAble" == sa.getParam("AILogic") and phase.is_(PhaseType.MAIN1, ai)
+        isBerserk = "Berserk" == sa.getParam("AILogic")
+        loseCardAtEOT = "Sacrifice" == sa.getParam("AtEOT") or "Exile" == sa.getParam("AtEOT") \
+            or "Destroy" == sa.getParam("AtEOT") or "ExileCombat" == sa.getParam("AtEOT")
+
+        combatTrick = False
+        holdCombatTricks = False
+        chanceToHoldCombatTricks = -1
+        simAI = False
+
+        if ai.getController().isAI():
+            aic = ai.getController().getAi()
+            simAI = aic.usesSimulation()
+            if not simAI:
+                holdCombatTricks = aic.getBoolProperty(AiProps.TRY_TO_HOLD_COMBAT_TRICKS_UNTIL_BLOCK)
+                chanceToHoldCombatTricks = aic.getIntProperty(AiProps.CHANCE_TO_HOLD_COMBAT_TRICKS_UNTIL_BLOCK)
+
+        if not c.canBeTargetedBy(sa):
+            return False
+
+        if c.getNetToughness() + toughness <= 0:
+            return False
+
+        if sa.getHostCard().equals(c) and ComputerUtilCost.isSacrificeSelfCost(sa.getPayCosts()):
+            return False
+
+        # will the creature attack (only relevant for sorcery speed)?
+        if phase.getPhase().isBefore(PhaseType.COMBAT_DECLARE_ATTACKERS) \
+                and phase.isPlayerTurn(ai) \
+                and (SpellAbilityAi.isSorcerySpeed(sa, ai) or main1Preferred) \
+                and power > 0 \
+                and ComputerUtilCard.doesCreatureAttackAI(ai, c):
+            return True
+
+        # buff attacker/blocker using triggered pump (unless it's lethal and we don't want to be reckless)
+        if immediately and phase.getPhase().isBefore(PhaseType.COMBAT_DECLARE_BLOCKERS) and not loseCardAtEOT:
+            if phase.isPlayerTurn(ai):
+                if CombatUtil.canAttack(c) or (phase.inCombat() and c.isAttacking()):
+                    return True
+            elif CombatUtil.canBlock(c):
+                return True
+
+        if "Banding" in keywords and not c.hasKeyword(Keyword.BANDING):
+            if phase.is_(PhaseType.COMBAT_BEGIN) and phase.isPlayerTurn(ai) and not ComputerUtilCard.doesCreatureAttackAI(ai, c):
+                # will this card participate in an attacking band?
+                bandingCard = ComputerUtilCard.getPumpedCreature(ai, sa, c, toughness, power, keywords)
+                # TODO: It may be possible to use AiController.getPredictedCombat here, but that makes it difficult to
+                # use reinforceWithBanding through the attack controller, especially with the extra card parameter in mind
+                aiAtk = AiAttackController(ai)
+                predicted = Combat(ai)
+                aiAtk.declareAttackers(predicted)
+                aiAtk.reinforceWithBanding(predicted, bandingCard)
+                if predicted.isAttacking(bandingCard) and predicted.getBandOfAttacker(bandingCard).getAttackers().size() > 1:
+                    return True
+            elif phase.is_(PhaseType.COMBAT_DECLARE_BLOCKERS) and combat is not None:
+                # does this card block a Trample card or participate in a multi block?
+                for atk in combat.getAttackers():
+                    if atk.getController().isOpponentOf(ai):
+                        blockers = combat.getBlockers(atk)
+                        hasBanding = False
+                        for blocker in blockers:
+                            if blocker.hasKeyword(Keyword.BANDING):
+                                hasBanding = True
+                                break
+                        if not hasBanding and ((blockers.contains(c) and blockers.size() > 1) or atk.hasKeyword(Keyword.TRAMPLE)):
+                            return True
+
+        opp = ai.getWeakestOpponent()
+        pumped = ComputerUtilCard.getPumpedCreature(ai, sa, c, toughness, power, keywords)
+        oppCreatures = opp.getCreaturesInPlay()
+        chance = 0.0
+
+        # create and buff attackers
+        if phase.getPhase().isBefore(PhaseType.COMBAT_DECLARE_ATTACKERS) and phase.isPlayerTurn(ai) and opp.getLife() > 0:
+            # 1. become attacker for whatever reason
+            if not ComputerUtilCard.doesCreatureAttackAI(ai, c) and ComputerUtilCard.doesSpecifiedCreatureAttackAI(ai, pumped):
+                threat = 1.0 * ComputerUtilCombat.damageIfUnblocked(pumped, opp, combat, True) / opp.getLife()
+                if not any(CardPredicates.possibleBlockers(pumped)(x) for x in oppCreatures):
+                    threat *= 2
+                if c.getNetPower() == 0 and c == sa.getHostCard() and power > 0:
+                    threat *= 4  # over-value self +attack for 0 power creatures which may be pumped further after attacking
+                chance += threat
+
+                # -- Hold combat trick (the AI will try to delay the pump until Declare Blockers) --
+                # Enable combat trick mode only in case it's a pure buff spell in hand with no keywords or with Trample,
+                # First Strike, or Double Strike, otherwise the AI is unlikely to cast it or it's too late to
+                # cast it during Declare Blockers, thus ruining its attacker
+                if holdCombatTricks and sa.getApi() == ApiType.Pump \
+                        and sa.hasParam("NumAtt") and sa.getHostCard() is not None \
+                        and sa.getHostCard().isInZone(ZoneType.Hand) \
+                        and c.getNetPower() > 0 \
+                        and sa.getHostCard().isInstant() \
+                        and ComputerUtilMana.hasEnoughManaSourcesToCast(sa, ai):
+                    combatTrick = True
+
+                    for kw in keywords:
+                        if kw != "Trample" and kw != "First Strike" and kw != "Double Strike":
+                            combatTrick = False
+                            break
+
+            # 2. grant haste
+            if "Haste" in keywords and c.hasSickness() and not c.isTapped():
+                nonCombatChance = 0.0
+                combatChance = 0.0
+                # non-combat Haste: has an activated ability with tap cost
+                if c.isAbilitySick():
+                    for ab in c.getSpellAbilities():
+                        abCost = ab.getPayCosts()
+                        if abCost is not None and (abCost.hasTapCost() or abCost.hasSpecificCostType(CostUntap)) \
+                                and (not abCost.hasManaCost() or ComputerUtilMana.canPayManaCost(ab, ai, sa.getPayCosts().getTotalMana().getCMC(), False)):
+                            nonCombatChance += 0.5
+                            break
+                # combat Haste: only grant it if the creature will attack
+                if ComputerUtilCard.doesSpecifiedCreatureAttackAI(ai, pumped):
+                    combatChance += 0.5 + (0.5 * ComputerUtilCombat.damageIfUnblocked(pumped, opp, combat, True) / opp.getLife())
+                chance += nonCombatChance + combatChance
+
+            # 3. grant evasive
+            if any(CardPredicates.possibleBlockers(c)(x) for x in oppCreatures):
+                if not any(CardPredicates.possibleBlockers(pumped)(x) for x in oppCreatures) \
+                        and ComputerUtilCard.doesSpecifiedCreatureAttackAI(ai, pumped):
+                    chance += 0.5 * ComputerUtilCombat.damageIfUnblocked(pumped, opp, combat, True) / opp.getLife()
+
+        # combat trickery
+        if phase.is_(PhaseType.COMBAT_DECLARE_BLOCKERS):
+            # clunky code because ComputerUtilCombat.combatantWouldBeDestroyed() does not work for this sort of artificial combat
+            pumpedCombat = Combat(ai if phase.isPlayerTurn(ai) else opp)
+            opposing = None
+            pumpedWillDie = False
+            isAttacking = combat.isAttacking(c)
+
+            if (isBerserk and isAttacking) or loseCardAtEOT:
+                pumpedWillDie = True
+
+            if isAttacking:
+                pumpedCombat.addAttacker(pumped, opp)
+                opposing = combat.getBlockers(c)
+                for b in opposing:
+                    pumpedCombat.addBlocker(pumped, b)
+                if ComputerUtilCombat.attackerWouldBeDestroyed(ai, pumped, pumpedCombat):
+                    pumpedWillDie = True
+            else:
+                opposing = combat.getAttackersBlockedBy(c)
+                for a in opposing:
+                    pumpedCombat.addAttacker(a, ai)
+                    pumpedCombat.addBlocker(a, pumped)
+                if ComputerUtilCombat.blockerWouldBeDestroyed(ai, pumped, pumpedCombat):
+                    pumpedWillDie = True
+
+            # 1. save combatant
+            if ComputerUtilCombat.combatantWouldBeDestroyed(ai, c, combat) and not pumpedWillDie \
+                    and not c.hasKeyword(Keyword.INDESTRUCTIBLE):
+                # hack because attackerWouldBeDestroyed()
+                # does not check for Indestructible when computing lethal damage
+                return True
+
+            # 2. kill combatant
+            survivor = False
+            for o in opposing:
+                if not ComputerUtilCombat.combatantWouldBeDestroyed(opp, o, combat):
+                    survivor = True
+                    break
+            if survivor:
+                for o in opposing:
+                    if not ComputerUtilCombat.combatantWouldBeDestroyed(opp, o, combat) \
+                            and not (o.hasSVar("SacMe") and int(o.getSVar("SacMe")) > 2):
+                        if isAttacking:
+                            if ComputerUtilCombat.blockerWouldBeDestroyed(opp, o, pumpedCombat):
+                                return True
+                        else:
+                            if ComputerUtilCombat.attackerWouldBeDestroyed(opp, o, pumpedCombat):
+                                return True
+
+            # 3. buff attacker
+            if combat.isAttacking(c) and opp.getLife() > 0:
+                dmg = ComputerUtilCombat.damageIfUnblocked(c, opp, combat, True)
+                pumpedDmg = ComputerUtilCombat.damageIfUnblocked(pumped, opp, pumpedCombat, True)
+                poisonOrig = ComputerUtilCombat.poisonIfUnblocked(c, ai)
+                poisonPumped = ComputerUtilCombat.poisonIfUnblocked(pumped, ai)
+
+                # predict Infect
+                if pumpedDmg == 0 and c.hasKeyword(Keyword.INFECT):
+                    if poisonPumped > poisonOrig:
+                        pumpedDmg = poisonPumped
+
+                if combat.isBlocked(c):
+                    if not c.hasKeyword(Keyword.TRAMPLE):
+                        dmg = 0
+                    if c.hasKeyword(Keyword.TRAMPLE) or "Trample" in keywords:
+                        for b in combat.getBlockers(c):
+                            pumpedDmg -= ComputerUtilCombat.getDamageToKill(b, False)
+                    else:
+                        pumpedDmg = 0
+                if pumpedDmg > dmg:
+                    if (not c.hasKeyword(Keyword.INFECT) and pumpedDmg >= opp.getLife()) \
+                            or (c.hasKeyword(Keyword.INFECT) and opp.canReceiveCounters(CounterEnumType.POISON) and pumpedDmg >= opp.getPoisonCounters()) \
+                            or ("PumpForTrample" == sa.getParam("AILogic")):
+                        return True
+
+                    # try to determine if pumping a creature for more power will give lethal on board
+                    # considering all unblocked creatures after the blockers are already declared
+                    if phase.is_(PhaseType.COMBAT_DECLARE_BLOCKERS):
+                        totalPowerUnblocked = 0
+                        for atk in combat.getAttackers():
+                            if combat.isBlocked(atk) and not atk.hasKeyword(Keyword.TRAMPLE):
+                                continue
+                            if atk == c:
+                                totalPowerUnblocked += pumpedDmg  # this accounts for Trample by now
+                            else:
+                                totalPowerUnblocked += ComputerUtilCombat.damageIfUnblocked(atk, opp, combat, True)
+                                if combat.isBlocked(atk):
+                                    # consider Trample damage properly for a blocked creature
+                                    for blk in combat.getBlockers(atk):
+                                        totalPowerUnblocked -= ComputerUtilCombat.getDamageToKill(blk, False)
+                        if totalPowerUnblocked >= opp.getLife():
+                            return True
+                        elif totalPowerUnblocked > dmg and sa.getHostCard() is not None and sa.getHostCard().isInPlay():
+                            if sa.getPayCosts().hasNoManaCost():
+                                return True  # always activate abilities which cost no mana and which can increase unblocked damage
+
+                value = 1.0 * (pumpedDmg - dmg)
+                if c == sa.getHostCard() and power > 0:
+                    divisor = sa.getPayCosts().getTotalMana().getCMC()
+                    if divisor <= 0:
+                        divisor = 1
+                    value *= power / divisor
+                else:
+                    value /= opp.getLife()
+                chance += value
+
+            # 4. lifelink
+            if ai.canGainLife() and ai.getLife() > 0 and not c.hasKeyword(Keyword.LIFELINK) and "Lifelink" in keywords \
+                    and (combat.isAttacking(c) or combat.isBlocking(c)):
+                dmg = pumped.getNetCombatDamage()
+                # The actual dmg inflicted should be the sum of ComputerUtilCombat.predictDamageTo() for opposing creature
+                # and trample damage (if any)
+                chance += 1.0 * dmg / ai.getLife()
+
+            # 5. if the life of the computer is in danger, try to pump blockers blocking Tramplers
+            if combat.isBlocking(c) and toughness > 0:
+                blockedBy = combat.getAttackersBlockedBy(c)
+                attackerHasTrample = False
+                for b in blockedBy:
+                    attackerHasTrample |= b.hasKeyword(Keyword.TRAMPLE)
+                if attackerHasTrample and (sa.isAbility() or ComputerUtilCombat.lifeInDanger(ai, combat)):
+                    return True
+
+        if "UntapCombatTrick" == sa.getParam("AILogic") and c.isTapped():
+            if phase.is_(PhaseType.COMBAT_DECLARE_ATTACKERS) and phase.getPlayerTurn().isOpponentOf(ai):
+                chance += 0.5  # this creature will untap to become a potential blocker
+            elif phase.is_(PhaseType.COMBAT_DECLARE_BLOCKERS, ai):
+                chance += 1.0  # untap after tapping for attack
+
+        if isBerserk:
+            # if we got here, Berserk will result in the pumped creature dying at EOT and the opponent will not lose
+            # (other similar cards with AILogic$ Berserk that do not die only when attacking are excluded from consideration)
+            if isinstance(ai.getController(), PlayerControllerAi):
+                aggr = ai.getController().getAi().getBoolProperty(AiProps.USE_BERSERK_AGGRESSIVELY) \
+                    or sa.hasParam("AtEOT")
+                if not aggr:
+                    return False
+
+        wantToHoldTrick = holdCombatTricks and not ai.getCardsIn(ZoneType.Hand).isEmpty()
+        if chanceToHoldCombatTricks >= 0:
+            # Obey the chance specified in the AI profile for holding combat tricks
+            wantToHoldTrick &= MyRandom.percentTrue(chanceToHoldCombatTricks)
+        else:
+            # Use standard considerations dependent solely on the buff chance determined above
+            wantToHoldTrick &= MyRandom.getRandom().nextFloat() < chance
+
+        isHeldCombatTrick = combatTrick and wantToHoldTrick
+
+        if isHeldCombatTrick:
+            if AiCardMemory.isMemorySetEmpty(ai, AiCardMemory.MemorySet.TRICK_ATTACKERS):
+                # Attempt to hold combat tricks until blockers are declared, and try to lure the opponent into blocking
+                # (The AI will only do it for one attacker at the moment, otherwise it risks running his attackers into
+                # an army of opposing blockers with only one combat trick in hand)
+                # Reserve the mana until Declare Blockers such that the AI doesn't tap out before having a chance to use
+                # the combat trick
+                reserved = False
+                if ai.getController().isAI():
+                    reserved = ai.getController().getAi().reserveManaSources(sa, PhaseType.COMBAT_DECLARE_BLOCKERS, False)
+                    # Only proceed with this if we could actually reserve mana
+                    if reserved:
+                        AiCardMemory.rememberCard(ai, c, AiCardMemory.MemorySet.MANDATORY_ATTACKERS)
+                        AiCardMemory.rememberCard(ai, c, AiCardMemory.MemorySet.TRICK_ATTACKERS)
+                        return False
+            else:
+                # Don't try to mix "lure" and "precast" paradigms for combat tricks, since that creates issues with
+                # the AI overextending the attack
+                return False
+
+        return simAI or MyRandom.getRandom().nextFloat() < chance
+
+    @staticmethod
+    def getPumpedCreature(ai, sa, c, toughness, power, keywords):
+        pumped = CardCopyService(c).copyCard(False)
+        pumped.setSickness(c.hasSickness())
+        timestamp = c.getGame().getNextTimestamp()
+        kws = []
+        hiddenKws = []
+        for kw in keywords:
+            if kw.startswith("HIDDEN"):
+                hiddenKws.append(kw[7:])
+            else:
+                kws.append(kw)
+
+        # Berserk (and other similar cards)
+        isBerserk = "Berserk" == sa.getParam("AILogic")
+        berserkPower = 0
+        if isBerserk and sa.hasSVar("X"):
+            if "Targeted$CardPower" == sa.getSVar("X"):
+                berserkPower = c.getCurrentPower()
+            else:
+                berserkPower = AbilityUtils.calculateAmount(sa.getHostCard(), "X", sa)
+
+        # Electrostatic Pummeler
+        for ab in c.getSpellAbilities():
+            if "Pummeler" == ab.getParam("AILogic"):
+                newPT = SpecialCardAi.ElectrostaticPummeler.getPumpedPT(ai, power, toughness)
+                power = newPT.getLeft()
+                toughness = newPT.getRight()
+
+        pumped.addNewPT(c.getCurrentPower(), c.getCurrentToughness(), timestamp, 0)
+        pumped.setPTBoost(c.getPTBoostTable())
+        pumped.addPTBoost(power + berserkPower, toughness, timestamp, 0)
+
+        if kws:
+            pumped.addChangedCardKeywords(kws, None, False, timestamp, None, False)
+        if hiddenKws:
+            pumped.addHiddenExtrinsicKeywords(timestamp, 0, hiddenKws)
+        pumped.setCounters(c.getCounters())
+        # Copies tap-state and extra keywords (auras, equipment, etc.)
+        if c.isTapped():
+            pumped.setTapped(True)
+
+        copiedKeywords = KeywordCollection()
+        copiedKeywords.insertAll(pumped.getKeywords())
+        toCopy = []
+        for k in c.getUnhiddenKeywords():
+            copiedKI = k.copy(c, True)
+            if not copiedKeywords.contains(copiedKI.getOriginal()):
+                toCopy.append(copiedKI)
+        timestamp2 = c.getGame().getNextTimestamp()  # is this necessary or can the timestamp be re-used?
+        pumped.addChangedCardKeywordsInternal(toCopy, None, False, timestamp2, None, False)
+        pumped.updateKeywordsCache()
+        ComputerUtilCard.applyStaticContPT(ai.getGame(), pumped, CardCollection(c))
+        return pumped
+
+    @staticmethod
+    def applyStaticContPT(game, vCard, exclude):
+        if not vCard.isCreature():
+            return
+        list = CardCollection(game.getCardsIn(ZoneType.Battlefield))
+        list.addAll(game.getCardsIn(ZoneType.Command))
+        if exclude is not None:
+            list.removeAll(exclude)
+        list.add(vCard)  # account for the static abilities that may be present on the card itself
+        for c in list:
+            # remove old boost that might be copied
+            for stAb in c.getStaticAbilities():
+                vCard.removePTBoost(c.getLayerTimestamp(), stAb.getId())
+                if not stAb.checkMode(StaticAbilityMode.Continuous):
+                    continue
+                if not stAb.hasParam("Affected"):
+                    continue
+                if not stAb.hasParam("AddPower") and not stAb.hasParam("AddToughness"):
+                    continue
+                if not stAb.matchesValidParam("Affected", vCard):
+                    continue
+                att = 0
+                if stAb.hasParam("AddPower"):
+                    addP = stAb.getParam("AddPower")
+                    att = AbilityUtils.calculateAmount(vCard if "Affected" in addP else c, addP, stAb, True)
+                deff = 0
+                if stAb.hasParam("AddToughness"):
+                    addT = stAb.getParam("AddToughness")
+                    deff = AbilityUtils.calculateAmount(vCard if "Affected" in addT else c, addT, stAb, True)
+                vCard.addPTBoost(att, deff, c.getLayerTimestamp(), stAb.getId())
+
+    @staticmethod
+    def canPumpAgainstRemoval(ai, sa):
+        objects = ComputerUtil.predictThreatenedObjects(sa.getActivatingPlayer(), sa, True)
+
+        if not sa.usesTargeting():
+            cards = AbilityUtils.getDefinedCards(sa.getHostCard(), sa.getParam("Defined"), sa)
+            for card in cards:
+                if card in objects:
+                    return AiAbilityDecision(100, AiPlayDecision.ResponseToStackResolve)
+            # For pumps without targeting restrictions, just return immediately until this is fleshed out.
+            return AiAbilityDecision(0, AiPlayDecision.TargetingFailed)
+
+        threatenedTargets = CardLists.getTargetableCards(ai.getCardsIn(ZoneType.Battlefield), sa)
+        threatenedTargets = ComputerUtil.getSafeTargets(ai, sa, threatenedTargets)
+        threatenedTargets.retainAll(objects)
+
+        if not threatenedTargets.isEmpty():
+            ComputerUtilCard.sortByEvaluateCreature(threatenedTargets)
+            for c in threatenedTargets:
+                if sa.canAddMoreTarget():
+                    sa.getTargets().add(c)
+                    if not sa.canAddMoreTarget():
+                        break
+            if not sa.isTargetNumberValid():
+                sa.resetTargets()
+                return AiAbilityDecision(0, AiPlayDecision.TargetingFailed)
+            return AiAbilityDecision(100, AiPlayDecision.ResponseToStackResolve)
+        return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+    @staticmethod
+    def isUselessCreature(ai, c):
+        if c is None:
+            return True
+        if not c.isCreature():
+            return False
+        if c.isDetained():
+            return True
+        if c.hasKeyword("CARDNAME can't attack or block."):
+            return True
+        if c.getOwner() == ai and ai.getOpponents().contains(c.getController()):
+            return True
+        if c.isTapped() and not c.canUntap(ai, True):
+            return True
+        return False
+
+    @staticmethod
+    def hasActiveUndyingOrPersist(c):
+        if c.isToken():
+            return False
+        if c.hasKeyword(Keyword.UNDYING) and c.getCounters(CounterEnumType.P1P1) == 0:
+            return True
+        if c.hasKeyword(Keyword.PERSIST) and c.getCounters(CounterEnumType.M1M1) == 0:
+            return True
+        return False
+
+    @staticmethod
+    def getMaxSAEnergyCostOnBattlefield(ai):
+        # returns the maximum energy cost of an ability that permanents on the battlefield under AI's control have
+        maxEnergyCost = 0
+
+        for c in ai.getCardsIn(ZoneType.Battlefield):
+            for sa in c.getSpellAbilities():
+                energyCost = sa.getPayCosts().getCostEnergy()
+                if energyCost is not None:
+                    amount = energyCost.convertAmount()
+                    if amount > maxEnergyCost:
+                        maxEnergyCost = amount
+
+        return maxEnergyCost
+
+    @staticmethod
+    def prioritizeCreaturesWorthRemovingNow(ai, oppCards, temporary):
+        if not CardLists.getNotType(oppCards, "Creature").isEmpty():
+            # non-creatures were passed, nothing to do here
+            return oppCards
+
+        enablePriorityRemoval = AiProfileUtil.getBoolProperty(ai, AiProps.ACTIVELY_DESTROY_IMMEDIATELY_UNBLOCKABLE)
+        priorityRemovalThreshold = AiProfileUtil.getIntProperty(ai, AiProps.DESTROY_IMMEDIATELY_UNBLOCKABLE_THRESHOLD)
+        priorityRemovalOnlyInDanger = AiProfileUtil.getBoolProperty(ai, AiProps.DESTROY_IMMEDIATELY_UNBLOCKABLE_ONLY_IN_DNGR)
+        lifeInDanger = AiProfileUtil.getIntProperty(ai, AiProps.DESTROY_IMMEDIATELY_UNBLOCKABLE_LIFE_IN_DNGR)
+
+        if not enablePriorityRemoval:
+            # Nothing to do here, the profile does not allow prioritizing
+            return oppCards
+
+        aiCreats = ai.getCreaturesInPlay()
+        if temporary:
+            # Pump effects that add "CARDNAME can't attack" and similar things. Only do it if something is untapped.
+            oppCards = CardLists.filter(oppCards, CardPredicates.UNTAPPED)
+
+        priorityCards = CardCollection()
+        for atk in oppCards:
+            canBeBlocked = False
+            if ComputerUtilCard.isUselessCreature(atk.getController(), atk):
+                continue
+            for blk in aiCreats:
+                if CombatUtil.canBlock(atk, blk, True):
+                    canBeBlocked = True
+                    break
+            if not canBeBlocked:
+                threat = ComputerUtilCombat.getAttack(atk) >= ai.getLife() - lifeInDanger
+                if not priorityRemovalOnlyInDanger or threat:
+                    priorityCards.add(atk)
+
+        if not priorityCards.isEmpty() and priorityCards.size() <= priorityRemovalThreshold:
+            return priorityCards
+
+        return oppCards
+
+    @staticmethod
+    def checkNeedsToPlayReqs(card, sa):
+        game = card.getGame()
+        needsToPlayName = "NeedsToPlay"
+        needsToPlayVarName = "NeedsToPlayVar"
+
+        # TODO: if there are ever split cards with Evoke or Kicker, factor in the right split option above
+        if sa is not None:
+            if sa.isEvoke():
+                # if the spell is evoked, will use NeedsToPlayEvoked if available (otherwise falls back to NeedsToPlay)
+                if card.hasSVar("NeedsToPlayEvoked"):
+                    needsToPlayName = "NeedsToPlayEvoked"
+                if card.hasSVar("NeedsToPlayEvokedVar"):
+                    needsToPlayVarName = "NeedsToPlayEvokedVar"
+            elif sa.isKicked():
+                # if the spell is kicked, uses NeedsToPlayKicked if able and locks out the regular NeedsToPlay check
+                # for unkicked spells, uses NeedsToPlay
+                if card.hasSVar("NeedsToPlayKicked"):
+                    needsToPlayName = "NeedsToPlayKicked"
+                else:
+                    needsToPlayName = "UNUSED"
+                if card.hasSVar("NeedsToPlayKickedVar"):
+                    needsToPlayVarName = "NeedsToPlayKickedVar"
+                else:
+                    needsToPlayVarName = "UNUSED"
+
+        if card.hasSVar(needsToPlayName):
+            needsToPlay = card.getSVar(needsToPlayName)
+
+            # A special case which checks that this creature will attack if it's the AI's turn
+            if needsToPlay.equalsIgnoreCase("WillAttack"):
+                if sa is not None and game.getPhaseHandler().isPlayerTurn(sa.getActivatingPlayer()):
+                    return AiPlayDecision.WillPlay if ComputerUtilCard.doesSpecifiedCreatureAttackAI(sa.getActivatingPlayer(), card) \
+                        else AiPlayDecision.BadEtbEffects
+                else:
+                    return AiPlayDecision.WillPlay  # not our turn, skip this check for the possible Flash use etc.
+
+            list = game.getCardsIn(ZoneType.Battlefield)
+
+            list = CardLists.getValidCards(list, needsToPlay, card.getController(), card, sa)
+            if list.isEmpty():
+                return AiPlayDecision.MissingNeededCards
+        if len(card.getSVar(needsToPlayVarName)) > 0:
+            needsToPlay = card.getSVar(needsToPlayVarName)
+            sVar = needsToPlay.split(" ")[0]
+            comparator = needsToPlay.split(" ")[1]
+            compareTo = comparator[2:]
+            x = AbilityUtils.calculateAmount(card, sVar, sa)
+            y = AbilityUtils.calculateAmount(card, compareTo, sa)
+
+            if not Expressions.compare(x, comparator, y):
+                return AiPlayDecision.NeedsToPlayCriteriaNotMet
+
+        return AiPlayDecision.WillPlay
+
+    @staticmethod
+    def getTotalWardCost(c):
+        totalCost = Cost(ManaCost.NO_COST, False)
+        for inst in c.getKeywords(Keyword.WARD):
+            keyword = inst.getOriginal()
+            k = keyword.split(":")
+            wardCost = Cost(k[1], False)
+            totalCost = totalCost.add(wardCost)
+        return totalCost
+
+    @staticmethod
+    def willUntap(ai, tapped):
+        # TODO use AiLogic on trigger in case card loses all abilities
+        # if it's from a static need to also check canUntap
+        for card in ai.getGame().getCardsIn(ZoneType.Battlefield):
+            untapsEachTurn = card.hasSVar("UntapsEachTurn")
+            untapsEachOtherTurn = card.hasSVar("UntapsEachOtherPlayerTurn")
+
+            if untapsEachTurn or untapsEachOtherTurn:
+                affected = card.getSVar("UntapsEachTurn") if untapsEachTurn \
+                    else card.getSVar("UntapsEachOtherPlayerTurn")
+
+                for aff in TextUtil.split(affected, ','):
+                    if tapped.isValid(aff, ai, tapped, None) \
+                            and (untapsEachTurn or (untapsEachOtherTurn and ai.equals(card.getController()))):
+                        return True
+        return False
+
+    # TODO replace most calls to Player.isCardInPlay because they include phased out
+    @staticmethod
+    def isNonDisabledCardInPlay(ai, cardName):
+        for card in ai.getCardsIn(ZoneType.Battlefield, cardName):
+            # TODO - Better logic to determine if a permanent is disabled by local effects
+            # currently assuming any permanent enchanted by another player
+            # is disabled and a second copy is necessary
+            # will need actual logic that determines if the enchantment is able
+            # to disable the permanent or it's still functional and a duplicate is unneeded.
+            disabledByEnemy = False
+            for card2 in card.getEnchantedBy():
+                if card2.getOwner() != ai:
+                    disabledByEnemy = True
+                    break
+            if not disabledByEnemy:
+                return True
+        return False
+
+    # use this function to skip expensive calculations on identical cards
+    @staticmethod
+    def dedupeCards(cc):
+        if cc.size() <= 1:
+            return cc
+        deduped = CardCollection()
+        for c in cc:
+            unique = True
+            if c.isInZone(ZoneType.Hand) and not c.hasPerpetual():
+                for d in deduped:
+                    if d.isInZone(ZoneType.Hand) and d.getOwner().equals(c.getOwner()) and d.getName().equals(c.getName()):
+                        unique = False
+                        break
+            if unique:
+                deduped.add(c)
+        return deduped
+
+    # Determine if the AI has an AI:RemoveDeck:All or an AI:RemoveDeck:Random hint specified.
+    # Includes a NPE guard on getRules() which might otherwise be tripped on some cards (e.g. tokens).
+    @staticmethod
+    def isCardRemAIDeck(card):
+        return card.getRules() is not None and card.getRules().getAiHints().getRemAIDecks()
+
+    @staticmethod
+    def isCardRemRandomDeck(card):
+        return card.getRules() is not None and card.getRules().getAiHints().getRemRandomDecks()
+
+    @staticmethod
+    def isCardRemNonCommanderDeck(card):
+        return card.getRules() is not None and card.getRules().getAiHints().getRemNonCommanderDecks()
+```

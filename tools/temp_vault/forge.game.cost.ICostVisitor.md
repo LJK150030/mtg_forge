@@ -144,7 +144,7 @@ classDiagram
 
 ## Design Description
 
-ICostVisitor is a generic visitor interface (parameterized by return type `T`) that defines the type-safe dispatch contract for Forge's cost system. It declares one overloaded `visit` method for every concrete `Cost` subtype—tap, sacrifice, pay life, mill, counter manipulation, and dozens of mechanic-specific costs—allowing callers to perform a type-specific operation on a heterogeneous cost without instanceof checks or downcasting. Each `Cost` subtype is expected to accept a visitor and route to its matching overload, implementing the classic Visitor pattern.
+ICostVisitor is a generic visitor interface (parameterized by return type `T`) that defines the type-safe dispatch contract for Forge's cost system. It declares one overloaded `visit` method for every concrete `Cost` subtypeâ€”tap, sacrifice, pay life, mill, counter manipulation, and dozens of mechanic-specific costsâ€”allowing callers to perform a type-specific operation on a heterogeneous cost without instanceof checks or downcasting. Each `Cost` subtype is expected to accept a visitor and route to its matching overload, implementing the classic Visitor pattern.
 
 The nested `Base<T>` inner class supplies a no-op default implementation that returns `null` for every overload, letting clients subclass and override only the cost types they care about. This keeps concrete visitors concise and decouples cost-processing logic from the cost class hierarchy, so new behaviors can be added without modifying the individual `Cost` classes.
 
@@ -390,4 +390,228 @@ public interface ICostVisitor<T> {
         public T visit(CostBlight cost) { return null; }
     }
 }
+```
+
+## Python
+`forge/game/cost/ICostVisitor.py`
+
+```python
+from abc import ABC, abstractmethod
+from functools import singledispatchmethod
+from typing import Generic, TypeVar
+
+from forge.game.cost.CostAddMana import CostAddMana
+from forge.game.cost.CostBehold import CostBehold
+from forge.game.cost.CostBeholdExile import CostBeholdExile
+from forge.game.cost.CostBlight import CostBlight
+from forge.game.cost.CostChooseColor import CostChooseColor
+from forge.game.cost.CostChooseCreatureType import CostChooseCreatureType
+from forge.game.cost.CostCollectEvidence import CostCollectEvidence
+from forge.game.cost.CostDamage import CostDamage
+from forge.game.cost.CostDiscard import CostDiscard
+from forge.game.cost.CostDraw import CostDraw
+from forge.game.cost.CostEnlist import CostEnlist
+from forge.game.cost.CostExert import CostExert
+from forge.game.cost.CostExile import CostExile
+from forge.game.cost.CostExileFromStack import CostExileFromStack
+from forge.game.cost.CostExiledMoveToGrave import CostExiledMoveToGrave
+from forge.game.cost.CostFlipCoin import CostFlipCoin
+from forge.game.cost.CostForage import CostForage
+from forge.game.cost.CostGainControl import CostGainControl
+from forge.game.cost.CostGainLife import CostGainLife
+from forge.game.cost.CostMill import CostMill
+from forge.game.cost.CostPartMana import CostPartMana
+from forge.game.cost.CostPayEnergy import CostPayEnergy
+from forge.game.cost.CostPayLife import CostPayLife
+from forge.game.cost.CostPayShards import CostPayShards
+from forge.game.cost.CostPromiseGift import CostPromiseGift
+from forge.game.cost.CostPutCardToLib import CostPutCardToLib
+from forge.game.cost.CostPutCounter import CostPutCounter
+from forge.game.cost.CostRemoveAnyCounter import CostRemoveAnyCounter
+from forge.game.cost.CostRemoveCounter import CostRemoveCounter
+from forge.game.cost.CostReturn import CostReturn
+from forge.game.cost.CostReveal import CostReveal
+from forge.game.cost.CostRevealChosen import CostRevealChosen
+from forge.game.cost.CostRollDice import CostRollDice
+from forge.game.cost.CostSacrifice import CostSacrifice
+from forge.game.cost.CostTap import CostTap
+from forge.game.cost.CostTapType import CostTapType
+from forge.game.cost.CostUnattach import CostUnattach
+from forge.game.cost.CostUntap import CostUntap
+from forge.game.cost.CostUntapType import CostUntapType
+
+T = TypeVar("T")
+
+
+class ICostVisitor(ABC, Generic[T]):
+
+    @abstractmethod
+    def visit(self, cost) -> T:
+        ...
+
+
+class Base(ICostVisitor[T], Generic[T]):
+
+    @singledispatchmethod
+    def visit(self, cost) -> T:
+        return None
+
+    @visit.register
+    def _(self, cost: CostGainControl) -> T:
+        return None
+
+    @visit.register
+    def _(self, cost: CostChooseColor) -> T:
+        return None
+
+    @visit.register
+    def _(self, cost: CostChooseCreatureType) -> T:
+        return None
+
+    @visit.register
+    def _(self, cost: CostCollectEvidence) -> T:
+        return None
+
+    @visit.register
+    def _(self, cost: CostDiscard) -> T:
+        return None
+
+    @visit.register
+    def _(self, cost: CostBehold) -> T:
+        return None
+
+    @visit.register
+    def _(self, cost: CostBeholdExile) -> T:
+        return None
+
+    @visit.register
+    def _(self, cost: CostDamage) -> T:
+        return None
+
+    @visit.register
+    def _(self, cost: CostDraw) -> T:
+        return None
+
+    @visit.register
+    def _(self, cost: CostExile) -> T:
+        return None
+
+    @visit.register
+    def _(self, cost: CostExileFromStack) -> T:
+        return None
+
+    @visit.register
+    def _(self, cost: CostExiledMoveToGrave) -> T:
+        return None
+
+    @visit.register
+    def _(self, cost: CostExert) -> T:
+        return None
+
+    @visit.register
+    def _(self, cost: CostEnlist) -> T:
+        return None
+
+    @visit.register
+    def _(self, cost: CostFlipCoin) -> T:
+        return None
+
+    @visit.register
+    def _(self, cost: CostForage) -> T:
+        return None
+
+    @visit.register
+    def _(self, cost: CostRollDice) -> T:
+        return None
+
+    @visit.register
+    def _(self, cost: CostMill) -> T:
+        return None
+
+    @visit.register
+    def _(self, cost: CostAddMana) -> T:
+        return None
+
+    @visit.register
+    def _(self, cost: CostPayLife) -> T:
+        return None
+
+    @visit.register
+    def _(self, cost: CostPayEnergy) -> T:
+        return None
+
+    @visit.register
+    def _(self, cost: CostGainLife) -> T:
+        return None
+
+    @visit.register
+    def _(self, cost: CostPartMana) -> T:
+        return None
+
+    @visit.register
+    def _(self, cost: CostPromiseGift) -> T:
+        return None
+
+    @visit.register
+    def _(self, cost: CostPutCardToLib) -> T:
+        return None
+
+    @visit.register
+    def _(self, cost: CostTap) -> T:
+        return None
+
+    @visit.register
+    def _(self, cost: CostSacrifice) -> T:
+        return None
+
+    @visit.register
+    def _(self, cost: CostReturn) -> T:
+        return None
+
+    @visit.register
+    def _(self, cost: CostReveal) -> T:
+        return None
+
+    @visit.register
+    def _(self, cost: CostRevealChosen) -> T:
+        return None
+
+    @visit.register
+    def _(self, cost: CostRemoveAnyCounter) -> T:
+        return None
+
+    @visit.register
+    def _(self, cost: CostRemoveCounter) -> T:
+        return None
+
+    @visit.register
+    def _(self, cost: CostPutCounter) -> T:
+        return None
+
+    @visit.register
+    def _(self, cost: CostUntapType) -> T:
+        return None
+
+    @visit.register
+    def _(self, cost: CostUntap) -> T:
+        return None
+
+    @visit.register
+    def _(self, cost: CostUnattach) -> T:
+        return None
+
+    @visit.register
+    def _(self, cost: CostTapType) -> T:
+        return None
+
+    @visit.register
+    def _(self, cost: CostPayShards) -> T:
+        return None
+
+    @visit.register
+    def _(self, cost: CostBlight) -> T:
+        return None
+
+
+ICostVisitor.Base = Base
 ```

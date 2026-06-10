@@ -28,6 +28,10 @@ classDiagram
 **Extends:**
 - [[forge.item.InventoryItem|InventoryItem]]
 
+## Design Description
+
+Inventory management for player-owned items that originate from a specific Magic: the Gathering set or edition. As a specialization of `InventoryItem`, it adds a single contract, `getEdition()`, requiring any conforming item to report the set it belongs to. Concrete inventory types tied to a releaseâ€”such as printed cards, boosters, and similar collectiblesâ€”implement this interface so callers can uniformly query an item's edition without knowing its concrete type. The design intent is minimal and composable: rather than folding set-awareness into the base `InventoryItem` abstraction, it isolates that responsibility in a narrow extension interface, keeping set-agnostic items free of an irrelevant method while letting set-bound items participate in the broader inventory hierarchy.
+
 ## Source
 `forge-core/src/main/java/forge/item/InventoryItemFromSet.java`
 
@@ -63,4 +67,29 @@ public interface InventoryItemFromSet extends InventoryItem {
      */
     String getEdition();
 }
+```
+
+## Python
+`forge/item/InventoryItemFromSet.py`
+
+```python
+from abc import abstractmethod
+
+from forge.item.InventoryItem import InventoryItem
+
+
+class InventoryItemFromSet(InventoryItem):
+    """
+    Interface to define a player's inventory may hold. Should include
+    CardPrinted, Booster, Pets, Plants... etc
+    """
+
+    @abstractmethod
+    def getEdition(self) -> str:
+        """
+        An item belonging to a set should return its set as well.
+
+        :return: the sets the
+        """
+        ...
 ```

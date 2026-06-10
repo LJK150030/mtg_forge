@@ -120,3 +120,65 @@ public class ReplaceSplitDamageEffect extends SpellAbilityEffect {
 
 }
 ```
+
+## Python
+`forge/game/ability/effects/ReplaceSplitDamageEffect.py`
+
+```python
+from typing import List, Map
+
+from forge.game.Game import Game
+from forge.game.GameEntity import GameEntity
+from forge.game.GameObject import GameObject
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.replacement.ReplacementResult import ReplacementResult
+from forge.game.spellability.SpellAbility import SpellAbility
+
+from org.apache.commons.lang3 import StringUtils
+
+
+class ReplaceSplitDamageEffect(SpellAbilityEffect):
+
+    def resolve(self, sa: SpellAbility) -> None:
+        card = sa.getHostCard()
+        game = card.getGame()
+
+        # outside of Replacement Effect, unwanted result
+        if not sa.isReplacementAbility():
+            return
+
+        varValue = sa.getParamOrDefault("VarName", "1")
+
+        originalParams = sa.getReplacingObject(AbilityKey.OriginalParams)
+        dmg = sa.getReplacingObject(AbilityKey.DamageAmount)
+        prevent = AbilityUtils.calculateAmount(card, varValue, sa)
+
+        list = AbilityUtils.getDefinedObjects(card, sa.getParam("DamageTarget"), sa)
+
+        if prevent > 0 and len(list) > 0 and isinstance(list[0], GameEntity):
+            n = min(dmg, prevent)
+            # if the effect has divided shield, use that
+            if originalParams.get(AbilityKey.DividedShieldAmount) is not None:
+                n = min(n, originalParams.get(AbilityKey.DividedShieldAmount))
+            dmg -= n
+            prevent -= n
+
+            if card.isImmutable() and prevent <= 0:
+                game.getAction().exileEffect(card)
+            elif not StringUtils.isNumeric(varValue):
+                sa.setSVar(varValue, "Number$" + str(prevent))
+                card.updateAbilityTextForView()
+
+            obj = list[0]
+            originalParams.put(AbilityKey.Affected, obj)
+            originalParams.put(AbilityKey.DamageAmount, n)
+
+        # no damage for original target anymore
+        if dmg <= 0:
+            originalParams.put(AbilityKey.ReplacementResult, ReplacementResult.Replaced)
+            return
+        originalParams.put(AbilityKey.ReplacementResult, ReplacementResult.Updated)
+```

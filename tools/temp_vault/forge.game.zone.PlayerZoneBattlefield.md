@@ -47,6 +47,12 @@ classDiagram
 - [[forge.game.player.Player|Player]]
 - [[forge.game.zone.ZoneType|ZoneType]]
 
+## Design Description
+
+Summoning sickness, melded cards, and phased-out filteringâ€”I have everything I need from the source.
+
+PlayerZoneBattlefield is a specialized game zone representing a player's battlefield, extending PlayerZone to add Magic-specific behavior for permanents in play. It overrides `add` to apply summoning sickness to newly entering creatures (gated by a `trigger` flag that can be toggled via `setTriggers`), and overrides `getCards` so that phased-out permanents are filtered from the default view while still being retrievable on request. It also maintains a separate `meldedCards` collection, managed through `addToMelded`/`removeFromMelded`, to track the components of melded permanents apart from the main zone. Collaborating with Card, CardCollection, CardCollectionView, Player, and ZoneType, the class concentrates the battlefield's distinct rulesâ€”sickness, phasing visibility, and meld bookkeepingâ€”in one subtype, keeping the generic zone superclass free of these concerns.
+
 ## Source
 `forge-game/src/main/java/forge/game/zone/PlayerZoneBattlefield.java`
 
@@ -156,4 +162,69 @@ public class PlayerZoneBattlefield extends PlayerZone {
         return meldedCards;
     }
 }
+```
+
+## Python
+`forge/game/zone/PlayerZoneBattlefield.py`
+
+```python
+from forge.game.zone.PlayerZone import PlayerZone
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.player.Player import Player
+from forge.game.zone.ZoneType import ZoneType
+
+
+class PlayerZoneBattlefield(PlayerZone):
+    serialVersionUID = 5750837078903423978
+
+    def __init__(self, zone: ZoneType, player: Player):
+        super().__init__(zone, player)
+        self.trigger = True
+        self.meldedCards = CardCollection()
+
+    def addToMelded(self, c: Card) -> None:
+        c.getZone().remove(c)
+        self.meldedCards.add(c)
+
+    def removeFromMelded(self, c: Card) -> None:
+        self.meldedCards.remove(c)
+
+    def add(self, c: Card, position: int, latestState: Card) -> None:
+        if c is None:
+            raise RuntimeError("PlayerZoneComesInto Play : add() object is null")
+
+        super().add(c, position, latestState)
+
+        if self.trigger:
+            c.setSickness(True)  # summoning sickness
+
+    def setTriggers(self, b: bool) -> None:
+        self.trigger = b
+
+    def getCards(self, filter: bool) -> CardCollectionView:
+        # Battlefield filters out Phased Out cards by default. Needs to call
+        # getCards(false) to get Phased Out cards
+
+        cards = super().getCards(False)
+        if not filter:
+            return cards
+
+        hasFilteredCard = False
+        for c in cards:
+            if c.isPhasedOut():
+                hasFilteredCard = True
+                break
+
+        if hasFilteredCard:
+            filteredCollection = CardCollection()
+            for c in cards:
+                if not c.isPhasedOut():
+                    filteredCollection.add(c)
+            cards = filteredCollection
+        return cards
+
+    def getMeldedCards(self) -> CardCollection:
+        return self.meldedCards
 ```

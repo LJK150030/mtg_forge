@@ -167,3 +167,103 @@ public class ConniveEffect extends SpellAbilityEffect {
     }
 }
 ```
+
+## Python
+`forge/game/ability/effects/ConniveEffect.py`
+
+```python
+from forge.game.Game import Game
+from forge.game.GameActionUtil import GameActionUtil
+from forge.game.GameEntityCounterTable import GameEntityCounterTable
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CardZoneTable import CardZoneTable
+from forge.game.card.CounterEnumType import CounterEnumType
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.Lang import Lang
+from forge.util.Localizer import Localizer
+
+
+class ConniveEffect(SpellAbilityEffect):
+
+    # (non-Javadoc)
+    # @see forge.game.ability.SpellAbilityEffect#getStackDescription(forge.game.spellability.SpellAbility)
+    # returns the automatically generated stack description string
+    def getStackDescription(self, sa: SpellAbility) -> str:
+        tgt = self.getTargetCards(sa)
+        if len(tgt) <= 0:
+            return ""
+        else:
+            sb = []
+            sb.append(Lang.joinHomogenous(tgt))
+            sb.append(" connive." if len(tgt) > 1 else " connives.")
+            return "".join(sb)
+
+    # (non-Javadoc)
+    # @see forge.game.ability.SpellAbilityEffect#resolve(forge.game.spellability.SpellAbility)
+    def resolve(self, sa: SpellAbility) -> None:
+        host = sa.getHostCard()
+        game = host.getGame()
+        num = AbilityUtils.calculateAmount(host, sa.getParamOrDefault("ConniveNum", "1"), sa)
+
+        toConnive = self.getTargetCards(sa)
+        if toConnive.isEmpty():  # if nothing is conniving, we're done
+            return
+
+        controllers = []
+        for c in toConnive:
+            controller = c.getController()
+            if controller not in controllers:
+                controllers.append(controller)
+        # order controllers by APNAP
+        indexAP = controllers.index(game.getPhaseHandler().getPlayerTurn()) \
+            if game.getPhaseHandler().getPlayerTurn() in controllers else -1
+        if indexAP != -1:
+            Collections.rotate(controllers, -indexAP)
+
+        for p in controllers:
+            connivers = CardLists.filterControlledBy(toConnive, p)
+            while not connivers.isEmpty():
+                moveParams = AbilityKey.newMap()
+                zoneMovements = AbilityKey.addCardZoneTableParams(moveParams, sa)
+                counterPlacements = GameEntityCounterTable()
+
+                conniver = p.getController().chooseSingleEntityForEffect(connivers, sa,
+                        Localizer.getInstance().getMessage("lblChooseConniver"), None) \
+                    if connivers.size() > 1 else connivers.get(0)
+                connivers.remove(conniver)
+
+                p.drawCards(num, sa, moveParams)
+
+                # in case anything triggers from drawing that happened before discard, e.g. Sneaky Snacker
+                game.getTriggerHandler().collectTriggerForWaiting()
+
+                hand = CardCollection(p.getCardsIn(ZoneType.Hand))
+                if hand.isEmpty() or not p.canDiscardBy(sa, True):
+                    continue
+
+                amt = min(hand.size(), num)
+                toBeDiscarded = CardCollection.EMPTY if amt == 0 else \
+                    p.getController().chooseCardsToDiscardFrom(p, sa, hand, amt, amt)
+
+                toBeDiscarded = GameActionUtil.orderCardsByTheirOwners(game, toBeDiscarded, ZoneType.Graveyard, sa)
+
+                # need to get newest game state to check if it is still on the battlefield and the timestamp didn't change
+                gamec = game.getCardState(conniver)
+                # if the card is not in the game anymore, this might still return true, but it's no problem
+                if game.getZoneOf(gamec).is_(ZoneType.Battlefield) and gamec.equalsWithGameTimestamp(conniver):
+                    numCntrs = CardLists.getValidCardCount(toBeDiscarded, "Card.nonLand", p, host, sa)
+                    conniver.addCounter(CounterEnumType.P1P1, numCntrs, p, counterPlacements)
+                discardedMap = {}
+                discardedMap[p] = CardCollection.getView(toBeDiscarded)
+                self.discard(sa, True, discardedMap, moveParams)
+                counterPlacements.replaceCounterEffect(game, sa)
+                zoneMovements.triggerChangesZoneAll(game, sa)
+```

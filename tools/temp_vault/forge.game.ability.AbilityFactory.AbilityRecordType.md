@@ -55,12 +55,12 @@ classDiagram
 
 ## Design Description
 
-`AbilityRecordType` is a nested enum within `AbilityFactory` that classifies a card-script ability by one of four kinds—`Ability` ("AB"), `Spell` ("SP"), `StaticAbility` ("ST"), or `SubAbility` ("DB")—each tagged with the script prefix that identifies it inside a parsed parameter map. Its central responsibility is to act as a factory dispatcher: `buildSpellAbility` switches on the constant to instantiate the matching `SpellAbility` subtype (`AbilityApiBased`, `SpellApiBased`, `StaticAbilityApiBased`, or `AbilitySub`), wiring in the `ApiType`, host `Card`, `Cost`, and `TargetRestrictions`.
+`AbilityRecordType` is a nested enum within `AbilityFactory` that classifies a card-script ability by one of four kindsâ€”`Ability` ("AB"), `Spell` ("SP"), `StaticAbility` ("ST"), or `SubAbility` ("DB")â€”each tagged with the script prefix that identifies it inside a parsed parameter map. Its central responsibility is to act as a factory dispatcher: `buildSpellAbility` switches on the constant to instantiate the matching `SpellAbility` subtype (`AbilityApiBased`, `SpellApiBased`, `StaticAbilityApiBased`, or `AbilitySub`), wiring in the `ApiType`, host `Card`, `Cost`, and `TargetRestrictions`.
 
 The static `getRecordType` and `getApiTypeOf` helpers recover the kind and its `ApiType` from a raw `Map<String,String>`, letting the enclosing factory drive ability construction directly from parsed script text. This design centralizes the prefix-to-type mapping in one place, replacing scattered conditionals with a self-describing enum that couples each record kind to both its textual marker and its concrete constructor.
 
 ## Source
-`forge-game/src/main/java/forge/game/ability/AbilityFactory.java` â€” declaration excerpt
+`forge-game/src/main/java/forge/game/ability/AbilityFactory.java` Ã¢â‚¬â€ declaration excerpt
 
 ```java
     public enum AbilityRecordType {
@@ -105,4 +105,61 @@ The static `getRecordType` and `getApiTypeOf` helpers recover the kind and its `
             }
         }
     }
+```
+
+## Python
+`forge/game/ability/AbilityFactory/AbilityRecordType.py`
+
+```python
+from enum import Enum
+
+from forge.game.ability.AbilityApiBased import AbilityApiBased
+from forge.game.ability.ApiType import ApiType
+from forge.game.ability.SpellApiBased import SpellApiBased
+from forge.game.ability.StaticAbilityApiBased import StaticAbilityApiBased
+from forge.game.card.Card import Card
+from forge.game.cost.Cost import Cost
+from forge.game.spellability.AbilitySub import AbilitySub
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.spellability.TargetRestrictions import TargetRestrictions
+
+
+class AbilityRecordType(Enum):
+    Ability = "AB"
+    Spell = "SP"
+    StaticAbility = "ST"
+    SubAbility = "DB"
+
+    def __init__(self, prefix: str):
+        self.prefix = prefix
+
+    def getPrefix(self) -> str:
+        return self.prefix
+
+    def buildSpellAbility(self, api: ApiType, hostCard: Card, abCost: Cost, abTgt: TargetRestrictions, mapParams: dict[str, str]) -> SpellAbility:
+        if self is AbilityRecordType.Ability:
+            return AbilityApiBased(api, hostCard, abCost, abTgt, mapParams)
+        elif self is AbilityRecordType.Spell:
+            return SpellApiBased(api, hostCard, abCost, abTgt, mapParams)
+        elif self is AbilityRecordType.StaticAbility:
+            return StaticAbilityApiBased(api, hostCard, abCost, abTgt, mapParams)
+        elif self is AbilityRecordType.SubAbility:
+            return AbilitySub(api, hostCard, abTgt, mapParams)
+        return None  # exception here would be fine!
+
+    def getApiTypeOf(self, abParams: dict[str, str]) -> ApiType:
+        return ApiType.smartValueOf(abParams.get(self.getPrefix()))
+
+    @staticmethod
+    def getRecordType(abParams: dict[str, str]) -> "AbilityRecordType":
+        if AbilityRecordType.Ability.getPrefix() in abParams:
+            return AbilityRecordType.Ability
+        elif AbilityRecordType.Spell.getPrefix() in abParams:
+            return AbilityRecordType.Spell
+        elif AbilityRecordType.StaticAbility.getPrefix() in abParams:
+            return AbilityRecordType.StaticAbility
+        elif AbilityRecordType.SubAbility.getPrefix() in abParams:
+            return AbilityRecordType.SubAbility
+        else:
+            return None
 ```

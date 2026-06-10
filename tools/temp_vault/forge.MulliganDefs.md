@@ -30,6 +30,12 @@ classDiagram
 **Uses:**
 - [[forge.MulliganDefs.MulliganRule|MulliganRule]]
 
+## Design Description
+
+The MulliganDefs class centralizes the definitions of Magic's supported mulligan rule variants, exposing them through a nested `MulliganRule` enum (Original, Paris, Vancouver, London, and Houston) and a small set of static accessor methods. It serves as a stateless utility/registry: it has no instances, holding only a class-level default rule (London) and helper methods to retrieve that default, enumerate all rule names, and resolve a rule from its string name.
+
+Its sole collaborator is the `MulliganRule` enum it defines, which callers reference when configuring game behavior. The design favors defensive robustness â€” `GetRuleByName` catches an invalid name, warns to standard error, and falls back to the default rather than propagating an exception â€” making rule selection from external or configuration input safe and predictable.
+
 ## Source
 `forge-core/src/main/java/forge/MulliganDefs.java`
 
@@ -78,4 +84,45 @@ public class MulliganDefs {
         return r;
     }
 }
+```
+
+## Python
+`forge/MulliganDefs.py`
+
+```python
+from forge.MulliganDefs.MulliganRule import MulliganRule
+import sys
+from enum import Enum
+
+
+class MulliganDefs:
+    class MulliganRule(Enum):
+        Original = "Original"
+        Paris = "Paris"
+        Vancouver = "Vancouver"
+        London = "London"
+        Houston = "Houston"
+
+    defaultRule = MulliganRule.London
+
+    @staticmethod
+    def getDefaultRule() -> "MulliganDefs.MulliganRule":
+        return MulliganDefs.defaultRule
+
+    @staticmethod
+    def getMulliganRuleNames() -> list[str]:
+        names = []
+        for mr in MulliganDefs.MulliganRule:
+            names.append(mr.name)
+        return names
+
+    @staticmethod
+    def GetRuleByName(rule: str) -> "MulliganDefs.MulliganRule":
+        try:
+            r = MulliganDefs.MulliganRule[rule]
+        except KeyError:
+            sys.stderr.write("Warning: illegal Mulligan rule specified: " + rule + ", defaulting to " + MulliganDefs.getDefaultRule().name + "\n")
+            r = MulliganDefs.getDefaultRule()
+
+        return r
 ```

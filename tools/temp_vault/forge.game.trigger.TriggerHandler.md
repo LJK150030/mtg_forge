@@ -121,6 +121,12 @@ classDiagram
 - [[forge.game.zone.Zone|Zone]]
 - [[forge.game.zone.ZoneType|ZoneType]]
 
+## Design Description
+
+TriggerHandler is the per-`Game` orchestrator for Magic's triggered-ability system, owning the lifecycle of every trigger from registration through resolution. It maintains the set of active triggers (rebuilt from all cards via `resetActiveTriggers`), several categories of delayed triggers (general, this-turn, and player-defined), and a queue of waiting triggers that defers firing while the stack is frozen. Its core duty is `runTrigger`, which screens each `Trigger` against suppression modes, mode/zone/phase requirements, and disabling static abilities (`canRunTrigger`/`isTriggerActive`) before wrapping the eligible ability in a `WrappedAbility` and pushing it onto the stack.
+
+As a plain collaborator class (no supertype), it is held by `Game` and coordinates broadly with the trigger hierarchy, `Card`/`CardState`, `Player`, and `SpellAbility`. Notable design intent: thread-safe synchronized collections guard concurrent access; a static `parseTrigger` family builds `Trigger` instances from card script params with Sentry breadcrumbs for diagnostics; `StaticAbilityPanharmonicon` enables trigger doubling; and `adjustUndoStack` selectively invalidates mana undo for specific trigger subtypes, reflecting careful integration with the rules engine's edge cases.
+
 ## Source
 `forge-game/src/main/java/forge/game/trigger/TriggerHandler.java`
 
@@ -729,4 +735,498 @@ public class TriggerHandler {
         runWaitingTriggers();
     }
 }
+```
+
+## Python
+`forge/game/trigger/TriggerHandler.py`
+
+```python
+from forge.game.CardTraitBase import CardTraitBase
+from forge.game.CardTraitPredicates import CardTraitPredicates
+from forge.game.Game import Game
+from forge.game.IHasSVars import IHasSVars
+from forge.game.ability.AbilityFactory import AbilityFactory
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.card.CardState import CardState
+from forge.game.player.Player import Player
+from forge.game.spellability.AbilitySub import AbilitySub
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.spellability.SpellAbility.EmptySa import EmptySa
+from forge.game.staticability.StaticAbilityDisableTriggers import StaticAbilityDisableTriggers
+from forge.game.staticability.StaticAbilityPanharmonicon import StaticAbilityPanharmonicon
+from forge.game.trigger.Trigger import Trigger
+from forge.game.trigger.TriggerAbilityResolves import TriggerAbilityResolves
+from forge.game.trigger.TriggerAbilityTriggered import TriggerAbilityTriggered
+from forge.game.trigger.TriggerManaAdded import TriggerManaAdded
+from forge.game.trigger.TriggerSpellAbilityCastOrCopy import TriggerSpellAbilityCastOrCopy
+from forge.game.trigger.TriggerTapAll import TriggerTapAll
+from forge.game.trigger.TriggerTaps import TriggerTaps
+from forge.game.trigger.TriggerTapsForMana import TriggerTapsForMana
+from forge.game.trigger.TriggerType import TriggerType
+from forge.game.trigger.TriggerUntapAll import TriggerUntapAll
+from forge.game.trigger.TriggerUntaps import TriggerUntaps
+from forge.game.trigger.TriggerWaiting import TriggerWaiting
+from forge.game.trigger.WrappedAbility import WrappedAbility
+from forge.game.zone.Zone import Zone
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.FileSection import FileSection
+from io.sentry.Breadcrumb import Breadcrumb
+from io.sentry.Sentry import Sentry
+
+import sys
+import itertools
+
+
+class TriggerHandler:
+    def __init__(self, gameState: Game):
+        self.suppressedModes: set[TriggerType] = set()
+        self.allSuppressed: bool = False
+        self.activeTriggers: list[Trigger] = []
+
+        self.delayedTriggers: list[Trigger] = []
+        self.thisTurnDelayedTriggers: list[Trigger] = []
+        self.playerDefinedDelayedTriggers: dict[Player, list[Trigger]] = {}
+        self.waitingTriggers: list[TriggerWaiting] = []
+        self.game: Game = gameState
+
+    def registerDelayedTrigger(self, trig: Trigger) -> None:
+        self.delayedTriggers.append(trig)
+
+    def clearDelayedTrigger(self) -> None:
+        self.delayedTriggers.clear()
+
+    def registerThisTurnDelayedTrigger(self, trig: Trigger) -> None:
+        self.thisTurnDelayedTriggers.append(trig)
+        self.delayedTriggers.append(trig)
+
+    def clearThisTurnDelayedTrigger(self) -> None:
+        self.delayedTriggers[:] = [t for t in self.delayedTriggers if t not in self.thisTurnDelayedTriggers]
+        self.thisTurnDelayedTriggers.clear()
+
+    def clearDelayedTrigger(self, card: Card) -> None:
+        deltrigs = list(self.delayedTriggers)
+
+        for trigger in deltrigs:
+            if trigger.getHostCard() == card:
+                self.delayedTriggers.remove(trigger)
+
+    def registerPlayerDefinedDelayedTrigger(self, player: Player, trig: Trigger) -> None:
+        self.playerDefinedDelayedTriggers.setdefault(player, []).append(trig)
+
+    def clearPlayerDefinedDelayedTrigger(self) -> None:
+        self.playerDefinedDelayedTriggers.clear()
+
+    def handlePlayerDefinedDelTriggers(self, player: Player) -> None:
+        playerTriggers = self.playerDefinedDelayedTriggers.pop(player, [])
+        pred = CardTraitPredicates.hasParam("ThisTurn")
+        for t in playerTriggers:
+            if pred.apply(t):
+                self.thisTurnDelayedTriggers.append(t)
+        self.delayedTriggers.extend(playerTriggers)
+
+    def suppressMode(self, mode: TriggerType) -> None:
+        self.suppressedModes.add(mode)
+
+    def setSuppressAllTriggers(self, suppress: bool) -> None:
+        self.allSuppressed = suppress
+
+    def clearSuppression(self, mode: TriggerType) -> None:
+        self.suppressedModes.discard(mode)
+
+    def isTriggerSuppressed(self, mode: TriggerType) -> bool:
+        return self.allSuppressed or mode in self.suppressedModes
+
+    @staticmethod
+    def parseTrigger(trigParse: str, host: Card, intrinsic: bool) -> Trigger:
+        return TriggerHandler.parseTrigger(trigParse, host, intrinsic, host.getCurrentState())
+
+    @staticmethod
+    def parseTrigger(trigParse: str, host: Card, intrinsic: bool, sVarHolder: IHasSVars) -> Trigger:
+        try:
+            mapParams = TriggerHandler.parseParams(trigParse)
+            return TriggerHandler.parseTrigger(mapParams, host, intrinsic, sVarHolder)
+        except Exception as e:
+            msg = "TriggerHandler:parseTrigger failed to parse"
+
+            bread = Breadcrumb(msg)
+            bread.setData("Card", host.getName())
+            bread.setData("Trigger", trigParse)
+            Sentry.addBreadcrumb(bread)
+
+            # rethrow
+            raise RuntimeError("Error in Trigger for Card: " + host.getName(), e)
+
+    @staticmethod
+    def parseTrigger(mapParams: dict[str, str], host: Card, intrinsic: bool, sVarHolder: IHasSVars) -> Trigger:
+        try:
+            type = TriggerType.smartValueOf(mapParams.get("Mode"))
+            result = type.createTrigger(mapParams, host, intrinsic)
+            if sVarHolder is not None:
+                result.ensureAbility(sVarHolder)
+
+                if isinstance(sVarHolder, CardState):
+                    result.setCardState(sVarHolder)
+                elif isinstance(sVarHolder, CardTraitBase):
+                    result.setCardState(sVarHolder.getCardState())
+        except Exception as e:
+            msg = "TriggerHandler:parseTrigger failed to parse"
+
+            bread = Breadcrumb(msg)
+            bread.setData("Card", host.getName())
+            bread.setData("Params", str(mapParams))
+            Sentry.addBreadcrumb(bread)
+
+            # rethrow
+            raise RuntimeError("Error in Trigger for Card: " + host.getName(), e)
+
+        return result
+
+    @staticmethod
+    def parseParams(trigParse: str) -> dict[str, str]:
+        if len(trigParse) == 0:
+            raise RuntimeError("TriggerFactory : registerTrigger -- trigParse too short")
+
+        return FileSection.parseToMap(trigParse, FileSection.DOLLAR_SIGN_KV_SEPARATOR)
+
+    def collectTriggerForWaiting(self) -> None:
+        for wt in self.waitingTriggers:
+            if wt.getTriggers() is not None:
+                continue
+
+            # TODO we don't seem to handle Static ones from this,
+            # so they shouldn't be checked for performance in the first place
+            wt.setTriggers(self.getActiveTrigger(wt.getMode(), wt.getParams()))
+
+    def resetActiveTriggers(self) -> None:
+        self.resetActiveTriggers(True, None)
+
+    def resetActiveTriggers(self, collect: bool, lastStateBattlefield: CardCollectionView) -> None:
+        if collect:
+            self.collectTriggerForWaiting()
+        self.activeTriggers.clear()
+
+        def _process(c):
+            for t in c.getTriggers():
+                if c.isInPlay() and lastStateBattlefield is not None and not lastStateBattlefield.contains(c) and t.looksBackInTime():
+                    continue
+                if self.isTriggerActive(t):
+                    self.activeTriggers.append(t)
+            return True
+
+        self.game.forEachCardInGame(_process)
+
+    def clearActiveTriggers(self, c: Card, zoneFrom: Zone) -> None:
+        toBeRemoved = []
+
+        for t in self.activeTriggers:
+            # Clear if no ZoneFrom, or not coming from the TriggerZone
+            if c.getId() == t.getHostCard().getId() and (t not in c.getTriggers() or not t.zonesCheck(zoneFrom)):
+                toBeRemoved.append(t)
+
+        self.activeTriggers[:] = [t for t in self.activeTriggers if t not in toBeRemoved]
+
+    def registerActiveTrigger(self, c: Card, onlyExtrinsic: bool) -> None:
+        for t in c.getTriggers():
+            if not onlyExtrinsic or c.isCloned() or not t.isIntrinsic() or TriggerType.Always == t.getMode():
+                self.registerOneTrigger(t)
+
+    def registerActiveLTBTrigger(self, c: Card) -> None:
+        for t in c.getTriggers():
+            if t.looksBackInTime():
+                self.registerOneTrigger(t)
+
+    def registerOneTrigger(self, t: Trigger) -> bool:
+        if self.isTriggerActive(t):
+            self.activeTriggers.append(t)
+            return True
+        return False
+
+    def runTrigger(self, mode: TriggerType, runParams: dict[AbilityKey, object], holdTrigger: bool) -> None:
+        if self.isTriggerSuppressed(mode):
+            return
+
+        # too many waiting triggers might cause OutOfMemory exception
+        # such high amount usually happens from looping on one type:
+        # e.g. Heroes' Bane counters ability
+        # we can just run further triggers directly, side effects are highly unlikely
+        # (could also make this depend on Runtime.getRuntime().freeMemory()
+        # - but probably overkill)
+        canWait = len(self.waitingTriggers) < 9999
+        if mode == TriggerType.Always:
+            self.runStateTrigger(runParams)
+        elif canWait and (self.game.getStack().isFrozen() or holdTrigger) and mode != TriggerType.TapsForMana and mode != TriggerType.ManaAdded:
+            self.waitingTriggers.append(TriggerWaiting(mode, runParams))
+        else:
+            self.runWaitingTrigger(TriggerWaiting(mode, runParams))
+
+    def runStateTrigger(self, runParams: dict[AbilityKey, object]) -> None:
+        for t in list(self.activeTriggers):
+            if self.canRunTrigger(t, TriggerType.Always, runParams):
+                self.runSingleTrigger(t, runParams)
+
+    def runWaitingTriggers(self) -> bool:
+        if len(self.waitingTriggers) == 0:
+            return False
+        waiting = list(self.waitingTriggers)
+        self.waitingTriggers.clear()
+
+        haveWaiting = False
+        for wt in waiting:
+            haveWaiting |= self.runWaitingTrigger(wt)
+
+        return haveWaiting
+
+    def runWaitingTrigger(self, wt: TriggerWaiting) -> bool:
+        playerAP = self.game.getPhaseHandler().getPlayerTurn()
+        if playerAP is None:
+            # This should only happen outside of games, so it's safe to abort.
+            return False
+
+        mode = wt.getMode()
+        runParams = wt.getParams()
+        # Copy triggers here, so things can be modified just in case
+        delayedTriggersWorkingCopy = list(self.delayedTriggers)
+        checkStatics = False
+
+        # Static ones should happen first
+        for t in list(self.activeTriggers):
+            if t.isStatic() and self.canRunTrigger(t, mode, runParams):
+                trigAmt = 1 + StaticAbilityPanharmonicon.handlePanharmonicon(self.game, t, runParams)
+                for i in range(trigAmt):
+                    self.runSingleTrigger(t, runParams)
+                checkStatics = True
+
+        if AbilityKey.Destination in runParams:
+            # Check static abilities when a card enters the battlefield
+            if isinstance(runParams.get(AbilityKey.Destination), str):
+                type = runParams.get(AbilityKey.Destination)
+                checkStatics |= (type == "Battlefield")
+            else:
+                zone = runParams.get(AbilityKey.Destination)
+                if zone is not None:
+                    checkStatics |= (zone == ZoneType.Battlefield)
+
+        wasCollected = wt.getTriggers() is not None
+        triggers = wt.getTriggers() if wasCollected else self.activeTriggers
+
+        # the trigger will be ordered later in MagicStack
+        for t in triggers:
+            if not t.isStatic() and (wasCollected or self.canRunTrigger(t, mode, runParams)):
+                if wasCollected and not t.checkActivationLimit():
+                    continue
+                trigAmt = 1 + StaticAbilityPanharmonicon.handlePanharmonicon(self.game, t, runParams)
+                for i in range(trigAmt):
+                    self.runSingleTrigger(t, runParams, wt.getController(t))
+                checkStatics = True
+
+        for deltrig in delayedTriggersWorkingCopy:
+            if self.isTriggerActive(deltrig) and self.canRunTrigger(deltrig, mode, runParams):
+                self.delayedTriggers.remove(deltrig)
+                self.runSingleTrigger(deltrig, runParams)
+
+        return checkStatics
+
+    def clearWaitingTriggers(self) -> None:
+        self.waitingTriggers.clear()
+
+    def isTriggerActive(self, regtrig: Trigger) -> bool:
+        if not regtrig.phasesCheck(self.game):
+            return False  # It's not the right phase to go off.
+
+        if regtrig.isSuppressed():
+            return False  # Trigger removed by effect
+
+        if TriggerType.Always == regtrig.getMode() and self.game.getStack().hasStateTrigger(regtrig.getId()):
+            return False  # State triggers that are already on the stack
+            # don't trigger again.
+
+        # do not check delayed
+        if regtrig.getSpawningAbility() is None and not regtrig.zonesCheck(self.game.getZoneOf(regtrig.getHostCard())):
+            return False  # Host card isn't where it needs to be.
+
+        for t in self.activeTriggers:
+            # If an ID that matches this ID is already active, don't add it
+            if regtrig.getId() == t.getId():
+                return False
+
+        return True
+
+    def canRunTrigger(self, regtrig: Trigger, mode: TriggerType, runParams: dict[AbilityKey, object]) -> bool:
+        if regtrig.getMode() != mode:
+            return False  # Not the right mode.
+
+        if regtrig.isSuppressed():
+            return False  # Trigger removed by effect
+
+        # this trigger can only be activated once per turn, verify it hasn't already run
+        if not regtrig.checkActivationLimit():
+            return False
+
+        if not regtrig.requirementsCheck(self.game):
+            return False  # Conditions aren't right.
+
+        if not regtrig.meetsRequirementsOnTriggeredObjects(self.game, runParams):
+            return False  # Conditions aren't right.
+
+        if not regtrig.performTest(runParams):
+            return False  # Test failed.
+
+        if TriggerType.Always == regtrig.getMode() and self.game.getStack().hasStateTrigger(regtrig.getId()):
+            return False  # State triggers that are already on the stack
+            # don't trigger again.
+
+        # check if any static abilities are disabling the trigger (Torpor Orb and the like)
+        if not regtrig.isStatic() and StaticAbilityDisableTriggers.disabled(self.game, regtrig, runParams):
+            return False
+
+        return True
+
+    def runSingleTrigger(self, regtrig: Trigger, runParams: dict[AbilityKey, object]) -> None:
+        self.runSingleTrigger(regtrig, runParams, None)
+
+    def runSingleTrigger(self, regtrig: Trigger, runParams: dict[AbilityKey, object], controller: Player) -> None:
+        if controller is None:
+            controller = regtrig.getHostCard().getController()
+        # If the runParams contains MergedCards, it is called from GameAction.changeZone()
+        if runParams.get(AbilityKey.MergedCards) is not None:
+            # Check if the trigger cares the origin is from battlefield
+            original = runParams.get(AbilityKey.Card)
+            mergedCards = runParams.get(AbilityKey.MergedCards)
+            mergedCards.set(mergedCards.indexOf(original), original)
+            newParams = AbilityKey.newMap(runParams)
+            if "Battlefield" == regtrig.getParam("Origin"):
+                # If yes, only trigger once
+                newParams.put(AbilityKey.Card, mergedCards)
+                self.runSingleTriggerInternal(regtrig, newParams, controller)
+            else:
+                # Else, trigger for each merged components
+                for c in mergedCards:
+                    newParams.put(AbilityKey.Card, c)
+                    self.runSingleTriggerInternal(regtrig, newParams, controller)
+        else:
+            self.runSingleTriggerInternal(regtrig, runParams, controller)
+
+    # Checks if the conditions are right for a single trigger to go off, and
+    # runs it if so.
+    # Return true if the trigger went off, false otherwise.
+    def runSingleTriggerInternal(self, regtrig: Trigger, runParams: dict[AbilityKey, object], controller: Player) -> None:
+        # All tests passed, execute ability.
+
+        self.adjustUndoStack(regtrig, runParams)
+
+        host = regtrig.getHostCard()
+        sa = regtrig.getOverridingAbility()
+        if sa is None:
+            if not regtrig.hasParam("Execute"):
+                sa = EmptySa(host)
+            else:
+                name = regtrig.getParam("Execute")
+                if not host.getCurrentState().hasSVar(name):
+                    print("Warning: tried to run a trigger for card " + str(host) + " referencing a SVar " + name + " not present on the current state " + str(host.getCurrentState()) + ". Aborting trigger execution to prevent a crash.", file=sys.stderr)
+                    return
+
+                sa = AbilityFactory.getAbility(host, name)
+                # need to set as Overriding Ability so it can be copied better
+                regtrig.setOverridingAbility(sa)
+            sa.setActivatingPlayer(controller)
+
+            if regtrig.isIntrinsic():
+                sa.setIntrinsic(True)
+                sa.changeText()
+        else:
+            if regtrig.getSpawningAbility() is not None:
+                controller = regtrig.getSpawningAbility().getActivatingPlayer()
+            # need to copy the SA because of TriggeringObjects
+            sa = sa.copy(host, controller, False, True)
+
+        sa.setTrigger(regtrig)
+        regtrig.setTriggeringObjects(sa, runParams)
+
+        if regtrig.hasParam("TriggerController"):
+            p = AbilityUtils.getDefinedPlayers(host, regtrig.getParam("TriggerController"), sa).get(0)
+            sa.setActivatingPlayer(p)
+
+        if not sa.getActivatingPlayer().isInGame():
+            return
+
+        sa.setStackDescription(sa.toString())
+
+        decider = None
+        isMandatory = False
+        if regtrig.hasParam("OptionalDecider"):
+            sa.setOptionalTrigger(True)
+            decider = AbilityUtils.getDefinedPlayers(host, regtrig.getParam("OptionalDecider"), sa).get(0)
+        elif isinstance(sa, AbilitySub) or not sa.hasParam("Cost") or (sa.getPayCosts() is not None and sa.getPayCosts().isMandatory()) or sa.getParam("Cost") == "0":
+            isMandatory = True
+        else:  # triggers with a cost can't be mandatory
+            sa.setOptionalTrigger(True)
+            decider = sa.getActivatingPlayer()
+
+        wrapperAbility = WrappedAbility(regtrig, sa, decider)
+        # wrapperAbility.setDescription(wrapperAbility.getStackDescription());
+        # wrapperAbility.setDescription(wrapperAbility.toUnsuppressedString());
+
+        if regtrig.isStatic():
+            if wrapperAbility.getActivatingPlayer().getController().playTrigger(host, wrapperAbility, isMandatory):
+                staticParams = AbilityKey.mapFromCard(host)
+                staticParams.put(AbilityKey.SpellAbility, sa)
+                self.game.getTriggerHandler().runTrigger(TriggerType.AbilityResolves, staticParams, False)
+        else:
+            self.game.getStack().addSimultaneousStackEntry(wrapperAbility)
+            self.game.getTriggerHandler().runTrigger(TriggerType.AbilityTriggered, TriggerAbilityTriggered.getRunParams(regtrig, wrapperAbility, runParams), False)
+
+        regtrig.triggerRun()
+
+        removeBoon = host.isBoon()
+        if regtrig.hasParam("BoonAmount"):
+            x = AbilityUtils.calculateAmount(host, regtrig.getParam("BoonAmount"), wrapperAbility)
+            y = host.getAbilityActivatedThisGame(regtrig.getOverridingAbility())
+            if y < x:
+                removeBoon = False
+        if regtrig.hasParam("OneOff") and host.isImmutable() or removeBoon:
+            host.getController().getZone(ZoneType.Command).remove(host)
+
+    def adjustUndoStack(self, regtrig: Trigger, runParams: dict[AbilityKey, object]) -> None:
+        if isinstance(regtrig, TriggerTapsForMana) or isinstance(regtrig, TriggerManaAdded):
+            abMana = runParams.get(AbilityKey.AbilityMana)
+            if abMana is not None and abMana.getManaPart() is not None:
+                abMana.setUndoable(False)
+        elif isinstance(regtrig, TriggerSpellAbilityCastOrCopy) or isinstance(regtrig, TriggerAbilityResolves):
+            abMana = runParams.get(AbilityKey.SpellAbility)
+            if abMana is not None and abMana.getManaPart() is not None:
+                abMana.setUndoable(False)
+        elif isinstance(regtrig, TriggerTaps) or isinstance(regtrig, TriggerUntaps):
+            c = runParams.get(AbilityKey.Card)
+            for sa in self.game.getStack().filterUndoStackByHost(c):
+                sa.setUndoable(False)
+        elif isinstance(regtrig, TriggerTapAll):
+            cards = runParams.get(AbilityKey.Cards)
+            for c in cards:
+                for sa in self.game.getStack().filterUndoStackByHost(c):
+                    sa.setUndoable(False)
+        elif isinstance(regtrig, TriggerUntapAll):
+            map = runParams.get(AbilityKey.Map)
+            for c in itertools.chain(*map.values()):
+                for sa in self.game.getStack().filterUndoStackByHost(c):
+                    sa.setUndoable(False)
+
+    def getActiveTrigger(self, mode: TriggerType, runParams: dict[AbilityKey, object]) -> list[Trigger]:
+        trigger = []
+        for t in self.activeTriggers:
+            if self.canRunTrigger(t, mode, runParams):
+                trigger.append(t)
+        return trigger
+
+    def onPlayerLost(self, p: Player) -> None:
+        lost = list(self.delayedTriggers)
+        for t in lost:
+            # CR 800.4d trigger controller lost game
+            if p == t.getSpawningAbility().getActivatingPlayer():
+                self.delayedTriggers.remove(t)
+        # run all ChangesZone
+        self.runWaitingTriggers()
 ```

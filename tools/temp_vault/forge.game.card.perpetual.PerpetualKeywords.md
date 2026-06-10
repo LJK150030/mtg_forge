@@ -34,7 +34,7 @@ classDiagram
 
 ## Design Description
 
-PerpetualKeywords is an immutable record that captures a "perpetual" modification to a card's keyword set—keywords to grant, keywords to strip, and a flag to remove all existing ones—stamped with a creation timestamp for ordering. As a record it provides value-based identity and concise, final state, fitting the engine's continuous-effects model where layered changes are resolved by timestamp.
+PerpetualKeywords is an immutable record that captures a "perpetual" modification to a card's keyword setâ€”keywords to grant, keywords to strip, and a flag to remove all existing onesâ€”stamped with a creation timestamp for ordering. As a record it provides value-based identity and concise, final state, fitting the engine's continuous-effects model where layered changes are resolved by timestamp.
 
 It realizes the PerpetualInterface contract, exposing `getTimestamp()` for ordering against other perpetual effects and `applyEffect(Card)` to enact the change. The latter collaborates with Card, delegating to `addChangedCardKeywords` so the card itself owns the bookkeeping of its changed-keyword layers; the null final argument signals no removal-by-type. The design favors small, declarative effect objects that the card replays in timestamp order, keeping perpetual keyword logic decoupled from the broader effect-resolution machinery.
 
@@ -59,4 +59,28 @@ public record PerpetualKeywords(long timestamp, List<String> addKeywords, List<S
         c.addChangedCardKeywords(addKeywords, removeKeywords, removeAll, timestamp, null);
     }
 }
+```
+
+## Python
+`forge/game/card/perpetual/PerpetualKeywords.py`
+
+```python
+from dataclasses import dataclass
+
+from forge.game.card.perpetual.PerpetualInterface import PerpetualInterface
+from forge.game.card.Card import Card
+
+
+@dataclass(frozen=True)
+class PerpetualKeywords(PerpetualInterface):
+    timestamp: int
+    addKeywords: list[str]
+    removeKeywords: list[str]
+    removeAll: bool
+
+    def getTimestamp(self) -> int:
+        return self.timestamp
+
+    def applyEffect(self, c: Card) -> None:
+        c.addChangedCardKeywords(self.addKeywords, self.removeKeywords, self.removeAll, self.timestamp, None)
 ```

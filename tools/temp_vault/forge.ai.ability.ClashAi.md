@@ -45,9 +45,9 @@ classDiagram
 
 ## Design Description
 
-ClashAi provides the AI decision logic for resolving "Clash" abilities, a Magic mechanic in which players compare the top cards of their libraries. As a concrete subtype of `SpellAbilityAi`, it overrides the framework's hook methods—`doTriggerNoCost` and `checkApiLogic`—to decide whether the computer should play the ability, returning an `AiAbilityDecision` that pairs a confidence score with a play verdict (e.g., `WillPlay` or `TargetingFailed`). When the ability targets, it delegates to `selectTarget`, which narrows the field to targetable opponents and, for creature-targeting variants, picks the best friendly or worst enemy creature via `ComputerUtilCard`.
+ClashAi provides the AI decision logic for resolving "Clash" abilities, a Magic mechanic in which players compare the top cards of their libraries. As a concrete subtype of `SpellAbilityAi`, it overrides the framework's hook methodsâ€”`doTriggerNoCost` and `checkApiLogic`â€”to decide whether the computer should play the ability, returning an `AiAbilityDecision` that pairs a confidence score with a play verdict (e.g., `WillPlay` or `TargetingFailed`). When the ability targets, it delegates to `selectTarget`, which narrows the field to targetable opponents and, for creature-targeting variants, picks the best friendly or worst enemy creature via `ComputerUtilCard`.
 
-Its core heuristic lives in `chooseSinglePlayer`, which prefers an opponent with an empty library, then—if the AI may look at library tops—an opponent whose top card has lower converted mana cost, maximizing the AI's chance of winning the clash. The design keeps targeting and player-selection concerns separate and reuses the shared decision/scoring conventions of the AI framework, while inline TODOs flag known gaps (split cards, trickier clash variants).
+Its core heuristic lives in `chooseSinglePlayer`, which prefers an opponent with an empty library, thenâ€”if the AI may look at library topsâ€”an opponent whose top card has lower converted mana cost, maximizing the AI's chance of winning the clash. The design keeps targeting and player-selection concerns separate and reuses the shared decision/scoring conventions of the AI framework, while inline TODOs flag known gaps (split cards, trickier clash variants).
 
 ## Source
 `forge-ai/src/main/java/forge/ai/ability/ClashAi.java`
@@ -168,4 +168,102 @@ public class ClashAi extends SpellAbilityAi {
         return !sa.getTargets().isEmpty();
     }
 }
+```
+
+## Python
+`forge/ai/ability/ClashAi.py`
+
+```python
+from typing import Iterable, Map  # noqa
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.ai.ComputerUtilCard import ComputerUtilCard
+from forge.ai.SpellAbilityAi import SpellAbilityAi
+from forge.game.card.Card import Card
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CardPredicates import CardPredicates
+from forge.game.player.Player import Player
+from forge.game.player.PlayerCollection import PlayerCollection
+from forge.game.player.PlayerPredicates import PlayerPredicates
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+
+
+class ClashAi(SpellAbilityAi):
+
+    # (non-Javadoc)
+    # @see forge.card.abilityfactory.SpellAiLogic#doTriggerAINoCost(forge.game.player.Player, java.util.Map, forge.card.spellability.SpellAbility, boolean)
+    def doTriggerNoCost(self, aiPlayer: Player, sa: SpellAbility, mandatory: bool) -> AiAbilityDecision:
+        legalAction = True
+
+        if sa.usesTargeting():
+            legalAction = self.selectTarget(aiPlayer, sa)
+
+        return AiAbilityDecision(100, AiPlayDecision.WillPlay) if legalAction \
+            else AiAbilityDecision(0, AiPlayDecision.TargetingFailed)
+
+    #
+    # (non-Javadoc)
+    #
+    # @see forge.ai.SpellAbilityAi#checkApiLogic(forge.game.player.Player,
+    # forge.game.spellability.SpellAbility)
+    #
+    def checkApiLogic(self, ai: Player, sa: SpellAbility) -> AiAbilityDecision:
+        legalAction = True
+
+        if sa.usesTargeting():
+            legalAction = self.selectTarget(ai, sa)
+            if not legalAction:
+                return AiAbilityDecision(0, AiPlayDecision.TargetingFailed)
+
+        return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+    #
+    # (non-Javadoc)
+    #
+    # @see forge.ai.SpellAbilityAi#chooseSinglePlayer(forge.game.player.Player,
+    # forge.game.spellability.SpellAbility, java.lang.Iterable)
+    #
+    def chooseSinglePlayer(self, ai: Player, sa: SpellAbility, options: Iterable[Player], params: dict[str, object]) -> Player:
+        for p in options:
+            if p.getCardsIn(ZoneType.Library).isEmpty():
+                return p
+
+        col: CardCollectionView = ai.getCardsIn(ZoneType.Library)
+        if not col.isEmpty() and col.getFirst().mayPlayerLook(ai):
+            top: Card = col.get(0)
+            for p in options:
+                oppTop: Card = p.getCardsIn(ZoneType.Library).getFirst()
+                # TODO add logic for SplitCards
+                if top.getCMC() > oppTop.getCMC():
+                    return p
+
+        return next(iter(options), None)
+
+    def selectTarget(self, ai: Player, sa: SpellAbility) -> bool:
+        valid = sa.getParam("ValidTgts")
+
+        players: PlayerCollection = ai.getOpponents().filter(PlayerPredicates.isTargetableBy(sa))
+        # use chooseSinglePlayer function to the select player
+        chosen = self.chooseSinglePlayer(ai, sa, players, None)
+        if chosen is not None:
+            sa.resetTargets()
+            sa.getTargets().add(chosen)
+
+        if "Creature" == valid:
+            # Springjack Knight
+            # TODO: Whirlpool Whelm also uses creature targeting but it's trickier to support
+            aiCreats: CardCollectionView = ai.getCreaturesInPlay()
+            oppCreats: CardCollectionView = CardLists.filter(ai.getOpponents().getCardsIn(ZoneType.Battlefield), CardPredicates.CREATURES)
+
+            tgt: Card = ComputerUtilCard.getWorstCreatureAI(oppCreats) if aiCreats.isEmpty() else ComputerUtilCard.getBestCreatureAI(aiCreats)
+
+            if tgt is not None:
+                sa.resetTargets()
+                sa.getTargets().add(tgt)
+            else:
+                return False  # cut short if this part of the clause is not satisfiable (with current card pool should never get here)
+
+        return not sa.getTargets().isEmpty()
 ```

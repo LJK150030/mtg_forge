@@ -45,7 +45,7 @@ classDiagram
 
 ## Design Description
 
-TokenEffect is the concrete `SpellAbility` resolution handler for "create token" effects, the runtime behavior behind cards that put tokens onto the battlefield. Extending TokenEffectBase, it inherits the shared token-construction machinery (notably `makeTokenTable` and `getDefinedPlayersOrTargeted`) and supplies the two effect-specific overrides: `getStackDescription`, which rewrites a card's spell text into a grammatically correct stack message—adjusting the creating player, verb agreement, numeral substitution for X-style amounts, and pronoun replacement—and `resolve`, which performs the actual creation.
+TokenEffect is the concrete `SpellAbility` resolution handler for "create token" effects, the runtime behavior behind cards that put tokens onto the battlefield. Extending TokenEffectBase, it inherits the shared token-construction machinery (notably `makeTokenTable` and `getDefinedPlayersOrTargeted`) and supplies the two effect-specific overrides: `getStackDescription`, which rewrites a card's spell text into a grammatically correct stack messageâ€”adjusting the creating player, verb agreement, numeral substitution for X-style amounts, and pronoun replacementâ€”and `resolve`, which performs the actual creation.
 
 `resolve` first guards against unresolved linked choices (ChosenType/ChosenColor), then builds tokens for the targeted owners, routing zone-change events through a shared or local `CardZoneTable`. Collaborating with `Game`, it fires `GameEventTokenCreated` and, when entering combat alters the board, refreshes combat state and fires `GameEventCombatChanged`, keeping the view and event subscribers consistent.
 
@@ -194,4 +194,110 @@ public class TokenEffect extends TokenEffectBase {
         }
     }
 }
+```
+
+## Python
+`forge/game/ability/effects/TokenEffect.py`
+
+```python
+from forge.game.ability.effects.TokenEffectBase import TokenEffectBase
+from forge.game.Game import Game
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.card.Card import Card
+from forge.game.card.CardZoneTable import CardZoneTable
+from forge.game.event.GameEventCombatChanged import GameEventCombatChanged
+from forge.game.event.GameEventTokenCreated import GameEventTokenCreated
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Lang import Lang
+
+import re
+
+from org.apache.commons.lang3 import StringUtils
+from org.apache.commons.lang3.mutable.MutableBoolean import MutableBoolean
+
+
+class TokenEffect(TokenEffectBase):
+
+    def getStackDescription(self, sa: SpellAbility) -> str:
+        if sa.hasParam("SpellDescription"):
+            host = sa.getHostCard()
+            desc = sa.getParam("SpellDescription")
+            words = desc.split(" ")
+            creators = self.getDefinedPlayersOrTargeted(sa, "TokenOwner")
+            if not words[0].lower() == "create".lower() and " create" in desc:
+                parts = desc.split(" create", 1)
+                desc = parts[0] + " " + Lang.joinHomogenous(creators) + " create" + parts[1]
+                if len(creators) == 1:
+                    desc = desc.replace(" create ", " creates ")
+                if "you" in desc:
+                    desc = desc.replace("you", sa.getActivatingPlayer().getName())
+            elif StringUtils.containsIgnoreCase(desc, "Create"):
+                verb = "creates" if len(creators) == 1 else "create"
+                start = Lang.joinHomogenous(creators) + " " + verb
+                create = "Create" if "Create" in desc else "create"
+                desc = re.sub(".*" + create, "", desc)
+                desc = start + desc
+                # try to put the right amount of tokens for X calculations and the like
+                if sa.hasParam("TokenAmount") and not StringUtils.isNumeric(sa.getParam("TokenAmount")):
+                    numTokens = AbilityUtils.calculateAmount(host, sa.getParam("TokenAmount"), sa)
+                    if numTokens != 0:  # 0 probably means calculation isn't ready in time for stack
+                        if numTokens != 1:  # if we are making more than one, substitute the numeral for a/an
+                            numeral = " " + Lang.getNumeral(numTokens) + " "
+                            words2 = desc.split(" ")
+                            target = " " + words2[words2.index(verb) + 1] + " "
+                            desc = desc.replace(target, numeral, 1)
+                        # try to cut out unneeded description, which would now be confusing
+                        truncate = None
+                        if ", where" in desc:
+                            truncate = ", where"
+                        elif " for each" in desc:
+                            truncate = " for each"
+                        if truncate is not None:  # if we do truncate, make sure the string ends properly
+                            desc = desc.split(truncate)[0]
+                            if desc.endswith("token") and numTokens > 1:
+                                desc = desc + "s."
+                            else:
+                                desc = desc + "."
+                # pronoun replacement for things that create an amount based on what you control
+                desc = desc.replace("you control", "they control")
+            return desc
+        return sa.getDescription()
+
+    def resolve(self, sa: SpellAbility) -> None:
+        host = sa.getHostCard()
+        game = host.getGame()
+
+        # linked Abilities, if it needs chosen values, but nothing is chosen, no token can be created
+        if sa.hasParam("TokenTypes"):
+            if "ChosenType" in sa.getParam("TokenTypes") and not host.hasChosenType():
+                return
+        if sa.hasParam("TokenColors"):
+            if "ChosenColor" in sa.getParam("TokenColors") and not host.hasChosenColor():
+                return
+
+        combatChanged = MutableBoolean(False)
+
+        useZoneTable = True
+        triggerList = sa.getChangeZoneTable()
+        if triggerList is None:
+            triggerList = CardZoneTable()
+            useZoneTable = False
+        if sa.hasParam("ChangeZoneTable"):
+            sa.setChangeZoneTable(triggerList)
+            useZoneTable = True
+
+        self.makeTokenTable(self.getDefinedPlayersOrTargeted(sa, "TokenOwner"), sa.getParam("TokenScript").split(","),
+                AbilityUtils.calculateAmount(host, sa.getParamOrDefault("TokenAmount", "1"), sa),
+                False, triggerList, combatChanged, sa)
+
+        if not useZoneTable:
+            triggerList.triggerChangesZoneAll(game, sa)
+            triggerList.clear()
+
+        game.fireEvent(GameEventTokenCreated())
+
+        if combatChanged.isTrue():
+            game.updateCombatForView()
+            game.fireEvent(GameEventCombatChanged())
 ```

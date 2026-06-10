@@ -176,3 +176,69 @@ public class CostUnattach extends CostPartWithList {
 
 }
 ```
+
+## Python
+`forge/game/cost/CostUnattach.py`
+
+```python
+from forge.game.cost.CostPartWithList import CostPartWithList
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardLists import CardLists
+from forge.game.cost.ICostVisitor import ICostVisitor
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.TextUtil import TextUtil
+
+
+class CostUnattach(CostPartWithList):
+    """The Class CostUnattach."""
+
+    # Unattach<CARDNAME> if ability is on the Equipment
+    # Unattach<Card.Attached+namedHeartseeker/Equipped Heartseeker> if equipped creature has the ability
+
+    serialVersionUID = 1
+
+    def __init__(self, type: str, desc: str):
+        super().__init__("1", type, desc)
+
+    def isUndoable(self) -> bool:
+        return False
+
+    def isReusable(self) -> bool:
+        return True
+
+    def toString(self) -> str:
+        return TextUtil.concatWithSpace("Unattach", self.getTypeDescription())
+
+    def canPay(self, ability: SpellAbility, payer: Player, effect: bool) -> bool:
+        return not self.findCardToUnattach(ability.getHostCard(), payer, ability).isEmpty()
+
+    def findCardToUnattach(self, source: Card, activator: Player, ability: SpellAbility) -> CardCollection:
+        attachees = CardCollection()
+        if self.payCostFromSource():
+            if source.isEquipping():
+                attachees.add(source)
+        elif self.getType() == "OriginalHost":
+            originalEquipment = ability.getOriginalHost()
+            if originalEquipment.isEquipping():
+                attachees.add(originalEquipment)
+        else:
+            attachees.addAll(source.getEquippedBy())
+            if "X" not in self.getType() or ability.getXManaCostPaid() is not None:
+                attachees = CardLists.getValidCards(attachees, self.getType(), activator, source, ability)
+        return attachees
+
+    def doPayment(self, payer: Player, ability: SpellAbility, targetCard: Card, effect: bool) -> Card:
+        targetCard.unattachFromEntity(targetCard.getEntityAttachedTo())
+        return targetCard
+
+    def getHashForLKIList(self) -> str:
+        return "Unattached"
+
+    def getHashForCardList(self) -> str:
+        return "UnattachedCards"
+
+    def accept(self, visitor: ICostVisitor):
+        return visitor.visit(self)
+```

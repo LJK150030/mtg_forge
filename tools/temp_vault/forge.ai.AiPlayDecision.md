@@ -123,3 +123,67 @@ public enum AiPlayDecision {
     }
 }
 ```
+
+## Python
+`forge/ai/AiPlayDecision.py`
+
+```python
+from enum import Enum
+
+
+class AiPlayDecision(Enum):
+    # Play decision reasons
+    WillPlay = 1
+    MandatoryPlay = 2
+    PlayToEmptyHand = 3
+    ImpactCombat = 4
+    ResponseToStackResolve = 5
+    AddBoardPresence = 6
+    Removal = 7
+    Tempo = 8
+    CardAdvantage = 9
+
+    # Play later decisions
+    WaitForCombat = 10
+    WaitForMain2 = 11
+    WaitForEndOfTurn = 12
+    StackNotEmpty = 13
+    AnotherTime = 14
+
+    # Don't play decision reasons
+    CantPlaySa = 15
+    CantPlayAi = 16
+    CantAfford = 17
+    CantAffordX = 18
+    DoesntImpactCombat = 19
+    DoesntImpactGame = 20
+    MissingLogic = 21
+    MissingNeededCards = 22
+    TimingRestrictions = 23
+    MissingPhaseRestrictions = 24
+    ConditionsNotMet = 25
+    NeedsToPlayCriteriaNotMet = 26
+    StopRunawayActivations = 27
+    TargetingFailed = 28
+    CostNotAcceptable = 29
+    LifeInDanger = 30
+    WouldDestroyLegend = 31
+    WouldDestroyOtherPlaneswalker = 32
+    WouldBecomeZeroToughnessCreature = 33
+    WouldDestroyWorldEnchantment = 34
+    BadEtbEffects = 35
+    CurseEffects = 36
+
+    def willingToPlay(self) -> bool:
+        return self in (
+            AiPlayDecision.WillPlay,
+            AiPlayDecision.MandatoryPlay,
+            AiPlayDecision.PlayToEmptyHand,
+            AiPlayDecision.AddBoardPresence,
+            AiPlayDecision.ImpactCombat,
+            AiPlayDecision.ResponseToStackResolve,
+            AiPlayDecision.Removal,
+            AiPlayDecision.Tempo,
+            AiPlayDecision.CardAdvantage,
+        )
+```

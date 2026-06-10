@@ -44,6 +44,12 @@ classDiagram
 - [[forge.game.staticability.StaticAbility|StaticAbility]]
 - [[forge.game.zone.ZoneType|ZoneType]]
 
+## Design Description
+
+StaticAbilityCantBeCast is a stateless utility class that centralizes the rules logic for determining when a spell cannot be cast, an ability cannot be activated, or a land cannot be played due to continuous static effects in play. Its three public entry points (`cantBeCastAbility`, `cantBeActivatedAbility`, `cantPlayLandAbility`) sweep every Card in the static-ability source zones via the Game, evaluate each StaticAbility whose mode and conditions match, and delegate to the corresponding `applyXxx` predicate that tests the restriction's parameters against the affected Card, SpellAbility, and Player.
+
+As a collection of static methods with no instance state, it acts as a focused helper within the staticability package rather than a polymorphic participant in a hierarchy. The design intent is data-driven evaluation: each restriction is expressed through declarative parameters (ValidCard, Caster, Origin, cmcGT, NumLimitEachTurn, AffectedZone), and the early-return guard chains keep each rule check isolated and short-circuiting, collaborating with CardCollection, CardLists, CardUtil, and ZoneType to resolve scope.
+
 ## Source
 `forge-game/src/main/java/forge/game/staticability/StaticAbilityCantBeCast.java`
 
@@ -261,4 +267,167 @@ public class StaticAbilityCantBeCast {
     }
 
 }
+```
+
+## Python
+`forge/game/staticability/StaticAbilityCantBeCast.py`
+
+```python
+from forge.game.Game import Game
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CardUtil import CardUtil
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.staticability.StaticAbility import StaticAbility
+from forge.game.staticability.StaticAbilityMode import StaticAbilityMode
+from forge.game.zone.ZoneType import ZoneType
+
+
+class StaticAbilityCantBeCast:
+    """The Class StaticAbility_CantBeCast."""
+
+    @staticmethod
+    def cantBeCastAbility(spell: SpellAbility, card: Card, activator: Player) -> bool:
+        card.setCastSA(spell)
+
+        game = activator.getGame()
+        allp = CardCollection(game.getCardsIn(ZoneType.STATIC_ABILITIES_SOURCE_ZONES))
+        allp.add(card)
+        for ca in allp:
+            for stAb in ca.getStaticAbilities():
+                if not stAb.checkConditions(StaticAbilityMode.CantBeCast):
+                    continue
+                if StaticAbilityCantBeCast.applyCantBeCastAbility(stAb, spell, card, activator):
+                    return True
+        return False
+
+    @staticmethod
+    def cantBeActivatedAbility(spell: SpellAbility, card: Card, activator: Player) -> bool:
+        if spell.isTrigger():
+            return False
+        game = activator.getGame()
+        for ca in game.getCardsIn(ZoneType.STATIC_ABILITIES_SOURCE_ZONES):
+            for stAb in ca.getStaticAbilities():
+                if not stAb.checkConditions(StaticAbilityMode.CantBeActivated):
+                    continue
+                if StaticAbilityCantBeCast.applyCantBeActivatedAbility(stAb, spell, card, activator):
+                    return True
+        return False
+
+    @staticmethod
+    def cantPlayLandAbility(spell: SpellAbility, card: Card, activator: Player) -> bool:
+        game = activator.getGame()
+        for ca in game.getCardsIn(ZoneType.STATIC_ABILITIES_SOURCE_ZONES):
+            for stAb in ca.getStaticAbilities():
+                if not stAb.checkConditions(StaticAbilityMode.CantPlayLand):
+                    continue
+                if StaticAbilityCantBeCast.applyCantPlayLandAbility(stAb, card, activator):
+                    return True
+        return False
+
+    @staticmethod
+    def applyCantBeCastAbility(stAb: StaticAbility, spell: SpellAbility, card: Card, activator: Player) -> bool:
+        """
+        TODO Write javadoc for this method.
+
+        @param stAb
+                   a StaticAbility
+        @param card
+                   the card
+        @param activator
+                   the activator
+        @return true, if successful
+        """
+        if not stAb.matchesValidParam("ValidCard", card):
+            return False
+
+        if not stAb.matchesValidParam("Caster", activator):
+            return False
+        if activator in stAb.getIgnoreEffectPlayers():
+            return False
+
+        if stAb.hasParam("OnlySorcerySpeed") and activator is not None and activator.canCastSorcery():
+            return False
+
+        if stAb.hasParam("Origin"):
+            src = ZoneType.listValueOf(stAb.getParam("Origin"))
+            if card.getCastFrom() is None or card.getCastFrom().getZoneType() not in src:
+                return False
+
+        if stAb.hasParam("cmcGT") and activator is not None:
+            if stAb.getParam("cmcGT") == "Turns":
+                if card.getCMC() <= activator.getTurn():
+                    return False
+            elif card.getCMC() <= len(CardLists.getType(activator.getCardsIn(ZoneType.Battlefield),
+                    stAb.getParam("cmcGT"))):
+                return False
+
+        if stAb.hasParam("NumLimitEachTurn") and activator is not None:
+            limit = int(stAb.getParam("NumLimitEachTurn"))
+            valid = stAb.getParamOrDefault("ValidCard", "Card")
+            thisTurnCast = CardUtil.getThisTurnCast(valid, card, stAb, activator)
+            if len(CardLists.filterControlledByAsList(thisTurnCast, activator)) < limit:
+                return False
+
+        return True
+
+    @staticmethod
+    def applyCantBeActivatedAbility(stAb: StaticAbility, spellAbility: SpellAbility, card: Card, activator: Player) -> bool:
+        """
+        Applies Cant Be Activated ability.
+
+        @param stAb
+                   a StaticAbility
+        @param card
+                   the card
+        @param spellAbility
+                   a SpellAbility
+        @return true, if successful
+        """
+        if not stAb.matchesValidParam("ValidCard", card):
+            return False
+        if card in stAb.getIgnoreEffectCards():
+            return False
+
+        if not stAb.matchesValidParam("ValidSA", spellAbility):
+            return False
+
+        if stAb.hasParam("AffectedZone") and not card.isInZone(ZoneType.smartValueOf(stAb.getParam("AffectedZone"))):
+            return False
+
+        if not stAb.matchesValidParam("Activator", activator):
+            return False
+
+        return True
+
+    @staticmethod
+    def applyCantPlayLandAbility(stAb: StaticAbility, card: Card, player: Player) -> bool:
+        """
+        TODO Write javadoc for this method.
+
+        @param stAb
+                   a StaticAbility
+        @param card
+                   the card
+        @param player
+                   the player
+        @return true, if successful
+        """
+        if not stAb.matchesValidParam("ValidCard", card):
+            return False
+
+        if stAb.hasParam("Origin"):
+            src = ZoneType.listValueOf(stAb.getParam("Origin"))
+
+            if card.getLastKnownZone().getZoneType() not in src:
+                return False
+
+        if not stAb.matchesValidParam("Player", player):
+            return False
+        if player in stAb.getIgnoreEffectPlayers():
+            return False
+
+        return True
 ```

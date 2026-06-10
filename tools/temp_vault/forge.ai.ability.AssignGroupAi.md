@@ -80,3 +80,34 @@ public class AssignGroupAi extends SpellAbilityAi {
     }
 }
 ```
+
+## Python
+`forge/ai/ability/AssignGroupAi.py`
+
+```python
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.ai.SpellAbilityAi import SpellAbilityAi
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+
+from typing import List, Map
+
+
+class AssignGroupAi(SpellAbilityAi):
+
+    def canPlay(self, ai: Player, sa: SpellAbility) -> AiAbilityDecision:
+        # TODO: Currently this AI relies on the card-specific limiting hints (NeedsToPlay / NeedsToPlayVar),
+        # otherwise the AI considers the card playable.
+        return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+    def chooseSingleSpellAbility(self, player: Player, sa: SpellAbility, spells: List[SpellAbility], params: dict[str, object]) -> SpellAbility:
+        logic = sa.getParamOrDefault("AILogic", "")
+
+        if logic == "FriendOrFoe":
+            if "Affected" in params and len(spells) >= 2:
+                t = params["Affected"]
+                return spells[1 if player.isOpponentOf(t) else 0]
+
+        return spells[0] if spells else None
+```

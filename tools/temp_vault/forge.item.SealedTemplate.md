@@ -41,6 +41,10 @@ classDiagram
 **Uses:**
 - [[forge.util.storage.StorageReaderFile|StorageReaderFile]]
 
+## Design Description
+
+SealedTemplate models the composition of a Magic booster pack as an ordered set of weighted slots, each pairing a slot type (e.g. common, uncommon, rare/mythic) with a count. Its responsibility is to describe what a pack should contain rather than to generate it, exposing the slot list, expected card count, and slot-membership queries while remaining an immutable value object with proper equals/hashCode semantics. It ships canonical static instances (genericDraftBooster, genericNoSlotBooster) and parses textual booster descriptions via its nested Reader, which extends StorageReaderFile to load templates from a file keyed by name. Slot definitions reference BoosterSlots constants, and the design favors flexibility through multiple constructors and lenient slot-name matching that strips qualifiers after spaces, colons, or exclamation marks.
+
 ## Source
 `forge-core/src/main/java/forge/item/SealedTemplate.java`
 
@@ -180,4 +184,122 @@ public class SealedTemplate {
         }
     }
 }
+```
+
+## Python
+`forge/item/SealedTemplate.py`
+
+```python
+from forge.item.generation.BoosterSlots import BoosterSlots
+from forge.util.TextUtil import TextUtil
+from forge.util.storage.StorageReaderFile import StorageReaderFile
+
+
+class SealedTemplate:
+
+    def __init__(self, *args):
+        if len(args) == 1:
+            # SealedTemplate(Iterable<Pair<String, Integer>> itrSlots)
+            itrSlots = args[0]
+            self.slots = list(itrSlots)
+            self.name = None
+        elif len(args) == 2 and isinstance(args[1], str):
+            # SealedTemplate(String code, String boosterDesc)
+            code, boosterDesc = args
+            self.slots = list(SealedTemplate.Reader.parseSlots(boosterDesc))
+            self.name = code
+        else:
+            # SealedTemplate(String name0, Iterable<Pair<String, Integer>> itrSlots)
+            name0, itrSlots = args
+            self.slots = list(itrSlots)
+            self.name = name0
+
+    def getName(self):
+        return self.name
+
+    def getSlots(self):
+        return self.slots
+
+    def hasSlot(self, s):
+        import re
+        for slot in self.getSlots():
+            slotName = slot[0]
+            # Anything after a space or ! or : is not part of the slot's main type
+            if re.split("[ :!]", slotName)[0] == s:
+                return True
+        return False
+
+    def getEdition(self):
+        return self.name
+
+    def getNumberOfCardsExpected(self):
+        sum = 0
+        for p in self.slots:
+            sum += p[1]
+        return sum
+
+    def __str__(self):
+        s = []
+
+        s.append("consisting of ")
+        for p in self.slots:
+            s.append(str(p[1]))
+            s.append(" ")
+            s.append(str(p[0]))
+            s.append(", ")
+
+        s = "".join(s)
+
+        # trim the last comma and space
+        s = s[:len(s) - 2]
+
+        # put an 'and' before the previous comma
+        lastCommaIdx = s.rfind(",")
+        if 0 < lastCommaIdx:
+            s = s[:lastCommaIdx + 1] + " and" + s[lastCommaIdx + 1:]
+
+        return s
+
+    def __eq__(self, o):
+        if self is o:
+            return True
+        if o is None or type(self) is not type(o):
+            return False
+
+        template = o
+
+        return self.slots == template.slots and self.name == template.name
+
+    def __hash__(self):
+        result = hash(tuple(self.slots))
+        result = 31 * result + hash(self.name)
+        return result
+
+    class Reader(StorageReaderFile):
+        def __init__(self, file):
+            super().__init__(file, SealedTemplate.getName)
+
+        @staticmethod
+        def parseSlots(data):
+            dataz = TextUtil.splitWithParenthesis(data, ',')
+            slots = []
+            for slotDesc in dataz:
+                kv = TextUtil.splitWithParenthesis(slotDesc, ' ', 2)
+                slots.append((kv[1].replace(";", ","), int(kv[0])))
+            return slots
+
+        def read(self, line, i):
+            headAndData = TextUtil.split(line, ':', 2)
+            return SealedTemplate(headAndData[0], SealedTemplate.Reader.parseSlots(headAndData[1]))
+
+
+SealedTemplate.genericDraftBooster = SealedTemplate(None, [
+    (BoosterSlots.COMMON, 10), (BoosterSlots.UNCOMMON, 3),
+    (BoosterSlots.RARE_MYTHIC, 1), (BoosterSlots.BASIC_LAND, 1)
+])
+
+# This is a generic cube booster. 15 cards, no rarity slots.
+SealedTemplate.genericNoSlotBooster = SealedTemplate(None, [
+    (BoosterSlots.ANY, 15)
+])
 ```

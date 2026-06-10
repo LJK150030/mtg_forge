@@ -233,7 +233,7 @@ public class CardCopyService {
             copyState(copyFrom, CardStateName.Backside, to, CardStateName.Backside);
             // 707.10g If an effect creates a copy of a transforming permanent spell, the copy is also a transforming permanent spell that has both a front face and a back face.
             // The characteristics of its front and back face are determined by the copiable values of the same face of the spell it is a copy of, as modified by any other copy effects.
-            // If the spell it is a copy of has its back face up, the copy is created with its back face up. The token thatâ€™s put onto the battlefield as that spell resolves is a transforming token.
+            // If the spell it is a copy of has its back face up, the copy is created with its back face up. The token thatÃ¢â‚¬â„¢s put onto the battlefield as that spell resolves is a transforming token.
             to.setBackSide(copyFrom.isBackSide());
         } else if (fromIsTransformedCard) {
             copyState(copyFrom, copyFrom.getCurrentStateName(), to, CardStateName.Original);
@@ -486,4 +486,381 @@ public class CardCopyService {
     }
 
 }
+```
+
+## Python
+`forge/game/card/CardCopyService.py`
+
+```python
+from forge.card.CardStateName import CardStateName
+from forge.card.CardType import CardType
+from forge.game.Game import Game
+from forge.game.GameEntity import GameEntity
+from forge.game.ability.ApiType import ApiType
+from forge.game.ability.effects.DetachedCardEffect import DetachedCardEffect
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardState import CardState
+from forge.game.card.CardFactory import getCard
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from io.sentry.Breadcrumb import Breadcrumb
+from io.sentry.Sentry import Sentry
+
+
+class CardCopyService:
+    # A service to copy all sorts of things from a card to a new card.
+    # This pulled in functions from CardFactory and CardUtil
+
+    def __init__(self, copyFrom, toGame=None):
+        if toGame is None:
+            toGame = None if copyFrom is None else copyFrom.getGame()
+        self.copyFrom = copyFrom
+        self.toGame = toGame
+
+    def copyCard(self, assignNewId, *args):
+        if len(args) == 0:
+            return self.copyCard(assignNewId, self.copyFrom.getOwner())
+        owner = args[0]
+        copyFrom = self.copyFrom
+        toGame = self.toGame
+
+        # Straight copying for things like moving a card to a different zone or using GameCopier
+        if copyFrom.isRealToken() or copyFrom.getCopiedPermanent() is not None or copyFrom.getPaperCard() is None:
+            out = CardCopyService.copyStats(copyFrom, owner, assignNewId)
+            out.setEffectSource(copyFrom.getEffectSource())
+            out.setBoon(copyFrom.isBoon())
+            out.dangerouslySetGame(toGame)
+
+            # need to copy this values for the tokens
+            out.setTokenSpawningAbility(copyFrom.getTokenSpawningAbility())
+            out.setCopiedPermanent(copyFrom.getCopiedPermanent())
+        else:
+            out = getCard(copyFrom.getPaperCard(), owner, toGame) if assignNewId \
+                else getCard(copyFrom.getPaperCard(), owner, copyFrom.getId(), toGame)
+
+        out.setZone(copyFrom.getZone())
+        out.setState(copyFrom.getFaceupCardStateName(), True)
+        out.setBackSide(copyFrom.isBackSide())
+        out.setGamePieceType(copyFrom.getGamePieceType())
+        out.setTokenCard(copyFrom.isTokenCard())
+
+        if toGame == copyFrom.getGame():
+            # Only copy these things if we're not copying them into a new game
+
+            out.setCollectible(copyFrom.isCollectible())
+
+            # this's necessary for forge.game.GameAction.unattachCardLeavingBattlefield(Card)
+            if copyFrom.hasCardAttachments():
+                out.setAttachedCards(copyFrom.getAttachedCards())
+            if copyFrom.isAttachedToEntity():
+                out.setEntityAttachedTo(copyFrom.getEntityAttachedTo())
+            if copyFrom.hasMergedCard():
+                out.setMergedCards(copyFrom.getMergedCards())
+
+            out.setLeavesPlayCommands(copyFrom.getLeavesPlayCommands())
+
+            out.setSpecialized(copyFrom.isSpecialized())
+            out.addRemembered(copyFrom.getRemembered())
+            out.addImprintedCards(copyFrom.getImprintedCards())
+            out.setCommander(copyFrom.isRealCommander())
+            # out.setFaceDown(copyFrom.isFaceDown())
+
+        foil = copyFrom.getCurrentState().getFoil()
+        if foil > 0:
+            out.setFoil(foil)
+
+        return out
+
+    @staticmethod
+    def copyState(from_, fromState, to, toState, updateView=True):
+        # copy characteristics not associated with a state
+        to.setText(from_.getSpellText())
+
+        # get CardCharacteristics for desired state
+        if not to.getStates().contains(toState):
+            to.addAlternateState(toState, updateView)
+        toCharacteristics, fromCharacteristics = to.getState(toState), from_.getState(fromState)
+        toCharacteristics.copyFrom(fromCharacteristics, False)
+
+    @staticmethod
+    def copyStats(in_, newOwner, assignNewId):
+        id = in_.getId()
+        if assignNewId:
+            id = 0 if newOwner is None else newOwner.getGame().nextCardId()
+        if isinstance(in_, DetachedCardEffect):
+            c = DetachedCardEffect(in_, assignNewId)
+        else:
+            c = Card(id, in_.getPaperCard(), in_.getGame())
+
+        c.setOwner(newOwner)
+        c.setSetCode(in_.getSetCode())
+
+        for state in in_.getStates():
+            CardCopyService.copyState(in_, state, c, state, False)
+
+        c.setState(in_.getCurrentStateName(), False)
+        c.setBackSide(in_.isBackSide())
+
+        return c
+
+    # @Deprecated
+    def copyCopiableCharacteristics(self, to, sourceSA, targetSA):
+        copyFrom = self.copyFrom
+        toIsFaceDown = to.isFaceDown()
+        if toIsFaceDown:
+            # If to is face down, copy to its front side
+            to.setState(CardStateName.Original, False)
+            self.copyCopiableCharacteristics(to, sourceSA, targetSA)
+            to.setState(CardStateName.FaceDown, False)
+            return
+
+        fromIsFlipCard = copyFrom.isFlipCard()
+        fromIsTransformedCard = copyFrom.getCurrentStateName() == CardStateName.Backside or copyFrom.getCurrentStateName() == CardStateName.Meld
+
+        if fromIsFlipCard:
+            if to.getCurrentStateName() == CardStateName.Flipped:
+                CardCopyService.copyState(copyFrom, CardStateName.Original, to, CardStateName.Original)
+            else:
+                CardCopyService.copyState(copyFrom, CardStateName.Original, to, to.getCurrentStateName())
+            CardCopyService.copyState(copyFrom, CardStateName.Flipped, to, CardStateName.Flipped)
+        elif (copyFrom.isTransformable()
+              and sourceSA is not None and ApiType.CopySpellAbility == sourceSA.getApi()
+              and targetSA is not None and targetSA.isSpell() and targetSA.getHostCard().isPermanent()):
+            CardCopyService.copyState(copyFrom, CardStateName.Original, to, CardStateName.Original)
+            CardCopyService.copyState(copyFrom, CardStateName.Backside, to, CardStateName.Backside)
+            # 707.10g If an effect creates a copy of a transforming permanent spell, the copy is also a transforming permanent spell that has both a front face and a back face.
+            # The characteristics of its front and back face are determined by the copiable values of the same face of the spell it is a copy of, as modified by any other copy effects.
+            # If the spell it is a copy of has its back face up, the copy is created with its back face up. The token that's put onto the battlefield as that spell resolves is a transforming token.
+            to.setBackSide(copyFrom.isBackSide())
+        elif fromIsTransformedCard:
+            CardCopyService.copyState(copyFrom, copyFrom.getCurrentStateName(), to, CardStateName.Original)
+        else:
+            CardCopyService.copyState(copyFrom, copyFrom.getCurrentStateName(), to, to.getCurrentStateName())
+
+    # ========================================================
+    # LKI functions
+
+    @staticmethod
+    def getLKICopyList(in_, cachedMap):
+        if in_ is None:
+            return None
+        result = list()
+        for c in in_:
+            result.append(CardCopyService(c).getLKICopy(cachedMap))
+        return result
+
+    def getLKICopy(self, *args):
+        # Python has no method overloading; dispatch the Java overloads here.
+        if not isinstance(self, CardCopyService):
+            # static overloads: `self` is actually the first positional argument
+            c = self
+            if len(args) == 0:
+                # getLKICopy(Card c)
+                # Ideally, we'd just convert all calls to getLKICopy to use the Map version
+                return CardCopyService(c).getLKICopy()
+            cachedMap = args[0]
+            if isinstance(c, Card):
+                # getLKICopy(Card c, Map cachedMap) / getLKICopy(GameEntity c, Map cachedMap)
+                return CardCopyService(c).getLKICopy(cachedMap)
+            # getLKICopy(GameEntity c, Map cachedMap) for non-Card entities
+            return c
+
+        # instance overloads
+        if len(args) == 0:
+            return self.getLKICopy(dict())
+        cachedMap = args[0]
+
+        copyFrom = self.copyFrom
+        if copyFrom is None:
+            return None
+        cachedCard = cachedMap.get(copyFrom.getId())
+        if cachedCard is not None:
+            return cachedCard
+
+        msg = "CardUtil:getLKICopy copy object"
+        bread = Breadcrumb(msg)
+        bread.setData("Card", copyFrom.getName())
+        bread.setData("CardState", copyFrom.getCurrentStateName().toString())
+        bread.setData("Player", copyFrom.getController().getName())
+        Sentry.addBreadcrumb(bread)
+
+        if isinstance(copyFrom, DetachedCardEffect):
+            newCopy = DetachedCardEffect(copyFrom, False)
+        else:
+            newCopy = Card(copyFrom.getId(), copyFrom.getPaperCard(), copyFrom.getGame(), None)
+        cachedMap[copyFrom.getId()] = newCopy
+        newCopy.setSetCode(copyFrom.getSetCode())
+        newCopy.setOwner(copyFrom.getOwner())
+        newCopy.setController(copyFrom.getController(), 0)
+        newCopy.setCommander(copyFrom.isCommander())
+        newCopy.setCollectible(copyFrom.isCollectible())
+
+        # needed to ensure that the LKI object has correct CMC info no matter what state the original card was in
+        # (e.g. Scrap Trawler + transformed Harvest Hand)
+        newCopy.setLKICMC(copyFrom.getCMC())
+        # used for the purpose of cards that care about the zone the card was known to be in last
+        newCopy.setLastKnownZone(copyFrom.getLastKnownZone())
+        # copy EffectSource for description
+        newCopy.setEffectSource(CardCopyService.getLKICopy(copyFrom.getEffectSource(), cachedMap))
+
+        if copyFrom.isFlipCard():
+            newCopy.getState(CardStateName.Original).copyFrom(copyFrom.getState(CardStateName.Original), True)
+            newCopy.addAlternateState(CardStateName.Flipped, False)
+            newCopy.getState(CardStateName.Flipped).copyFrom(copyFrom.getState(CardStateName.Flipped), True)
+        elif copyFrom.isTransformable():
+            newCopy.getState(CardStateName.Original).copyFrom(copyFrom.getState(CardStateName.Original), True)
+            newCopy.addAlternateState(CardStateName.Backside, False)
+            newCopy.getState(CardStateName.Backside).copyFrom(copyFrom.getState(CardStateName.Backside), True)
+        elif copyFrom.hasState(CardStateName.Secondary):
+            newCopy.getState(CardStateName.Original).copyFrom(copyFrom.getState(CardStateName.Original), True)
+            newCopy.addAlternateState(CardStateName.Secondary, False)
+            newCopy.getState(CardStateName.Secondary).copyFrom(copyFrom.getState(CardStateName.Secondary), True)
+        elif copyFrom.hasState(CardStateName.PreparedSpell):
+            newCopy.getState(CardStateName.Original).copyFrom(copyFrom.getState(CardStateName.Original), True)
+            newCopy.addAlternateState(CardStateName.PreparedSpell, False)
+            newCopy.getState(CardStateName.PreparedSpell).copyFrom(copyFrom.getState(CardStateName.PreparedSpell), True)
+        elif copyFrom.isSplitCard():
+            newCopy.getState(CardStateName.Original).copyFrom(copyFrom.getState(CardStateName.Original), True)
+            newCopy.addAlternateState(CardStateName.LeftSplit, False)
+            newCopy.getState(CardStateName.LeftSplit).copyFrom(copyFrom.getState(CardStateName.LeftSplit), True)
+            newCopy.addAlternateState(CardStateName.RightSplit, False)
+            newCopy.getState(CardStateName.RightSplit).copyFrom(copyFrom.getState(CardStateName.RightSplit), True)
+        else:
+            newCopy.getCurrentState().copyFrom(copyFrom.getState(copyFrom.getFaceupCardStateName()), True)
+        newCopy.setFlipped(copyFrom.isFlipped())
+        newCopy.setBackSide(copyFrom.isBackSide())
+        if newCopy.hasAlternateState():
+            newCopy.setState(copyFrom.getCurrentStateName(), False, True)
+        if copyFrom.isFaceDown():
+            newCopy.turnFaceDownNoUpdate()
+            newCopy.setType(CardType(copyFrom.getFaceDownState().getType()))
+        # prevent StackDescription from revealing face
+        newCopy.updateStateForView()
+
+        # if in.isCloned():
+        #     newCopy.addAlternateState(CardStateName.Cloner, false)
+        #     newCopy.getState(CardStateName.Cloner).copyFrom(in.getState(CardStateName.Cloner), true)
+
+        newCopy.setGamePieceType(copyFrom.getGamePieceType())
+        newCopy.setTokenCard(copyFrom.isTokenCard())
+        newCopy.setEmblem(copyFrom.isEmblem())
+
+        # lock in the current P/T
+        newCopy.setBasePower(copyFrom.getCurrentPower())
+        newCopy.setBaseToughness(copyFrom.getCurrentToughness())
+
+        # printed P/T
+        newCopy.setBasePowerString(copyFrom.getCurrentState().getBasePowerString())
+        newCopy.setBaseToughnessString(copyFrom.getCurrentState().getBaseToughnessString())
+
+        # extra copy PT boost
+        newCopy.setPTBoost(copyFrom.getPTBoostTable())
+
+        newCopy.copyFrom(copyFrom)
+        newCopy.setCounters(dict(copyFrom.getCounters()))
+
+        newCopy.setColor(copyFrom.getColor())
+        newCopy.setPhasedOut(copyFrom.getPhasedOut())
+        newCopy.setTapped(copyFrom.isTapped())
+        newCopy.setTributed(copyFrom.isTributed())
+        newCopy.setUnearthed(copyFrom.isUnearthed())
+        newCopy.setMonstrous(copyFrom.isMonstrous())
+        newCopy.setRenowned(copyFrom.isRenowned())
+        newCopy.setSolved(copyFrom.isSolved())
+        newCopy.setPromisedGift(copyFrom.getPromisedGift())
+        newCopy.setSaddled(copyFrom.isSaddled())
+        if newCopy.isSaddled():
+            newCopy.setSaddledByThisTurn(copyFrom.getSaddledByThisTurn())
+        if copyFrom.isSuspected():
+            newCopy.setSuspectedStatic(copyFrom.getSuspectedStatic().copy(newCopy, True))
+
+        newCopy.setDamageHistory(copyFrom.getDamageHistory())
+        newCopy.setDamageReceivedThisTurn(copyFrom.getDamageReceivedThisTurn())
+        newCopy.setExcessDamageReceivedThisTurn(copyFrom.getExcessDamageThisTurn())
+
+        # these are LKI already
+        newCopy.getBlockedThisTurn().addAll(copyFrom.getBlockedThisTurn())
+        newCopy.getBlockedByThisTurn().addAll(copyFrom.getBlockedByThisTurn())
+
+        newCopy.setAttachedCards(CardCopyService.getLKICopyList(copyFrom.getAttachedCards(), cachedMap))
+        newCopy.setEntityAttachedTo(CardCopyService.getLKICopy(copyFrom.getEntityAttachedTo(), cachedMap))
+
+        newCopy.setCopiedPermanent(copyFrom.getCopiedPermanent())
+
+        newCopy.setHaunting(copyFrom.getHaunting())
+        for haunter in copyFrom.getHauntedBy():
+            newCopy.addHauntedBy(haunter, False)
+
+        newCopy.setIntensity(copyFrom.getIntensity(False))
+        # Don't re-apply perpetual effects - they're already copied via copyFrom().
+        # Re-applying would create duplicate ReplacementEffect objects that cause
+        # infinite recursion in getReplacementList for "enters tapped" effects.
+        newCopy.setPerpetual(copyFrom, False)
+
+        newCopy.addRemembered(copyFrom.getRemembered())
+        newCopy.addImprintedCards(copyFrom.getImprintedCards())
+        newCopy.setChosenCards(copyFrom.getChosenCards())
+
+        newCopy.setChosenType(copyFrom.getChosenType())
+        newCopy.setChosenType2(copyFrom.getChosenType2())
+        newCopy.setNamedCards(list(copyFrom.getNamedCards()))
+        newCopy.setChosenColors(list(copyFrom.getChosenColors()))
+        if copyFrom.hasChosenNumber():
+            newCopy.setChosenNumber(copyFrom.getChosenNumber())
+        newCopy.setChosenEvenOdd(copyFrom.getChosenEvenOdd())
+
+        # for getReplacementList (run after setChangedCardKeywords for caching)
+        newCopy.setStoredKeywords(copyFrom.getStoredKeywords(), True)
+        newCopy.setStoredReplacements(copyFrom.getStoredReplacements())
+
+        newCopy.copyChangedTextFrom(copyFrom)
+        newCopy.changedCardKeywordsByWord = copyFrom.changedCardKeywordsByWord.copy(newCopy, True)
+
+        newCopy.setGameTimestamp(copyFrom.getGameTimestamp())
+        newCopy.setLayerTimestamp(copyFrom.getLayerTimestamp())
+
+        newCopy.setBestowTimestamp(copyFrom.getBestowTimestamp())
+
+        newCopy.setTurnInZone(copyFrom.getTurnInZone())
+
+        newCopy.setForetold(copyFrom.isForetold())
+        newCopy.setForetoldCostByEffect(copyFrom.isForetoldCostByEffect())
+
+        newCopy.setPlotted(copyFrom.isPlotted())
+
+        newCopy.setPrepared(copyFrom.getPrepared())
+
+        newCopy.setMeldedWith(CardCopyService.getLKICopy(copyFrom.getMeldedWith(), cachedMap))
+
+        # update keyword cache on all states
+        for s in newCopy.getStates():
+            newCopy.getState(s).updateKeywordsCache()
+
+        if copyFrom.getCastSA() is not None:
+            castSA = copyFrom.getCastSA().copy(newCopy, True)
+            castSA.setLastStateBattlefield(CardCollection.EMPTY)
+            castSA.setLastStateGraveyard(CardCollection.EMPTY)
+            newCopy.setCastSA(castSA)
+        newCopy.setCastFrom(copyFrom.getCastFrom())
+
+        newCopy.setExiledBy(copyFrom.getExiledBy())
+        newCopy.setExiledWith(CardCopyService.getLKICopy(copyFrom.getExiledWith(), cachedMap))
+        newCopy.setExiledSA(copyFrom.getExiledSA())
+        newCopy.addExiledCards(copyFrom.getExiledCards())
+
+        newCopy.setDiscarded(copyFrom.wasDiscarded())
+        newCopy.setMilled(copyFrom.wasMilled())
+        newCopy.setSurveilled(copyFrom.wasSurveilled())
+
+        newCopy.getAbilityActivatedThisTurn().putAll(copyFrom.getAbilityActivatedThisTurn())
+        newCopy.getAbilityActivatedThisGame().putAll(copyFrom.getAbilityActivatedThisGame())
+        newCopy.getAbilityResolvedThisTurn().putAll(copyFrom.getAbilityResolvedThisTurn())
+
+        if copyFrom.getGame().getCombat() is not None and copyFrom.isPermanent():
+            newCopy.setCombatLKI(copyFrom.getGame().getCombat().saveLKI(newCopy))
+
+        newCopy.getGoadMap().putAll(copyFrom.getGoadMap())
+
+        return newCopy
 ```

@@ -38,7 +38,7 @@ classDiagram
 A predicate that filters cards by converted mana cost during deck generation. Defined as a static nested class of `DeckGeneratorBase`, it implements `Predicate<CardRules>` over an inclusive `[min, max]` CMC range fixed at construction. Its `test` method extracts the card's `ManaCost` via `CardRules`, reads the CMC, and accepts only cards whose cost falls within the range while rejecting cards with no mana cost (lands and other costless cards). The two `final` fields and absence of state mutation make instances immutable and safely reusable as composable filtering criteria when assembling random or themed decks.
 
 ## Source
-`forge-core/src/main/java/forge/deck/generation/DeckGeneratorBase.java` â€” declaration excerpt
+`forge-core/src/main/java/forge/deck/generation/DeckGeneratorBase.java` Ã¢â‚¬â€ declaration excerpt
 
 ```java
     public static class FilterCMC implements Predicate<CardRules> {
@@ -57,4 +57,24 @@ A predicate that filters cards by converted mana cost during deck generation. De
             return cmc >= min && cmc <= max && !mc.isNoCost();
         }
     }
+```
+
+## Python
+`forge/deck/generation/DeckGeneratorBase/FilterCMC.py`
+
+```python
+from forge.card.CardRules import CardRules
+from forge.card.mana.ManaCost import ManaCost
+from forge.util.Predicate import Predicate
+
+
+class FilterCMC(Predicate[CardRules]):
+    def __init__(self, from_: int, to: int):
+        self.min = from_
+        self.max = to
+
+    def test(self, c: CardRules) -> bool:
+        mc: ManaCost = c.getManaCost()
+        cmc: int = mc.getCMC()
+        return cmc >= self.min and cmc <= self.max and not mc.isNoCost()
 ```

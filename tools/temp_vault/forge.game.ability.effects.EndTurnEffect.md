@@ -45,7 +45,7 @@ classDiagram
 
 EndTurnEffect is a concrete effect handler implementing the "end the turn" game action (e.g., Time Stop). It is one of many leaf classes extending `SpellAbilityEffect` in the ability-effects framework, fulfilling that contract by overriding `resolve` to carry out the action and `getStackDescription` to supply the brief UI string "End the turn." Its `resolve` method selects the affected player from the ability's defined/targeted players (falling back to the activating player, with a re-chooser if that player has left the game) and honors an optional confirmation prompt before proceeding.
 
-The class delegates the actual rules sequence to the `Game` aggregate's handlers: it clears waiting triggers, exiles everything in the stack zone via a `CardCollection`, ends combat, checks state-based actions, and skips to the cleanup step. Notable design intent is its careful fidelity to the comprehensive rules—inline comments cite CR 721.1a and Gatherer's Time Stop rulings to justify each ordered step—and its use of `AbilityKey`/`CardZoneTable` move parameters so the exile correctly fires zone-change triggers.
+The class delegates the actual rules sequence to the `Game` aggregate's handlers: it clears waiting triggers, exiles everything in the stack zone via a `CardCollection`, ends combat, checks state-based actions, and skips to the cleanup step. Notable design intent is its careful fidelity to the comprehensive rulesâ€”inline comments cite CR 721.1a and Gatherer's Time Stop rulings to justify each ordered stepâ€”and its use of `AbilityKey`/`CardZoneTable` move parameters so the exile correctly fires zone-change triggers.
 
 ## Source
 `forge-game/src/main/java/forge/game/ability/effects/EndTurnEffect.java`
@@ -120,4 +120,67 @@ public class EndTurnEffect extends SpellAbilityEffect {
     }
 
 }
+```
+
+## Python
+`forge/game/ability/effects/EndTurnEffect.py`
+
+```python
+from typing import List, Dict
+
+from forge.game.Game import Game
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardZoneTable import CardZoneTable
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Localizer import Localizer
+
+
+class EndTurnEffect(SpellAbilityEffect):
+
+    # (non-Javadoc)
+    # @see forge.card.abilityfactory.SpellEffect#resolve(java.util.Map, forge.card.spellability.SpellAbility)
+    def resolve(self, sa: SpellAbility) -> None:
+        enders: List[Player] = self.getDefinedPlayersOrTargeted(sa, "Defined")
+        ender = sa.getActivatingPlayer() if not enders else enders[0]
+        if not ender.isInGame():
+            ender = self.getNewChooser(sa, ender)
+
+        if sa.hasParam("Optional") and not ender.getController().confirmAction(sa, None, Localizer.getInstance().getMessage("lblDoYouWantEndTurn"), None):
+            return
+
+        game: Game = ender.getGame()
+        # CR 721.1a
+        game.getTriggerHandler().clearWaitingTriggers()
+
+        # Steps taken from gatherer's rulings on Time Stop.
+        # 1) All spells and abilities on the stack are exiled. This includes
+        # Time Stop, though it will continue to resolve. It also includes
+        # spells and abilities that can't be countered.
+        moveParams: Dict[AbilityKey, object] = AbilityKey.newMap()
+        zoneMovements: CardZoneTable = AbilityKey.addCardZoneTableParams(moveParams, sa)
+
+        game.getAction().exile(CardCollection(game.getStackZone().getCards()), sa, moveParams)
+        zoneMovements.triggerChangesZoneAll(game, sa)
+
+        game.getStack().clear()
+        game.getStack().clearSimultaneousStack()
+
+        # 2) All attacking and blocking creatures are removed from combat.
+        game.getPhaseHandler().endCombat()
+
+        # 3) State-based actions are checked. No player gets priority, and no
+        # triggered abilities are put onto the stack.
+        game.getAction().checkStateEffects(True)
+
+        # 4) The current phase and/or step ends. The game skips straight to the
+        # cleanup step. The cleanup step happens in its entirety.
+        game.getPhaseHandler().endTurnByEffect()
+
+    # (non-Javadoc)
+    # @see forge.card.abilityfactory.SpellEffect#getStackDescription(java.util.Map, forge.card.spellability.SpellAbility)
+    def getStackDescription(self, sa: SpellAbility) -> str:
+        return "End the turn."
 ```

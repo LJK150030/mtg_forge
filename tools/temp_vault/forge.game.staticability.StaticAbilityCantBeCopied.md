@@ -32,6 +32,12 @@ classDiagram
 - [[forge.game.card.Card|Card]]
 - [[forge.game.staticability.StaticAbility|StaticAbility]]
 
+## Design Description
+
+StaticAbilityCantBeCopied is a stateless utility that enforces Magic's "can't be copied" rules layer, determining whether a given card is prevented from being copied by any active static ability. Its public `cantBeCopied(Card)` entry point queries the card's Game for all cards in the static-ability source zones, iterates each card's StaticAbility list, filters to those whose conditions match the CantBeCopied mode, and delegates to the private `cantBeCopiedCheck` helper, which returns true when the candidate card matches the ability's `ValidCard` parameter.
+
+Rather than implementing an interface or extending a supertype, the class collaborates purely through static methods over Card, Game, and StaticAbility, fitting Forge's pattern of one focused checker per static-ability mode. The design centralizes a single rule check, keeps no instance state, and relies on StaticAbility's condition and valid-parameter matching to remain data-driven against card definitions.
+
 ## Source
 `forge-game/src/main/java/forge/game/staticability/StaticAbilityCantBeCopied.java`
 
@@ -86,4 +92,35 @@ public class StaticAbilityCantBeCopied {
         return false;
     }
 }
+```
+
+## Python
+`forge/game/staticability/StaticAbilityCantBeCopied.py`
+
+```python
+from forge.game.Game import Game
+from forge.game.card.Card import Card
+from forge.game.zone.ZoneType import ZoneType
+from forge.game.staticability.StaticAbility import StaticAbility
+from forge.game.staticability.StaticAbilityMode import StaticAbilityMode
+
+
+class StaticAbilityCantBeCopied:
+
+    @staticmethod
+    def cantBeCopied(c: Card) -> bool:
+        game = c.getGame()
+        for ca in game.getCardsIn(ZoneType.STATIC_ABILITIES_SOURCE_ZONES):
+            for stAb in ca.getStaticAbilities():
+                if not stAb.checkConditions(StaticAbilityMode.CantBeCopied):
+                    continue
+                if StaticAbilityCantBeCopied.cantBeCopiedCheck(stAb, c):
+                    return True
+        return False
+
+    @staticmethod
+    def cantBeCopiedCheck(stAb: StaticAbility, card: Card) -> bool:
+        if stAb.matchesValidParam("ValidCard", card):
+            return True
+        return False
 ```

@@ -32,6 +32,12 @@ classDiagram
 - [[forge.game.card.CardCollection|CardCollection]]
 - [[forge.game.staticability.StaticAbility|StaticAbility]]
 
+## Design Description
+
+StaticAbilityCantCrew is a stateless utility that evaluates whether a given Card is prohibited from being used to crew a Vehicle, implementing the rules layer behind "can't crew" static abilities. Its `cantCrew` entry point gathers every active static-ability source â€” the cards in the relevant zones plus the candidate card itself, collected into a CardCollection â€” and scans each Card's StaticAbility list for any in CantCrew mode whose conditions are met, delegating the per-ability test to `applyCantCrew`, which simply checks the card against the ability's `ValidCard` parameter.
+
+Following the package's convention, the class exposes only static methods and holds no state, acting as a focused helper that collaborates with Card and StaticAbility rather than extending them. This keeps the crew-restriction rule isolated and uniformly discoverable alongside the other `StaticAbility*` evaluators.
+
 ## Source
 `forge-game/src/main/java/forge/game/staticability/StaticAbilityCantCrew.java`
 
@@ -68,4 +74,36 @@ public class StaticAbilityCantCrew {
     }
 
 }
+```
+
+## Python
+`forge/game/staticability/StaticAbilityCantCrew.py`
+
+```python
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.zone.ZoneType import ZoneType
+from forge.game.staticability.StaticAbility import StaticAbility
+from forge.game.staticability.StaticAbilityMode import StaticAbilityMode
+
+
+class StaticAbilityCantCrew:
+
+    @staticmethod
+    def cantCrew(card: Card) -> bool:
+        list = CardCollection(card.getGame().getCardsIn(ZoneType.STATIC_ABILITIES_SOURCE_ZONES))
+        list.add(card)
+        for ca in list:
+            for stAb in ca.getStaticAbilities():
+                if not stAb.checkConditions(StaticAbilityMode.CantCrew):
+                    continue
+                if StaticAbilityCantCrew.applyCantCrew(stAb, card):
+                    return True
+        return False
+
+    @staticmethod
+    def applyCantCrew(stAb: StaticAbility, card: Card) -> bool:
+        if not stAb.matchesValidParam("ValidCard", card):
+            return False
+        return True
 ```

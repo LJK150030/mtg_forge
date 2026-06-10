@@ -33,6 +33,12 @@ classDiagram
 **Uses:**
 - [[forge.game.cost.Cost|Cost]]
 
+## Design Description
+
+Kicker implements Magic: The Gathering's Kicker keyword ability, an optional additional cost a player may pay when casting a spell to gain extra effects. It extends `KeywordWithCost`, inheriting the base cost-parsing and reminder-text machinery, and overriding only the behavior unique to kicker.
+
+The class collaborates with `Cost` to model an optional second kicker cost (`cost2`), supporting the "double kicker" case where a spell offers two independent kicker costs. Its overridden `parse` splits the detail string on a colon, delegating the first segment to the superclass and constructing a second `Cost` only when present. Correspondingly, `formatReminderText` falls back to the superclass for the single-cost case and otherwise composes custom "and/or" reminder text. This delegate-and-extend design keeps single-kicker handling in the parent while localizing the double-kicker special case here.
+
 ## Source
 `forge-game/src/main/java/forge/game/keyword/Kicker.java`
 
@@ -69,4 +75,33 @@ public class Kicker extends KeywordWithCost {
         return TextUtil.concatWithSpace("You may pay an additional", cost.toSimpleString(),"and/or", cost2.toSimpleString(),"as you cast this spell.");
     }
 }
+```
+
+## Python
+`forge/game/keyword/Kicker.py`
+
+```python
+package: forge.game.keyword
+
+from forge.game.keyword.KeywordWithCost import KeywordWithCost
+from forge.game.cost.Cost import Cost
+from forge.util.TextUtil import TextUtil
+
+
+class Kicker(KeywordWithCost):
+    def __init__(self):
+        super().__init__()
+        self.cost2 = None
+
+    def parse(self, details):
+        l = list(TextUtil.split(details, ':'))
+        super().parse(l[0])
+        if len(l) > 1:
+            self.cost2 = Cost(l[1], False)
+
+    def formatReminderText(self, reminderText):
+        if self.cost2 is None:
+            return super().formatReminderText(reminderText)
+        # handle special case of double kicker
+        return TextUtil.concatWithSpace("You may pay an additional", self.cost.toSimpleString(), "and/or", self.cost2.toSimpleString(), "as you cast this spell.")
 ```

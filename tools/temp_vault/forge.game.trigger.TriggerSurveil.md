@@ -37,6 +37,12 @@ classDiagram
 - [[forge.game.card.Card|Card]]
 - [[forge.game.spellability.SpellAbility|SpellAbility]]
 
+## Design Description
+
+TriggerSurveil is a concrete trigger that fires in response to a surveil event, extending the abstract `Trigger` base class to plug into Forge's event-driven triggered-ability system. It specializes the framework for surveil by binding the surveilling `Player` as the triggering object, gating activation through `performTest` (honoring optional `ValidPlayer` and `FirstTime` constraints), and rendering a localized stack description.
+
+Its responsibilities stay narrow: it collaborates with `SpellAbility` to set and read triggering objects keyed by `AbilityKey`, and takes its host `Card` and parameter map through the constructor to the superclass. Marking `setTriggeringObjects` and `performTest` as `final` signals these override points are fixed, and the use of `Localizer` reflects deliberate support for internationalized UI text, keeping all surveil-specific logic isolated from the generic trigger machinery.
+
 ## Source
 `forge-game/src/main/java/forge/game/trigger/TriggerSurveil.java`
 
@@ -120,4 +126,55 @@ public class TriggerSurveil extends Trigger {
     }
 
 }
+```
+
+## Python
+`forge/game/trigger/TriggerSurveil.py`
+
+```python
+package forge.game.trigger
+
+from typing import Map
+
+from forge.game.trigger.Trigger import Trigger
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Localizer import Localizer
+
+
+class TriggerSurveil(Trigger):
+    """
+    @author Forge
+    """
+
+    def __init__(self, params: dict[str, str], host: Card, intrinsic: bool):
+        """
+        Constructor for TriggerSurveil
+
+        :param params: a Map object.
+        :param host: a Card object.
+        :param intrinsic: the intrinsic
+        """
+        super().__init__(params, host, intrinsic)
+
+    def getImportantStackObjects(self, sa: SpellAbility) -> str:
+        sb = []
+        sb.append(Localizer.getInstance().getMessage("lblPlayer"))
+        sb.append(": ")
+        sb.append(str(sa.getTriggeringObject(AbilityKey.Player)))
+        return "".join(sb)
+
+    def setTriggeringObjects(self, sa: SpellAbility, runParams: dict[AbilityKey, object]) -> None:
+        sa.setTriggeringObjectsFrom(runParams, AbilityKey.Player)
+
+    def performTest(self, runParams: dict[AbilityKey, object]) -> bool:
+        if not self.matchesValidParam("ValidPlayer", runParams.get(AbilityKey.Player)):
+            return False
+
+        if self.hasParam("FirstTime"):
+            if not bool(runParams.get(AbilityKey.FirstTime)):
+                return False
+
+        return True
 ```

@@ -38,7 +38,7 @@ classDiagram
 
 ## Design Description
 
-EndTurnAi is the AI decision handler for the "End Turn" spell ability, implementing how Forge's computer-controlled players evaluate whether to play an ability that ends the current turn. Extending `SpellAbilityAi`, it overrides three decision hooks—`canPlay`, `chkDrawback`, and `doTriggerNoCost`—each returning an `AiAbilityDecision` that pairs a confidence score with an `AiPlayDecision` verdict. It collaborates with `Player` and `SpellAbility` to receive the acting AI and the ability under consideration.
+EndTurnAi is the AI decision handler for the "End Turn" spell ability, implementing how Forge's computer-controlled players evaluate whether to play an ability that ends the current turn. Extending `SpellAbilityAi`, it overrides three decision hooksâ€”`canPlay`, `chkDrawback`, and `doTriggerNoCost`â€”each returning an `AiAbilityDecision` that pairs a confidence score with an `AiPlayDecision` verdict. It collaborates with `Player` and `SpellAbility` to receive the acting AI and the ability under consideration.
 
 The design intent is deliberately conservative: the AI never volunteers to end its own turn, so `canPlay` and `chkDrawback` always return `CantPlayAi` with zero weight. Only when the effect is mandatory (a forced trigger) does `doTriggerNoCost` commit with full confidence (`WillPlay`, score 100). This makes the handler a minimal, defensive stub that prevents the AI from harming itself while still honoring obligatory resolutions.
 
@@ -81,4 +81,33 @@ public class EndTurnAi extends SpellAbilityAi  {
         return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
     }
 }
+```
+
+## Python
+`forge/ai/ability/EndTurnAi.py`
+
+```python
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.ai.SpellAbilityAi import SpellAbilityAi
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+
+
+# TODO: Write javadoc for this type.
+class EndTurnAi(SpellAbilityAi):
+
+    def doTriggerNoCost(self, aiPlayer: Player, sa: SpellAbility, mandatory: bool) -> AiAbilityDecision:
+        if mandatory:
+            return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+        else:
+            return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+    def chkDrawback(self, aiPlayer: Player, sa: SpellAbility) -> AiAbilityDecision:
+        return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+    # (non-Javadoc)
+    # @see forge.card.abilityfactory.SpellAiLogic#canPlayAI(forge.game.player.Player, java.util.Map, forge.card.spellability.SpellAbility)
+    def canPlay(self, aiPlayer: Player, sa: SpellAbility) -> AiAbilityDecision:
+        return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
 ```

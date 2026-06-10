@@ -49,7 +49,7 @@ classDiagram
 
 ProtectAllEffect is a resolution handler for "protect all" style spell abilities, granting protection keywords to many permanents and players at once rather than to a single target. As a concrete subclass of SpellAbilityEffect, it overrides getStackDescription to summarize the granted protection and resolve to perform the work, fitting the engine's pattern where each ability script maps to one effect implementation.
 
-On resolution it determines which protection colors to grant—via player choice, the host's chosen colors, a targeted card's colors, or a fixed list—then builds "Protection from X" keywords and applies them through timestamped changed-keyword layers to every valid battlefield Card and defined Player. It collaborates with Game for timestamps and fires GameEventCardStatsChanged to refresh affected cards, and reuses ProtectEffect.getProtectionList for color logic. Notably, unless the Duration is Permanent, it registers GameCommand cleanup callbacks via addUntilCommand to revoke the keywords at end of turn, mirroring Magic's temporary-effect semantics.
+On resolution it determines which protection colors to grantâ€”via player choice, the host's chosen colors, a targeted card's colors, or a fixed listâ€”then builds "Protection from X" keywords and applies them through timestamped changed-keyword layers to every valid battlefield Card and defined Player. It collaborates with Game for timestamps and fires GameEventCardStatsChanged to refresh affected cards, and reuses ProtectEffect.getProtectionList for color logic. Notably, unless the Duration is Permanent, it registers GameCommand cleanup callbacks via addUntilCommand to revoke the keywords at end of turn, mirroring Magic's temporary-effect semantics.
 
 ## Source
 `forge-game/src/main/java/forge/game/ability/effects/ProtectAllEffect.java`
@@ -186,4 +186,107 @@ public class ProtectAllEffect extends SpellAbilityEffect {
     }
 
 }
+```
+
+## Python
+`forge/game/ability/effects/ProtectAllEffect.py`
+
+```python
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.GameCommand import GameCommand
+from forge.card.ColorSet import ColorSet
+from forge.card.MagicColor import MagicColor
+from forge.game.Game import Game
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.card.Card import Card
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.card.CardLists import CardLists
+from forge.game.event.GameEventCardStatsChanged import GameEventCardStatsChanged
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.Lang import Lang
+from forge.util.TextUtil import TextUtil
+from forge.game.ability.effects.ProtectEffect import ProtectEffect
+
+
+class ProtectAllEffect(SpellAbilityEffect):
+
+    def getStackDescription(self, sa: SpellAbility) -> str:
+        sb = []
+
+        tgtCards = self.getTargetCards(sa)
+
+        if len(tgtCards) > 0:
+            sb.append("Valid card gain protection")
+            if not "Permanent" == sa.getParam("Duration"):
+                sb.append(" until end of turn")
+            sb.append(".")
+
+        return "".join(sb)
+
+    def resolve(self, sa: SpellAbility) -> None:
+        host = sa.getHostCard()
+        game = sa.getActivatingPlayer().getGame()
+        timestamp = game.getNextTimestamp()
+
+        isChoice = "Choice" in sa.getParam("Gains")
+        choices = ProtectEffect.getProtectionList(sa)
+        gains: list[str] = []
+        if isChoice:
+            choser = sa.getActivatingPlayer()
+            choice = choser.getController().chooseProtectionType(sa, choices)
+            if choice is None:
+                return
+            gains.append(choice)
+            game.getAction().notifyOfValue(sa, choser, Lang.joinHomogenous(gains), choser)
+        else:
+            if sa.getParam("Gains") == "ChosenColor":
+                for color in host.getChosenColors():
+                    gains.append(color.lower())
+            elif sa.getParam("Gains") == "TargetedCardColor":
+                for c in sa.getSATargetingCard().getTargets().getTargetCards():
+                    cs = c.getColor()
+                    for col in MagicColor.WUBRG:
+                        if cs.hasAnyColor(col):
+                            gains.append(MagicColor.toLongString(col).lower())
+            else:
+                gains.extend(choices)
+
+        gainsKWList: list[str] = []
+        for color in gains:
+            gainsKWList.append(TextUtil.concatWithSpace("Protection from", color))
+
+        # Deal with permanents
+        valid = sa.getParamOrDefault("ValidCards", "")
+        if valid != "":
+            list_ = CardLists.getValidCards(game.getCardsIn(ZoneType.Battlefield), valid, sa.getActivatingPlayer(), host, sa)
+
+            for tgtC in list_:
+                tgtC.addChangedCardKeywords(gainsKWList, None, False, timestamp, None, True)
+                game.fireEvent(GameEventCardStatsChanged(tgtC))
+
+                if not "Permanent" == sa.getParam("Duration"):
+                    # If not Permanent, remove protection at EOT
+                    def untilEOT(tgtC=tgtC):
+                        if tgtC.isInPlay():
+                            tgtC.removeChangedCardKeywords(timestamp, 0, True)
+                            game.fireEvent(GameEventCardStatsChanged(tgtC))
+
+                    command = GameCommand(untilEOT)
+                    self.addUntilCommand(sa, command)
+
+        # Deal with Players
+        players = sa.getParamOrDefault("ValidPlayers", "")
+        if players != "":
+            for player in AbilityUtils.getDefinedPlayers(host, players, sa):
+                player.addChangedKeywords(gainsKWList, [], timestamp, 0)
+
+                if not "Permanent" == sa.getParam("Duration"):
+                    # If not Permanent, remove protection at EOT
+                    def revokeCommand(player=player):
+                        player.removeChangedKeywords(timestamp, 0)
+
+                    command = GameCommand(revokeCommand)
+                    self.addUntilCommand(sa, command)
 ```

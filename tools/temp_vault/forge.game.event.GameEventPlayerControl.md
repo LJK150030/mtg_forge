@@ -36,9 +36,9 @@ classDiagram
 
 ## Design Description
 
-GameEventPlayerControl is an immutable event record signaling that control of a player has changed—capturing the affected player, the new lobby player's name, and whether the new controller is human. As a `GameEvent` implementation, it participates in Forge's event-dispatch system, which decouples game-state changes from observers such as UI or AI components.
+GameEventPlayerControl is an immutable event record signaling that control of a player has changedâ€”capturing the affected player, the new lobby player's name, and whether the new controller is human. As a `GameEvent` implementation, it participates in Forge's event-dispatch system, which decouples game-state changes from observers such as UI or AI components.
 
-Its `visit` method implements the visitor pattern, dispatching to the type-parameterized `IGameEventVisitor` so each event type is handled in a type-safe way without instanceof checks. It collaborates with `PlayerView`, the presentation-facing snapshot of a player, rather than the live player model—reflecting a deliberate separation between game logic and view state. The overridden `toString` yields a human-readable summary of the control reassignment for logging or display.
+Its `visit` method implements the visitor pattern, dispatching to the type-parameterized `IGameEventVisitor` so each event type is handled in a type-safe way without instanceof checks. It collaborates with `PlayerView`, the presentation-facing snapshot of a player, rather than the live player modelâ€”reflecting a deliberate separation between game logic and view state. The overridden `toString` yields a human-readable summary of the control reassignment for logging or display.
 
 ## Source
 `forge-game/src/main/java/forge/game/event/GameEventPlayerControl.java`
@@ -63,4 +63,32 @@ public record GameEventPlayerControl(PlayerView player, String newLobbyPlayerNam
         return "" + player + " controlled by " + newLobbyPlayerName;
     }
 }
+```
+
+## Python
+`forge/game/event/GameEventPlayerControl.py`
+
+```python
+from typing import TypeVar
+
+from forge.game.event.GameEvent import GameEvent
+from forge.game.event.IGameEventVisitor import IGameEventVisitor
+from forge.game.player.PlayerView import PlayerView
+
+T = TypeVar("T")
+
+
+class GameEventPlayerControl(GameEvent):
+    def __init__(self, player: PlayerView, newLobbyPlayerName: str, newControllerIsHuman: bool):
+        self.player = player
+        self.newLobbyPlayerName = newLobbyPlayerName
+        self.newControllerIsHuman = newControllerIsHuman
+
+    def visit(self, visitor: IGameEventVisitor[T]) -> T:
+        return visitor.visit(self)
+
+    # (non-Javadoc)
+    # @see java.lang.Object#toString()
+    def __str__(self) -> str:
+        return "" + str(self.player) + " controlled by " + self.newLobbyPlayerName
 ```

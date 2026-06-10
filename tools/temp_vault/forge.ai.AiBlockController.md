@@ -1477,3 +1477,1115 @@ public class AiBlockController {
     }
 }
 ```
+
+## Python
+`forge/ai/AiBlockController.py`
+
+```python
+from forge.card.CardStateName import CardStateName
+from forge.game.GameEntity import GameEntity
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.ability.ApiType import ApiType
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CardPredicates import CardPredicates
+from forge.game.card.CounterEnumType import CounterEnumType
+from forge.game.combat.AttackingBand import AttackingBand
+from forge.game.combat.Combat import Combat
+from forge.game.combat.CombatUtil import CombatUtil
+from forge.game.cost.Cost import Cost
+from forge.game.keyword.Keyword import Keyword
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.staticability.StaticAbilityAssignCombatDamageAsUnblocked import StaticAbilityAssignCombatDamageAsUnblocked
+from forge.game.staticability.StaticAbilityCantAttackBlock import StaticAbilityCantAttackBlock
+from forge.game.staticability.StaticAbilityMustBlock import StaticAbilityMustBlock
+from forge.game.trigger.Trigger import Trigger
+from forge.game.trigger.TriggerType import TriggerType
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.MyRandom import MyRandom
+from forge.util.collect.FCollectionView import FCollectionView
+
+from forge.ai.AiController import AiController
+from forge.ai.PlayerControllerAi import PlayerControllerAi
+from forge.ai.ComputerUtil import ComputerUtil
+from forge.ai.ComputerUtilCard import ComputerUtilCard
+from forge.ai.ComputerUtilCombat import ComputerUtilCombat
+from forge.ai.ComputerUtilMana import ComputerUtilMana
+from forge.ai.AiProfileUtil import AiProfileUtil
+from forge.ai.AiProps import AiProps
+
+from functools import cmp_to_key
+
+_UNSET = object()
+
+
+class AiBlockController:
+
+    def __init__(self, aiPlayer, checkingOther):
+        self.attackers = []  # all attackers
+        self.attackersLeft = []  # keeps track of all currently unblocked attackers
+        self.blockedButUnkilled = []  # blocked attackers that currently wouldn't be destroyed
+        self.blockersLeft = []  # keeps track of all unassigned blockers
+        self.diff = 0
+        self.lifeInDanger = False
+        # set to true when AI is predicting a blocking for another player so it doesn't use hidden information
+        self.checkingOther = checkingOther
+        self.ai = aiPlayer
+
+    # finds the creatures able to block the attacker
+    @staticmethod
+    def getPossibleBlockers(combat, attacker, blockersLeft, solo):
+        blockers = []
+
+        for blocker in blockersLeft:
+            # if the blocker can block a creature with lure it can't block a creature without
+            if CombatUtil.canBlock(attacker, blocker, combat):
+                cantBlockAlone = blocker.hasKeyword("CARDNAME can't attack or block alone.") or blocker.hasKeyword("CARDNAME can't block alone.")
+                if solo and cantBlockAlone:
+                    continue
+                blockers.append(blocker)
+
+        return blockers
+
+    # finds blockers that won't be destroyed
+    def getSafeBlockers(self, combat, attacker, blockersLeft):
+        blockers = []
+
+        # Usually don't check attacker static abilities at this point since the attackers have already attacked and, thus,
+        # their P/T modifiers are active and are counted as a part of getNetPower/getNetToughness unless we're simulating an outcome outside of real combat
+        for b in blockersLeft:
+            if not ComputerUtilCombat.canDestroyBlocker(self.ai, b, attacker, combat, False, attacker.getGame().getPhaseHandler().inCombat()):
+                blockers.append(b)
+        return blockers
+
+    # finds blockers that destroy the attacker
+    def getKillingBlockers(self, combat, attacker, blockersLeft):
+        blockers = []
+
+        # Usually don't check attacker static abilities at this point since the attackers have already attacked and, thus,
+        # their P/T modifiers are active and are counted as a part of getNetPower/getNetToughness unless we're simulating an outcome outside of real combat
+        for b in blockersLeft:
+            if ComputerUtilCombat.canDestroyAttacker(self.ai, attacker, b, combat, False, attacker.getGame().getPhaseHandler().inCombat()):
+                blockers.append(b)
+
+        return blockers
+
+    def sortPotentialAttackers(self, combat):
+        sortedAttackers = CardCollection()
+        firstAttacker = CardCollection()
+        defenders = combat.getDefenders()
+        attackingCmd = ComputerUtilCombat.getLifeThreateningCommanders(self.ai, combat)
+
+        # If I don't have any planeswalkers then sorting doesn't really matter
+        if len(defenders) == 1 or len(attackingCmd) != 0:
+            attackers = combat.getAttackersOf(defenders[0])
+            # Begin with the attackers that pose the biggest threat
+            ComputerUtilCard.sortByEvaluateCreature(attackers)
+            CardLists.sortByPowerDesc(attackers)
+
+            # move cards like Phage the Untouchable to the front
+            def cmp(o1, o2):
+                if o1.hasSVar("MustBeBlocked") and not o2.hasSVar("MustBeBlocked"):
+                    return -1
+                if not o1.hasSVar("MustBeBlocked") and o2.hasSVar("MustBeBlocked"):
+                    return 1
+                if o1 in attackingCmd and o2 not in attackingCmd:
+                    return -1
+                if o1 not in attackingCmd and o2 in attackingCmd:
+                    return 1
+                return 0
+            attackers.sort(key=cmp_to_key(cmp))
+            return attackers
+
+        # TODO Add creatures attacking Planeswalkers in order of which we want to protect
+        # defend planeswalkers with more loyalty before planeswalkers with less loyalty,
+        # defend battles with fewer defense counters before battles with more defense counters,
+        # if planeswalker/battle will be too difficult to defend don't even bother
+        for defender in defenders:
+            if ((isinstance(defender, Card) and defender.getController() == self.ai)
+                    or (isinstance(defender, Card) and defender.isBattle() and defender.getProtectingPlayer() == self.ai)):
+                ccAttackers = combat.getAttackersOf(defender)
+                # Begin with the attackers that pose the biggest threat
+                CardLists.sortByPowerDesc(ccAttackers)
+                sortedAttackers.addAll(ccAttackers)
+            elif isinstance(defender, Player) and defender == self.ai:
+                firstAttacker = combat.getAttackersOf(defender)
+                CardLists.sortByPowerDesc(firstAttacker)
+
+        if ComputerUtilCombat.lifeInDanger(self.ai, combat):
+            # add creatures attacking the Player to the front of the list
+            sortedAttackers.addAll(0, firstAttacker)
+        else:
+            # add creatures attacking the Player to the back of the list
+            sortedAttackers.addAll(firstAttacker)
+        return sortedAttackers
+
+    # Good Blocks means a good trade or no trade
+    def makeGoodBlocks(self, combat):
+        currentAttackers = list(self.attackersLeft)
+
+        for attacker in self.attackersLeft:
+            if CombatUtil.getMinNumBlockersForAttacker(attacker, combat.getDefenderPlayerByAttacker(attacker)) > 1:
+                continue
+
+            blocker = None
+            blockers = AiBlockController.getPossibleBlockers(combat, attacker, self.blockersLeft, True)
+
+            safeBlockers = self.getSafeBlockers(combat, attacker, blockers)
+
+            if safeBlockers:
+                # 1.Blockers that can destroy the attacker but won't get destroyed
+                killingBlockers = self.getKillingBlockers(combat, attacker, safeBlockers)
+                if killingBlockers:
+                    if ComputerUtilCombat.attackerHasThreateningAfflict(attacker, self.ai):
+                        continue
+                    blocker = ComputerUtilCard.getWorstCreatureAI(killingBlockers)
+                # 2.Blockers that won't get destroyed
+                elif (not StaticAbilityAssignCombatDamageAsUnblocked.assignCombatDamageAsUnblocked(attacker)
+                        and not ComputerUtilCombat.attackerHasThreateningAfflict(attacker, self.ai)):
+                    blocker = ComputerUtilCard.getWorstCreatureAI(safeBlockers)
+                    # check whether it's better to block a creature without trample to absorb more damage
+                    if attacker.hasKeyword(Keyword.TRAMPLE):
+                        doNotBlock = False
+                        for other in self.attackersLeft:
+                            if (other == attacker or not CombatUtil.canBlock(other, blocker)
+                                    or other.hasKeyword(Keyword.TRAMPLE)
+                                    or ComputerUtilCombat.attackerHasThreateningAfflict(other, self.ai)
+                                    or ComputerUtilCombat.canDestroyBlocker(self.ai, blocker, other, combat, False)
+                                    or StaticAbilityAssignCombatDamageAsUnblocked.assignCombatDamageAsUnblocked(other)):
+                                continue
+
+                            if other.getNetCombatDamage() > blocker.getLethalDamage():
+                                doNotBlock = True
+                                break
+                        if doNotBlock:
+                            continue
+                    self.blockedButUnkilled.append(attacker)
+            # no safe blockers
+            else:
+                # 3.Blockers that can destroy the attacker and have an upside when dying
+                killingBlockers = self.getKillingBlockers(combat, attacker, blockers)
+                for b in killingBlockers:
+                    if ((b.hasKeyword(Keyword.UNDYING) and b.getCounters(CounterEnumType.P1P1) == 0) or b.hasSVar("SacMe")
+                            or (b.hasKeyword(Keyword.VANISHING) and b.getCounters(CounterEnumType.TIME) == 1)
+                            or (b.hasKeyword(Keyword.FADING) and b.getCounters(CounterEnumType.FADE) == 0)
+                            or b.hasSVar("EndOfTurnLeavePlay")):
+                        blocker = b
+                        break
+                # 4.Blockers that have a big upside when dying
+                # 4a.Blockers that are profitable to sacrifice even in the event of an unfavorable block
+                for b in blockers:
+                    if ((b.hasSVar("SacMe") and int(b.getSVar("SacMe")) > 3) or
+                            (b.hasSVar("SacMeAfterBlock") and not attacker.hasKeyword(Keyword.TRAMPLE) and not attacker.hasKeyword(Keyword.BANDING))):
+                        blocker = b
+                        if not ComputerUtilCombat.canDestroyAttacker(self.ai, attacker, blocker, combat, False):
+                            self.blockedButUnkilled.append(attacker)
+                        break
+                # 5.Blockers that can destroy the attacker and are worth less
+                if killingBlockers:
+                    worst = ComputerUtilCard.getWorstCreatureAI(killingBlockers)
+                    value = ComputerUtilCard.evaluateCreature(attacker)
+
+                    # check for triggers when unblocked
+                    for trigger in attacker.getTriggers():
+                        mode = trigger.getMode()
+
+                        if not trigger.requirementsCheck(attacker.getGame()):
+                            continue
+
+                        if mode == TriggerType.DamageDone:
+                            if (trigger.matchesValidParam("ValidSource", attacker)
+                                    and "False" != trigger.getParam("CombatDamage") and attacker.getNetCombatDamage() > 0
+                                    and trigger.matchesValidParam("ValidTarget", combat.getDefenderByAttacker(attacker))):
+                                value += 50
+                        elif mode == TriggerType.AttackerUnblocked:
+                            if trigger.matchesValidParam("ValidCard", attacker):
+                                value += 50
+
+                    if ComputerUtilCard.evaluateCreature(worst) + self.diff < value:
+                        blocker = worst
+            if blocker is not None:
+                currentAttackers.remove(attacker)
+                combat.addBlocker(attacker, blocker)
+        self.attackersLeft = list(currentAttackers)
+
+        # 6. Blockers that don't survive until the next turn anyway
+        for attacker in self.attackersLeft:
+            if CombatUtil.getMinNumBlockersForAttacker(attacker, combat.getDefenderPlayerByAttacker(attacker)) > 1:
+                continue
+
+            blocker = None
+            blockers = AiBlockController.getPossibleBlockers(combat, attacker, self.blockersLeft, True)
+
+            for b in blockers:
+                if ((b.hasKeyword(Keyword.VANISHING) and b.getCounters(CounterEnumType.TIME) == 1)
+                        or (b.hasKeyword(Keyword.FADING) and b.getCounters(CounterEnumType.FADE) == 0)
+                        or b.hasSVar("EndOfTurnLeavePlay")):
+                    blocker = b
+                    if not ComputerUtilCombat.canDestroyAttacker(self.ai, attacker, blocker, combat, False):
+                        self.blockedButUnkilled.append(attacker)
+                    break
+            if blocker is not None:
+                currentAttackers.remove(attacker)
+                combat.addBlocker(attacker, blocker)
+        self.attackersLeft = list(currentAttackers)
+
+    def rampagesOrNeedsManyToBlock(self, combat):
+        hasRampage = CardPredicates.hasKeyword(Keyword.RAMPAGE)
+
+        def pred(input):
+            if hasRampage(input):
+                return True
+            # select creature that has a max blocker
+            return StaticAbilityCantAttackBlock.getMinMaxBlocker(input, combat.getDefenderPlayerByAttacker(input)).getRight() < 2147483647
+        return pred
+
+    def changesPTWhenBlocked(self, onlyForDefVsTrample):
+        def pred(card):
+            for tr in card.getTriggers():
+                if tr.getMode() == TriggerType.AttackerBlocked:
+                    ab = tr.getOverridingAbility()
+                    if ab is not None:
+                        if ab.getApi() == ApiType.Pump and "Self" == ab.getParam("Defined"):
+                            rawP = ab.getParam("NumAtt")
+                            rawT = ab.getParam("NumDef")
+                            if "+X" == rawP and "+X" == rawT and card.getSVar("X").startswith("Count$Valid Creature.blockingTriggeredAttacker"):
+                                return True
+                            # TODO: maybe also predict calculated bonus above certain threshold?
+                        elif ab.getApi() == ApiType.PumpAll and ab.hasParam("ValidCards") \
+                                and ab.getParam("ValidCards").startswith("Creature.blockingSource"):
+                            pBonus = AbilityUtils.calculateAmount(card, ab.getParam("NumAtt"), ab)
+                            tBonus = AbilityUtils.calculateAmount(card, ab.getParam("NumDef"), ab)
+                            return (not onlyForDefVsTrample and pBonus < 0) or tBonus < 0
+            return False
+        return pred
+
+    # Good Gang Blocks means a good trade or no trade
+    def makeGangBlocks(self, combat):
+        pred = self.rampagesOrNeedsManyToBlock(combat)
+        currentAttackers = CardLists.filter(self.attackersLeft, lambda c: not pred(c))
+
+        # Try to block an attacker without first strike with a gang of first strikers
+        for attacker in self.attackersLeft:
+            if ComputerUtilCombat.combatantCantBeDestroyed(self.ai, attacker):
+                # don't bother with gang blocking if the attacker will regenerate or is indestructible
+                continue
+            if not ComputerUtilCombat.dealsFirstStrikeDamage(attacker, False, combat):
+                blockers = AiBlockController.getPossibleBlockers(combat, attacker, self.blockersLeft, False)
+                firstStrikeBlockers = []
+                blockGang = []
+                for blocker in blockers:
+                    if ComputerUtilCombat.canDestroyBlockerBeforeFirstStrike(blocker, attacker, False):
+                        continue
+                    if blocker.hasFirstStrike() or blocker.hasDoubleStrike():
+                        firstStrikeBlockers.append(blocker)
+
+                if len(firstStrikeBlockers) > 1:
+                    CardLists.sortByPowerDesc(firstStrikeBlockers)
+                    for blocker in firstStrikeBlockers:
+                        damageNeeded = ComputerUtilCombat.getDamageToKill(attacker, False) \
+                            + ComputerUtilCombat.predictToughnessBonusOfAttacker(attacker, blocker, combat, False)
+                        # if the total damage of the blockgang was not enough
+                        # without but is enough with this blocker finish the blockgang
+                        if (ComputerUtilCombat.totalFirstStrikeDamageOfBlockers(attacker, blockGang) < damageNeeded
+                                or CombatUtil.getMinNumBlockersForAttacker(attacker, self.ai) > len(blockGang)):
+                            blockGang.append(blocker)
+                            if ComputerUtilCombat.totalFirstStrikeDamageOfBlockers(attacker, blockGang) >= damageNeeded:
+                                currentAttackers.remove(attacker)
+                                for b in blockGang:
+                                    if CombatUtil.canBlock(attacker, blocker, combat):
+                                        combat.addBlocker(attacker, b)
+
+        self.attackersLeft = list(currentAttackers)
+
+        considerTripleBlock = True
+
+        # Try to block an attacker with two blockers of which only one will die
+        for attacker in self.attackersLeft:
+            if ComputerUtilCombat.combatantCantBeDestroyed(self.ai, attacker):
+                # don't bother with gang blocking if the attacker will regenerate or is indestructible
+                continue
+
+            # AI can't handle good blocks with more than three creatures yet
+            if CombatUtil.getMinNumBlockersForAttacker(attacker, self.ai) > (3 if considerTripleBlock else 2):
+                continue
+
+            evalAttackerValue = ComputerUtilCard.evaluateCreature(attacker)
+
+            blockers = AiBlockController.getPossibleBlockers(combat, attacker, self.blockersLeft, False)
+            blockGang = []  # blockers in the gang
+            foundDoubleBlock = False  # if true, a good double block is found
+
+            # Try to add blockers that could be destroyed, but are worth less than the attacker
+            # Don't use blockers without First Strike or Double Strike if attacker has it
+            def _usable(c, attacker=attacker):
+                if (ComputerUtilCombat.dealsFirstStrikeDamage(attacker, False, combat)
+                        and not ComputerUtilCombat.dealsFirstStrikeDamage(c, False, combat)):
+                    return False
+                return self.lifeInDanger or self.wouldLikeToRandomlyTrade(attacker, c, combat) \
+                    or ComputerUtilCard.evaluateCreature(c) + self.diff < ComputerUtilCard.evaluateCreature(attacker)
+            usableBlockers = CardLists.filter(blockers, _usable)
+            if len(usableBlockers) < 2:
+                return
+
+            leader = ComputerUtilCard.getBestCreatureAI(usableBlockers)
+            blockGang.append(leader)
+            usableBlockers.remove(leader)
+            absorbedDamage = ComputerUtilCombat.getEnoughDamageToKill(leader, attacker.getNetCombatDamage(), attacker, True)
+            currentValue = ComputerUtilCard.evaluateCreature(leader)
+
+            # consider a double block
+            for blocker in usableBlockers:
+                # Add an additional blocker if the current blockers are not
+                # enough and the new one would deal the remaining damage
+                currentDamage = ComputerUtilCombat.totalDamageOfBlockers(attacker, blockGang)
+                additionalDamage = ComputerUtilCombat.dealsDamageAsBlocker(attacker, blocker)
+                absorbedDamage2 = ComputerUtilCombat.getEnoughDamageToKill(blocker, attacker.getNetCombatDamage(), attacker, True)
+                addedValue = ComputerUtilCard.evaluateCreature(blocker)
+                damageNeeded = ComputerUtilCombat.getDamageToKill(attacker, False) \
+                    + ComputerUtilCombat.predictToughnessBonusOfAttacker(attacker, blocker, combat, False)
+                if ((damageNeeded > currentDamage or CombatUtil.getMinNumBlockersForAttacker(attacker, self.ai) > len(blockGang))
+                        and not (damageNeeded > currentDamage + additionalDamage)
+                        # The attacker will be killed
+                        and (absorbedDamage2 + absorbedDamage > attacker.getNetCombatDamage()
+                             # only one blocker can be killed
+                             or currentValue + addedValue - 50 <= evalAttackerValue
+                             # or attacker is worth more
+                             or (self.lifeInDanger and ComputerUtilCombat.lifeInDanger(self.ai, combat)))
+                        # or life is in danger
+                        and CombatUtil.canBlock(attacker, blocker, combat)):
+                    # this is needed for attackers that can't be blocked by more than 1
+                    currentAttackers.remove(attacker)
+                    combat.addBlocker(attacker, blocker)
+                    if CombatUtil.canBlock(attacker, leader, combat):
+                        combat.addBlocker(attacker, leader)
+                    foundDoubleBlock = True
+                    break
+                if not foundDoubleBlock and (currentDamage + additionalDamage >= damageNeeded):
+                    # a double block was tested which resulted in a potential kill but it was dismissed,
+                    # no need to test for a triple block then to avoid suboptimal plays.
+                    considerTripleBlock = False
+
+            if foundDoubleBlock or not considerTripleBlock:
+                continue
+
+            # consider a triple block if a double block was not found
+            brokeBlockerLoop = False
+            for secondBlocker in usableBlockers:
+                if brokeBlockerLoop:
+                    break
+                # consider the properties of the second blocker
+                currentDamage = ComputerUtilCombat.totalDamageOfBlockers(attacker, blockGang)
+                additionalDamage2 = ComputerUtilCombat.dealsDamageAsBlocker(attacker, secondBlocker)
+                absorbedDamage2 = ComputerUtilCombat.getEnoughDamageToKill(secondBlocker, attacker.getNetCombatDamage(), attacker, True)
+                addedValue2 = ComputerUtilCard.evaluateCreature(secondBlocker)
+                damageNeeded = ComputerUtilCombat.getDamageToKill(attacker, False) \
+                    + ComputerUtilCombat.predictToughnessBonusOfAttacker(attacker, secondBlocker, combat, False)
+
+                usableBlockersAsThird = list(usableBlockers)
+                usableBlockersAsThird.remove(secondBlocker)
+
+                # loop over the remaining blockers in search of a good third blocker candidate
+                for thirdBlocker in usableBlockersAsThird:
+                    additionalDamage3 = ComputerUtilCombat.dealsDamageAsBlocker(attacker, thirdBlocker)
+                    absorbedDamage3 = ComputerUtilCombat.getEnoughDamageToKill(thirdBlocker, attacker.getNetCombatDamage(), attacker, True)
+                    addedValue3 = ComputerUtilCard.evaluateCreature(secondBlocker)
+                    netCombatDamage = attacker.getNetCombatDamage()
+
+                    if ((damageNeeded > currentDamage or CombatUtil.getMinNumBlockersForAttacker(attacker, self.ai) > len(blockGang))
+                            and not (damageNeeded > currentDamage + additionalDamage2 + additionalDamage3)
+                            # The attacker will be killed
+                            and ((absorbedDamage2 + absorbedDamage > netCombatDamage and absorbedDamage3 + absorbedDamage > netCombatDamage
+                                  and absorbedDamage3 + absorbedDamage2 > netCombatDamage)
+                                 # only one blocker can be killed
+                                 or currentValue + addedValue2 + addedValue3 - 50 <= evalAttackerValue
+                                 # or attacker is worth more
+                                 or (thirdBlocker.isToken() and absorbedDamage2 + absorbedDamage > netCombatDamage)
+                                 # or third blocker is a token and no more than two blockers will die, one of which is the third blocker (token)
+                                 or (self.lifeInDanger and ComputerUtilCombat.lifeInDanger(self.ai, combat)))
+                            # or life is in danger
+                            and CombatUtil.canBlock(attacker, secondBlocker, combat)
+                            and CombatUtil.canBlock(attacker, thirdBlocker, combat)):
+                        # this is needed for attackers that can't be blocked by more than 1
+                        currentAttackers.remove(attacker)
+                        combat.addBlocker(attacker, thirdBlocker)
+                        if CombatUtil.canBlock(attacker, secondBlocker, combat):
+                            combat.addBlocker(attacker, secondBlocker)
+                        if CombatUtil.canBlock(attacker, leader, combat):
+                            combat.addBlocker(attacker, leader)
+                        brokeBlockerLoop = True
+                        break
+
+        self.attackersLeft = list(currentAttackers)
+
+    def makeGangNonLethalBlocks(self, combat):
+        currentAttackers = list(self.attackersLeft)
+
+        # Try to block a Menace attacker with two blockers, neither of which will die
+        for attacker in self.attackersLeft:
+            if CombatUtil.getMinNumBlockersForAttacker(attacker, combat.getDefenderPlayerByAttacker(attacker)) != 2:
+                continue
+
+            blockers = AiBlockController.getPossibleBlockers(combat, attacker, self.blockersLeft, False)
+            blockGang = []
+
+            def _usable(c, attacker=attacker):
+                return c.getNetToughness() > attacker.getNetCombatDamage() \
+                    or c.getNetToughness() + ComputerUtilCombat.predictToughnessBonusOfBlocker(attacker, c, True) > attacker.getNetCombatDamage()
+            usableBlockers = CardLists.filter(blockers, _usable)
+            if len(usableBlockers) < 2:
+                return
+
+            leader = ComputerUtilCard.getWorstCreatureAI(usableBlockers)
+            blockGang.append(leader)
+            usableBlockers.remove(leader)
+            absorbedDamage = ComputerUtilCombat.getEnoughDamageToKill(leader, attacker.getNetCombatDamage(), attacker, True)
+
+            # consider a double block
+            for blocker in usableBlockers:
+                absorbedDamage2 = ComputerUtilCombat.getEnoughDamageToKill(blocker, attacker.getNetCombatDamage(), attacker, True)
+                # only do it if neither blocking creature will die
+                if absorbedDamage > attacker.getNetCombatDamage() and absorbedDamage2 > attacker.getNetCombatDamage():
+                    currentAttackers.remove(attacker)
+                    combat.addBlocker(attacker, blocker)
+                    if CombatUtil.canBlock(attacker, leader, combat):
+                        combat.addBlocker(attacker, leader)
+                    break
+
+        self.attackersLeft = list(currentAttackers)
+
+    # Bad Trade Blocks (should only be made if life is in danger)
+    # Random Trade Blocks (performed randomly if enabled in profile and only when in favorable conditions)
+    def makeTradeBlocks(self, combat):
+        currentAttackers = list(self.attackersLeft)
+
+        for attacker in self.attackersLeft:
+            if CombatUtil.getMinNumBlockersForAttacker(attacker, combat.getDefenderPlayerByAttacker(attacker)) > 1:
+                continue
+            if ComputerUtilCombat.attackerHasThreateningAfflict(attacker, self.ai):
+                continue
+
+            possibleBlockers = AiBlockController.getPossibleBlockers(combat, attacker, self.blockersLeft, True)
+            killingBlockers = self.getKillingBlockers(combat, attacker, possibleBlockers)
+
+            if killingBlockers:
+                blocker = ComputerUtilCard.getWorstCreatureAI(killingBlockers)
+
+                if self.lifeInDanger and ComputerUtilCombat.lifeInDanger(self.ai, combat):
+                    # Always trade when life in danger
+                    doTrade = True
+                else:
+                    # Randomly trade creatures with lower power and [hopefully] worse abilities, if enabled in profile
+                    doTrade = self.wouldLikeToRandomlyTrade(attacker, blocker, combat)
+
+                if doTrade:
+                    combat.addBlocker(attacker, blocker)
+                    currentAttackers.remove(attacker)
+        self.attackersLeft = currentAttackers
+
+    # Chump Blocks (should only be made if life is in danger)
+    def makeChumpBlocks(self, combat, attackers=_UNSET):
+        if attackers is _UNSET:
+            currentAttackers = list(self.attackersLeft)
+
+            self.makeChumpBlocks(combat, currentAttackers)
+
+            if self.lifeInDanger:
+                self.makeMultiChumpBlocks(combat)
+            return
+
+        if not ComputerUtilCombat.lifeInDanger(self.ai, combat):
+            self.lifeInDanger = False
+            return
+        if not attackers:
+            return
+
+        attacker = attackers[0]
+
+        if (CombatUtil.getMinNumBlockersForAttacker(attacker, combat.getDefenderPlayerByAttacker(attacker)) > 1
+                or StaticAbilityAssignCombatDamageAsUnblocked.assignCombatDamageAsUnblocked(attacker)
+                or ComputerUtilCombat.attackerHasThreateningAfflict(attacker, self.ai)):
+            attackers.pop(0)
+            self.makeChumpBlocks(combat, attackers)
+            return
+
+        chumpBlockers = AiBlockController.getPossibleBlockers(combat, attacker, self.blockersLeft, True)
+        if chumpBlockers:
+            blocker = ComputerUtilCard.getWorstCreatureAI(chumpBlockers)
+
+            # check if it's better to block a creature with lower power and without trample
+            if attacker.hasKeyword(Keyword.TRAMPLE):
+                damageAbsorbed = blocker.getLethalDamage()
+                if attacker.getNetCombatDamage() > damageAbsorbed:
+                    for other in attackers:
+                        if other == attacker:
+                            continue
+                        if (other.getNetCombatDamage() >= damageAbsorbed
+                                and not other.hasKeyword(Keyword.TRAMPLE)
+                                and not StaticAbilityAssignCombatDamageAsUnblocked.assignCombatDamageAsUnblocked(other)
+                                and not ComputerUtilCombat.attackerHasThreateningAfflict(other, self.ai)
+                                and CombatUtil.canBlock(other, blocker, combat)):
+                            combat.addBlocker(other, blocker)
+                            self.attackersLeft.remove(other)
+                            self.blockedButUnkilled.append(other)
+                            attackers.remove(other)
+                            self.makeChumpBlocks(combat, attackers)
+                            return
+
+            combat.addBlocker(attacker, blocker)
+            self.attackersLeft.remove(attacker)
+            self.blockedButUnkilled.append(attacker)
+        attackers.pop(0)
+        self.makeChumpBlocks(combat, attackers)
+
+    # Block creatures with "can't be blocked except by two or more creatures"
+    def makeMultiChumpBlocks(self, combat):
+        currentAttackers = list(self.attackersLeft)
+
+        for attacker in currentAttackers:
+            if CombatUtil.getMinNumBlockersForAttacker(attacker, combat.getDefenderPlayerByAttacker(attacker)) <= 1:
+                continue
+            possibleBlockers = AiBlockController.getPossibleBlockers(combat, attacker, self.blockersLeft, True)
+            if not CombatUtil.canAttackerBeBlockedWithAmount(attacker, len(possibleBlockers), combat):
+                continue
+            usedBlockers = []
+            for blocker in possibleBlockers:
+                if CombatUtil.canBlock(attacker, blocker, combat):
+                    combat.addBlocker(attacker, blocker)
+                    usedBlockers.append(blocker)
+                    if CombatUtil.canAttackerBeBlockedWithAmount(attacker, len(usedBlockers), combat):
+                        self.attackersLeft.remove(attacker)
+                        usedBlockers.clear()
+                        break
+            for blocker in usedBlockers:
+                combat.removeBlockAssignment(attacker, blocker)
+
+    # Reinforce blockers blocking attackers with trample (should only be made if life is in danger)
+    def reinforceBlockersAgainstTrample(self, combat):
+        tramplingAttackers = CardLists.getKeyword(self.attackers, Keyword.TRAMPLE)
+        pred1 = self.rampagesOrNeedsManyToBlock(combat)
+        tramplingAttackers = CardLists.filter(tramplingAttackers, lambda c: not pred1(c))
+
+        # TODO - Instead of filtering out rampage-like and similar triggers, make the AI properly count P/T and
+        # reinforce when actually possible without losing material.
+        pred2 = self.changesPTWhenBlocked(True)
+        tramplingAttackers = CardLists.filter(tramplingAttackers, lambda c: not pred2(c))
+
+        for attacker in tramplingAttackers:
+            if CombatUtil.getMinNumBlockersForAttacker(attacker, combat.getDefenderPlayerByAttacker(attacker)) > len(combat.getBlockers(attacker)):
+                continue
+
+            needsMoreChumpBlockers = True
+
+            if AttackingBand.isValidBand(combat.getBlockers(attacker), True):
+                continue
+
+            chumpBlockers = AiBlockController.getPossibleBlockers(combat, attacker, self.blockersLeft, False)
+            _blk = combat.getBlockers(attacker)
+            chumpBlockers = [c for c in chumpBlockers if c not in _blk]
+
+            # See if there's a Banding blocker that can tank the damage
+            for blocker in chumpBlockers:
+                if blocker.hasKeyword(Keyword.BANDING) or blocker.hasKeyword(Keyword.BANDSWITH):
+                    if (ComputerUtilCombat.getAttack(attacker) > ComputerUtilCombat.totalShieldDamage(attacker, combat.getBlockers(attacker))
+                            and ComputerUtilCombat.shieldDamage(attacker, blocker) > 0
+                            and CombatUtil.canBlock(attacker, blocker, combat) and ComputerUtilCombat.lifeInDanger(self.ai, combat)):
+                        combat.addBlocker(attacker, blocker)
+                        needsMoreChumpBlockers = False
+                        break
+
+            if not needsMoreChumpBlockers or StaticAbilityAssignCombatDamageAsUnblocked.assignCombatDamageAsUnblocked(attacker):
+                continue
+
+            if needsMoreChumpBlockers:
+                for blocker in chumpBlockers:
+                    # Add an additional blocker if the current blockers are not
+                    # enough and the new one would suck some of the damage
+                    if (ComputerUtilCombat.getAttack(attacker) > ComputerUtilCombat.totalShieldDamage(attacker, combat.getBlockers(attacker))
+                            and ComputerUtilCombat.shieldDamage(attacker, blocker) > 0
+                            and CombatUtil.canBlock(attacker, blocker, combat) and ComputerUtilCombat.lifeInDanger(self.ai, combat)):
+                        combat.addBlocker(attacker, blocker)
+
+    # Support blockers not destroying the attacker with more blockers to try to kill the attacker
+    def reinforceBlockersToKill(self, combat):
+        pred1 = self.rampagesOrNeedsManyToBlock(combat)
+        targetAttackers = CardLists.filter(self.blockedButUnkilled, lambda c: not pred1(c))
+
+        # TODO - Instead of filtering out rampage-like and similar triggers, make the AI properly count P/T and
+        # reinforce when actually possible without losing material.
+        pred2 = self.changesPTWhenBlocked(False)
+        targetAttackers = CardLists.filter(targetAttackers, lambda c: not pred2(c))
+
+        for attacker in targetAttackers:
+            blockers = AiBlockController.getPossibleBlockers(combat, attacker, self.blockersLeft, False)
+            _blk = combat.getBlockers(attacker)
+            blockers = [b for b in blockers if b not in _blk]
+
+            # Don't add any blockers that won't kill the attacker because the damage would be prevented by a static effect
+            blockers = CardLists.filter(blockers, lambda blocker, attacker=attacker: not ComputerUtilCombat.isCombatDamagePrevented(blocker, attacker, blocker.getNetCombatDamage()))
+
+            # Try to use safe blockers first
+            if len(blockers) > 0:
+                safeBlockers = self.getSafeBlockers(combat, attacker, blockers)
+                for blocker in safeBlockers:
+                    damageNeeded = ComputerUtilCombat.getDamageToKill(attacker, False) \
+                        + ComputerUtilCombat.predictToughnessBonusOfAttacker(attacker, blocker, combat, False)
+                    # Add an additional blocker if the current blockers are not
+                    # enough and the new one would deal additional damage
+                    if (damageNeeded > ComputerUtilCombat.totalDamageOfBlockers(attacker, combat.getBlockers(attacker))
+                            and ComputerUtilCombat.dealsDamageAsBlocker(attacker, blocker) > 0
+                            and CombatUtil.canBlock(attacker, blocker, combat)):
+                        combat.addBlocker(attacker, blocker)
+                    blockers.remove(blocker)  # Don't check them again next
+            # don't try to kill what can't be killed
+            if ComputerUtilCombat.combatantCantBeDestroyed(self.ai, attacker):
+                continue
+
+            # Try to add blockers that could be destroyed, but are worth less than the attacker
+            # Don't use blockers without First Strike or Double Strike if attacker has it
+            if ComputerUtilCombat.dealsFirstStrikeDamage(attacker, False, combat):
+                safeBlockers = CardLists.getKeyword(blockers, Keyword.FIRST_STRIKE)
+                safeBlockers.addAll(CardLists.getKeyword(blockers, Keyword.DOUBLE_STRIKE))
+            else:
+                safeBlockers = list(blockers)
+
+            for blocker in safeBlockers:
+                damageNeeded = ComputerUtilCombat.getDamageToKill(attacker, False) \
+                    + ComputerUtilCombat.predictToughnessBonusOfAttacker(attacker, blocker, combat, False)
+                # Add an additional blocker if the current blockers are not
+                # enough and the new one would deal the remaining damage
+                currentDamage = ComputerUtilCombat.totalDamageOfBlockers(attacker, combat.getBlockers(attacker))
+                additionalDamage = ComputerUtilCombat.dealsDamageAsBlocker(attacker, blocker)
+                if (damageNeeded > currentDamage
+                        and damageNeeded <= currentDamage + additionalDamage
+                        and ComputerUtilCard.evaluateCreature(blocker) + self.diff < ComputerUtilCard.evaluateCreature(attacker)
+                        and CombatUtil.canBlock(attacker, blocker, combat)
+                        and not ComputerUtilCombat.canDestroyBlockerBeforeFirstStrike(blocker, attacker, False)):
+                    combat.addBlocker(attacker, blocker)
+                    self.blockersLeft.remove(blocker)
+
+    def makeChumpBlocksToSavePW(self, combat):
+        if self.lifeInDanger:
+            # most likely not worth trying to protect planeswalkers when at threateningly low life
+            return
+
+        evalThresholdToken = AiProfileUtil.getIntProperty(self.ai, AiProps.THRESHOLD_TOKEN_CHUMP_TO_SAVE_PLANESWALKER)
+        evalThresholdNonToken = AiProfileUtil.getIntProperty(self.ai, AiProps.THRESHOLD_NONTOKEN_CHUMP_TO_SAVE_PLANESWALKER)
+        onlyIfLethal = AiProfileUtil.getBoolProperty(self.ai, AiProps.CHUMP_TO_SAVE_PLANESWALKER_ONLY_ON_LETHAL)
+
+        if evalThresholdToken > 0 or evalThresholdNonToken > 0:
+            # detect how much damage is threatened to each of the planeswalkers, see which ones would be
+            # worth protecting according to the AI profile properties
+            threatenedPWs = CardCollection()
+            for attacker in self.attackers:
+                defn = combat.getDefenderByAttacker(attacker)
+                if isinstance(defn, Card):
+                    if not onlyIfLethal:
+                        threatenedPWs.add(defn)
+                    else:
+                        damageToPW = 0
+                        for pwatkr in combat.getAttackersOf(defn):
+                            if not combat.isBlocked(pwatkr):
+                                damageToPW += ComputerUtilCombat.predictDamageTo(defn, pwatkr.getNetCombatDamage(), pwatkr, True)
+                        if (not onlyIfLethal and damageToPW > 0) or damageToPW >= defn.getCounters(CounterEnumType.LOYALTY):
+                            threatenedPWs.add(defn)
+
+            pwsWithChumpBlocks = CardCollection()
+            chosenChumpBlockers = CardCollection()
+            chumpPWDefenders = CardLists.filter(self.blockersLeft,
+                                                lambda card: ComputerUtilCard.evaluateCreature(card) <= (evalThresholdToken if card.isToken() else evalThresholdNonToken))
+            CardLists.sortByPowerAsc(chumpPWDefenders)
+            if len(chumpPWDefenders) != 0:
+                for attacker in self.attackers:
+                    if attacker.hasKeyword(Keyword.TRAMPLE):
+                        # don't bother trying to chump a trampling creature
+                        continue
+                    if len(combat.getBlockers(attacker)) != 0:
+                        # already blocked by something, no need to chump
+                        continue
+                    defn = combat.getDefenderByAttacker(attacker)
+                    if isinstance(defn, Card) and defn in threatenedPWs:
+                        blockerDecided = None
+                        for blocker in chumpPWDefenders:
+                            if CombatUtil.canBlock(attacker, blocker, combat):
+                                combat.addBlocker(attacker, blocker)
+                                pwsWithChumpBlocks.add(defn)
+                                chosenChumpBlockers.add(blocker)
+                                blockerDecided = blocker
+                                self.blockersLeft.remove(blocker)
+                                break
+                        if blockerDecided is not None:
+                            chumpPWDefenders.remove(blockerDecided)
+                # check to see if we managed to cover all the blockers of the planeswalker; if not, bail
+                for pw in pwsWithChumpBlocks:
+                    pwAttackers = combat.getAttackersOf(pw)
+                    if len(pwAttackers) != 0:
+                        pwDefenders = CardCollection()
+                        isFullyBlocked = True
+                        damageToPW = 0
+                        for pwAtk in pwAttackers:
+                            if len(combat.getBlockers(pwAtk)) != 0:
+                                pwDefenders.addAll(combat.getBlockers(pwAtk))
+                            else:
+                                isFullyBlocked = False
+                                damageToPW += ComputerUtilCombat.predictDamageTo(pw, pwAtk.getNetCombatDamage(), pwAtk, True)
+                        if not isFullyBlocked and damageToPW >= pw.getCounters(CounterEnumType.LOYALTY):
+                            for chump in pwDefenders:
+                                if chump in chosenChumpBlockers:
+                                    combat.removeFromCombat(chump)
+
+    def makeRequiredBlocks(self, combat):
+        # assign blockers that have to block
+        chumpBlockers = CardCollection()
+        # if an attacker with lure attacks - all that can block
+        for blocker in self.blockersLeft:
+            if (CombatUtil.mustBlockAnAttacker(blocker, combat, None) or
+                    StaticAbilityMustBlock.blocksEachCombatIfAble(blocker)):
+                chumpBlockers.add(blocker)
+        if len(chumpBlockers) != 0:
+            for attacker in self.attackers:
+                blockers = AiBlockController.getPossibleBlockers(combat, attacker, chumpBlockers, False)
+                for blocker in blockers:
+                    if (CombatUtil.canBlock(attacker, blocker, combat) and blocker in self.blockersLeft
+                            and (CombatUtil.mustBlockAnAttacker(blocker, combat, None)
+                                 or StaticAbilityMustBlock.blocksEachCombatIfAble(blocker))):
+                        combat.addBlocker(attacker, blocker)
+                        if len(blocker.getMustBlockCards()) != 0:
+                            mustBlockAmt = len(blocker.getMustBlockCards())
+                            blockedSoFar = combat.getAttackersBlockedBy(blocker)
+                            canBlockAnother = CombatUtil.canBlockMoreCreatures(blocker, blockedSoFar)
+                            if not canBlockAnother or mustBlockAmt == len(blockedSoFar):
+                                self.blockersLeft.remove(blocker)
+                        else:
+                            self.blockersLeft.remove(blocker)
+
+    def clearBlockers(self, combat, possibleBlockers):
+        for blocker in CardLists.filterControlledBy(combat.getAllBlockers(), self.ai):
+            # don't touch other player's blockers
+            combat.removeFromCombat(blocker)
+
+        self.attackersLeft = list(self.attackers)  # keeps track of all currently unblocked attackers
+        self.blockersLeft = list(possibleBlockers)  # keeps track of all unassigned blockers
+        self.blockedButUnkilled = []  # keeps track of all blocked attackers that currently wouldn't be destroyed
+
+    # Assigns blockers for the provided combat instance (in favor of player passes to ctor)
+    def assignBlockersForCombat(self, combat, exludedBlockers=None):
+        possibleBlockers = self.ai.getCreaturesInPlay()
+        if exludedBlockers is not None and len(exludedBlockers) != 0:
+            possibleBlockers.removeAll(exludedBlockers)
+        self.attackers = self.sortPotentialAttackers(combat)
+        self.assignBlockers(combat, possibleBlockers)
+
+    # assignBlockersForCombat() with additional and possibly "virtual" blockers.
+    def assignAdditionalBlockers(self, combat, blockers):
+        possibleBlockers = self.ai.getCreaturesInPlay()
+        for c in blockers:
+            if c not in possibleBlockers:
+                possibleBlockers.add(c)
+        self.attackers = self.sortPotentialAttackers(combat)
+        self.assignBlockers(combat, possibleBlockers)
+
+    # assignBlockersForCombat() with specific and possibly "virtual" attackers. No other creatures, even if
+    # they have already been declared in the combat instance, will be considered.
+    def assignBlockersGivenAttackers(self, combat, givenAttackers):
+        possibleBlockers = self.ai.getCreaturesInPlay()
+        self.attackers = givenAttackers
+        self.assignBlockers(combat, possibleBlockers)
+
+    # Core blocker assignment algorithm.
+    def assignBlockers(self, combat, possibleBlockers):
+        if len(self.attackers) == 0:
+            return
+
+        self.clearBlockers(combat, possibleBlockers)
+
+        self.diff = (self.ai.getLife() * 2) - 5  # This is the minimal gain for an unnecessary trade
+        if self.diff > 0 and AiProfileUtil.getBoolProperty(self.ai, AiProps.PLAY_AGGRO):
+            self.diff = 0
+
+        # remove all attackers that can't be blocked anyway
+        for a in self.attackers:
+            if not CombatUtil.canBeBlocked(a, None, self.ai):  # pass null to skip redundant checks for performance
+                self.attackersLeft.remove(a)
+
+        if len(self.attackersLeft) == 0:
+            return
+
+        # remove all blockers that can't block anyway
+        for b in possibleBlockers:
+            if not CombatUtil.canBlock(b, combat):
+                self.blockersLeft.remove(b)
+
+        # Begin with the weakest blockers
+        CardLists.sortByPowerAsc(self.blockersLeft)
+
+        # == 1. choose best blocks first ==
+        self.makeGoodBlocks(combat)
+        self.makeGangBlocks(combat)
+
+        # When the AI holds some Fog effect, don't bother about lifeInDanger
+        if not ComputerUtil.hasAFogEffect(self.ai, self.ai, self.checkingOther):
+            self.lifeInDanger = ComputerUtilCombat.lifeInDanger(self.ai, combat)
+            self.makeTradeBlocks(combat)  # choose necessary trade blocks
+
+            # if life is still in danger
+            if self.lifeInDanger:
+                self.makeChumpBlocks(combat)  # choose necessary chump blocks
+
+            # Reinforce blockers blocking attackers with trample if life is still in danger
+            if self.lifeInDanger and ComputerUtilCombat.lifeInDanger(self.ai, combat):
+                self.reinforceBlockersAgainstTrample(combat)
+            else:
+                self.lifeInDanger = False
+            # Support blockers not destroying the attacker with more blockers
+            # to try to kill the attacker
+            if not self.lifeInDanger:
+                self.reinforceBlockersToKill(combat)
+
+            # TODO could be made more accurate if this would be inside each blocker choosing loop instead
+            if self.removeUnpayableBlocks(combat) or self.lifeInDanger:
+                self.lifeInDanger = ComputerUtilCombat.lifeInDanger(self.ai, combat)
+
+            # == 2. If the AI life would still be in danger make a safer approach ==
+            if self.lifeInDanger:
+                self.clearBlockers(combat, possibleBlockers)  # reset every block assignment
+                self.makeTradeBlocks(combat)  # choose necessary trade blocks
+                self.makeGoodBlocks(combat)
+                # choose necessary chump blocks if life is still in danger
+                self.makeChumpBlocks(combat)
+
+                # Reinforce blockers blocking attackers with trample if life is still in danger
+                if self.lifeInDanger and ComputerUtilCombat.lifeInDanger(self.ai, combat):
+                    self.reinforceBlockersAgainstTrample(combat)
+                else:
+                    self.lifeInDanger = False
+
+                self.makeGangBlocks(combat)
+                self.reinforceBlockersToKill(combat)
+
+            # == 3. If the AI life would be in serious danger make an even safer approach ==
+            if self.lifeInDanger and ComputerUtilCombat.lifeInSeriousDanger(self.ai, combat):
+                self.clearBlockers(combat, possibleBlockers)
+                self.makeChumpBlocks(combat)
+
+                if self.lifeInDanger and ComputerUtilCombat.lifeInDanger(self.ai, combat):
+                    self.makeTradeBlocks(combat)
+                else:
+                    self.lifeInDanger = False
+
+                if self.lifeInDanger and ComputerUtilCombat.lifeInDanger(self.ai, combat):
+                    self.reinforceBlockersAgainstTrample(combat)
+                else:
+                    self.lifeInDanger = False
+
+                if not self.lifeInDanger:
+                    self.makeGoodBlocks(combat)
+
+                self.makeGangBlocks(combat)
+                self.reinforceBlockersToKill(combat)
+
+        # block requirements
+        # TODO because this isn't done earlier, sometimes a good block will enforce a restriction that prevents another for the requirement
+        self.makeRequiredBlocks(combat)
+
+        # check to see if it's possible to defend a Planeswalker under attack with a chump block,
+        # unless life is low enough to be more worried about saving preserving the life total
+        if self.ai.getController().isAI():
+            self.makeChumpBlocksToSavePW(combat)
+
+        # if there are still blockers left, see if it's possible to block Menace creatures with
+        # non-lethal blockers that won't kill the attacker but won't die to it as well
+        self.makeGangNonLethalBlocks(combat)
+
+        # Check for validity of blocks in case something slipped through
+        for attacker in self.attackers:
+            if not CombatUtil.canAttackerBeBlockedWithAmount(attacker, len(combat.getBlockers(attacker)), combat):
+                for blocker in CardLists.filterControlledBy(combat.getBlockers(attacker), self.ai):
+                    # don't touch other player's blockers
+                    combat.removeFromCombat(blocker)
+
+    @staticmethod
+    def orderBlockers(attacker, blockers):
+        # ordering of blockers, sort by evaluate, then try to kill the best
+        damage = attacker.getNetCombatDamage()
+        ComputerUtilCard.sortByEvaluateCreature(blockers)
+        first = CardCollection()
+        last = CardCollection()
+        for blocker in blockers:
+            lethal = ComputerUtilCombat.getEnoughDamageToKill(blocker, damage, attacker, True)
+            if lethal > damage:
+                last.add(blocker)
+            else:
+                first.add(blocker)
+                damage -= lethal
+        first.addAll(last)
+
+        # TODO: Take total damage, and attempt to maximize killing the greatest evaluation of creatures
+        # It's probably generally better to kill the largest creature, but sometimes its better to kill a few smaller ones
+
+        return first
+
+    # Orders a blocker that put onto the battlefield blocking. Depends heavily
+    # on the implementation of orderBlockers().
+    @staticmethod
+    def orderBlocker(attacker, blocker, oldBlockers):
+        # add blocker to existing ordering
+        # sort by evaluate, then insert it appropriately
+        # relies on current implementation of orderBlockers()
+        allBlockers = CardCollection(oldBlockers)
+        allBlockers.add(blocker)
+        ComputerUtilCard.sortByEvaluateCreature(allBlockers)
+        newBlockerIndex = allBlockers.indexOf(blocker)
+
+        damage = attacker.getNetCombatDamage()
+
+        result = CardCollection()
+        newBlockerIsAdded = False
+        # The new blocker comes right after this one
+        newBlockerRightAfter = None if newBlockerIndex == 0 else allBlockers[newBlockerIndex - 1]
+        if (newBlockerRightAfter is None
+                and damage >= ComputerUtilCombat.getEnoughDamageToKill(blocker, damage, attacker, True)):
+            result.add(blocker)
+            newBlockerIsAdded = True
+        # Don't bother to keep damage up-to-date after the new blocker is
+        # added, as we can't modify the order of the other cards anyway
+        for c in oldBlockers:
+            lethal = ComputerUtilCombat.getEnoughDamageToKill(c, damage, attacker, True)
+            damage -= lethal
+            result.add(c)
+            if (not newBlockerIsAdded and c == newBlockerRightAfter
+                    and damage <= ComputerUtilCombat.getEnoughDamageToKill(blocker, damage, attacker, True)):
+                # If blocker is right after this card in priority and we have
+                # sufficient damage to kill it, add it here
+                result.add(blocker)
+                newBlockerIsAdded = True
+        # We don't have sufficient damage, just add it at the end!
+        if not newBlockerIsAdded:
+            result.add(blocker)
+
+        return result
+
+    @staticmethod
+    def orderAttackers(blocker, attackers):
+        # This shouldn't really take trample into account, but otherwise should be pretty similar to orderBlockers
+        # ordering of blockers, sort by evaluate, then try to kill the best
+        damage = blocker.getNetCombatDamage()
+        ComputerUtilCard.sortByEvaluateCreature(attackers)
+        first = CardCollection()
+        last = CardCollection()
+        for attacker in attackers:
+            lethal = ComputerUtilCombat.getEnoughDamageToKill(attacker, damage, blocker, True)
+            if lethal > damage:
+                last.add(attacker)
+            else:
+                first.add(attacker)
+                damage -= lethal
+        first.addAll(last)
+
+        # TODO: Take total damage, and attempt to maximize killing the greatest evaluation of creatures
+        # It's probably generally better to kill the largest creature, but sometimes its better to kill a few smaller ones
+
+        return first
+
+    def wouldLikeToRandomlyTrade(self, attacker, blocker, combat):
+        # Determines if the AI would like to randomly trade its blocker for the attacker in given combat
+        enableRandomTrades = False
+        randomTradeIfBehindOnBoard = False
+        randomTradeIfCreatInHand = False
+        chanceModForEmbalm = 0
+        chanceToTradeToSaveWalker = 0
+        chanceToTradeDownToSaveWalker = 0
+        minRandomTradeChance = 0
+        maxRandomTradeChance = 0
+        maxCreatDiff = 0
+        maxCreatDiffWithRepl = 0
+        aiCreatureCount = 0
+        oppCreatureCount = 0
+        if self.ai.getController().isAI():
+            aic = self.ai.getController().getAi()
+            # simulation must get same results or it may crash
+            if not aic.usesSimulation():
+                enableRandomTrades = aic.getBoolProperty(AiProps.ENABLE_RANDOM_FAVORABLE_TRADES_ON_BLOCK)
+                randomTradeIfBehindOnBoard = aic.getBoolProperty(AiProps.RANDOMLY_TRADE_EVEN_WHEN_HAVE_LESS_CREATS)
+                randomTradeIfCreatInHand = aic.getBoolProperty(AiProps.ALSO_TRADE_WHEN_HAVE_A_REPLACEMENT_CREAT)
+                minRandomTradeChance = aic.getIntProperty(AiProps.MIN_CHANCE_TO_RANDOMLY_TRADE_ON_BLOCK)
+                maxRandomTradeChance = aic.getIntProperty(AiProps.MAX_CHANCE_TO_RANDOMLY_TRADE_ON_BLOCK)
+                chanceModForEmbalm = aic.getIntProperty(AiProps.CHANCE_DECREASE_TO_TRADE_VS_EMBALM)
+                maxCreatDiff = aic.getIntProperty(AiProps.MAX_DIFF_IN_CREATURE_COUNT_TO_TRADE)
+                maxCreatDiffWithRepl = aic.getIntProperty(AiProps.MAX_DIFF_IN_CREATURE_COUNT_TO_TRADE_WITH_REPL)
+                chanceToTradeToSaveWalker = aic.getIntProperty(AiProps.CHANCE_TO_TRADE_TO_SAVE_PLANESWALKER)
+                chanceToTradeDownToSaveWalker = aic.getIntProperty(AiProps.CHANCE_TO_TRADE_DOWN_TO_SAVE_PLANESWALKER)
+
+        if not enableRandomTrades:
+            return False
+
+        aiCreatureCount = ComputerUtil.countUsefulCreatures(self.ai)
+
+        if self.attackersLeft:
+            oppCreatureCount = ComputerUtil.countUsefulCreatures(self.attackersLeft[0].getController())
+
+        if attacker is not None and attacker.getOwner() is not None:
+            if attacker.getOwner() == self.ai and "6" == attacker.getSVar("SacMe"):
+                # Temporarily controlled object - don't trade with it
+                # TODO: find a more reliable way to figure out that control will be reestablished next turn
+                return False
+
+        numSteps = max(1, self.ai.getStartingLife() - 5)  # e.g. 15 steps between 5 life and 20 life
+        chanceStep = (maxRandomTradeChance - minRandomTradeChance) / numSteps
+        chance = int(max(minRandomTradeChance, (maxRandomTradeChance - (max(5, self.ai.getLife() - 5)) * chanceStep)))
+        if chance > maxRandomTradeChance:
+            chance = maxRandomTradeChance
+
+        evalAtk = ComputerUtilCard.evaluateCreature(attacker, True, False)
+        atkEmbalm = (attacker.hasKeyword(Keyword.EMBALM) or attacker.hasKeyword(Keyword.ETERNALIZE)) and not attacker.isToken()
+        blkEmbalm = (blocker.hasKeyword(Keyword.EMBALM) or blocker.hasKeyword(Keyword.ETERNALIZE)) and not blocker.isToken()
+
+        if atkEmbalm and not blkEmbalm:
+            # The opponent will eventually get his creature back, while the AI won't
+            chance = max(0, chance - chanceModForEmbalm)
+
+        if blocker.isFaceDown() and blocker.getView().canFaceDownBeShownTo(self.ai.getView()) and blocker.getState(CardStateName.Original).getType().isCreature():
+            # if the blocker is a face-down creature (e.g. cast via Morph, Manifest), evaluate it
+            # in relation to the original state, not to the Morph state
+            evalBlk = ComputerUtilCard.evaluateCreature(Card.fromPaperCard(blocker.getPaperCard(), self.ai), False, True)
+        else:
+            evalBlk = ComputerUtilCard.evaluateCreature(blocker, True, False)
+        chanceToSavePW = chanceToTradeDownToSaveWalker if (chanceToTradeDownToSaveWalker > 0 and evalAtk + 1 < evalBlk) else chanceToTradeToSaveWalker
+        powerParityOrHigher = blocker.getNetPower() <= attacker.getNetPower()
+        creatureParityOrAllowedDiff = aiCreatureCount \
+            + (maxCreatDiff if randomTradeIfBehindOnBoard else 0) >= oppCreatureCount
+        wantToTradeWithCreatInHand = not self.checkingOther and randomTradeIfCreatInHand \
+            and self.ai.getZone(ZoneType.Hand).contains(CardPredicates.CREATURES) \
+            and aiCreatureCount + maxCreatDiffWithRepl >= oppCreatureCount
+        defn = combat.getDefenderByAttacker(attacker)
+        wantToSavePlaneswalker = MyRandom.percentTrue(chanceToSavePW) \
+            and isinstance(defn, Card) \
+            and defn.isPlaneswalker()
+        wantToTradeDownToSavePW = chanceToTradeDownToSaveWalker > 0
+
+        return ((evalBlk <= evalAtk + 1) or (wantToSavePlaneswalker and wantToTradeDownToSavePW)) \
+            and powerParityOrHigher \
+            and (creatureParityOrAllowedDiff or wantToTradeWithCreatInHand) \
+            and (MyRandom.percentTrue(chance) or wantToSavePlaneswalker)
+
+    def removeUnpayableBlocks(self, combat):
+        myFreeMana = ComputerUtilMana.getAvailableManaEstimate(self.ai)
+        currentBlockTax = 0
+        oldBlockers = CardLists.filterControlledBy(combat.getAllBlockers(), self.ai)
+        CardLists.sortByPowerDesc(oldBlockers)
+        modified = False
+
+        for blocker in oldBlockers:
+            # TODO check all blocked attackers
+            tax = CombatUtil.getBlockCost(blocker.getGame(), blocker, combat.getAttackersBlockedBy(blocker)[0])
+            taxCMC = tax.getCostMana().getMana().getCMC() if tax is not None else 0
+            if myFreeMana < currentBlockTax + taxCMC:
+                combat.removeFromCombat(blocker)
+                modified = True
+                continue
+            currentBlockTax += taxCMC
+        return modified
+```

@@ -44,7 +44,7 @@ classDiagram
 
 ## Design Description
 
-ImmediateTriggerEffect implements the resolution logic for "reflexive" or immediate triggered abilities—triggers that fire as soon as possible after the effect that spawned them. As a concrete `SpellAbilityEffect` subclass, it slots into Forge's pluggable ability-effect framework, overriding `getStackDescription` to expose the trigger's description text and `resolve` to perform the actual work.
+ImmediateTriggerEffect implements the resolution logic for "reflexive" or immediate triggered abilitiesâ€”triggers that fire as soon as possible after the effect that spawned them. As a concrete `SpellAbilityEffect` subclass, it slots into Forge's pluggable ability-effect framework, overriding `getStackDescription` to expose the trigger's description text and `resolve` to perform the actual work.
 
 In `resolve`, it resolves the host `Card` and `Game`, then assembles a parameter map flagged as `TriggerType.Immediate`, building one `Trigger` per occurrence to honor CR 603.12a (a multiply-occurring event triggers once per occurrence). Each trigger optionally carries an `Execute` overriding `SpellAbility` (with any `AbilitySub` parent detached) plus remembered `GameEntity` objects or SVar amounts, and is registered as a delayed trigger so it fires immediately. Notably, the design reuses Forge's existing delayed-trigger infrastructure rather than executing inline, keeping immediate triggers consistent with ordinary trigger handling.
 
@@ -145,4 +145,82 @@ public class ImmediateTriggerEffect extends SpellAbilityEffect {
         }
     }
 }
+```
+
+## Python
+`forge/game/ability/effects/ImmediateTriggerEffect.py`
+
+```python
+from typing import List, Dict
+
+from forge.game.Game import Game
+from forge.game.GameEntity import GameEntity
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.spellability.AbilitySub import AbilitySub
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.trigger.Trigger import Trigger
+from forge.game.trigger.TriggerHandler import TriggerHandler
+from forge.game.trigger.TriggerType import TriggerType
+
+
+class ImmediateTriggerEffect(SpellAbilityEffect):
+
+    # (non-Javadoc)
+    # @see forge.card.abilityfactory.SpellEffect#resolve(java.util.Map, forge.card.spellability.SpellAbility)
+    def getStackDescription(self, sa: SpellAbility) -> str:
+        if sa.hasParam("TriggerDescription"):
+            return sa.getParam("TriggerDescription")
+        if sa.hasParam("SpellDescription"):
+            return sa.getParam("SpellDescription")
+
+        return ""
+
+    def resolve(self, sa: SpellAbility) -> None:
+        host = sa.getHostCard()
+        game = host.getGame()
+
+        # CR 603.12a if the trigger event or events occur multiple times during the resolution of the spell or ability that created it,
+        # the reflexive triggered ability will trigger once for each of those times
+        amt = AbilityUtils.calculateAmount(host, sa.getParamOrDefault("TriggerAmount", "1"), sa)
+        if amt <= 0:
+            return
+
+        mapParams: Dict[str, str] = dict(sa.getMapParams())
+        mapParams["Mode"] = TriggerType.Immediate.name()
+        if "SpellDescription" in mapParams and "TriggerDescription" not in mapParams:
+            mapParams["TriggerDescription"] = mapParams["SpellDescription"]
+        mapParams.pop("SpellDescription", None)
+        mapParams.pop("Cost", None)
+
+        overridingSA = None
+        if sa.hasAdditionalAbility("Execute"):
+            overridingSA = sa.getAdditionalAbility("Execute").copy(host, sa.getActivatingPlayer(), False)
+            # need to set Parent to null, otherwise it might have wrong root ability
+            if isinstance(overridingSA, AbilitySub):
+                overridingSA.setParent(None)
+
+        remember: List[GameEntity] = None
+        if sa.hasParam("RememberObjects"):
+            remember = AbilityUtils.getDefinedEntities(host, sa.getParam("RememberObjects").split(" & "), sa)
+
+        for i in range(amt):
+            immediateTrig = TriggerHandler.parseTrigger(mapParams, host, sa.isIntrinsic(), None)
+            immediateTrig.setSpawningAbility(sa.copy(host, True))
+            if overridingSA is not None:
+                immediateTrig.setOverridingAbility(overridingSA)
+
+            if remember is not None:
+                immediateTrig.addRemembered(
+                    [remember[i]] if sa.hasParam("RememberEach") else remember
+                )
+
+            if sa.hasParam("RememberSVarAmount"):
+                immediateTrig.addRemembered(
+                    AbilityUtils.calculateAmount(host, sa.getSVar(sa.getParam("RememberSVarAmount")), sa)
+                )
+
+            # Instead of registering this, add to the delayed triggers as an immediate trigger type? Which means it'll fire as soon as possible
+            game.getTriggerHandler().registerDelayedTrigger(immediateTrig)
 ```

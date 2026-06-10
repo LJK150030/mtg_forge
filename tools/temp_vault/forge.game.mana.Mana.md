@@ -51,6 +51,12 @@ classDiagram
 - [[forge.game.spellability.AbilityManaPart|AbilityManaPart]]
 - [[forge.game.spellability.SpellAbility|SpellAbility]]
 
+## Design Description
+
+Mana is an immutable record modeling a single mana "globe" in a player's pool, capturing its color, originating source card, the mana ability that produced it, and the owning player. Beyond holding state, it delegates rules-relevant queriesâ€”whether the mana is snow, restricted, colorless, adds counters or keywords, suppresses counterspells, or triggers when spentâ€”to its collaborating `AbilityManaPart`, which it treats as the authority on the mana's special behaviors. It consults `SpellAbility` to evaluate context-dependent effects against the ability being paid for.
+
+Notable design intent: the canonical constructor snapshots the source card via `CardCopyService` last-known-information copies, decoupling the mana from later changes to that card. Its hand-written `equals`/`hashCode` deliberately ignore the player and treat mana as fungible unless distinguishing restrictions, keywords, or counter effects require otherwise.
+
 ## Source
 `forge-game/src/main/java/forge/game/mana/Mana.java`
 
@@ -207,4 +213,119 @@ public record Mana(byte color, Card sourceCard, AbilityManaPart manaAbility, Pla
     }
 
 }
+```
+
+## Python
+`forge/game/mana/Mana.py`
+
+```python
+from forge.card.MagicColor import MagicColor
+from forge.card.mana.ManaAtom import ManaAtom
+from forge.game.card.Card import Card
+from forge.game.card.CardCopyService import CardCopyService
+from forge.game.player.Player import Player
+from forge.game.spellability.AbilityManaPart import AbilityManaPart
+from forge.game.spellability.SpellAbility import SpellAbility
+
+
+class Mana:
+    """
+    Mana class.
+    This represents a single mana 'globe' floating in a player's pool.
+    """
+
+    def __init__(self, color: int, sourceCard: Card, manaAbility: AbilityManaPart, player: Player):
+        self.color = color
+        self.manaAbility = manaAbility
+        self.sourceCard = CardCopyService.getLKICopy(sourceCard) if sourceCard.isInPlay() else sourceCard.getGame().getChangeZoneLKIInfo(sourceCard)
+        self.player = player
+
+    def hashCode(self) -> int:
+        prime = 31
+        result = 1
+        result = prime * result + self.color
+        result = prime * result + (0 if self.manaAbility is None else self.manaAbility.hashCode())
+        result = prime * result + (0 if self.sourceCard is None else self.sourceCard.hashCode())
+        return result
+
+    def __hash__(self) -> int:
+        return self.hashCode()
+
+    def equals(self, other) -> bool:
+        if not isinstance(other, Mana):
+            return False
+        m2 = other
+
+        if self.color != m2.color:
+            return False
+
+        mp = self.getManaAbility()
+        mp2 = m2.getManaAbility()
+        if (mp is None) != (mp2 is None):
+            return False
+
+        if not self.sourceCard.equals(m2.sourceCard) and mp is not None:
+            if self.addsKeywords(None) != m2.addsKeywords(None):
+                return False
+            if self.addsCounters(None) != m2.addsCounters(None):
+                return False
+            if mp.isCannotCounterPaidWith() != mp2.isCannotCounterPaidWith():
+                return False
+            if mp.getTriggersWhenSpent() != mp2.getTriggersWhenSpent():
+                return False
+            if mp.isPersistentMana() != mp2.isPersistentMana():
+                return False
+
+        return mp is mp2 or (mp.getManaRestrictions().equals(mp2.getManaRestrictions()) and mp.getExtraManaRestriction().equals(mp2.getExtraManaRestriction()))
+
+    def __eq__(self, other) -> bool:
+        return self.equals(other)
+
+    def toString(self) -> str:
+        return MagicColor.toShortString(self.color)
+
+    def __str__(self) -> str:
+        return self.toString()
+
+    def isSnow(self) -> bool:
+        return self.sourceCard.isSnow()
+
+    def isRestricted(self) -> bool:
+        return self.manaAbility is not None and (not self.manaAbility.getManaRestrictions().isEmpty() or not self.manaAbility.getExtraManaRestriction().isEmpty())
+
+    def addsNoCounterMagic(self, saBeingPaid: SpellAbility) -> bool:
+        return self.manaAbility is not None and self.manaAbility.cannotCounterPaidWith(saBeingPaid)
+
+    def addsCounters(self, saBeingPaid: SpellAbility) -> bool:
+        return self.manaAbility is not None and self.manaAbility.addsCounters(saBeingPaid)
+
+    def addsKeywords(self, saBeingPaid: SpellAbility) -> bool:
+        return self.manaAbility is not None and self.manaAbility.addKeywords(saBeingPaid)
+
+    def addsKeywordsType(self) -> bool:
+        return self.manaAbility is not None and self.manaAbility.getAddsKeywordsType() is not None
+
+    def addsKeywordsUntil(self) -> bool:
+        return self.manaAbility is not None and self.manaAbility.getAddsKeywordsUntil() is not None
+
+    def getAddedKeywords(self) -> str:
+        return self.manaAbility.getKeywords()
+
+    def triggersWhenSpent(self) -> bool:
+        return self.manaAbility is not None and self.manaAbility.getTriggersWhenSpent()
+
+    def getColor(self) -> int:
+        return self.color
+
+    def getSourceCard(self) -> Card:
+        return self.sourceCard
+
+    def getManaAbility(self) -> AbilityManaPart:
+        return self.manaAbility
+
+    def getPlayer(self) -> Player:
+        return self.player
+
+    def isColorless(self) -> bool:
+        return self.color == ManaAtom.COLORLESS
 ```

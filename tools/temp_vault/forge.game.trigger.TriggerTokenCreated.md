@@ -37,6 +37,12 @@ classDiagram
 - [[forge.game.card.Card|Card]]
 - [[forge.game.spellability.SpellAbility|SpellAbility]]
 
+## Design Description
+
+TriggerTokenCreated is a concrete trigger that fires when one or more tokens are created, responding to the game's token-creation event. As a subclass of Trigger, it implements the framework's template methods: performTest gates activation by validating the creating player (ValidPlayer), the created token (ValidToken), and an optional OnlyFirst condition that restricts firing to single-token events via the Num parameter; setTriggeringObjects exposes the Player and Card to the resolving SpellAbility through AbilityKey-keyed run parameters; and getImportantStackObjects supplies a localized stack description.
+
+It collaborates with Card as its host, SpellAbility as the triggered effect, and AbilityKey as the typed event-data vocabulary. The design follows Forge's data-driven trigger patternâ€”behavior is configured by string params rather than subclass logicâ€”keeping this class a thin, declarative adapter between a raw game event and the engine's ability-resolution machinery.
+
 ## Source
 `forge-game/src/main/java/forge/game/trigger/TriggerTokenCreated.java`
 
@@ -127,4 +133,45 @@ public class TriggerTokenCreated extends Trigger {
     }
 
 }
+```
+
+## Python
+`forge/game/trigger/TriggerTokenCreated.py`
+
+```python
+from forge.game.trigger.Trigger import Trigger
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Localizer import Localizer
+
+from typing import Map
+
+
+class TriggerTokenCreated(Trigger):
+
+    def __init__(self, params: dict[str, str], host: Card, intrinsic: bool):
+        super().__init__(params, host, intrinsic)
+
+    def getImportantStackObjects(self, sa: SpellAbility) -> str:
+        sb = []
+        sb.append(Localizer.getInstance().getMessage("lblPlayer"))
+        sb.append(": ")
+        sb.append(str(sa.getTriggeringObject(AbilityKey.Player)))
+        return "".join(sb)
+
+    def setTriggeringObjects(self, sa: SpellAbility, runParams: dict[AbilityKey, object]) -> None:
+        sa.setTriggeringObjectsFrom(runParams, AbilityKey.Player, AbilityKey.Card)
+
+    def performTest(self, runParams: dict[AbilityKey, object]) -> bool:
+        if not self.matchesValidParam("ValidPlayer", runParams.get(AbilityKey.Player)):
+            return False
+
+        if not self.matchesValidParam("ValidToken", runParams.get(AbilityKey.Card)):
+            return False
+
+        if self.hasParam("OnlyFirst"):
+            if int(runParams.get(AbilityKey.Num)) != 1:
+                return False
+        return True
 ```

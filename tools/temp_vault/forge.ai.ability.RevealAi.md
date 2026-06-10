@@ -140,3 +140,76 @@ public class RevealAi extends RevealAiBase {
 
 }
 ```
+
+## Python
+`forge/ai/ability/RevealAi.py`
+
+```python
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.ai.PlayerControllerAi import PlayerControllerAi
+from forge.ai.ability.RevealAiBase import RevealAiBase
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.card.Card import Card
+from forge.game.cost.Cost import Cost
+from forge.game.player.Player import Player
+from forge.game.spellability.Spell import Spell
+from forge.game.spellability.SpellAbility import SpellAbility
+
+
+class RevealAi(RevealAiBase):
+
+    def checkApiLogic(self, ai: Player, sa: SpellAbility) -> AiAbilityDecision:
+        if not self.revealHandTargetAI(ai, sa, False):
+            return AiAbilityDecision(0, AiPlayDecision.TargetingFailed)
+
+        if self.playReusable(ai, sa):
+            return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+        return super().checkApiLogic(ai, sa)
+
+    def doTriggerNoCost(self, ai: Player, sa: SpellAbility, mandatory: bool) -> AiAbilityDecision:
+        # logic to see if it should reveal Miracle Card
+        if sa.hasParam("MiracleCost"):
+            c = sa.getHostCard()
+            for s in c.getBasicSpells():
+                spell = s
+                s.setActivatingPlayer(ai)
+                # timing restrictions still apply
+                if not s.getRestrictions().checkTimingRestrictions(c, s):
+                    continue
+
+                spell = spell.copyWithDefinedCost(Cost(sa.getParam("MiracleCost"), False))
+
+                decision = ai.getController().getAi().canPlayFromEffectAI(spell, False, False)
+
+                if AiPlayDecision.WillPlay == decision:
+                    return AiAbilityDecision(100, decision)
+            return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+        if "Kefnet" == sa.getParam("AILogic"):
+            c = Iterables.getFirst(
+                AbilityUtils.getDefinedCards(sa.getHostCard(), sa.getParam("RevealDefined"), sa), None
+            )
+
+            if c is None or (not c.isInstant() and not c.isSorcery()):
+                return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+            for s in c.getBasicSpells():
+                spell = s.copy(ai)
+                # timing restrictions still apply
+                if not spell.getRestrictions().checkTimingRestrictions(c, spell):
+                    continue
+
+                # use hard coded reduce cost
+                spell.putParam("ReduceCost", "2")
+                decision = ai.getController().getAi().canPlayFromEffectAI(spell, False, False)
+
+                if AiPlayDecision.WillPlay == decision:
+                    return AiAbilityDecision(100, decision)
+            return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+        if not self.revealHandTargetAI(ai, sa, mandatory):
+            return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+        return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+```

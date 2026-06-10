@@ -53,7 +53,7 @@ classDiagram
 
 ## Design Description
 
-ChooseCardNameAi supplies the AI decision logic for spell abilities that require naming a card, extending the abstract `SpellAbilityAi` base and overriding its hooks to plug into Forge's ability-resolution framework. Its `canPlay` and `doTriggerNoCost` methods gate activation behind named `AILogic` strategies—handling special cases such as CursedScroll and PithingNeedle, where it inspects opponents' battlefield permanents, prefers planeswalker targets via `ComputerUtilCard`, and otherwise falls back to a randomized chance—and resolve targeting through `TargetRestrictions`.
+ChooseCardNameAi supplies the AI decision logic for spell abilities that require naming a card, extending the abstract `SpellAbilityAi` base and overriding its hooks to plug into Forge's ability-resolution framework. Its `canPlay` and `doTriggerNoCost` methods gate activation behind named `AILogic` strategiesâ€”handling special cases such as CursedScroll and PithingNeedle, where it inspects opponents' battlefield permanents, prefers planeswalker targets via `ComputerUtilCard`, and otherwise falls back to a randomized chanceâ€”and resolve targeting through `TargetRestrictions`.
 
 When a concrete card must be chosen, `chooseSingleCard` defers to `ComputerUtilCard.getBestAI`. The more involved `chooseCardName` (written for Alhammarret, High Arbiter) bridges the static card database: it resolves each `ICardFace` through `CardDb`/`CardRules` into `PaperCard` and `Card` instances, carefully reconstructs split-card states via `CardCopyService`, and evaluates the candidates to return the strongest card's name. This collaboration with card-data types lets the AI reason about real card values rather than mere names.
 
@@ -190,4 +190,121 @@ public class ChooseCardNameAi extends SpellAbilityAi {
         return ComputerUtilCard.getBestAI(cards).getName();
     }
 }
+```
+
+## Python
+`forge/ai/ability/ChooseCardNameAi.py`
+
+```python
+from forge.ai.SpellAbilityAi import SpellAbilityAi
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.ai.ComputerUtil import ComputerUtil
+from forge.ai.ComputerUtilCard import ComputerUtilCard
+from forge.ai.SpecialCardAi import SpecialCardAi
+from forge.ai.AiAttackController import AiAttackController
+from forge.StaticData import StaticData
+from forge.card.CardDb import CardDb
+from forge.card.CardRules import CardRules
+from forge.card.CardSplitType import CardSplitType
+from forge.card.CardStateName import CardStateName
+from forge.card.ICardFace import ICardFace
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardCopyService import CardCopyService
+from forge.game.card.CardLists import CardLists
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.spellability.TargetRestrictions import TargetRestrictions
+from forge.game.zone.ZoneType import ZoneType
+from forge.item.PaperCard import PaperCard
+from forge.util.MyRandom import MyRandom
+
+from typing import Iterable, List, Map
+
+
+class ChooseCardNameAi(SpellAbilityAi):
+
+    def canPlay(self, ai: Player, sa: SpellAbility) -> AiAbilityDecision:
+        if sa.hasParam("AILogic"):
+            # Don't tap creatures that may be able to block
+            if ComputerUtil.waitForBlocking(sa):
+                return AiAbilityDecision(0, AiPlayDecision.WaitForCombat)
+
+            logic = sa.getParam("AILogic")
+            if logic == "CursedScroll":
+                if SpecialCardAi.CursedScroll.consider(ai, sa):
+                    return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+                return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+            tgt = sa.getTargetRestrictions()
+            if tgt is not None:
+                sa.resetTargets()
+                if tgt.canOnlyTgtOpponent():
+                    sa.getTargets().add(AiAttackController.choosePreferredDefenderPlayer(ai))
+                else:
+                    sa.getTargets().add(ai)
+            return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+        return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+    def doTriggerNoCost(self, ai: Player, sa: SpellAbility, mandatory: bool) -> AiAbilityDecision:
+        aiLogic = sa.getParamOrDefault("AILogic", "")
+        if "PithingNeedle" == aiLogic:
+            # Make sure there's something in play worth Needlings.
+            # Planeswalker or equipment or something
+
+            oppPerms = CardLists.getValidCards(ai.getOpponents().getCardsIn(ZoneType.Battlefield), "Card.OppCtrl+hasNonManaActivatedAbility", ai, sa.getHostCard(), sa)
+            if oppPerms.isEmpty():
+                return AiAbilityDecision(0, AiPlayDecision.MissingNeededCards)
+
+            card = ComputerUtilCard.getBestPlaneswalkerAI(oppPerms)
+            if card is not None:
+                return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+            # 5 percent chance to cast per opposing card with a non mana ability
+            if MyRandom.getRandom().nextFloat() <= .05 * oppPerms.size():
+                return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+            return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+        if mandatory:
+            return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+        return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+    # (non-Javadoc)
+    # @see forge.card.ability.SpellAbilityAi#chooseSingleCard(forge.card.spellability.SpellAbility, java.util.List, boolean)
+    def chooseSingleCard(self, ai: Player, sa: SpellAbility, options: Iterable[Card], isOptional: bool, targetedPlayer: Player, params: Map[str, object]) -> Card:
+        return ComputerUtilCard.getBestAI(options)
+
+    def chooseCardName(self, ai: Player, sa: SpellAbility, faces: List[ICardFace]) -> str:
+        # this function is only for "Alhammarret, High Arbiter"
+
+        if not faces:
+            return ""
+        elif len(faces) == 1:
+            return faces[0].getName() if faces else None
+
+        cards: list[Card] = []
+        cardDb = StaticData.instance().getCommonCards()
+
+        for face in faces:
+            rules = cardDb.getRulesOrElseUnsupported(face.getName())
+            isOther = rules.getOtherPart() == face
+            paper = cardDb.getCard(rules.getName())
+            card = Card.fromPaperCard(paper, ai)
+
+            if rules.getSplitType() == CardSplitType.Split:
+                copy = CardCopyService.getLKICopy(card)
+                # for calcing i need only one split side
+                if isOther:
+                    copy.getCurrentState().copyFrom(card.getState(CardStateName.RightSplit), True)
+                else:
+                    copy.getCurrentState().copyFrom(card.getState(CardStateName.LeftSplit), True)
+                copy.updateStateForView()
+
+                cards.append(copy)
+            elif not isOther:
+                # other can't be cast that way, not need to prevent that
+                cards.append(card)
+
+        return ComputerUtilCard.getBestAI(cards).getName()
 ```

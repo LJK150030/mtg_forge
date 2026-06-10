@@ -47,7 +47,7 @@ classDiagram
 
 Here is the description:
 
-DraftOptions is an immutable configuration object in the `forge-core` card package that bundles the rules governing a draft session: maximum and recommended pod sizes, the maximum players per match, the deck format to build, and an optional fixed commander. Nearly all state is `final`, set once in the constructor, which translates two string parameters into the package-local `DeckType` and `DoublePick` enums it collaborates with—shielding callers such as configuration loaders from the enum constants themselves.
+DraftOptions is an immutable configuration object in the `forge-core` card package that bundles the rules governing a draft session: maximum and recommended pod sizes, the maximum players per match, the deck format to build, and an optional fixed commander. Nearly all state is `final`, set once in the constructor, which translates two string parameters into the package-local `DeckType` and `DoublePick` enums it collaborates withâ€”shielding callers such as configuration loaders from the enum constants themselves.
 
 Its central design intent is encoding draft "double pick" policy, which lets players take two cards per pack. Rather than storing a static answer, `isDoublePick(int podSize)` resolves the conditional `WHEN_POD_SIZE_IS_4` rule at query time, returning `ALWAYS` or `NEVER` against the actual pod size. Exposing only getters, the class presents itself as a read-only options bundle consumed by draft setup and matchmaking logic.
 
@@ -130,4 +130,57 @@ public class DraftOptions {
         return freeCommander;
     }
 }
+```
+
+## Python
+`forge/card/DraftOptions.py`
+
+```python
+from forge.card.DraftOptions.DeckType import DeckType
+from forge.card.DraftOptions.DoublePick import DoublePick
+
+
+class DraftOptions:
+    def __init__(self, doublePickOption: str, maxPodSize: int, recommendedPodSize: int, maxMatchPlayers: int, deckType: str, freeCommander: str):
+        self.doublePick = DoublePick.NEVER
+        self.maxPodSize = maxPodSize
+        self.recommendedPodSize = recommendedPodSize
+        self.maxMatchPlayers = maxMatchPlayers
+        self.deckType = DeckType.valueOf(deckType)
+        self.freeCommander = freeCommander
+        if doublePickOption is not None:
+            option = doublePickOption.lower()
+            if option == "firstpick":
+                self.doublePick = DoublePick.FIRST_PICK
+            elif option == "always":
+                self.doublePick = DoublePick.ALWAYS
+            elif option == "whenpodsizeis4":
+                self.doublePick = DoublePick.WHEN_POD_SIZE_IS_4
+
+    def getMaxPodSize(self) -> int:
+        return self.maxPodSize
+
+    def getRecommendedPodSize(self) -> int:
+        return self.recommendedPodSize
+
+    def getDoublePick(self) -> DoublePick:
+        return self.doublePick
+
+    def isDoublePick(self, podSize: int) -> DoublePick:
+        if self.doublePick == DoublePick.WHEN_POD_SIZE_IS_4:
+            if podSize != 4:
+                return DoublePick.NEVER
+            # only when pod size is 4, so you can pick two cards each time
+            return DoublePick.ALWAYS
+
+        return self.doublePick
+
+    def getMaxMatchPlayers(self) -> int:
+        return self.maxMatchPlayers
+
+    def getDeckType(self) -> DeckType:
+        return self.deckType
+
+    def getFreeCommander(self) -> str:
+        return self.freeCommander
 ```

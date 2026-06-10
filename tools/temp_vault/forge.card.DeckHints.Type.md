@@ -31,10 +31,10 @@ classDiagram
 
 ## Design Description
 
-Determines how a `DeckHints` entry is matched against a card during deck-building logic. As a nested enumeration of `DeckHints`, each constant names a distinct dimension along which a hint can key off another card — `MODIFIER` for extra custom logic, `ABILITY`, `COLOR`, `KEYWORD`, `NAME`, and `TYPE` for the corresponding card attributes, and `NONE` as the inert default for cards with no hints. By enumerating these categories as a closed type rather than relying on raw strings, the design lets `DeckHints` dispatch matching behavior per category and guarantees only valid hint kinds are ever represented, keeping the parsing and evaluation in the enclosing class type-safe.
+Determines how a `DeckHints` entry is matched against a card during deck-building logic. As a nested enumeration of `DeckHints`, each constant names a distinct dimension along which a hint can key off another card â€” `MODIFIER` for extra custom logic, `ABILITY`, `COLOR`, `KEYWORD`, `NAME`, and `TYPE` for the corresponding card attributes, and `NONE` as the inert default for cards with no hints. By enumerating these categories as a closed type rather than relying on raw strings, the design lets `DeckHints` dispatch matching behavior per category and guarantees only valid hint kinds are ever represented, keeping the parsing and evaluation in the enclosing class type-safe.
 
 ## Source
-`forge-core/src/main/java/forge/card/DeckHints.java` â€” declaration excerpt
+`forge-core/src/main/java/forge/card/DeckHints.java` Ã¢â‚¬â€ declaration excerpt
 
 ```java
     /**
@@ -56,4 +56,30 @@ Determines how a `DeckHints` entry is matched against a card during deck-buildin
         /** The None. */
         NONE
     }
+```
+
+## Python
+`forge/card/DeckHints/Type.py`
+
+```python
+from enum import Enum, auto
+
+
+class Type(Enum):
+    """Enum of types of DeckHints."""
+
+    # extra logic
+    MODIFIER = auto()
+    # The Ability
+    ABILITY = auto()
+    # The Color.
+    COLOR = auto()
+    # The Keyword.
+    KEYWORD = auto()
+    # The Name.
+    NAME = auto()
+    # The Type.
+    TYPE = auto()
+    # The None.
+    NONE = auto()
 ```

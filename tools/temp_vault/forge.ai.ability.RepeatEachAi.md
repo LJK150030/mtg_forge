@@ -160,3 +160,106 @@ public class RepeatEachAi extends SpellAbilityAi {
     }
 }
 ```
+
+## Python
+`forge/ai/ability/RepeatEachAi.py`
+
+```python
+from forge.ai.SpellAbilityAi import SpellAbilityAi
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.ai.SpecialCardAi import SpecialCardAi
+from forge.ai.ComputerUtilCard import ComputerUtilCard
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.card.Card import Card
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CardPredicates import CardPredicates
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardCopyService import CardCopyService
+from forge.game.phase.PhaseType import PhaseType
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.TextUtil import TextUtil
+
+from typing import Iterable, Map  # noqa
+from typing import List, Dict, Any, Optional
+
+
+class RepeatEachAi(SpellAbilityAi):
+
+    # (non-Javadoc)
+    # @see forge.card.abilityfactory.SpellAiLogic#canPlayAI(forge.game.player.Player, forge.card.spellability.SpellAbility)
+    def canPlay(self, aiPlayer: Player, sa: SpellAbility) -> AiAbilityDecision:
+        logic = sa.getParam("AILogic")
+
+        if "PriceOfProgress" == logic:
+            return SpecialCardAi.PriceOfProgress.consider(aiPlayer, sa)
+        elif "Never" == logic:
+            return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+        elif "CloneAllTokens" == logic:
+            humTokenCreats: List[Card] = CardLists.filter(aiPlayer.getOpponents().getCreaturesInPlay(), CardPredicates.TOKEN)
+            compTokenCreats: List[Card] = aiPlayer.getTokensInPlay()
+
+            if len(compTokenCreats) > len(humTokenCreats):
+                return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+            else:
+                return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+        elif "BalanceLands" == logic:
+            if len(aiPlayer.getLandsInPlay()) >= 5:
+                return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+            opponents: List[Player] = aiPlayer.getOpponents()
+            for opp in opponents:
+                if len(opp.getLandsInPlay()) < 4:
+                    return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+        elif "AllPlayerLoseLife" == logic:
+            source: Card = sa.getHostCard()
+            repeat: SpellAbility = sa.getAdditionalAbility("RepeatSubAbility")
+
+            svar = repeat.getSVar(repeat.getParam("LifeAmount"))
+            # replace RememberedPlayerCtrl with YouCtrl
+            svarYou = TextUtil.fastReplace(svar, "RememberedPlayer", "You")
+
+            # Currently all Cards with that are affect all player, including AI
+            if aiPlayer.canLoseLife():
+                lossYou = AbilityUtils.calculateAmount(source, svarYou, repeat)
+
+                # if playing it would cause AI to lose most life, don't do that
+                if lossYou + 5 > aiPlayer.getLife():
+                    return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+            hitOpp = False
+            # need a copy for source so YouCtrl can be faked
+            sourceLKI: Card = CardCopyService.getLKICopy(source)
+
+            # check if any opponent is affected
+            for opp in aiPlayer.getOpponents():
+                if opp.canLoseLife():
+                    sourceLKI.setOwner(opp)
+                    lossOpp = AbilityUtils.calculateAmount(source, svarYou, repeat)
+                    if lossOpp > 0:
+                        hitOpp = True
+
+            if hitOpp:
+                return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+            else:
+                return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+        elif "EquipAll" == logic:
+            if aiPlayer.getGame().getPhaseHandler().is_(PhaseType.MAIN1, aiPlayer):
+                unequipped: CardCollection = CardLists.filter(aiPlayer.getCardsIn(ZoneType.Battlefield), lambda card: card.isEquipment() and card.getAttachedTo() != sa.getHostCard())
+
+                if not unequipped.isEmpty():
+                    return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+                else:
+                    return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+            return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+        # TODO Add some normal AI variability here
+
+        return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+    def chooseSingleCard(self, ai: Player, sa: SpellAbility, options: Iterable[Card], isOptional: bool, targetedPlayer: Player, params: Dict[str, Any]) -> Card:
+        return ComputerUtilCard.getBestCreatureAI(options)
+```

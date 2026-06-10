@@ -43,7 +43,7 @@ classDiagram
 
 DebuffEffect is a resolution handler for spell/ability effects that strip keywords from cards, implementing one concrete behavior within Forge's ability-effect framework by extending SpellAbilityEffect. It overrides `getStackDescription` to render a human-readable "[targets] loses [keywords]" line and `resolve` to apply the actual change, reading its `Keywords`, `Duration`, and `AllSuffixKeywords` parameters from the driving SpellAbility.
 
-In `resolve` it iterates the targeted Cards, skipping any no longer legally in play (off-board, phased out, or stale via game-timestamp comparison against the live game state), then registers removed keywords through `addChangedCardKeywords` under a unique timestamp. Notable design intent includes special handling for landwalk suffixes and color-protection/Ward keywords—expanding aggregate "Protection from each color" forms into per-color entries—and, for non-permanent durations, scheduling a GameCommand via `addUntilCommand` to undo the change at end of turn. It collaborates with Game for state lookup and timestamping and KeywordInterface for inspecting existing keywords.
+In `resolve` it iterates the targeted Cards, skipping any no longer legally in play (off-board, phased out, or stale via game-timestamp comparison against the live game state), then registers removed keywords through `addChangedCardKeywords` under a unique timestamp. Notable design intent includes special handling for landwalk suffixes and color-protection/Ward keywordsâ€”expanding aggregate "Protection from each color" forms into per-color entriesâ€”and, for non-permanent durations, scheduling a GameCommand via `addUntilCommand` to undo the change at end of turn. It collaborates with Game for state lookup and timestamping and KeywordInterface for inspecting existing keywords.
 
 ## Source
 `forge-game/src/main/java/forge/game/ability/effects/DebuffEffect.java`
@@ -218,4 +218,147 @@ public class DebuffEffect extends SpellAbilityEffect {
     }
 
 }
+```
+
+## Python
+`forge/game/ability/effects/DebuffEffect.py`
+
+```python
+from typing import List
+
+from forge.GameCommand import GameCommand
+from forge.card.MagicColor import MagicColor
+from forge.game.Game import Game
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.keyword.Keyword import Keyword
+from forge.game.keyword.KeywordInterface import KeywordInterface
+from forge.game.spellability.SpellAbility import SpellAbility
+
+
+class DebuffEffect(SpellAbilityEffect):
+
+    def getStackDescription(self, sa: SpellAbility) -> str:
+        kws: List[str] = []
+        if sa.hasParam("Keywords"):
+            kws.extend(sa.getParam("Keywords").split(" & "))
+        sb = []
+
+        tgtCards = self.getTargetCards(sa)
+
+        if len(tgtCards) > 0:
+            it = iter(tgtCards)
+            try:
+                tgtC = next(it)
+                has_next = True
+            except StopIteration:
+                has_next = False
+            while has_next:
+                if tgtC.isFaceDown():
+                    sb.append("Morph")
+                else:
+                    sb.append(str(tgtC))
+
+                try:
+                    tgtC = next(it)
+                    sb.append(" ")
+                except StopIteration:
+                    has_next = False
+            sb.append(" loses ")
+            #
+            # Iterator<String> kwit = kws.iterator(); while(it.hasNext()) {
+            # String kw = kwit.next(); sb.append(kw); if(it.hasNext())
+            # sb.append(" "); }
+            #
+            sb.append(str(kws))
+            if "Permanent" != sa.getParam("Duration"):
+                sb.append(" until end of turn")
+            sb.append(".")
+
+        return "".join(sb)
+
+    def resolve(self, sa: SpellAbility) -> None:
+        kws: List[str] = []
+        if sa.hasParam("Keywords"):
+            kws.extend(sa.getParam("Keywords").split(" & "))
+        game = sa.getActivatingPlayer().getGame()
+        timestamp = game.getNextTimestamp()
+
+        for tgtC in self.getTargetCards(sa):
+            if not tgtC.isInPlay():
+                continue
+            if tgtC.isPhasedOut():
+                continue
+
+            # check if the object is still in game or if it was moved
+            gameCard = game.getCardState(tgtC, None)
+            # gameCard is LKI in that case, the card is not in game anymore
+            # or the timestamp did change
+            # this should check Self too
+            if gameCard is None or not tgtC.equalsWithGameTimestamp(gameCard):
+                continue
+
+            addedKW: List[str] = []
+            removedKW: List[str] = []
+            if sa.hasParam("AllSuffixKeywords"):
+                # this only for walk abilities, may to try better
+                if sa.getParam("AllSuffixKeywords") == "walk":
+                    for kw in gameCard.getKeywords(Keyword.LANDWALK):
+                        removedKW.append(kw.getOriginal())
+
+            ProtectionFromColor = False
+            for kw in kws:
+                # Check if some of the Keywords are Protection from <color>
+                if not kw.startswith("Protection from "):
+                    continue
+                for col in MagicColor.WUBRG:
+                    colString = MagicColor.toLongString(col)
+                    if not kw.endswith(colString):
+                        continue
+                    wardString = StringUtils.capitalize(colString) + ":" + colString
+                    for inst in gameCard.getKeywords(Keyword.PROTECTION):
+                        # special for the Ward Auras Protection:Card.<Color>:<color>:*
+                        keyword = inst.getOriginal()
+                        if keyword.startswith("Protection:") and wardString in keyword:
+                            removedKW.append(keyword)
+                ProtectionFromColor = True
+            if ProtectionFromColor:
+                # Split "Protection from each color" into extra Protection from <color>
+                allColors = "Protection from each color"
+                if gameCard.hasKeyword(allColors):
+                    allColorsProtect: List[str] = []
+
+                    for col in MagicColor.WUBRG:
+                        allColorsProtect.append("Protection from " + MagicColor.toLongString(col))
+
+                    allColorsProtect = [c for c in allColorsProtect if c not in kws]
+                    addedKW.extend(allColorsProtect)
+                    removedKW.append(allColors)
+
+                # Extra for Spectra Ward
+                allColors = "Protection:Card.nonColorless:each color:Aura"
+                if gameCard.hasKeyword(allColors):
+                    allColorsProtect = []
+
+                    for col in MagicColor.WUBRG:
+                        colString = MagicColor.toLongString(col)
+                        if ("Protection from " + colString) not in kws:
+                            allColorsProtect.append("Protection:Card." + StringUtils.capitalize(colString) + ":" + colString + ":Aura")
+                    addedKW.extend(allColorsProtect)
+                    removedKW.append(allColors)
+
+            removedKW.extend(kws)
+            gameCard.addChangedCardKeywords(addedKW, removedKW, False, timestamp, None)
+
+            if "Permanent" != sa.getParam("Duration"):
+                def make_until(gameCard, timestamp):
+                    class _Until(GameCommand):
+                        serialVersionUID = 5387486776282932314
+
+                        def run(self):
+                            gameCard.removeChangedCardKeywords(timestamp, 0)
+                    return _Until()
+
+                until = make_until(gameCard, timestamp)
+                self.addUntilCommand(sa, until)
 ```

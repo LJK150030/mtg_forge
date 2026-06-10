@@ -45,9 +45,9 @@ classDiagram
 
 ## Design Description
 
-TwoPilesEffect implements the "separate into two piles" mechanic common to Magic cards, executing as a concrete `SpellAbilityEffect` subclass within the ability-effects framework. It overrides `getStackDescription` to render a human-readable summary and `resolve` to carry out the partitioning: for each target Player it gathers a valid `CardCollection` from a configured `ZoneType` (or explicitly defined cards), has a separator player divide them into two piles, and lets a chooser select one—supporting left/right and face-down variants driven by `SpellAbility` parameters.
+TwoPilesEffect implements the "separate into two piles" mechanic common to Magic cards, executing as a concrete `SpellAbilityEffect` subclass within the ability-effects framework. It overrides `getStackDescription` to render a human-readable summary and `resolve` to carry out the partitioning: for each target Player it gathers a valid `CardCollection` from a configured `ZoneType` (or explicitly defined cards), has a separator player divide them into two piles, and lets a chooser select oneâ€”supporting left/right and face-down variants driven by `SpellAbility` parameters.
 
-The design is heavily data-driven, deriving behavior entirely from script parameters (Separator, Chooser, DefinedPiles, ChosenPile/UnchosenPile, RememberChosen) rather than subtyping. It collaborates with `AbilityUtils` to resolve defined players/cards and dispatch additional sub-abilities against each pile, using the host `Card`'s remembered-object list as a transient hand-off channel—carefully saving and restoring prior remembered state to keep the two sub-resolutions isolated and backward-compatible.
+The design is heavily data-driven, deriving behavior entirely from script parameters (Separator, Chooser, DefinedPiles, ChosenPile/UnchosenPile, RememberChosen) rather than subtyping. It collaborates with `AbilityUtils` to resolve defined players/cards and dispatch additional sub-abilities against each pile, using the host `Card`'s remembered-object list as a transient hand-off channelâ€”carefully saving and restoring prior remembered state to keep the two sub-resolutions isolated and backward-compatible.
 
 ## Source
 `forge-game/src/main/java/forge/game/ability/effects/TwoPilesEffect.java`
@@ -246,4 +246,169 @@ public class TwoPilesEffect extends SpellAbilityEffect {
         source.getGame().incPiledGuessedSA();
     }
 }
+```
+
+## Python
+`forge/game/ability/effects/TwoPilesEffect.py`
+
+```python
+from typing import List
+
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.card.CardLists import CardLists
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.Lang import Lang
+from forge.util.Localizer import Localizer
+from forge.util.collect.FCollectionView import FCollectionView
+
+
+class TwoPilesEffect(SpellAbilityEffect):
+
+    # (non-Javadoc)
+    # @see forge.card.abilityfactory.SpellEffect#getStackDescription(java.util.Map, forge.card.spellability.SpellAbility)
+    def getStackDescription(self, sa: SpellAbility) -> str:
+        sb = []
+
+        valid = sa.getParamOrDefault("ValidCards", "")
+
+        sb.append("Separate all ")
+        sb.append(valid)
+        sb.append(" cards ")
+
+        sb.append(Lang.joinHomogenous(self.getTargetPlayers(sa)))
+        sb.append(" controls into two piles.")
+        return "".join(sb)
+
+    # (non-Javadoc)
+    # @see forge.card.abilityfactory.SpellEffect#resolve(java.util.Map, forge.card.spellability.SpellAbility)
+    def resolve(self, sa: SpellAbility) -> None:
+        source = sa.getHostCard()
+        zone = None
+        pile1WasChosen = True
+        isLeftRightPile = sa.hasParam("LeftRightPile")
+
+        if sa.hasParam("Zone"):
+            zone = ZoneType.smartValueOf(sa.getParam("Zone"))
+
+        valid = sa.getParamOrDefault("ValidCards", "Card")
+
+        tgtPlayers = self.getTargetPlayers(sa)
+
+        separator = source.getController()
+        if sa.hasParam("Separator"):
+            choosers = AbilityUtils.getDefinedPlayers(source, sa.getParam("Separator"), sa)
+            if not choosers.isEmpty():
+                separator = sa.getActivatingPlayer().getController().chooseSingleEntityForEffect(choosers, None, sa, Localizer.getInstance().getMessage("lblChooser") + ":", False, None, None)
+
+        chooser = tgtPlayers[0]
+        if sa.hasParam("Chooser"):
+            choosers = AbilityUtils.getDefinedPlayers(source, sa.getParam("Chooser"), sa)
+            if not choosers.isEmpty():
+                chooser = sa.getActivatingPlayer().getController().chooseSingleEntityForEffect(choosers, None, sa, Localizer.getInstance().getMessage("lblChooser") + ":", False, None, None)
+
+        for p in tgtPlayers:
+            if not p.isInGame():
+                continue
+
+            # first, separate the cards into piles
+            if sa.hasParam("DefinedPiles"):
+                deff = sa.getParam("DefinedPiles").split(",", 1)
+                pile1 = AbilityUtils.getDefinedCards(source, deff[0], sa)
+                pile2 = AbilityUtils.getDefinedCards(source, deff[1], sa)
+            else:
+                if sa.hasParam("DefinedCards"):
+                    pool0 = AbilityUtils.getDefinedCards(source, sa.getParam("DefinedCards"), sa)
+                else:
+                    pool0 = p.getCardsIn(zone)
+                pool = CardLists.getValidCards(pool0, valid, source.getController(), source, sa)
+                size = pool.size()
+                if size == 0:
+                    return
+                if "One" == sa.getParamOrDefault("FaceDown", "False"):
+                    title = Localizer.getInstance().getMessage("lblSelectCardForFaceDownPile")
+                elif isLeftRightPile:
+                    title = Localizer.getInstance().getMessage("lblSelectCardForLeftPile")
+                else:
+                    title = Localizer.getInstance().getMessage("lblDivideCardIntoTwoPiles")
+                pile1 = separator.getController().chooseCardsForEffect(pool, sa, title, 0, size, False, None)
+                pile2 = CardCollection(pool)
+                pile2.removeAll(pile1)
+
+            if isLeftRightPile:
+                pile1WasChosen = True
+            else:
+                pile1WasChosen = chooser.getController().chooseCardsPile(sa, pile1, pile2, sa.getParamOrDefault("FaceDown", "False"))
+            chosenPile = pile1 if pile1WasChosen else pile2
+            unchosenPile = pile1 if not pile1WasChosen else pile2
+
+            notification = []
+            if isLeftRightPile:
+                notification.append("\n")
+                notification.append(Lang.getInstance().getPossessedObject(separator.getName(), Localizer.getInstance().getMessage("lblLeftPile")))
+                notification.append("\n--------------------\n")
+                if not chosenPile.isEmpty():
+                    for c in chosenPile:
+                        notification.append(c.getName())
+                        notification.append("\n")
+                else:
+                    notification.append("(" + Localizer.getInstance().getMessage("lblEmptyPile") + ")\n")
+                notification.append("\n")
+                notification.append(Lang.getInstance().getPossessedObject(separator.getName(), Localizer.getInstance().getMessage("lblRightPile")))
+                notification.append("\n--------------------\n")
+                if not unchosenPile.isEmpty():
+                    for c in unchosenPile:
+                        notification.append(c.getName())
+                        notification.append("\n")
+                else:
+                    notification.append("(" + Localizer.getInstance().getMessage("lblEmptyPile") + ")\n")
+                p.getGame().getAction().notifyOfValue(sa, separator, "".join(notification), separator)
+            else:
+                notification.append(str(chooser) + " " + Localizer.getInstance().getMessage("lblChoosesPile") + " " + ("1" if pile1WasChosen else "2") + ":\n")
+                if not chosenPile.isEmpty():
+                    for c in chosenPile:
+                        notification.append(c.getName())
+                        notification.append("\n")
+                else:
+                    notification.append("(" + Localizer.getInstance().getMessage("lblEmptyPile") + ")")
+                p.getGame().getAction().notifyOfValue(sa, chooser, "".join(notification), chooser)
+
+            if sa.hasParam("RememberChosen"):
+                source.addRemembered(chosenPile)
+
+            # take action on the chosen pile
+            if sa.hasParam("ChosenPile"):
+                tempRemembered = list(source.getRemembered())
+                source.removeRemembered(tempRemembered)
+                source.addRemembered(chosenPile)
+
+                sub = sa.getAdditionalAbility("ChosenPile")
+                if sub is not None:
+                    AbilityUtils.resolve(sub)
+                source.removeRemembered(chosenPile)
+                source.addRemembered(tempRemembered)
+
+            # take action on the unchosen pile
+            if sa.hasParam("UnchosenPile"):
+                tempRemembered = list(source.getRemembered())
+                source.removeRemembered(tempRemembered)
+                source.addRemembered(unchosenPile)
+
+                sub = sa.getAdditionalAbility("UnchosenPile")
+                if sub is not None:
+                    AbilityUtils.resolve(sub)
+                source.removeRemembered(unchosenPile)
+                source.addRemembered(tempRemembered)
+
+        if not sa.hasParam("KeepRemembered") and not sa.hasParam("RememberChosen"):
+            # prior to addition of "DefinedPiles" param, TwoPilesEffect cleared remembered objects in the
+            # Chosen/Unchosen subability resolutions, so this preserves that
+            source.clearRemembered()
+
+        source.getGame().incPiledGuessedSA()
 ```

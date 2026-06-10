@@ -111,3 +111,73 @@ public class FTrace {
     }
 }
 ```
+
+## Python
+`forge/FTrace.py`
+
+```python
+from forge.text.NumberFormat import NumberFormat
+from forge.text.SimpleDateFormat import SimpleDateFormat
+from forge.util.Date import Date
+from forge.util.HashMap import HashMap
+from forge.util.Map import Map
+
+
+class FTrace:
+    appStartTime: int = 0
+    traces: dict[str, "FTrace"] = {}
+
+    @staticmethod
+    def initialize() -> None:
+        FTrace.appStartTime = Date().getTime()
+
+    @staticmethod
+    def get(name0: str) -> "FTrace":
+        trace = FTrace.traces.get(name0)
+        if trace is None:
+            trace = FTrace(name0)
+            FTrace.traces[name0] = trace
+        return trace
+
+    @staticmethod
+    def formatTimestamp(timestamp: Date) -> str:
+        return SimpleDateFormat("hh:mm:ss.SSS").format(timestamp)
+
+    # dump total time of all traces into log file
+    @staticmethod
+    def dump() -> None:
+        if not FTrace.traces:
+            return
+
+        appTotalTime = Date().getTime() - FTrace.appStartTime
+        percent = NumberFormat.getPercentInstance()
+
+        print()
+        print("Forge total time - " + str(appTotalTime) + "ms")
+        for trace in FTrace.traces.values():
+            print(trace.name + " total time - " + str(trace.totalTime) + "ms (" + percent.format(float(trace.totalTime) / float(appTotalTime)) + ")")
+        FTrace.traces.clear()
+
+    def __init__(self, name0: str):
+        self.name: str = name0
+        self.startTime: int = 0
+        self.totalTime: int = 0
+
+    def start(self) -> None:
+        if self.startTime > 0:
+            return
+
+        now = Date()
+        self.startTime = now.getTime()
+        print(self.name + " start - " + FTrace.formatTimestamp(now))
+
+    def end(self) -> None:
+        if self.startTime == 0:
+            return
+
+        now = Date()
+        elapsed = now.getTime() - self.startTime
+        self.startTime = 0
+        self.totalTime += elapsed
+        print(self.name + " end - " + FTrace.formatTimestamp(now) + " (" + str(elapsed) + "ms)")
+```

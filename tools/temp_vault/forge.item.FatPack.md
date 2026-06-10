@@ -44,6 +44,10 @@ classDiagram
 - [[forge.item.PaperCard|PaperCard]]
 - [[forge.item.SealedTemplate|SealedTemplate]]
 
+## Design Description
+
+FatPack models a sealed product â€” a Magic set's Fat Pack or Bundle â€” composed of a fixed number of booster packs plus extra fixed cards. It extends BoxedProduct, inheriting the booster contents and count, and adds the extra-slot behavior through its nested Template, a SealedTemplate subclass that records the booster count and renders the human-readable slot description. The static fromSet factory builds an instance from a CardEdition, returning null when the edition defines no fat pack or lacks registered boosters. Design intent is visible in getItemType, which inspects the edition's release date against KLD to label products released from Kaladesh onward as "Bundle" rather than "Fat Pack," and in getExtraCards, which delegates to BoosterGenerator for the supplementary cards. It collaborates with CardEdition, PaperCard, SealedTemplate, and StaticData, and overrides clone, getTotalCards, and getImageKey to integrate with Forge's item framework.
+
 ## Source
 `forge-core/src/main/java/forge/item/FatPack.java`
 
@@ -161,4 +165,84 @@ public class FatPack extends BoxedProduct {
         return ImageKeys.FATPACK_PREFIX + getEdition();
     }    
 }
+```
+
+## Python
+`forge/item/FatPack.py`
+
+```python
+from forge.ImageKeys import ImageKeys
+from forge.StaticData import StaticData
+from forge.card.CardEdition import CardEdition
+from forge.item.generation.BoosterGenerator import BoosterGenerator
+from forge.item.BoxedProduct import BoxedProduct
+from forge.item.PaperCard import PaperCard
+from forge.item.SealedTemplate import SealedTemplate
+
+from typing import List
+
+
+class FatPack(BoxedProduct):
+    @staticmethod
+    def fromSet(edition: CardEdition) -> "FatPack":
+        boosters = edition.getFatPackCount()
+        if boosters <= 0:
+            return None
+
+        d = FatPack.Template(edition)
+        if StaticData.instance().getBoosters().get(d.getEdition()) is None:
+            return None
+        return FatPack(edition.getName(), d, d.cntBoosters)
+
+    def __init__(self, name0: str, fpData0: "FatPack.Template", boosterCount: int):
+        super().__init__(name0, StaticData.instance().getBoosters().get(fpData0.getEdition()), boosterCount)
+        self.fpData = fpData0
+
+    def getDescription(self) -> str:
+        return self.fpData.toString() + self.contents.toString()
+
+    def getItemType(self) -> str:
+        isBundle = StaticData.instance().getEditions().get(self.fpData.getEdition()).getDate().getTime() >= \
+            StaticData.instance().getEditions().get("KLD").getDate().getTime()
+
+        return "Bundle" if isBundle else "Fat Pack"
+
+    def getExtraCards(self) -> List[PaperCard]:
+        return BoosterGenerator.getBoosterPack(self.fpData)
+
+    def clone(self) -> object:
+        return FatPack(self.name, self.fpData, self.fpData.cntBoosters)
+
+    def getTotalCards(self) -> int:
+        return super().getTotalCards() * self.fpData.getCntBoosters() + self.fpData.getNumberOfCardsExpected()
+
+    class Template(SealedTemplate):
+        def __init__(self, edition: CardEdition):
+            super().__init__(edition.getCode(), edition.getFatPackExtraSlots())
+
+            self.cntBoosters = edition.getFatPackCount()
+
+        def getCntBoosters(self) -> int:
+            return self.cntBoosters
+
+        def toString(self) -> str:
+            if 0 >= self.cntBoosters:
+                return "no cards"
+
+            s = ""
+            for p in self.slots:
+                s += str(p.getRight()) + " " + p.getLeft() + ", "
+            # trim the last comma and space
+            if len(s) > 0:
+                s = s[:len(s) - 2]
+
+            if 0 < self.cntBoosters:
+                if len(s) > 0:
+                    s += " and "
+
+                s += str(self.cntBoosters) + " booster packs "
+            return s
+
+    def getImageKey(self, altState: bool) -> str:
+        return ImageKeys.FATPACK_PREFIX + self.getEdition()
 ```

@@ -44,7 +44,7 @@ classDiagram
 
 The description is already written. Here it is:
 
-VoteAi is the forge-ai decision module for spell abilities that conduct votes, supplying the AI's behavior for both whether to activate a voting effect and how to cast its ballots. Extending `SpellAbilityAi`, it overrides the standard hooks—`canPlay`, `chkDrawback`, and `doTriggerNoCost`—to plug into Forge's ability-evaluation framework, returning `AiAbilityDecision` objects that pair a confidence score with an `AiPlayDecision` rationale.
+VoteAi is the forge-ai decision module for spell abilities that conduct votes, supplying the AI's behavior for both whether to activate a voting effect and how to cast its ballots. Extending `SpellAbilityAi`, it overrides the standard hooksâ€”`canPlay`, `chkDrawback`, and `doTriggerNoCost`â€”to plug into Forge's ability-evaluation framework, returning `AiAbilityDecision` objects that pair a confidence score with an `AiPlayDecision` rationale.
 
 Its play logic is dispatched on a card-defined `AILogic` parameter, handling specific cases (`Always`, `Judgment`, which checks the battlefield for a valid `VoteCard`, and `Torture`, which defers until after Main 1) and otherwise declining. The overridden `chooseNumber` encodes the core voting intent: the AI casts an adversarial ballot, choosing the minimum when the voter or activating `Player` is an opponent and the maximum otherwise. Collaboration with `Card`, `Player`, and `SpellAbility` is read-only, reflecting an advisory role that informs rather than mutates game state.
 
@@ -121,4 +121,61 @@ public class VoteAi extends SpellAbilityAi {
         return max;
     }
 }
+```
+
+## Python
+`forge/ai/ability/VoteAi.py`
+
+```python
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.ai.SpellAbilityAi import SpellAbilityAi
+from forge.game.card.Card import Card
+from forge.game.card.CardLists import CardLists
+from forge.game.phase.PhaseType import PhaseType
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+
+from typing import Map
+
+
+class VoteAi(SpellAbilityAi):
+    # (non-Javadoc)
+    # @see forge.card.abilityfactory.SpellAiLogic#canPlayAI(forge.game.player.Player, java.util.Map, forge.card.spellability.SpellAbility)
+    def canPlay(self, aiPlayer: Player, sa: SpellAbility) -> AiAbilityDecision:
+        # TODO: add ailogic
+        logic = sa.getParam("AILogic")
+        host = sa.getHostCard()
+        if "Always" == logic:
+            return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+        elif "Judgment" == logic:
+            if CardLists.getValidCards(host.getGame().getCardsIn(ZoneType.Battlefield),
+                    sa.getParam("VoteCard"), host.getController(), host, sa):
+                return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+            else:
+                return AiAbilityDecision(0, AiPlayDecision.MissingNeededCards)
+        elif "Torture" == logic:
+            if aiPlayer.getGame().getPhaseHandler().getPhase().isAfter(PhaseType.MAIN1):
+                return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+            else:
+                return AiAbilityDecision(0, AiPlayDecision.WaitForMain2)
+        return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+    # (non-Javadoc)
+    # @see forge.card.abilityfactory.SpellAiLogic#chkAIDrawback(java.util.Map, forge.card.spellability.SpellAbility, forge.game.player.Player)
+    def chkDrawback(self, aiPlayer: Player, sa: SpellAbility) -> AiAbilityDecision:
+        return self.canPlay(aiPlayer, sa)
+
+    def doTriggerNoCost(self, ai: Player, sa: SpellAbility, mandatory: bool) -> AiAbilityDecision:
+        return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+    def chooseNumber(self, player: Player, sa: SpellAbility, min: int, max: int, params: Map[str, object]) -> int:
+        if "Voter" in params:
+            p = params.get("Voter")
+            if p.isOpponentOf(player):
+                return min
+        if sa.getActivatingPlayer().isOpponentOf(player):
+            return min
+        return max
 ```

@@ -46,6 +46,12 @@ classDiagram
 - [[forge.util.FileSection|FileSection]]
 - [[forge.util.storage.StorageReaderFolder|StorageReaderFolder]]
 
+## Design Description
+
+PreconDeck represents a prebuilt ("precon") deck as an inventory item within Forge's item model. It implements InventoryItemFromSet, exposing a deck's name, edition/set code, item type label ("Prebuilt Deck"), description, and image key, while wrapping an immutable Deck instance it delegates name and string representation to. Most state is final, reflecting an intentionally read-only catalog item; only the image filename is mutable, set during loading.
+
+Its nested Reader, a StorageReaderFolder<PreconDeck>, handles persistence: it parses deck files via FileSection into metadata sections, validates the set against StaticData's known editions (defaulting to "n/a"), and reconstructs decks through DeckSerializer. This keeps file-format and edition-validation concerns separate from the item's value-object role, collaborating with the deck and storage subsystems to populate the inventory.
+
 ## Source
 `forge-core/src/main/java/forge/item/PreconDeck.java`
 
@@ -173,4 +179,81 @@ public class PreconDeck implements InventoryItemFromSet {
     }      
     
 }
+```
+
+## Python
+`forge/item/PreconDeck.py`
+
+```python
+from forge.ImageKeys import ImageKeys
+from forge.StaticData import StaticData
+from forge.deck.Deck import Deck
+from forge.deck.io.DeckSerializer import DeckSerializer
+from forge.deck.io.DeckStorage import DeckStorage
+from forge.util.FileSection import FileSection
+from forge.util.FileUtil import FileUtil
+from forge.util.storage.StorageReaderFolder import StorageReaderFolder
+from forge.item.InventoryItemFromSet import InventoryItemFromSet
+
+
+class PreconDeck(InventoryItemFromSet):
+    # private final SellRules recommendedDeals;
+
+    def getName(self) -> str:
+        return self.deck.getName()
+
+    def getItemType(self) -> str:
+        return "Prebuilt Deck"
+
+    def __str__(self) -> str:
+        return str(self.deck)
+
+    def __init__(self, d: Deck, set: str, description: str):
+        self.deck = d
+        self.set = set
+        self.description = description
+        self.imageFilename = None
+
+    def getDeck(self) -> Deck:
+        return self.deck
+
+    # Gets the recommended deals.
+    #
+    # @return the recommended deals
+    #    public final SellRules getRecommendedDeals() {
+    #        return this.recommendedDeals;
+    #    }
+
+    def getImageFilename(self) -> str:
+        return self.imageFilename
+
+    def getEdition(self) -> str:
+        return self.set
+
+    def getDescription(self) -> str:
+        return self.description
+
+    class Reader(StorageReaderFolder):
+        def __init__(self, deckDir0):
+            super().__init__(deckDir0, PreconDeck.getName)
+
+        def read(self, file):
+            return self.getPreconDeckFromSections(FileSection.parseSections(FileUtil.readFile(file)))
+
+        # To be able to read "shops" section in overloads
+        def getPreconDeckFromSections(self, sections: dict[str, list[str]]):
+            kv = FileSection.parse(sections.get("metadata"), FileSection.EQUALS_KV_SEPARATOR)
+            imageFilename = kv.get("Image")
+            description = kv.get("Description")
+            deckEdition = kv.get("set")
+            set = "n/a" if deckEdition is None or StaticData.instance().getEditions().get(deckEdition.upper()) is None else deckEdition
+            result = PreconDeck(DeckSerializer.fromSections(sections), set, description)
+            result.imageFilename = imageFilename
+            return result
+
+        def getFileFilter(self):
+            return DeckStorage.DCK_FILE_FILTER
+
+    def getImageKey(self, altState: bool) -> str:
+        return ImageKeys.PRECON_PREFIX + self.imageFilename
 ```

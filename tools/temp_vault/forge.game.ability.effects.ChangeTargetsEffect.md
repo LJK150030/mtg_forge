@@ -49,7 +49,7 @@ classDiagram
 
 ChangeTargetsEffect is a concrete spell-ability effect that implements the Magic rules for redirecting or re-choosing the targets of spells and abilities already on the stack. Extending SpellAbilityEffect, it overrides buildSpellAbility to constrain targeting to the Stack zone, and resolve to perform the actual retargeting against the MagicStack. For each affected SpellAbility it walks the chain of SpellAbilityStackInstance sub-instances, mutating their TargetChoices to apply new GameObject/GameEntity targets.
 
-The class encodes several distinct retargeting modes driven by script parameters—optional confirmation, ChangeSingleTarget selection, RandomTarget, DefinedMagnet redirection, and player-chosen new targets—while honoring comprehensive-rules constraints (e.g., no duplicate targets, preserving original targets when no legal change exists) and faithfully carrying over divided-damage allocations. It collaborates with the activating or designated Player's controller for choices and delegates legality checks to each SpellAbility, keeping rules-correct retargeting centralized in one reusable effect.
+The class encodes several distinct retargeting modes driven by script parametersâ€”optional confirmation, ChangeSingleTarget selection, RandomTarget, DefinedMagnet redirection, and player-chosen new targetsâ€”while honoring comprehensive-rules constraints (e.g., no duplicate targets, preserving original targets when no legal change exists) and faithfully carrying over divided-damage allocations. It collaborates with the activating or designated Player's controller for choices and delegates legality checks to each SpellAbility, keeping rules-correct retargeting centralized in one reusable effect.
 
 ## Source
 `forge-game/src/main/java/forge/game/ability/effects/ChangeTargetsEffect.java`
@@ -146,7 +146,7 @@ public class ChangeTargetsEffect extends SpellAbilityEffect {
                 GameObject newTarget = Iterables.getFirst(getDefinedCardsOrTargeted(sa, "DefinedMagnet"), null);
 
                 // CR 115.3. The same target can't be chosen multiple times for
-                // any one instance of the word Ã¢â‚¬Å“targetÃ¢â‚¬Â on a spell or ability.
+                // any one instance of the word ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œtargetÃƒÂ¢Ã¢â€šÂ¬Ã‚Â on a spell or ability.
                 if (!oldTargetBlock.contains(newTarget) && replaceIn.getSpellAbility().canTarget(newTarget)) {
                     newTargetBlock.remove(oldTarget);
                     newTargetBlock.add(newTarget);
@@ -210,4 +210,128 @@ public class ChangeTargetsEffect extends SpellAbilityEffect {
         }
     }
 }
+```
+
+## Python
+`forge/game/ability/effects/ChangeTargetsEffect.py`
+
+```python
+from forge.game.GameEntity import GameEntity
+from forge.game.GameObject import GameObject
+from forge.game.GameObjectPredicates import GameObjectPredicates
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.spellability.SpellAbilityStackInstance import SpellAbilityStackInstance
+from forge.game.spellability.TargetChoices import TargetChoices
+from forge.game.zone.MagicStack import MagicStack
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.Aggregates import Aggregates
+from forge.util.Localizer import Localizer
+
+
+# TODO: Write javadoc for this type.
+#
+class ChangeTargetsEffect(SpellAbilityEffect):
+
+    def buildSpellAbility(self, sa):
+        super().buildSpellAbility(sa)
+        if sa.usesTargeting():
+            sa.getTargetRestrictions().setZone(ZoneType.Stack)
+
+    # (non-Javadoc)
+    # @see forge.card.ability.SpellAbilityEffect#resolve(forge.card.spellability.SpellAbility)
+    def resolve(self, sa):
+        sas = self.getTargetSpells(sa)
+        activator = sa.getActivatingPlayer()
+        chooser = self.getDefinedPlayersOrTargeted(sa, "Chooser")[0] if sa.hasParam("Chooser") else activator
+
+        stack = activator.getGame().getStack()
+
+        for tgtSA in sas:
+            si = stack.getInstanceMatchingSpellAbilityID(tgtSA)
+            if si is None:
+                # If there isn't a Stack Instance, there isn't really a target
+                continue
+
+            changingTgtSI = si
+
+            # Redirect rules read 'you MAY choose new targets' ... okay!
+            # TODO: Don't even ask to change targets, if the SA and subs don't actually have targets
+            isOptional = sa.hasParam("Optional")
+            if isOptional and not chooser.getController().confirmAction(sa, None, Localizer.getInstance().getMessage("lblDoYouWantChangeAbilityTargets", tgtSA.getHostCard().toString()), None):
+                continue
+            if sa.hasParam("ChangeSingleTarget"):
+                # 1. choose a target of target spell
+                allTargets = []
+                while changingTgtSI is not None:
+                    changedSa = changingTgtSI.getSpellAbility()
+                    if changedSa.usesTargeting():
+                        for it in changedSa.getTargets():
+                            allTargets.append((changingTgtSI, it))
+                    changingTgtSI = changingTgtSI.getSubInstance()
+                if not allTargets:
+                    return
+
+                chosenTarget = chooser.getController().chooseTarget(sa, allTargets)
+                # 2. prepare new target choices
+                replaceIn = chosenTarget[0]
+                oldTarget = chosenTarget[1]
+                newTargetBlock = replaceIn.getTargetChoices()
+                oldTargetBlock = newTargetBlock.clone()
+                # gets the divided value from old target
+                div = oldTargetBlock.getDividedValue(oldTarget)
+                # 3. test if updated choices would be correct.
+                newTarget = next(iter(self.getDefinedCardsOrTargeted(sa, "DefinedMagnet")), None)
+
+                # CR 115.3. The same target can't be chosen multiple times for
+                # any one instance of the word "target" on a spell or ability.
+                if not oldTargetBlock.contains(newTarget) and replaceIn.getSpellAbility().canTarget(newTarget):
+                    newTargetBlock.remove(oldTarget)
+                    newTargetBlock.add(newTarget)
+                    if div is not None:
+                        newTargetBlock.addDividedAllocation(newTarget, div)
+                    replaceIn.updateTarget(oldTargetBlock, sa.getHostCard())
+            else:
+                while changingTgtSI is not None:
+                    changingTgtSA = changingTgtSI.getSpellAbility()
+                    if changingTgtSA.usesTargeting():
+                        # random target and DefinedMagnet works on single targets
+                        if sa.hasParam("RandomTarget"):
+                            div = changingTgtSA.getTotalDividedValue()
+                            candidates = changingTgtSA.getTargetRestrictions().getAllCandidates(changingTgtSA, True)
+                            if sa.hasParam("RandomTargetRestriction"):
+                                candidates[:] = [c for c in candidates if c.isValid(sa.getParam("RandomTargetRestriction").split(","), activator, sa.getHostCard(), sa)]
+                            # CR 115.7a If a target can't be changed to another legal target, the original target is unchanged
+                            if not candidates:
+                                return
+                            choice = Aggregates.random(candidates)
+                            oldTarget = changingTgtSA.getTargets()
+                            changingTgtSA.resetTargets()
+                            changingTgtSA.getTargets().add(choice)
+                            if changingTgtSA.isDividedAsYouChoose():
+                                changingTgtSA.addDividedAllocation(choice, div)
+                            changingTgtSI.updateTarget(oldTarget, sa.getHostCard())
+                        elif sa.hasParam("DefinedMagnet"):
+                            newTarget = next(iter(self.getDefinedCardsOrTargeted(sa, "DefinedMagnet")), None)
+                            if newTarget is not None and changingTgtSA.canTarget(newTarget):
+                                div = changingTgtSA.getTotalDividedValue()
+                                oldTarget = changingTgtSA.getTargets()
+                                changingTgtSA.resetTargets()
+                                changingTgtSA.getTargets().add(newTarget)
+                                if changingTgtSA.isDividedAsYouChoose():
+                                    changingTgtSA.addDividedAllocation(newTarget, div)
+                                changingTgtSI.updateTarget(oldTarget, sa.getHostCard())
+                        else:
+                            # Update targets, with a potential new target
+                            source = sa.getHostCard()
+                            if changingTgtSA.getTargetCard() is not None:
+                                # try to use old target so "Other" restriction of Meddle works
+                                source = changingTgtSA.getTargetCard()
+                            filter = GameObjectPredicates.restriction(sa.getParam("TargetRestriction").split(","), activator, source, sa) if sa.hasParam("TargetRestriction") else None
+                            oldTarget = changingTgtSA.getTargets()
+                            chooser.getController().chooseNewTargetsFor(changingTgtSA, filter, False)
+                            changingTgtSI.updateTarget(oldTarget, sa.getHostCard())
+                    changingTgtSI = changingTgtSI.getSubInstance()
 ```

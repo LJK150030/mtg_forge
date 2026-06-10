@@ -141,3 +141,78 @@ public class TapOrUntapEffect extends SpellAbilityEffect {
     }
 }
 ```
+
+## Python
+`forge/game/ability/effects/TapOrUntapEffect.py`
+
+```python
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.player.Player import Player
+from forge.game.player.PlayerController import PlayerController
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.trigger.TriggerType import TriggerType
+from forge.util.Lang import Lang
+from forge.util.Localizer import Localizer
+
+
+class TapOrUntapEffect(SpellAbilityEffect):
+
+    # (non-Javadoc)
+    # @see forge.card.abilityfactory.SpellEffect#getStackDescription(java.util.Map, forge.card.spellability.SpellAbility)
+    def getStackDescription(self, sa: SpellAbility) -> str:
+        # when getStackDesc is called, just build exactly what is happening
+        sb = []
+
+        sb.append("Tap or untap ")
+
+        sb.append(Lang.joinHomogenous(self.getTargetCards(sa)))
+        sb.append(".")
+        return "".join(sb)
+
+    def resolve(self, sa: SpellAbility) -> None:
+        tapper = sa.getActivatingPlayer()
+        if sa.hasParam("Tapper"):
+            tapper = AbilityUtils.getDefinedPlayers(sa.getHostCard(), sa.getParam("Tapper"), sa).getFirst()
+        pc = tapper.getController()
+        toggle = sa.hasParam("Toggle")
+
+        tapped = CardCollection()
+        untapMap: dict[Player, CardCollection] = {}
+        for tgtC in self.getTargetCards(sa):
+            if not tgtC.isInPlay():
+                continue
+            if tgtC.isPhasedOut():
+                continue
+
+            # check if the object is still in game or if it was moved
+            gameCard = tapper.getGame().getCardState(tgtC, None)
+            # gameCard is LKI in that case, the card is not in game anymore
+            # or the timestamp did change
+            # this should check Self too
+            if gameCard is None or not tgtC.equalsWithGameTimestamp(gameCard):
+                continue
+            # If the effected card is controlled by the same controller of the SA, default to untap.
+            if toggle:
+                tap = not gameCard.isTapped()
+            else:
+                # all cards using this are optional, so don't need to worry about impossible choice
+                tap = pc.chooseBinary(sa, Localizer.getInstance().getMessage("lblTapOrUntapTarget", gameCard.getTranslatedName()), PlayerController.BinaryChoiceType.TapOrUntap,
+                        not gameCard.getController().equals(tapper))
+            if tap:
+                if gameCard.tap(True, sa, tapper):
+                    tapped.add(gameCard)
+            elif gameCard.untap():
+                untapMap.setdefault(tapper, CardCollection()).add(gameCard)
+        if untapMap:
+            runParams = AbilityKey.newMap()
+            runParams[AbilityKey.Map] = untapMap
+            tapper.getGame().getTriggerHandler().runTrigger(TriggerType.UntapAll, runParams, False)
+        if not tapped.isEmpty():
+            runParams = AbilityKey.newMap()
+            runParams[AbilityKey.Cards] = tapped
+            tapper.getGame().getTriggerHandler().runTrigger(TriggerType.TapAll, runParams, False)
+```

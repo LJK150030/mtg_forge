@@ -32,6 +32,12 @@ classDiagram
 **Uses:**
 - [[forge.item.PaperCard|PaperCard]]
 
+## Design Description
+
+ItemPoolSorter is a small, reusable `Comparator` implementation that orders item-pool entriesâ€”`Map.Entry<T, Integer>` pairs of an item and its quantityâ€”by a configurable key. Rather than hard-coding sort logic, it accepts a `Function` that extracts a `Comparable` field from each entry plus an `ascending` flag, then delegates ordering to that field's natural comparison, inverting the result for descending order. Nulls are handled defensively, sorting absent values to one end.
+
+The class is generic over the item type `T` and collaborates with `PaperCard` chiefly through its predefined `BY_NAME_THEN_SET` constant, a ready-made sorter keyed on the entry key. By combining a strategy function with a direction flag and exposing reusable static instances, it keeps item-pool sorting flexible and centralized while remaining decoupled from any specific UI or table layer.
+
 ## Source
 `forge-core/src/main/java/forge/util/ItemPoolSorter.java`
 
@@ -116,4 +122,53 @@ public class ItemPoolSorter<T> implements Comparator<Entry<T, Integer>> {
         return this.ascending ? obj1.compareTo(obj2) : obj2.compareTo(obj1);
     }
 }
+```
+
+## Python
+`forge/util/ItemPoolSorter.py`
+
+```python
+from forge.item.PaperCard import PaperCard
+
+from typing import Callable, Generic, TypeVar
+
+T = TypeVar("T")
+
+
+class ItemPoolSorter(Generic[T]):
+    """
+    TableSorter class.
+
+    @param <T> the generic type
+    @author Forge
+    @version $Id: TableSorter.java 21966 2013-06-05 06:58:32Z Max mtg $
+    """
+
+    BY_NAME_THEN_SET: "ItemPoolSorter[PaperCard]" = None
+
+    def __init__(self, field: Callable[[tuple], object], inAscending: bool):
+        """
+        Constructor for TableSorter.
+
+        @param field the field
+        @param inAscending a boolean.
+        """
+        self.field = field
+        self.ascending = inAscending
+
+    def compare(self, arg0: tuple, arg1: tuple) -> int:
+        obj1 = self.field(arg0)
+        obj2 = self.field(arg1)
+        if obj1 is None:
+            return -1
+        if obj2 is None:
+            return 1
+        # System.out.println(String.format("%s vs %s _______ %s vs %s", arg0, arg1, obj1, obj2));
+        if self.ascending:
+            return (obj1 > obj2) - (obj1 < obj2)
+        return (obj2 > obj1) - (obj2 < obj1)
+
+
+# The Constant byNameThenSet.
+ItemPoolSorter.BY_NAME_THEN_SET = ItemPoolSorter(lambda entry: entry[0], True)
 ```

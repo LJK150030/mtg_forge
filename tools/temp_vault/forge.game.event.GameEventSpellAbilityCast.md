@@ -48,7 +48,7 @@ classDiagram
 
 GameEventSpellAbilityCast is an immutable record that captures the moment a spell or ability is cast, activated, or triggered, serving as a notification object broadcast through Forge's game-event system. As a `GameEvent` implementation, it participates in the engine's visitor-based event dispatch: its `visit` method double-dispatches to an `IGameEventVisitor`, letting observers (typically UI or logging) react without the event needing to know their concrete types.
 
-The record deliberately stores view-layer snapshots—`SpellAbilityView` and `StackItemView`—rather than live `SpellAbility`/`SpellAbilityStackInstance` objects, decoupling consumers from mutable game state. Its convenience constructor performs this conversion and eagerly computes a human-readable target description from the ability's `TargetChoices`, so the immutable payload is fully resolved at construction time. The `toString` override formats a readable cast/trigger/activate message for logs and event feeds.
+The record deliberately stores view-layer snapshotsâ€”`SpellAbilityView` and `StackItemView`â€”rather than live `SpellAbility`/`SpellAbilityStackInstance` objects, decoupling consumers from mutable game state. Its convenience constructor performs this conversion and eagerly computes a human-readable target description from the ability's `TargetChoices`, so the immutable payload is fully resolved at construction time. The `toString` override formats a readable cast/trigger/activate message for logs and event feeds.
 
 ## Source
 `forge-game/src/main/java/forge/game/event/GameEventSpellAbilityCast.java`
@@ -93,4 +93,57 @@ public record GameEventSpellAbilityCast(SpellAbilityView sa, StackItemView si, i
         return "" + si.getActivatingPlayer() + (sa.isSpell() ? " cast " : si.isTrigger() ? " triggered " : " activated ") + sa;
     }
 }
+```
+
+## Python
+`forge/game/event/GameEventSpellAbilityCast.py`
+
+```python
+from forge.game.event.GameEvent import GameEvent
+from forge.game.event.IGameEventVisitor import IGameEventVisitor
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.spellability.SpellAbilityStackInstance import SpellAbilityStackInstance
+from forge.game.spellability.SpellAbilityView import SpellAbilityView
+from forge.game.spellability.StackItemView import StackItemView
+from forge.game.spellability.TargetChoices import TargetChoices
+
+
+class GameEventSpellAbilityCast(GameEvent):
+
+    def __init__(self, sa: SpellAbility, si: SpellAbilityStackInstance, stackIndex: int):
+        self._sa = SpellAbilityView.get(sa)
+        self._si = StackItemView.get(si)
+        self._stackIndex = stackIndex
+        self._targetDescription = GameEventSpellAbilityCast.computeTargetDescription(sa)
+
+    def sa(self) -> SpellAbilityView:
+        return self._sa
+
+    def si(self) -> StackItemView:
+        return self._si
+
+    def stackIndex(self) -> int:
+        return self._stackIndex
+
+    def targetDescription(self) -> str:
+        return self._targetDescription
+
+    @staticmethod
+    def computeTargetDescription(sa: SpellAbility) -> str:
+        if sa.getTargetRestrictions() is None:
+            return None
+        sb = []
+        for ch in sa.getAllTargetChoices():
+            if ch is not None:
+                if len("".join(sb)) > 0:
+                    sb.append(" ")
+                sb.append(str(ch))
+        result = "".join(sb)
+        return None if len(result) == 0 else result
+
+    def visit(self, visitor: IGameEventVisitor):
+        return visitor.visit(self)
+
+    def __str__(self) -> str:
+        return "" + str(self._si.getActivatingPlayer()) + (" cast " if self._sa.isSpell() else " triggered " if self._si.isTrigger() else " activated ") + str(self._sa)
 ```

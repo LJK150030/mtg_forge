@@ -37,6 +37,12 @@ classDiagram
 - [[forge.game.card.Card|Card]]
 - [[forge.game.spellability.SpellAbility|SpellAbility]]
 
+## Design Description
+
+TriggerManaAdded is a concrete trigger that fires when mana is added to a player's pool, typically from a mana-producing ability. As a subclass of Trigger, it specializes the framework's template by implementing the matching and binding hooks: performTest screens candidate events against the trigger's configured parametersâ€”ValidSource, ValidSA, Player, and the produced mana colorâ€”using the host card's chosen color when "ChosenColor" is specified. setTriggeringObjects then exposes the source card, controlling player, and produced mana to the resulting SpellAbility for use in its effect.
+
+It collaborates with AbilityKey to read typed values from the runtime parameter map, with Card and SpellAbility as the event's source and resolved ability, and with MagicColor and TextUtil to normalize mana into comparable string form. getImportantStackObjects supplies a localized stack description of the produced mana, reflecting an intent to keep trigger logic data-driven and presentation localized.
+
 ## Source
 `forge-game/src/main/java/forge/game/trigger/TriggerManaAdded.java`
 
@@ -139,4 +145,53 @@ public class TriggerManaAdded extends Trigger {
                 toManaString(sa.getTriggeringObject(AbilityKey.Produced).toString());
     }
 }
+```
+
+## Python
+`forge/game/trigger/TriggerManaAdded.py`
+
+```python
+package forge.game.trigger
+
+from typing import Any
+
+from forge.card.MagicColor import MagicColor
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Localizer import Localizer
+from forge.util.TextUtil import toManaString
+from forge.game.trigger.Trigger import Trigger
+
+
+class TriggerManaAdded(Trigger):
+    def __init__(self, params: dict[str, str], host: Card, intrinsic: bool):
+        super().__init__(params, host, intrinsic)
+
+    def performTest(self, runParams: dict[AbilityKey, Any]) -> bool:
+        if not self.matchesValidParam("ValidSource", runParams.get(AbilityKey.Card)):
+            return False
+        if not self.matchesValidParam("ValidSA", runParams.get(AbilityKey.AbilityMana)):
+            return False
+        if not self.matchesValidParam("Player", runParams.get(AbilityKey.Player)):
+            return False
+
+        if self.hasParam("Produced"):
+            prod = runParams.get(AbilityKey.Produced)
+            if not isinstance(prod, str):
+                return False
+            produced = prod
+            if "ChosenColor" == self.getParam("Produced"):
+                if not self.getHostCard().hasChosenColor() or MagicColor.toShortString(self.getHostCard().getChosenColor()) not in produced:
+                    return False
+            elif MagicColor.toShortString(self.getParam("Produced")) not in produced:
+                return False
+        return True
+
+    def setTriggeringObjects(self, sa: SpellAbility, runParams: dict[AbilityKey, Any]) -> None:
+        sa.setTriggeringObjectsFrom(runParams, AbilityKey.Card, AbilityKey.Player, AbilityKey.Produced)
+
+    def getImportantStackObjects(self, sa: SpellAbility) -> str:
+        return Localizer.getInstance().getMessage("lblProduced") + ": " + \
+            toManaString(str(sa.getTriggeringObject(AbilityKey.Produced)))
 ```

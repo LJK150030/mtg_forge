@@ -67,6 +67,12 @@ classDiagram
 - [[forge.item.PaperCard|PaperCard]]
 - [[forge.util.TextUtil.PhraseCase|PhraseCase]]
 
+## Design Description
+
+TextUtil is a stateless, final-style utility class in `forge.util` providing a broad collection of static string-manipulation helpers for the forge-core module. Its responsibilities span text normalization, Roman-numeral conversion, fast custom splitting (including parenthesis-aware tokenization), joining, case and label formatting, enclosing/affixing helpers, mana-string and sortable-name construction, XML sanitization, and changelog formatting. It depends only on lightweight collaboratorsâ€”holding no inheritance relationships and exposing functionality entirely through static methods over shared static state (cached date formatters, a Roman-numeral map, a changelog buffer).
+
+As a leaf helper it collaborates with domain types `PaperCard` (formatting card lists) and `IPaperCard` (default artist constant), and defines the nested `PhraseCase` enum to drive compound-word splitting. The design favors performanceâ€”custom `split` and `fastReplace` implementations explicitly aim to outpace `String.split`â€”and localization, exposing the overridable `ARTICLE_WORDS` array for sort-name generation.
+
 ## Source
 `forge-core/src/main/java/forge/util/TextUtil.java`
 
@@ -524,3 +530,438 @@ public class TextUtil {
     }
 }
 ```
+
+## Python
+`forge/util/TextUtil.py`
+
+````python
+package forge.util ΓÇö Python port:
+
+```python
+import datetime
+import re
+import unicodedata
+from enum import Enum
+
+from forge.item.IPaperCard import IPaperCard
+from forge.item.PaperCard import PaperCard
+from forge.util.FileUtil import FileUtil
+
+
+class PhraseCase(Enum):
+    Title = "Title"
+    Sentence = "Sentence"
+    Lower = "Lower"
+
+
+class TextUtil:
+    """
+    TODO: Write javadoc for this type.
+    """
+
+    changes = []  # acts as the shared StringBuilder buffer
+    simpleDate = None
+
+    romanMap = {
+        1000: "M", 900: "CM",
+        500: "D", 400: "CD",
+        100: "C", 90: "XC",
+        50: "L", 40: "XL",
+        10: "X", 9: "IX",
+        5: "V", 4: "IV", 1: "I",
+    }
+
+    @staticmethod
+    def toRoman(number):
+        if number <= 0:
+            return ""
+        l = max(k for k in TextUtil.romanMap if k <= number)
+        return TextUtil.romanMap[l] + TextUtil.toRoman(number - l)
+
+    @staticmethod
+    def normalizeText(text):
+        if text is None:
+            return IPaperCard.NO_ARTIST_NAME
+        return unicodedata.normalize("NFD", text)
+
+    @staticmethod
+    def decimalFormat(value):
+        formatted = "{:.2f}".format(value)
+        # mimic DecimalFormat("#.##") which strips trailing zeros and the dot
+        if "." in formatted:
+            formatted = formatted.rstrip("0").rstrip(".")
+        return formatted
+
+    @staticmethod
+    def safeToString(obj):
+        """
+        Safely converts an object to a String.
+
+        @param obj
+                   to convert; may be null
+
+        @return "null" if obj is null, obj.toString() otherwise
+        """
+        return "null" if obj is None else str(obj)
+
+    @staticmethod
+    def mapToString(map):
+        mapAsString = []
+        isFirst = True
+        for key, value in map.items():
+            if isFirst:
+                isFirst = False
+            else:
+                mapAsString.append("; ")
+            mapAsString.append(key)
+            mapAsString.append(" => ")
+            mapAsString.append("(null)" if value is None else str(value))
+        return "".join(mapAsString)
+
+    @staticmethod
+    def split(input, delimiter, limit=None):
+        if limit is None:
+            limit = 2147483647
+        return TextUtil.splitWithParenthesis(input, delimiter, limit, '\0', '\0', True)
+
+    @staticmethod
+    def splitWithParenthesis(input, delimiter, *args):
+        # Resolve the various overloads:
+        #   (input, delimiter)
+        #   (input, delimiter, openPar, closePar)
+        #   (input, delimiter, limit)
+        #   (input, delimiter, openPar, closePar, limit)
+        #   (input, delimiter, maxEntries, openPar, closePar, skipEmpty)
+        if len(args) == 0:
+            return TextUtil._splitWithParenthesis(input, delimiter, 2147483647, '(', ')', True)
+        elif len(args) == 1:
+            limit = args[0]
+            return TextUtil._splitWithParenthesis(input, delimiter, limit, '(', ')', True)
+        elif len(args) == 2:
+            openPar, closePar = args
+            return TextUtil._splitWithParenthesis(input, delimiter, 2147483647, openPar, closePar, True)
+        elif len(args) == 3:
+            openPar, closePar, limit = args
+            return TextUtil._splitWithParenthesis(input, delimiter, limit, openPar, closePar, True)
+        else:
+            maxEntries, openPar, closePar, skipEmpty = args
+            return TextUtil._splitWithParenthesis(input, delimiter, maxEntries, openPar, closePar, skipEmpty)
+
+    @staticmethod
+    def _splitWithParenthesis(input, delimiter, maxEntries, openPar, closePar, skipEmpty):
+        """
+        Split string separated by a single char delimiter, can take parenthesis in account
+        It's faster than String.split, and allows parenthesis
+        """
+        result = []
+        # Assume that when equal non-zero parenthesis are passed, they need to be discarded
+        trimParenthesis = openPar == closePar and openPar > '\0'
+        nPar = 0
+        length = len(input)
+        start = 0
+        idx = 1
+        for iC in range(length):
+            c = input[iC]
+            if closePar > '\0' and c == closePar and nPar > 0:
+                nPar -= 1
+            elif openPar > '\0' and c == openPar:
+                nPar += 1
+
+            if c == delimiter and nPar == 0 and idx < maxEntries:
+                if iC > start or not skipEmpty:
+                    result.append(str(input[start:iC]))
+                    idx += 1
+                start = iC + 1
+
+        if length > start or not skipEmpty:
+            result.append(str(input[start:length]))
+
+        toReturn = result
+        if trimParenthesis:
+            toReturn = [s.strip(openPar) for s in toReturn]
+        return toReturn
+
+    @staticmethod
+    def join(strs, delim):
+        sb = []
+        for str_ in strs:
+            if len(sb) > 0:
+                sb.append(delim)
+            sb.append(str_)
+        return "".join(sb)
+
+    @staticmethod
+    def enumToLabel(val):
+        """
+        Converts an enum value to a printable label but upcasing the first letter
+        and lcasing all subsequent letters
+        """
+        s = str(val)
+        return s[0:1].upper() + s[1:].lower()
+
+    @staticmethod
+    def buildFourColumnList(firstLine, cAnteRemoved):
+        sb = [firstLine]
+        i = 0
+        for cp in cAnteRemoved:
+            if i != 0:
+                sb.append(", ")
+            if i % 4 == 0:
+                sb.append("\n")
+            sb.append(str(cp))
+            i += 1
+        return "".join(sb)
+
+    CHAR_UNDEFINED = chr(65535)  # taken from KeyEvent.CHAR_UNDEFINED which can't live here since awt library can't be referenced
+
+    @staticmethod
+    def isPrintableChar(c):
+        category = unicodedata.category(c)
+        isISOControl = (0 <= ord(c) <= 0x1F) or (0x7F <= ord(c) <= 0x9F)
+        return (not isISOControl) and \
+            c != TextUtil.CHAR_UNDEFINED and \
+            category != "Cn" and \
+            not (0xFFF0 <= ord(c) <= 0xFFFF)
+
+    @staticmethod
+    def splitCompoundWord(word, phraseCase):
+        builder = []
+        for i in range(len(word)):
+            ch = word[i]
+            if ch.isupper():
+                if i > 0:
+                    builder.append(" ")
+                if phraseCase == PhraseCase.Title:
+                    builder.append(ch)
+                elif phraseCase == PhraseCase.Sentence:
+                    if i > 0:
+                        builder.append(ch)
+                    else:
+                        builder.append(ch.lower())
+                elif phraseCase == PhraseCase.Lower:
+                    builder.append(ch.lower())
+                    continue
+            else:
+                builder.append(ch)
+        return "".join(builder)
+
+    @staticmethod
+    def capitalize(s):
+        return s[0:1].upper() + s[1:]
+
+    @staticmethod
+    def concatWithSpace(*s):
+        """concatenate with spaces"""
+        sb = []
+        for i in range(len(s)):
+            sb.append(s[i])
+            if i < len(s) - 1:
+                sb.append(" ")
+        return "".join(sb)
+
+    @staticmethod
+    def concatNoSpace(*s):
+        """concatenate no spaces"""
+        sb = []
+        for str_ in s:
+            sb.append(str_)
+        return "".join(sb)
+
+    @staticmethod
+    def enclosedParen(s):
+        """enclosed in Parentheses"""
+        sb = []
+        sb.append("(")
+        sb.append(s)
+        sb.append(")")
+        return "".join(sb)
+
+    @staticmethod
+    def enclosedBracket(s):
+        """enclosed in Brackets"""
+        sb = []
+        sb.append("[")
+        sb.append(s)
+        sb.append("]")
+        return "".join(sb)
+
+    @staticmethod
+    def enclosedSingleQuote(s):
+        """enclosed in Single Quote"""
+        sb = []
+        sb.append("'")
+        sb.append(s)
+        sb.append("'")
+        return "".join(sb)
+
+    @staticmethod
+    def enclosedDoubleQuote(s):
+        """enclosed in Double Quote"""
+        sb = []
+        sb.append("\"")
+        sb.append(s)
+        sb.append("\"")
+        return "".join(sb)
+
+    @staticmethod
+    def addSuffix(s, suffix):
+        """suffix"""
+        sb = []
+        sb.append(s)
+        sb.append(suffix)
+        return "".join(sb)
+
+    @staticmethod
+    def addPrefix(prefix, s):
+        """prefix"""
+        sb = []
+        sb.append(prefix)
+        sb.append(s)
+        return "".join(sb)
+
+    @staticmethod
+    def fastReplace(str, target, replacement):
+        """fast Replace"""
+        if str is None:
+            return None
+        targetLength = len(target)
+        if targetLength == 0:
+            return str
+        idx2 = str.find(target)
+        if idx2 < 0:
+            return str
+        sb = []
+        idx1 = 0
+        while True:
+            sb.append(str[idx1:idx2])
+            sb.append(replacement)
+            idx1 = idx2 + targetLength
+            idx2 = str.find(target, idx1)
+            if not (idx2 > 0):
+                break
+        sb.append(str[idx1:len(str)])
+        return "".join(sb)
+
+    @staticmethod
+    def toManaString(ManaProduced):
+        """Convert to Mana String"""
+        if "mana" == ManaProduced or "Combo" in ManaProduced or "Any" in ManaProduced:
+            return "mana"  # fix manamorphose stack description and probably others..
+        return "{" + TextUtil.fastReplace(ManaProduced, " ", "}{") + "}"
+
+    @staticmethod
+    def toSortableName(printedName):
+        """
+        Converts a card name to a sortable name.
+        Trim leading quotes, then move article last, then replace characters.
+        Because An-Havva Constable.
+        Capitals and lowercase sorted as one: "my deck" before "Myr Retribution"
+        Apostrophes matter, though: "D'Avenant" before "Danitha"
+        TO DO: Commas before apostrophes: "Rakdos, Lord of Riots" before "Rakdos's Return"
+
+        @param printedName The name of the card.
+        @return A sortable name.
+        """
+        if printedName.startswith("\""):
+            printedName = printedName[1:]
+        return re.sub(r"[^\s'0-9a-z]", "", TextUtil.moveArticleToEnd(printedName).lower())
+
+    ARTICLE_WORDS = [
+        "A",
+        "An",
+        "The",
+    ]
+    """
+    Article words. These words get kicked to the end of a sortable name.
+    For localization, simply overwrite this array with appropriate words.
+    Words in this list are used by the method String moveArticleToEnd(String), useful
+    for alphabetizing phrases, in particular card or other inventory object names.
+    """
+
+    @staticmethod
+    def moveArticleToEnd(str):
+        """
+        Detects whether a string begins with an article word
+
+        @param str The name of the card.
+        @return The sort-friendly name of the card. Example: "The Hive" becomes "Hive The".
+        """
+        for articleWord in TextUtil.ARTICLE_WORDS:
+            if str.startswith(articleWord + " "):
+                str = str[len(articleWord) + 1:] + " " + articleWord
+                return str
+        return str
+
+    @staticmethod
+    def stripNonValidXMLCharacters(in_):
+        """
+        Strip non valid XML Characters
+        """
+        out = []
+
+        if in_ is None or ("" == in_):
+            return ""
+        for i in range(len(in_)):
+            current = ord(in_[i])
+            if (current == 0x9) or (current == 0xA) or (current == 0xD) \
+                    or ((current >= 0x20) and (current <= 0xD7FF)) \
+                    or ((current >= 0xE000) and (current <= 0xFFFD)) \
+                    or ((current >= 0x10000) and (current <= 0x10FFFF)):
+                out.append(chr(current))
+        return "".join(out)
+
+    @staticmethod
+    def getSimpleDate():
+        if TextUtil.simpleDate is None:
+            TextUtil.simpleDate = "E, MMM dd, yyyy - hh:mm:ss a"
+        return TextUtil.simpleDate
+
+    @staticmethod
+    def getFormattedChangelog(changelog, defaultLog):
+        if not changelog.exists():
+            return defaultLog
+        if TextUtil.changes is None or "".join(TextUtil.changes) == "":
+            try:
+                original_fmt = "%Y-%m-%d %H:%M:%S"
+                formatted_fmt = "%a, %b %d, %Y - %I:%M:%S %p"
+                offset = " GMT " + str(datetime.datetime.now().astimezone().strftime("%z"))
+                toformat = FileUtil.readAllLines(changelog, False)
+                skip = False
+                count = 0
+                for line in toformat:
+                    if line == "" or line.startswith("#") or len(line) < 4:
+                        continue
+                    if "**Merge" in line:
+                        skip = True
+                        continue
+                    if line.startswith("["):
+                        if skip:
+                            skip = False
+                            continue
+                        count += 1
+                        datestring = line[line.rfind(" *") + 1:].replace("*", "")
+                        try:
+                            toDate = datetime.datetime.strptime(datestring, original_fmt)
+                            toDate = toDate.replace(tzinfo=datetime.timezone.utc)
+                            localDate = toDate.astimezone()
+                            TextUtil.changes.append("\n(" + localDate.strftime(formatted_fmt) + offset + ")\n\n")
+                        except Exception:
+                            TextUtil.changes.append("\n(" + datestring + ")\n\n")
+                        if count > 20:
+                            break
+                    else:
+                        if skip:
+                            continue
+                        if line.startswith(" * "):
+                            TextUtil.changes.append("\n" + TextUtil._unescapeXml(line))
+                        else:
+                            TextUtil.changes.append(TextUtil._unescapeXml(line))
+            except Exception:
+                return defaultLog
+        return "".join(TextUtil.changes)
+
+    @staticmethod
+    def _unescapeXml(s):
+        return s.replace("&lt;", "<").replace("&gt;", ">") \
+            .replace("&quot;", "\"").replace("&apos;", "'").replace("&amp;", "&")
+````

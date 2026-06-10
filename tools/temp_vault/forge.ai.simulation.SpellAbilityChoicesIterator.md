@@ -69,9 +69,9 @@ classDiagram
 
 ## Design Description
 
-`SpellAbilityChoicesIterator` enumerates, for the simulation-based AI, every combination of decisions a `SpellAbility` may demand—mode selection, target selection, and card choices—surfacing the current candidate through `chooseModesForAbility`, `chooseTargets`, `chooseCard`, and `announceX`. Constructed with and owned by a `SimulationController`, it serves as the choice-generation engine driving the `GameSimulator`: each accessor yields one option while `advance(Score)` steps to the next combination, feeding best-seen `Score`s back to the controller so a depth-first search can prune and rank branches.
+`SpellAbilityChoicesIterator` enumerates, for the simulation-based AI, every combination of decisions a `SpellAbility` may demandâ€”mode selection, target selection, and card choicesâ€”surfacing the current candidate through `chooseModesForAbility`, `chooseTargets`, `chooseCard`, and `announceX`. Constructed with and owned by a `SimulationController`, it serves as the choice-generation engine driving the `GameSimulator`: each accessor yields one option while `advance(Score)` steps to the next combination, feeding best-seen `Score`s back to the controller so a depth-first search can prune and rank branches.
 
-The class is deliberately a stateful, resumable iterator over a nested choice space ordered modes → targets → choices. It builds its mode iterators lazily—`CombinatoricsUtils` combinations, or the nested `AllowRepeatModesIterator` for repeatable modes—filters untargetable modes through `modesMap`/`remapModes`, and caches per-target `Score`s so pre-judged targets are skipped. It rebuilds `MultiTargetSelector` each pass because the `SpellAbility` differs per simulation, and tracks `evalDepth` to assert balanced push/pop of controller evaluations.
+The class is deliberately a stateful, resumable iterator over a nested choice space ordered modes â†’ targets â†’ choices. It builds its mode iterators lazilyâ€”`CombinatoricsUtils` combinations, or the nested `AllowRepeatModesIterator` for repeatable modesâ€”filters untargetable modes through `modesMap`/`remapModes`, and caches per-target `Score`s so pre-judged targets are skipped. It rebuilds `MultiTargetSelector` each pass because the `SpellAbility` differs per simulation, and tracks `evalDepth` to assert balanced push/pop of controller evaluations.
 
 ## Source
 `forge-ai/src/main/java/forge/ai/simulation/SpellAbilityChoicesIterator.java`
@@ -370,4 +370,275 @@ public class SpellAbilityChoicesIterator {
         }
     }
 }
+```
+
+## Python
+`forge/ai/simulation/SpellAbilityChoicesIterator.py`
+
+```python
+from forge.ai.ComputerUtilAbility import ComputerUtilAbility
+from forge.ai.ComputerUtilCost import ComputerUtilCost
+from forge.ai.simulation.GameStateEvaluator.Score import Score
+from forge.ai.simulation.GameSimulator import GameSimulator
+from forge.ai.simulation.MultiTargetSelector import MultiTargetSelector
+from forge.ai.simulation.SimulationController import SimulationController
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.spellability.AbilitySub import AbilitySub
+from forge.game.spellability.SpellAbility import SpellAbility
+
+import itertools
+
+_INT_MIN = -2147483648
+
+
+class SpellAbilityChoicesIterator:
+    class ChoicePoint:
+        def __init__(self):
+            self.numChoices = -1
+            self.nextChoice = 0
+            self.selectedChoice = None
+            self.bestScoreForChoice = Score(_INT_MIN)
+
+    class _CombinationsIterator:
+        # Iterates over combinations of `num` indexes out of `numChoices`,
+        # mirroring CombinatoricsUtils.combinationsIterator. Exposes a
+        # hasNext()/next() interface so it can be used interchangeably with
+        # AllowRepeatModesIterator.
+        def __init__(self, numChoices, num):
+            self._it = itertools.combinations(range(numChoices), num)
+            self._advance()
+
+        def _advance(self):
+            try:
+                self._nextval = list(next(self._it))
+            except StopIteration:
+                self._nextval = None
+
+        def hasNext(self):
+            return self._nextval is not None
+
+        def next(self):
+            if self._nextval is None:
+                raise StopIteration()
+            result = self._nextval
+            self._advance()
+            return result
+
+    def __init__(self, controller: SimulationController):
+        self.controller = controller
+
+        self.modeIterator = None
+        self.selectedModes = None
+        self.bestScoreForMode = Score(_INT_MIN)
+        self.advancedToNextMode = False
+
+        self.cachedTargetScores = None
+        self.nextTarget = 0
+        self.bestScoreForTarget = Score(_INT_MIN)
+        self.pushTarget = True
+
+        self.choicePoints = []
+        self.incrementedCpIndex = 0
+        self.cpIndex = -1
+
+        self.evalDepth = 0
+        # Maps from filtered mode indexes to original ones.
+        self.modesMap = None
+
+    def chooseModesForAbility(self, sa: SpellAbility, choices: list[AbilitySub], min: int, num: int, allowRepeat: bool) -> list[AbilitySub]:
+        if self.modeIterator is None:
+            # Skip modes that don't have legal targets.
+            self.modesMap = []
+            origIndex = -1
+            for sub in choices:
+                origIndex += 1
+                if not ComputerUtilAbility.isFullyTargetable(sub):
+                    continue
+                self.modesMap.append(origIndex)
+            # TODO: Do we need to do something special to support cards that have extra costs
+            # when choosing more modes, like Blessed Alliance?
+            if len(self.modesMap) == 0:
+                return None
+            elif not allowRepeat:
+                self.modeIterator = SpellAbilityChoicesIterator._CombinationsIterator(len(self.modesMap), num)
+            else:
+                # Note: When allowRepeat is true, it does result in many possibilities being tried.
+                # We should ideally prune some of those at a higher level.
+                self.modeIterator = SpellAbilityChoicesIterator.AllowRepeatModesIterator(len(self.modesMap), min, num)
+            self.selectedModes = self.remapModes(self.modeIterator.next())
+            self.advancedToNextMode = True
+        # Note: If modeIterator already existed, selectedModes would have been updated in advance().
+        result = self.getModeCombination(choices, self.selectedModes)
+        if self.advancedToNextMode:
+            sb = ""
+            for sub in result:
+                if len(sb) > 0:
+                    sb += " "
+                else:
+                    sb += sub.getHostCard().getName() + " -> "
+                sb += str(sub)
+            self.controller.evaluateChosenModes(self.selectedModes, sb)
+            self.evalDepth += 1
+            self.advancedToNextMode = False
+        return result
+
+    def remapModes(self, modes):
+        for i in range(len(modes)):
+            modes[i] = self.modesMap[modes[i]]
+        return modes
+
+    def chooseCard(self, fetchList: CardCollection) -> Card:
+        self.cpIndex += 1
+        if self.cpIndex >= len(self.choicePoints):
+            self.choicePoints.append(SpellAbilityChoicesIterator.ChoicePoint())
+        cp = self.choicePoints[self.cpIndex]
+        # Prune duplicates.
+        uniqueCards = set()
+        for card in fetchList:
+            if card.getName() not in uniqueCards:
+                uniqueCards.add(card.getName())
+                if len(uniqueCards) == cp.nextChoice + 1:
+                    cp.selectedChoice = card
+        if cp.selectedChoice is None:
+            raise RuntimeError()
+        cp.numChoices = len(uniqueCards)
+        if self.cpIndex >= self.incrementedCpIndex:
+            self.controller.evaluateCardChoice(cp.selectedChoice)
+            self.evalDepth += 1
+        return cp.selectedChoice
+
+    def chooseTargets(self, sa: SpellAbility, simulator: GameSimulator) -> None:
+        # Note: Can't just keep a TargetSelector object cached because it's
+        # responsible for setting state on a SA and the SA object changes each
+        # time since it's a different simulation.
+        selector = MultiTargetSelector(sa, None)
+        if selector.hasPossibleTargets():
+            if self.cachedTargetScores is None:
+                self.cachedTargetScores = []
+                self.nextTarget = -1
+                i = 0
+                while selector.selectNextTargets():
+                    score = self.controller.shouldSkipTarget(sa, simulator)
+                    self.cachedTargetScores.append(score)
+                    if score is not None:
+                        self.controller.printState(score, sa, " - via estimate (skipped)", False)
+                    elif self.nextTarget == -1:
+                        self.nextTarget = i
+                    i += 1
+                selector.reset()
+                # If all targets were cached, we unfortunately have to evaluate the first target again
+                # because at this point we're already running the simulation code and there's no turning
+                # back. This used to be not possible when the PossibleTargetSelector was controlling the
+                # flow. :(
+                if self.nextTarget == -1:
+                    self.nextTarget = 0
+            selector.selectTargetsByIndex(self.nextTarget)
+            self.controller.setHostAndTarget(sa, simulator)
+            # The hierarchy is modes -> targets -> choices[]. In the presence of choices, we want to call
+            # evaluate just once at the top level.
+            if self.pushTarget:
+                self.controller.evaluateTargetChoices(sa, selector.getLastSelectedTargets())
+                self.evalDepth += 1
+                self.pushTarget = False
+
+    def advance(self, lastScore: Score) -> bool:
+        self.cpIndex = -1
+        for cp in self.choicePoints:
+            if lastScore.value > cp.bestScoreForChoice.value:
+                cp.bestScoreForChoice = lastScore
+        if lastScore.value > self.bestScoreForTarget.value:
+            self.bestScoreForTarget = lastScore
+        if lastScore.value > self.bestScoreForMode.value:
+            self.bestScoreForMode = lastScore
+
+        if len(self.choicePoints) != 0:
+            for i in range(len(self.choicePoints) - 1, -1, -1):
+                cp = self.choicePoints[i]
+                if cp.nextChoice + 1 < cp.numChoices:
+                    cp.nextChoice += 1
+                    # Remove tail of the list.
+                    self.incrementedCpIndex = i
+                    for j in range(len(self.choicePoints) - 1, i - 1, -1):
+                        self.doneEvaluating(self.choicePoints[j].bestScoreForChoice)
+                    del self.choicePoints[i + 1:]
+                    return True
+            for i in range(len(self.choicePoints) - 1, -1, -1):
+                self.doneEvaluating(self.choicePoints[i].bestScoreForChoice)
+            self.choicePoints.clear()
+        if self.cachedTargetScores is not None:
+            self.pushTarget = True
+            self.doneEvaluating(self.bestScoreForTarget)
+            self.bestScoreForTarget = Score(_INT_MIN)
+            while self.nextTarget + 1 < len(self.cachedTargetScores):
+                self.nextTarget += 1
+                if self.cachedTargetScores[self.nextTarget] is None:
+                    return True
+            self.nextTarget = -1
+            self.cachedTargetScores = None
+        if self.modeIterator is not None:
+            self.doneEvaluating(self.bestScoreForMode)
+            self.bestScoreForMode = Score(_INT_MIN)
+            if self.modeIterator.hasNext():
+                self.selectedModes = self.remapModes(self.modeIterator.next())
+                self.advancedToNextMode = True
+                return True
+            self.modeIterator = None
+
+        if self.evalDepth != 0:
+            raise RuntimeError("" + str(self.evalDepth))
+        return False
+
+    def doneEvaluating(self, bestScore: Score) -> None:
+        self.controller.doneEvaluating(bestScore)
+        self.evalDepth -= 1
+
+    @staticmethod
+    def getModeCombination(choices: list[AbilitySub], modeIndexes) -> list[AbilitySub]:
+        modes = []
+        for modeIndex in modeIndexes:
+            modes.append(choices[modeIndex])
+        return modes
+
+    def announceX(self, sa: SpellAbility) -> None:
+        # TODO this should also iterate over all possible values
+        # (currently no additional complexity to keep performance reasonable)
+        if sa.costHasManaX():
+            x = ComputerUtilCost.setMaxXValue(sa, sa.getActivatingPlayer(), sa.isTrigger())
+            self.controller.getLastDecision().xMana = x
+
+    class AllowRepeatModesIterator:
+        def __init__(self, numChoices, min, max):
+            self.numChoices = numChoices
+            self.max = max
+            self.indexes = [0] * min
+
+        def hasNext(self):
+            return self.indexes is not None
+
+        # Note: This returns a new int[] array and doesn't modify indexes in place,
+        # since that gets returned to the caller.
+        def getNextIndexes(self):
+            # TODO: In some cases, ordering has no effect - e.g. AAB and BAA are equivalent.
+            # We should detect those and skip equivalent modes.
+            for i in range(len(self.indexes) - 1, -1, -1):
+                if self.indexes[i] < self.numChoices - 1:
+                    nextIndexes = [0] * len(self.indexes)
+                    for j in range(i):
+                        nextIndexes[j] = self.indexes[j]
+                    nextIndexes[i] = self.indexes[i] + 1
+                    return nextIndexes
+            if len(self.indexes) < self.max:
+                return [0] * (len(self.indexes) + 1)
+            return None
+
+        def next(self):
+            if self.indexes is None:
+                raise StopIteration()
+            result = self.indexes
+            self.indexes = self.getNextIndexes()
+            return result
+
+        def remove(self):
+            raise NotImplementedError()
 ```

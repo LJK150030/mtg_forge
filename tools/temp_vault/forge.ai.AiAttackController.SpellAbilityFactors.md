@@ -49,12 +49,12 @@ classDiagram
 
 ## Design Description
 
-`SpellAbilityFactors` is a private inner helper of `AiAttackController` that captures, for a single prospective attacker, the tactical facts the AI needs to decide whether attacking is worthwhile. Its constructor binds the `Card` attacker, and `calculate(defenders, combat)` evaluates that creature against the opponent's valid blockers — recording whether it can be killed (including by a single blocker or "dangerous" wither/lifelink blockers), whether it can kill all blockers, whether it tramples through, and aggregate blocker counts and power.
+`SpellAbilityFactors` is a private inner helper of `AiAttackController` that captures, for a single prospective attacker, the tactical facts the AI needs to decide whether attacking is worthwhile. Its constructor binds the `Card` attacker, and `calculate(defenders, combat)` evaluates that creature against the opponent's valid blockers â€” recording whether it can be killed (including by a single blocker or "dangerous" wither/lifelink blockers), whether it can kill all blockers, whether it tramples through, and aggregate blocker counts and power.
 
-Acting as a plain data-and-computation object, it delegates rules queries to collaborators — `CombatUtil`, `ComputerUtilCombat`, and `ComputerUtilCard` — over `CardCollection`/`Combat` inputs, and consults `PlayerControllerAi` for tunable AI properties such as avoiding reckless attacks. The design intent is to precompute combat heuristics once per attacker so the enclosing controller's attack strategy can read simple boolean/int flags rather than recompute combat math, with short-circuiting loops kept for performance.
+Acting as a plain data-and-computation object, it delegates rules queries to collaborators â€” `CombatUtil`, `ComputerUtilCombat`, and `ComputerUtilCard` â€” over `CardCollection`/`Combat` inputs, and consults `PlayerControllerAi` for tunable AI properties such as avoiding reckless attacks. The design intent is to precompute combat heuristics once per attacker so the enclosing controller's attack strategy can read simple boolean/int flags rather than recompute combat math, with short-circuiting loops kept for performance.
 
 ## Source
-`forge-ai/src/main/java/forge/ai/AiAttackController.java` â€” declaration excerpt
+`forge-ai/src/main/java/forge/ai/AiAttackController.java` Ã¢â‚¬â€ declaration excerpt
 
 ```java
     private class SpellAbilityFactors {
@@ -163,4 +163,118 @@ Acting as a plain data-and-computation object, it delegates rules queries to col
             }
         }
     }
+```
+
+## Python
+`forge/ai/AiAttackController/SpellAbilityFactors.py`
+
+```python
+from forge.ai.PlayerControllerAi import PlayerControllerAi
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.combat.Combat import Combat
+from forge.game.combat.CombatUtil import CombatUtil
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CardPredicates import CardPredicates
+from forge.game.card.CounterEnumType import CounterEnumType
+from forge.game.keyword.Keyword import Keyword
+from forge.util.Aggregates import Aggregates
+from forge.ai.ComputerUtilCombat import ComputerUtilCombat
+from forge.ai.ComputerUtilCard import ComputerUtilCard
+from forge.ai.AiProps import AiProps
+
+
+class SpellAbilityFactors:
+    def __init__(self, c: Card):
+        self.attacker = None  # type: Card
+        self.canBeKilled = False  # indicates if the attacker can be killed
+        self.canBeKilledByOne = False  # indicates if the attacker can be killed by a single blocker
+        self.canKillAll = True  # indicates if the attacker can kill all single blockers
+        self.canKillAllDangerous = True  # indicates if the attacker can kill all single blockers with wither or infect
+        self.isWorthLessThanAllKillers = True
+        self.hasAttackEffect = False
+        self.hasCombatEffect = False
+        self.dangerousBlockersPresent = False
+        self.canTrampleOverDefenders = False
+        self.numberOfPossibleBlockers = 0
+        self.defPower = 0
+
+        self.attacker = c
+
+    def canBeBlocked(self) -> bool:
+        return (self.numberOfPossibleBlockers > 2
+                or (self.numberOfPossibleBlockers >= 1 and CombatUtil.canAttackerBeBlockedWithAmount(self.attacker, 1, defendingOpponent))
+                or (self.numberOfPossibleBlockers == 2 and CombatUtil.canAttackerBeBlockedWithAmount(self.attacker, 2, defendingOpponent)))
+
+    def calculate(self, defenders: list[Card], combat: Combat) -> None:
+        self.hasAttackEffect = self.attacker.getSVar("HasAttackEffect") == "TRUE" or self.attacker.hasKeyword(Keyword.ANNIHILATOR)
+        # is there a gain in attacking even when the blocker is not killed (Lifelink, Wither,...)
+        self.hasCombatEffect = (self.attacker.getSVar("HasCombatEffect") == "TRUE" or "Blocked" == self.attacker.getSVar("HasAttackEffect")
+                or self.attacker.isWitherDamage() or self.attacker.hasKeyword(Keyword.LIFELINK) or self.attacker.hasKeyword(Keyword.AFFLICT))
+
+        # contains only the defender's blockers that can actually block the attacker
+        validBlockers = CardLists.filter(defenders, lambda defender1: CombatUtil.canBlock(self.attacker, defender1))
+
+        self.canTrampleOverDefenders = self.attacker.hasKeyword(Keyword.TRAMPLE) and self.attacker.getNetCombatDamage() > Aggregates.sum(validBlockers, Card.getNetToughness)
+
+        # used to check that CanKillAllDangerous check makes sense in context where creatures with dangerous abilities are present
+        self.dangerousBlockersPresent = validBlockers.anyMatch(
+                CardPredicates.hasKeyword(Keyword.LIFELINK)
+                .or_(Card.isWitherDamage)
+        )
+
+        # total power of the defending creatures, used in predicting whether a gang block can kill the attacker
+        self.defPower = CardLists.getTotalPower(validBlockers, None)
+
+        # look at the attacker in relation to the blockers to establish a
+        # number of factors about the attacking context that will be relevant
+        # to the attackers decision according to the selected strategy
+        for blocker in validBlockers:
+            # if both isWorthLessThanAllKillers and canKillAllDangerous are false there's nothing more to check
+            if self.isWorthLessThanAllKillers or self.canKillAllDangerous or self.numberOfPossibleBlockers < 2:
+                self.numberOfPossibleBlockers += 1
+                if (self.isWorthLessThanAllKillers and ComputerUtilCombat.canDestroyAttacker(ai, self.attacker, blocker, combat, False)
+                        and not (self.attacker.hasKeyword(Keyword.UNDYING) and self.attacker.getCounters(CounterEnumType.P1P1) == 0)):
+                    self.canBeKilledByOne = True  # there is a single creature on the battlefield that can kill the creature
+                    # see if the defending creature is of higher or lower
+                    # value. We don't want to attack only to lose value
+                    if (self.isWorthLessThanAllKillers and not self.attacker.hasSVar("SacMe")
+                            and ComputerUtilCard.evaluateCreature(blocker) <= ComputerUtilCard.evaluateCreature(self.attacker)):
+                        self.isWorthLessThanAllKillers = False
+                # see if this attacking creature can destroy this defender, if
+                # not record that it can't kill everything
+                if self.canKillAllDangerous and not ComputerUtilCombat.canDestroyBlocker(ai, blocker, self.attacker, combat, False):
+                    self.canKillAll = False
+
+                    if (blocker.getSVar("HasCombatEffect") == "TRUE" or blocker.getSVar("HasBlockEffect") == "TRUE"
+                            or blocker.isWitherDamage() or blocker.hasKeyword(Keyword.LIFELINK)):
+                        self.canKillAllDangerous = False
+                        # there is a creature that can survive an attack from this creature
+                        # and combat will have negative effects
+
+                    # Check if maybe we are too reckless in adding this attacker
+                    if self.canKillAllDangerous:
+                        avoidAttackingIntoBlock = (ai.getController().isAI()
+                                and ai.getController().getAi().getBoolProperty(AiProps.TRY_TO_AVOID_ATTACKING_INTO_CERTAIN_BLOCK))
+                        attackerWillDie = self.defPower >= self.attacker.getNetToughness()
+                        uselessAttack = not self.hasCombatEffect and not self.hasAttackEffect
+                        noContributionToAttack = attackers.size() <= defenders.size() or self.attacker.getNetPower() <= 0
+
+                        # We are attacking too recklessly if we can't kill a single blocker and:
+                        # - our creature will die for sure (chump attack)
+                        # - our attack will not do anything special (no attack/combat effect to proc)
+                        # - we can't deal damage to our opponent with sheer number of attackers and/or our attacker's power is 0 or less
+                        if attackerWillDie or (avoidAttackingIntoBlock and uselessAttack and noContributionToAttack):
+                            self.canKillAllDangerous = False
+
+        # performance-wise it doesn't seem worth it to check attackVigilance() instead (only includes a single niche card)
+        if not self.attacker.hasKeyword(Keyword.VIGILANCE) and ComputerUtilCard.canBeKilledByRoyalAssassin(ai, self.attacker):
+            self.canKillAllDangerous = False
+            self.canBeKilled = True
+            self.canBeKilledByOne = True
+            self.isWorthLessThanAllKillers = False
+            self.hasCombatEffect = False
+        elif (self.canKillAllDangerous or not self.canBeKilled) and ComputerUtilCard.canBeBlockedProfitably(defendingOpponent, self.attacker, True):
+            self.canKillAllDangerous = False
+            self.canBeKilled = True
 ```

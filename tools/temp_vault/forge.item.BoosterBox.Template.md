@@ -33,8 +33,14 @@ classDiagram
 **Uses:**
 - [[forge.card.CardEdition|CardEdition]]
 
+## Design Description
+
+The `Template` class is a private nested specialization of `SealedTemplate` that models the contents of a Magic: The Gathering booster box for a specific card set. Its sole responsibility is to capture how many booster packs a box contains, derived at construction time from a `CardEdition` via `getBoosterBoxCount()`. By extending `SealedTemplate`, it reuses the inherited slot-based representation of sealed product contents (the `slots` collection) while adding the booster-count dimension.
+
+The design favors immutability and encapsulation: `cntBoosters` is `final`, the constructor is `private` (restricting instantiation to the enclosing `BoosterBox`), and `CardEdition` is used only transiently as a configuration source rather than retained. The overridden `toString()` produces a human-readable summary, concatenating any fixed card slots with the booster-pack count and gracefully reporting "no cards" when the box is empty.
+
 ## Source
-`forge-core/src/main/java/forge/item/BoosterBox.java` — declaration excerpt
+`forge-core/src/main/java/forge/item/BoosterBox.java` Ã¢â‚¬â€ declaration excerpt
 
 ```java
     public static class Template extends SealedTemplate {
@@ -70,4 +76,39 @@ classDiagram
             return s.toString();
         }
     }
+```
+
+## Python
+`forge/item/BoosterBox/Template.py`
+
+```python
+from forge.item.SealedTemplate import SealedTemplate
+from forge.card.CardEdition import CardEdition
+
+
+class Template(SealedTemplate):
+    def __init__(self, edition: CardEdition):
+        super().__init__(edition.getCode(), [])
+        self.cntBoosters = edition.getBoosterBoxCount()
+
+    def getCntBoosters(self) -> int:
+        return self.cntBoosters
+
+    def toString(self) -> str:
+        if 0 >= self.cntBoosters:
+            return "no cards"
+
+        s = ""
+        for p in self.slots:
+            s += str(p.getRight()) + " " + p.getLeft() + ", "
+        # trim the last comma and space
+        if len(s) > 0:
+            s = s[:len(s) - 2]
+
+        if 0 < self.cntBoosters:
+            if len(s) > 0:
+                s += " and "
+
+            s += str(self.cntBoosters) + " booster packs "
+        return s
 ```

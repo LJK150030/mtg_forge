@@ -51,7 +51,7 @@ classDiagram
 
 SeekEffect implements the resolution logic for "seek" abilities, where a player randomly retrieves cards matching specified types from their library (or a defined card pool) into their hand. As a concrete subclass of SpellAbilityEffect, it overrides `resolve` to perform the effect and `getStackDescription` to supply the displayed text, fitting Forge's command-style pattern in which each game ability delegates execution to a dedicated effect class. It interprets SpellAbility parameters (Types/Type, Num, DefinedCards, RememberFound, ImprintFound) to drive behavior, using AbilityUtils and CardLists to compute amounts and filter valid candidates and Aggregates.random to pick cards.
 
-Notable design intent: it captures last-known battlefield and graveyard state up front and threads it through move operations via an AbilityKey map, records zone changes in a CardZoneTable so all zone-change triggers fire together at the end, distinguishes cards that actually reached the hand as "sought," and fires the SeekAll trigger per seeker—integrating cleanly with the engine's trigger and zone-tracking subsystems.
+Notable design intent: it captures last-known battlefield and graveyard state up front and threads it through move operations via an AbilityKey map, records zone changes in a CardZoneTable so all zone-change triggers fire together at the end, distinguishes cards that actually reached the hand as "sought," and fires the SeekAll trigger per seekerâ€”integrating cleanly with the engine's trigger and zone-tracking subsystems.
 
 ## Source
 `forge-game/src/main/java/forge/game/ability/effects/SeekEffect.java`
@@ -164,4 +164,94 @@ public class SeekEffect extends SpellAbilityEffect {
         triggerList.triggerChangesZoneAll(game, sa);
     }
 }
+```
+
+## Python
+`forge/game/ability/effects/SeekEffect.py`
+
+```python
+from forge.game.Game import Game
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.card.CardZoneTable import CardZoneTable
+from forge.game.card.CardLists import CardLists
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.trigger.TriggerType import TriggerType
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.Aggregates import Aggregates
+from forge.util.Localizer import Localizer
+
+
+class SeekEffect(SpellAbilityEffect):
+
+    # (non-Javadoc)
+    # @see forge.game.ability.SpellAbilityEffect#getStackDescription(forge.game.spellability.SpellAbility)
+    def getStackDescription(self, sa: SpellAbility) -> str:
+        return sa.getDescription()
+
+    def resolve(self, sa: SpellAbility) -> None:
+        source = sa.getHostCard()
+        game = source.getGame()
+
+        seekTypes: list[str] = []
+        if sa.hasParam("Types"):
+            seekTypes.extend(sa.getParam("Types").split(","))
+        else:
+            seekTypes.append(sa.getParamOrDefault("Type", "Card"))
+
+        seekNum = AbilityUtils.calculateAmount(source, sa.getParamOrDefault("Num", "1"), sa)
+        if seekNum <= 0:
+            return
+
+        triggerList = CardZoneTable()
+        lastStateBattlefield = game.copyLastStateBattlefield()
+        lastStateGraveyard = game.copyLastStateGraveyard()
+
+        for seeker in self.getTargetPlayers(sa):
+            if not seeker.isInGame():
+                continue
+
+            soughtCards = CardCollection()
+
+            notify = []
+            for seekType in seekTypes:
+                if sa.hasParam("DefinedCards"):
+                    pool = AbilityUtils.getDefinedCards(source, sa.getParam("DefinedCards"), sa)
+                else:
+                    pool = CardCollection(seeker.getCardsIn(ZoneType.Library))
+                if seekType != "Card":
+                    pool = CardLists.getValidCards(pool, seekType, source.getController(), source, sa)
+                if pool.isEmpty():
+                    if len(notify) != 0:
+                        notify.append("\r\n")
+                    notify.append(Localizer.getInstance().getMessage("lblSeekFailed", seekType))
+                    continue  # can't find if nothing to seek
+
+                for c in Aggregates.random(pool, seekNum):
+                    moveParams = AbilityKey.newMap()
+                    moveParams[AbilityKey.LastStateBattlefield] = lastStateBattlefield
+                    moveParams[AbilityKey.LastStateGraveyard] = lastStateGraveyard
+                    movedCard = game.getAction().moveToHand(c, sa, moveParams)
+                    resultZone = movedCard.getZone().getZoneType()
+                    if resultZone != ZoneType.Library:  # as long as it moved we add to triggerList
+                        triggerList.put(ZoneType.Library, movedCard.getZone().getZoneType(), movedCard)
+                    if resultZone == ZoneType.Hand:  # if it went to hand as planned, consider it "sought"
+                        soughtCards.add(movedCard)
+
+            if len(notify) != 0:
+                game.getAction().notifyOfValue(sa, source, "".join(notify), None)
+            if not soughtCards.isEmpty():
+                if sa.hasParam("RememberFound"):
+                    source.addRemembered(soughtCards)
+                if sa.hasParam("ImprintFound"):
+                    source.addImprintedCards(soughtCards)
+                runParams = AbilityKey.mapFromPlayer(seeker)
+                runParams[AbilityKey.Cards] = soughtCards
+                game.getTriggerHandler().runTrigger(TriggerType.SeekAll, runParams, False)
+        triggerList.triggerChangesZoneAll(game, sa)
 ```

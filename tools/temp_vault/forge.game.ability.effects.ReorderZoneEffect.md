@@ -96,3 +96,44 @@ public class ReorderZoneEffect extends SpellAbilityEffect {
     }
 }
 ```
+
+## Python
+`forge/game/ability/effects/ReorderZoneEffect.py`
+
+```python
+import random
+
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.Lang import Lang
+from forge.util.MyRandom import MyRandom
+
+
+class ReorderZoneEffect(SpellAbilityEffect):
+    def getStackDescription(self, sa: SpellAbility) -> str:
+        zone = ZoneType.smartValueOf(sa.getParam("Zone"))
+        tgtPlayers = self.getTargetPlayers(sa)
+        shuffle = sa.hasParam("Random")
+
+        return "Reorder " + Lang.joinHomogenous(tgtPlayers) + " " + zone.toString() + " " + ("at random." if shuffle else "as your choose.")
+
+    def resolve(self, sa: SpellAbility) -> None:
+        zone = ZoneType.smartValueOf(sa.getParam("Zone"))
+        shuffle = sa.hasParam("Random")
+
+        for p in self.getTargetPlayers(sa):
+            if not p.isInGame():
+                continue
+
+            list = CardCollection(p.getCardsIn(zone))
+            if shuffle:
+                MyRandom.getRandom().shuffle(list)
+                p.getZone(zone).setCards(list)
+            else:
+                orderedCards = p.getController().orderMoveToZoneList(list, zone, sa)
+                p.getZone(zone).setCards(orderedCards)
+```

@@ -274,6 +274,12 @@ classDiagram
 - [[forge.trackable.TrackableTypes.TrackableType|TrackableType]]
 - [[forge.trackable.Tracker|Tracker]]
 
+## Design Description
+
+TrackableProperty is an enumeration that catalogs every observable attribute of the game's view layerâ€”cards, players, spell abilities, combat, stack items, and overall game stateâ€”each constant pairing a property key with a `TrackableType<?>` that defines its value's storage, default, and copy semantics. It functions as the central registry binding the trackable framework's keys to their typed value handlers, collaborating with TrackableType for type behavior, TrackableObject for property storage and change propagation (`copyChangedProps`, `getDefaultValue`), and Tracker for object-lookup updates.
+
+Its notable design intent is the per-constant `FreezeMode`, defaulting to `RespectsFreeze` but set to `IgnoresFreeze` for zones, animations, mana, and combat so state-based changes surface in the UI even while updates are otherwise frozen. Enum constants reference reusable singleton type instances from TrackableTypes, and unchecked generic casts let one untyped enum dispatch to strongly typed handlers.
+
 ## Source
 `forge-game/src/main/java/forge/trackable/TrackableProperty.java`
 
@@ -587,4 +593,308 @@ public enum TrackableProperty {
     }
 
 }
+```
+
+## Python
+`forge/trackable/TrackableProperty.py`
+
+```python
+from forge.card.CardRarity import CardRarity
+from forge.card.GamePieceType import GamePieceType
+from forge.game.Direction import Direction
+from forge.game.EvenOdd import EvenOdd
+from forge.game.GameType import GameType
+from forge.game.phase.PhaseType import PhaseType
+from forge.game.zone.ZoneType import ZoneType
+from forge.trackable.TrackableObject import TrackableObject
+from forge.trackable.Tracker import Tracker
+from forge.trackable.TrackableTypes import TrackableTypes
+from forge.trackable.TrackableTypes.TrackableType import TrackableType
+
+from enum import Enum
+
+
+class TrackableProperty(Enum):
+
+    class FreezeMode(Enum):
+        IgnoresFreeze = 1
+        RespectsFreeze = 2
+        IgnoresFreezeIfUnset = 3
+
+    def __new__(cls, type0, freezeMode0=FreezeMode.RespectsFreeze):
+        obj = object.__new__(cls)
+        obj._value_ = len(cls.__members__) + 1
+        obj.type = type0
+        obj.freezeMode = freezeMode0
+        return obj
+
+    # Shared
+    Text = TrackableTypes.StringType
+    PreventNextDamage = TrackableTypes.IntegerType
+    AttachedCards = TrackableTypes.CardViewCollectionType
+    Counters = TrackableTypes.CounterMapType
+    CurrentPlane = TrackableTypes.StringType
+    PlanarPlayer = TrackableTypes.PlayerViewType
+
+    # Card
+    Owner = TrackableTypes.PlayerViewType
+    Controller = TrackableTypes.PlayerViewType
+    Zone = TrackableTypes.EnumType(ZoneType)
+
+    GamePieceType = TrackableTypes.EnumType(GamePieceType)
+
+    IsEmblem = TrackableTypes.BooleanType
+    IsBoon = TrackableTypes.BooleanType
+    CanSpecialize = TrackableTypes.BooleanType
+
+    Flipped = TrackableTypes.BooleanType
+    Facedown = TrackableTypes.BooleanType
+    Foretold = TrackableTypes.BooleanType
+    Modal = TrackableTypes.BooleanType
+    Secondary = TrackableTypes.BooleanType
+    DoubleFaced = TrackableTypes.BooleanType
+    FacedownImageKey = TrackableTypes.StringType
+    PaperFoil = TrackableTypes.BooleanType
+
+    # TODO?
+    Cloner = TrackableTypes.StringType
+    Cloned = TrackableTypes.BooleanType
+    FlipCard = TrackableTypes.BooleanType
+    SplitCard = TrackableTypes.BooleanType
+    MergedCards = TrackableTypes.StringType
+    MergedCardsCollection = (TrackableTypes.CardViewCollectionType, FreezeMode.IgnoresFreeze)
+    RevealedCardsCollection = (TrackableTypes.CardViewCollectionType, FreezeMode.IgnoresFreeze)
+    PaperCardBackup = TrackableTypes.IPaperCardType
+
+    Attacking = TrackableTypes.BooleanType
+    Blocking = TrackableTypes.BooleanType
+    PhasedOut = TrackableTypes.BooleanType
+    Sickness = TrackableTypes.BooleanType
+    Tapped = TrackableTypes.BooleanType
+    Token = TrackableTypes.BooleanType
+    TokenCard = TrackableTypes.BooleanType
+    IsCommander = TrackableTypes.BooleanType
+    IsRingBearer = TrackableTypes.BooleanType
+    CommanderAltType = TrackableTypes.StringType
+    Damage = TrackableTypes.IntegerType
+    AssignedDamage = TrackableTypes.IntegerType
+    LethalDamage = TrackableTypes.IntegerType
+    ShieldCount = TrackableTypes.IntegerType
+    ChosenType = TrackableTypes.StringType
+    ChosenType2 = TrackableTypes.StringType
+    NotedTypes = TrackableTypes.StringListType
+    ChosenColors = TrackableTypes.StringListType
+    ChosenCards = TrackableTypes.CardViewCollectionType
+    ChosenNumber = TrackableTypes.StringType
+    StoredRolls = TrackableTypes.StringListType
+    ChosenPlayer = TrackableTypes.PlayerViewType
+    PromisedGift = TrackableTypes.PlayerViewType
+    ProtectingPlayer = TrackableTypes.PlayerViewType
+    ChosenDirection = TrackableTypes.EnumType(Direction)
+    ChosenEvenOdd = TrackableTypes.EnumType(EvenOdd)
+    ChosenMode = TrackableTypes.StringType
+    Sector = TrackableTypes.StringType
+    Sprocket = TrackableTypes.IntegerType
+    DraftAction = TrackableTypes.StringListType
+    ClassLevel = TrackableTypes.IntegerType
+    RingLevel = TrackableTypes.IntegerType
+    CurrentRoom = TrackableTypes.StringType
+    Intensity = TrackableTypes.IntegerType
+    OverlayText = TrackableTypes.StringType
+    MarkerText = TrackableTypes.StringListType
+    Remembered = TrackableTypes.StringType
+    NamedCard = TrackableTypes.StringListType
+    PlayerMayLook = (TrackableTypes.PlayerViewCollectionType, FreezeMode.IgnoresFreeze)
+    MayPlayPlayers = (TrackableTypes.PlayerViewCollectionType, FreezeMode.IgnoresFreeze)
+    EntityAttachedTo = TrackableTypes.GameEntityViewType
+    EncodedCards = TrackableTypes.CardViewCollectionType
+    UntilLeavesBattlefield = TrackableTypes.CardViewCollectionType
+    GainControlTargets = TrackableTypes.CardViewCollectionType
+    CloneOrigin = TrackableTypes.CardViewType
+    ExiledWith = TrackableTypes.CardViewType
+    WasDestroyed = TrackableTypes.BooleanType
+    CrackOverlay = TrackableTypes.IntegerType
+    NeedsTransformAnimation = (TrackableTypes.BooleanType, FreezeMode.IgnoresFreeze)
+    NeedsUntapAnimation = (TrackableTypes.BooleanType, FreezeMode.IgnoresFreeze)
+    NeedsTapAnimation = (TrackableTypes.BooleanType, FreezeMode.IgnoresFreeze)
+    MarkedColors = TrackableTypes.ColorSetType
+
+    ImprintedCards = TrackableTypes.CardViewCollectionType
+    ExiledCards = TrackableTypes.CardViewCollectionType
+    HauntedBy = TrackableTypes.CardViewCollectionType
+    Haunting = TrackableTypes.CardViewType
+    MustBlockCards = TrackableTypes.CardViewCollectionType
+    PairedWith = TrackableTypes.CardViewType
+    CurrentState = (TrackableTypes.CardStateViewType, FreezeMode.IgnoresFreeze)
+    AlternateState = (TrackableTypes.CardStateViewType, FreezeMode.IgnoresFreeze)
+    LeftSplitState = (TrackableTypes.CardStateViewType, FreezeMode.IgnoresFreeze)
+    RightSplitState = (TrackableTypes.CardStateViewType, FreezeMode.IgnoresFreeze)
+    Room = (TrackableTypes.BooleanType, FreezeMode.IgnoresFreeze)
+    HiddenId = TrackableTypes.IntegerType
+    ExertedThisTurn = TrackableTypes.BooleanType
+    Detained = TrackableTypes.BooleanType
+
+    # Card State
+    Name = TrackableTypes.StringType
+    Colors = TrackableTypes.ColorSetType
+    OriginalColors = TrackableTypes.ColorSetType
+    ImageKey = TrackableTypes.StringType
+    Type = TrackableTypes.CardTypeViewType
+    ManaCost = TrackableTypes.ManaCostType
+    OriginalManaCost = TrackableTypes.ManaCostType
+    SetCode = TrackableTypes.StringType
+    Rarity = TrackableTypes.EnumType(CardRarity)
+    FunctionalVariant = TrackableTypes.StringType
+    OracleText = TrackableTypes.StringType
+    RulesText = TrackableTypes.StringType
+    OracleName = TrackableTypes.StringType
+    Power = TrackableTypes.IntegerType
+    Toughness = TrackableTypes.IntegerType
+    Loyalty = TrackableTypes.StringType
+    Defense = TrackableTypes.StringType
+    AttractionLights = TrackableTypes.IntegerSetType
+    ChangedColorWords = TrackableTypes.StringMapType
+    HasChangedColors = TrackableTypes.BooleanType
+    HasPrintedPT = TrackableTypes.BooleanType
+    ChangedTypes = TrackableTypes.StringMapType
+
+    # check produce mana for BG
+    OrigProduceMana = TrackableTypes.ColorSetType
+    OrigProduceAnyMana = TrackableTypes.BooleanType
+
+    Keywords = TrackableTypes.KeywordCollectionViewType
+    HasAnnihilator = TrackableTypes.BooleanType
+    HasWard = TrackableTypes.BooleanType
+
+    BlockAdditional = TrackableTypes.IntegerType
+    BlockAny = TrackableTypes.BooleanType
+    AbilityText = TrackableTypes.StringType
+    NonAbilityText = TrackableTypes.StringType
+    HasDivideDamage = TrackableTypes.BooleanType
+    FoilIndex = TrackableTypes.IntegerType
+
+    CantHaveKeyword = TrackableTypes.StringSetType
+
+    # Player
+    IsAI = TrackableTypes.BooleanType
+    LobbyPlayerName = TrackableTypes.StringType
+    AvatarIndex = TrackableTypes.IntegerType
+    AvatarCardImageKey = TrackableTypes.StringType
+    SleeveIndex = TrackableTypes.IntegerType
+    Opponents = TrackableTypes.PlayerViewCollectionType
+    Life = TrackableTypes.IntegerType
+    MaxHandSize = TrackableTypes.IntegerType
+    HasUnlimitedHandSize = TrackableTypes.BooleanType
+    MaxLandPlay = TrackableTypes.IntegerType
+    HasUnlimitedLandPlay = TrackableTypes.BooleanType
+    NumLandThisTurn = TrackableTypes.IntegerType
+    NumManaShards = TrackableTypes.IntegerType
+    DraftNotes = TrackableTypes.StringMapType
+    NumDrawnThisTurn = TrackableTypes.IntegerType
+    AdditionalVote = TrackableTypes.IntegerType
+    OptionalAdditionalVote = TrackableTypes.IntegerType
+    ControlVotes = TrackableTypes.BooleanType
+    AdditionalVillainousChoices = TrackableTypes.IntegerType
+    Commander = (TrackableTypes.CardViewCollectionType, FreezeMode.IgnoresFreeze)
+    CommanderCast = TrackableTypes.IntegerMapType
+    CommanderDamage = TrackableTypes.IntegerMapType
+    MindSlaveMaster = TrackableTypes.PlayerViewType
+
+    Ante = (TrackableTypes.CardViewCollectionType, FreezeMode.IgnoresFreeze)
+    Battlefield = (TrackableTypes.CardViewCollectionType, FreezeMode.IgnoresFreeze)  # zones can't respect freeze, otherwise cards that die from state based effects won't have that reflected in the UI
+    Command = (TrackableTypes.CardViewCollectionType, FreezeMode.IgnoresFreeze)
+    Exile = (TrackableTypes.CardViewCollectionType, FreezeMode.IgnoresFreeze)
+    Flashback = (TrackableTypes.CardViewCollectionType, FreezeMode.IgnoresFreeze)
+    Graveyard = (TrackableTypes.CardViewCollectionType, FreezeMode.IgnoresFreeze)
+    Hand = (TrackableTypes.CardViewCollectionType, FreezeMode.IgnoresFreeze)
+    Library = (TrackableTypes.CardViewCollectionType, FreezeMode.IgnoresFreeze)
+    Sideboard = (TrackableTypes.CardViewCollectionType, FreezeMode.IgnoresFreeze)
+    PlanarDeck = (TrackableTypes.CardViewCollectionType, FreezeMode.IgnoresFreeze)
+    SchemeDeck = (TrackableTypes.CardViewCollectionType, FreezeMode.IgnoresFreeze)
+    AttractionDeck = (TrackableTypes.CardViewCollectionType, FreezeMode.IgnoresFreeze)
+    ContraptionDeck = (TrackableTypes.CardViewCollectionType, FreezeMode.IgnoresFreeze)
+    Junkyard = (TrackableTypes.CardViewCollectionType, FreezeMode.IgnoresFreeze)
+
+    Mana = (TrackableTypes.ManaMapType, FreezeMode.IgnoresFreeze)
+
+    IsExtraTurn = TrackableTypes.BooleanType
+    ExtraTurnCount = TrackableTypes.IntegerType
+    HasPriority = (TrackableTypes.BooleanType, FreezeMode.IgnoresFreeze)
+    AvatarLifeDifference = (TrackableTypes.IntegerType, FreezeMode.IgnoresFreeze)
+    HasLost = TrackableTypes.BooleanType
+    HasAvailableActions = TrackableTypes.BooleanType
+
+    # SpellAbility
+    HostCard = TrackableTypes.CardViewType
+    Description = TrackableTypes.StringType
+    CanPlay = TrackableTypes.BooleanType
+    PromptIfOnlyPossibleAbility = TrackableTypes.BooleanType
+    SA_IsSpell = TrackableTypes.BooleanType
+
+    # ReplacementEffectView
+    RE_HostCard = TrackableTypes.CardViewType
+    RE_Description = TrackableTypes.StringType
+
+    # StaticAbilityView
+    ST_HostCard = TrackableTypes.CardViewType
+    ST_Description = TrackableTypes.StringType
+
+    # HasBackSide
+    BackSideName = TrackableTypes.StringType
+    HasBackSide = TrackableTypes.BooleanType
+
+    # StackItem
+    Key = TrackableTypes.StringType
+    SourceTrigger = TrackableTypes.IntegerType
+    SourceCard = TrackableTypes.CardViewType
+    ActivatingPlayer = TrackableTypes.PlayerViewType
+    TargetCards = TrackableTypes.CardViewCollectionType
+    TargetPlayers = TrackableTypes.PlayerViewCollectionType
+    SubInstance = TrackableTypes.StackItemViewType
+    Ability = TrackableTypes.BooleanType
+    OptionalTrigger = TrackableTypes.BooleanType
+    OptionalCosts = TrackableTypes.StringType
+
+    # Combat
+    AttackersWithDefenders = (TrackableTypes.GenericMapType, FreezeMode.IgnoresFreeze)
+    AttackersWithBlockers = (TrackableTypes.GenericMapType, FreezeMode.IgnoresFreeze)
+    BandsWithDefenders = (TrackableTypes.GenericMapType, FreezeMode.IgnoresFreeze)
+    BandsWithBlockers = (TrackableTypes.GenericMapType, FreezeMode.IgnoresFreeze)
+    AttackersWithPlannedBlockers = (TrackableTypes.GenericMapType, FreezeMode.IgnoresFreeze)
+    BandsWithPlannedBlockers = (TrackableTypes.GenericMapType, FreezeMode.IgnoresFreeze)
+    CombatView = (TrackableTypes.CombatViewType, FreezeMode.IgnoresFreeze)
+
+    # Game
+    Players = TrackableTypes.PlayerViewCollectionType
+    GameType = TrackableTypes.EnumType(GameType)
+    Title = TrackableTypes.StringType
+    Turn = TrackableTypes.IntegerType
+    WinningPlayerName = TrackableTypes.StringType
+    WinningTeam = TrackableTypes.IntegerType
+    MatchOver = TrackableTypes.BooleanType
+    Mulligan = TrackableTypes.BooleanType
+    NumGamesInMatch = TrackableTypes.IntegerType
+    NumPlayedGamesInMatch = TrackableTypes.IntegerType
+    Stack = TrackableTypes.StackItemViewListType
+    StormCount = TrackableTypes.IntegerType
+    GameOver = TrackableTypes.BooleanType
+    PoisonCountersToLose = TrackableTypes.IntegerType
+    PlayerTurn = (TrackableTypes.PlayerViewType, FreezeMode.IgnoresFreeze)
+    Phase = (TrackableTypes.EnumType(PhaseType), FreezeMode.IgnoresFreeze)
+    Dependencies = TrackableTypes.StringType
+
+    def getFreezeMode(self):
+        return self.freezeMode
+
+    def getType(self):
+        return self.type
+
+    def updateObjLookup(self, tracker, newObj):
+        self.type.updateObjLookup(tracker, newObj)
+
+    def copyChangedProps(self, from_, to):
+        self.type.copyChangedProps(from_, to, self)
+
+    def getDefaultValue(self):
+        return self.type.getDefaultValue()
 ```

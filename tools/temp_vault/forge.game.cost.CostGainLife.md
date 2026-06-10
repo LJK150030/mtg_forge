@@ -46,7 +46,7 @@ classDiagram
 
 ## Design Description
 
-CostGainLife models the in-game cost of having one or more opponents gain life, taking its place in Forge's cost-payment hierarchy as a concrete subtype of `CostPart`. It captures an amount (inherited) and a `cntPlayers` count—where `Integer.MAX_VALUE` denotes "all/each" affected players—and supplies the behavior needed to validate and apply that cost.
+CostGainLife models the in-game cost of having one or more opponents gain life, taking its place in Forge's cost-payment hierarchy as a concrete subtype of `CostPart`. It captures an amount (inherited) and a `cntPlayers` countâ€”where `Integer.MAX_VALUE` denotes "all/each" affected playersâ€”and supplies the behavior needed to validate and apply that cost.
 
 It collaborates with `Player` and `SpellAbility` to enumerate valid targets via `getPotentialTargets`, confirm affordability in `canPay` (counting players actually able to gain life), and execute payment in `payAsDecided` using a `PaymentDecision`. Notably, `canPay` treats the "each player" case specially, requiring every potential target be able to gain life. The class participates in a visitor pattern through `accept(ICostVisitor)`, letting external operations dispatch over cost types without modifying this class, reflecting an extensible, double-dispatch design across the cost hierarchy.
 
@@ -163,4 +163,81 @@ public class CostGainLife extends CostPart {
     }
 
 }
+```
+
+## Python
+`forge/game/cost/CostGainLife.py`
+
+```python
+from forge.game.cost.CostPart import CostPart
+from forge.game.cost.ICostVisitor import ICostVisitor
+from forge.game.cost.PaymentDecision import PaymentDecision
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+
+import sys
+
+from typing import List
+
+
+class CostGainLife(CostPart):
+    """The Class CostGainLife."""
+
+    serialVersionUID = 1
+    # cntPlayers: MAX_VALUE means ALL/EACH PLAYERS
+
+    def __init__(self, amount: str, playerSelector: str, qty: int):
+        """
+        Instantiates a new cost gain life.
+
+        :param amount: the amount
+        """
+        super().__init__(amount, playerSelector, None)
+        self.cntPlayers = qty
+
+    def getCntPlayers(self) -> int:
+        """:return: the cntPlayers"""
+        return self.cntPlayers
+
+    def toString(self) -> str:
+        sb = []
+        sb.append("Have an opponent gain ")
+        sb.append(str(self.getAmount()))
+        sb.append(" life")
+        return "".join(sb)
+
+    def getPotentialTargets(self, payer: Player, ability: SpellAbility) -> List[Player]:
+        res = []
+        for p in payer.getGame().getPlayers():
+            if p.isValid(self.getType(), payer, ability.getHostCard(), ability):
+                res.append(p)
+        return res
+
+    def canPay(self, ability: SpellAbility, payer: Player, effect: bool) -> bool:
+        cntAbleToGainLife = 0
+        possibleTargets = self.getPotentialTargets(payer, ability)
+
+        for opp in possibleTargets:
+            if opp.canGainLife():
+                cntAbleToGainLife += 1
+
+        return cntAbleToGainLife >= self.cntPlayers or (self.cntPlayers == sys.maxsize and cntAbleToGainLife == len(possibleTargets))
+
+    def payAsDecided(self, ai: Player, decision: PaymentDecision, ability: SpellAbility, effect: bool) -> bool:
+        c = self.getAbilityAmount(ability)
+
+        playersLeft = self.cntPlayers
+        for opp in decision.players:
+            if playersLeft == 0:
+                break
+
+            if not opp.canGainLife():  # you should not have added him to decision.
+                return False
+
+            playersLeft -= 1
+            opp.gainLife(c, ability.getHostCard(), ability)
+        return True
+
+    def accept(self, visitor: ICostVisitor):
+        return visitor.visit(self)
 ```

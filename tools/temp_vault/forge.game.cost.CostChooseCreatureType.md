@@ -43,7 +43,7 @@ classDiagram
 
 ## Design Description
 
-CostChooseCreatureType models the "choose a creature type" component of a Magic: The Gathering casting or activation cost. As a concrete subclass of CostPart, it plugs into Forge's composite cost system, where a Cost aggregates many CostPart instances that are each queried and paid in turn. Payment is trivially affordable—canPay always returns true—and payAsDecided simply records the chosen type on the spell's host card via setChosenType, drawing the selection from the supplied PaymentDecision; toString renders a human-readable "Choose … creature type" label using the inherited amount.
+CostChooseCreatureType models the "choose a creature type" component of a Magic: The Gathering casting or activation cost. As a concrete subclass of CostPart, it plugs into Forge's composite cost system, where a Cost aggregates many CostPart instances that are each queried and paid in turn. Payment is trivially affordableâ€”canPay always returns trueâ€”and payAsDecided simply records the chosen type on the spell's host card via setChosenType, drawing the selection from the supplied PaymentDecision; toString renders a human-readable "Choose â€¦ creature type" label using the inherited amount.
 
 The class collaborates with SpellAbility and Player to reach game state during payment, and implements the visitor hook accept(ICostVisitor) so cost processing (cost reduction, AI evaluation, display) can dispatch over part types without instanceof checks. This reflects a deliberate visitor-based, polymorphic design that keeps each cost variety small and self-contained.
 
@@ -131,4 +131,50 @@ public class CostChooseCreatureType extends CostPart {
     }
 
 }
+```
+
+## Python
+`forge/game/cost/CostChooseCreatureType.py`
+
+```python
+from forge.game.cost.CostPart import CostPart
+from forge.game.cost.Cost import Cost
+from forge.game.cost.ICostVisitor import ICostVisitor
+from forge.game.cost.PaymentDecision import PaymentDecision
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+
+
+class CostChooseCreatureType(CostPart):
+    """The Class CostChooseCreatureType."""
+
+    serialVersionUID = 1
+
+    def __init__(self, amount: str):
+        """
+        Instantiates a new cost mill.
+
+        :param amount: the amount
+        """
+        self.setAmount(amount)
+
+    def canPay(self, ability: SpellAbility, payer: Player, effect: bool) -> bool:
+        return True
+
+    def payAsDecided(self, payer: Player, pd: PaymentDecision, sa: SpellAbility, effect: bool) -> bool:
+        sa.getHostCard().setChosenType(pd.type)
+        return True
+
+    def toString(self) -> str:
+        sb = []
+        i = self.convertAmount()
+        sb.append("Choose ")
+        sb.append(Cost.convertAmountTypeToWords(i, self.getAmount(), "creature type"))
+        return "".join(sb)
+
+    def __str__(self) -> str:
+        return self.toString()
+
+    def accept(self, visitor: ICostVisitor):
+        return visitor.visit(self)
 ```

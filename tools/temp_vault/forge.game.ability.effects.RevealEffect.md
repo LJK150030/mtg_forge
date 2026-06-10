@@ -44,7 +44,7 @@ classDiagram
 
 ## Design Description
 
-RevealEffect implements the resolution logic for "reveal cards from hand" abilities within Forge's data-driven ability framework. Extending `SpellAbilityEffect`, it overrides `resolve` to perform the reveal and `getStackDescription` to generate human-readable stack text. For each targeted `Player`, it selects cards from hand—at random, from defined or valid-card filters, or via interactive controller choice—governed by string parameters like `NumCards`, `AnyNumber`, `Optional`, `Random`, and `RevealValid`.
+RevealEffect implements the resolution logic for "reveal cards from hand" abilities within Forge's data-driven ability framework. Extending `SpellAbilityEffect`, it overrides `resolve` to perform the reveal and `getStackDescription` to generate human-readable stack text. For each targeted `Player`, it selects cards from handâ€”at random, from defined or valid-card filters, or via interactive controller choiceâ€”governed by string parameters like `NumCards`, `AnyNumber`, `Optional`, `Random`, and `RevealValid`.
 
 The design embodies the engine's parameter-driven convention: a single effect class serves many card scripts, configured entirely through the `SpellAbility`'s parameters rather than subclassing. It collaborates with `Game` to delegate the actual reveal through the game action, uses `CardCollection`/`CardCollectionView` to gather candidate cards, leans on `AbilityUtils`, `CardLists`, and `Aggregates` for filtering and selection, and can optionally remember revealed cards on the host for later reference.
 
@@ -173,4 +173,112 @@ public class RevealEffect extends SpellAbilityEffect {
     }
 
 }
+```
+
+## Python
+`forge/game/ability/effects/RevealEffect.py`
+
+```python
+package forge.game.ability.effects ΓÇö translation below.
+
+from forge.game.Game import Game
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.card.CardLists import CardLists
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.Aggregates import Aggregates
+from forge.util.Lang import Lang
+
+
+class RevealEffect(SpellAbilityEffect):
+
+    def resolve(self, sa: SpellAbility) -> None:
+        host = sa.getHostCard()
+        game = host.getGame()
+        anyNumber = sa.hasParam("AnyNumber")
+        optional = sa.hasParam("Optional")
+        cnt = AbilityUtils.calculateAmount(host, sa.getParam("NumCards"), sa) if sa.hasParam("NumCards") else 1
+
+        for p in self.getTargetPlayers(sa):
+            if not p.isInGame():
+                continue
+            cardsInHand = p.getCardsIn(ZoneType.Hand)
+            if cardsInHand.isEmpty():
+                continue
+            revealed = CardCollection()
+            if sa.hasParam("Random"):
+                valid = CardCollection(cardsInHand)
+
+                if sa.hasParam("RevealValid"):
+                    valid = CardLists.getValidCards(valid, sa.getParam("RevealValid"), p, host, sa)
+
+                if valid.isEmpty():
+                    continue
+
+                revealnum = min(valid.size(), cnt)
+                revealed.addAll(Aggregates.random(valid, revealnum))
+            elif sa.hasParam("RevealDefined"):
+                revealed.addAll(AbilityUtils.getDefinedCards(host, sa.getParam("RevealDefined"), sa))
+            elif sa.hasParam("RevealAllValid"):
+                revealed.addAll(CardLists.getValidCards(cardsInHand, sa.getParam("RevealAllValid"), p, host, sa))
+            else:
+                valid = CardCollection(cardsInHand)
+
+                if sa.hasParam("RevealValid"):
+                    valid = CardLists.getValidCards(valid, sa.getParam("RevealValid"), p, host, sa)
+
+                if valid.isEmpty():
+                    continue
+
+                if cnt > valid.size():
+                    cnt = valid.size()
+
+                min_ = cnt
+                if anyNumber:
+                    cnt = valid.size()
+                    min_ = 0
+                elif optional:
+                    min_ = 0
+
+                revealed.addAll(p.getController().chooseCardsToRevealFromHand(min_, cnt, valid))
+
+            if sa.hasParam("RevealToAll") or sa.hasParam("Random"):
+                revealTitle = sa.hasParam("RevealTitle")
+                game.getAction().reveal(revealed, p, False,
+                    sa.getParam("RevealTitle") if revealTitle else "", not revealTitle)
+            else:
+                game.getAction().reveal(revealed, p)
+            if sa.hasParam("RememberRevealed"):
+                host.addRemembered(revealed)
+
+    def getStackDescription(self, sa: SpellAbility) -> str:
+        sb = []
+
+        tgtPlayers = self.getTargetPlayers(sa)
+
+        if len(tgtPlayers) > 0:
+            sb.append(Lang.joinHomogenous(tgtPlayers))
+            sb.append(" reveals ")
+            if sa.hasParam("AnyNumber"):
+                sb.append("any number of cards ")
+            elif sa.hasParam("NumCards"):
+                if sa.getHostCard() is not None:
+                    numCards = AbilityUtils.calculateAmount(sa.getHostCard(), "NumCards", sa)
+                else:
+                    numCards = int(sa.getParam("NumCards")) if str(sa.getParam("NumCards")).isdigit() else 0
+                sb.append(str(numCards) + " cards " if numCards > 1 else "a card ")
+            else:
+                sb.append("a card ")
+            if sa.hasParam("Random"):
+                sb.append("at random ")
+            sb.append("from their hand.")
+        else:
+            sb.append("Error - no target players for RevealHand. ")
+
+        return "".join(sb)
 ```

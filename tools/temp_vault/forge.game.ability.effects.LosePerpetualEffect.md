@@ -80,3 +80,31 @@ public class LosePerpetualEffect extends SpellAbilityEffect {
     }
 }
 ```
+
+## Python
+`forge/game/ability/effects/LosePerpetualEffect.py`
+
+```python
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.card.ICardTraitChanges import ICardTraitChanges
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.trigger.Trigger import Trigger
+
+
+class LosePerpetualEffect(SpellAbilityEffect):
+
+    def resolve(self, sa: SpellAbility) -> None:
+        host = sa.getHostCard()
+        toRemove = 0
+        # currently only part of perpetual triggers... expand in future as needed
+        if sa.getTrigger() is not None:
+            trig = sa.getTrigger()
+            for cell in host.getChangedCardTraits().cellSet():
+                if trig in cell.getValue().applyTrigger([]):
+                    toRemove = cell.getRowKey()
+                    break
+            if toRemove != 0:
+                host.getChangedCardTraits().remove(toRemove, 0)
+                host.removePerpetual(toRemove)
+```

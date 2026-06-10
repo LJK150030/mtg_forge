@@ -43,9 +43,9 @@ classDiagram
 
 ## Design Description
 
-MultiplePilesEffect is a concrete `SpellAbilityEffect` that resolves abilities asking players to divide a set of cards into a fixed number of piles. It overrides `getStackDescription` to produce a readable summary and `resolve` to perform the partitioning. For each in-game target player—ordered to start from the activator—it builds a candidate pool from explicitly defined cards or the player's cards in a given zone (defaulting to the battlefield), filters it via a `ValidCards` predicate using `CardLists`, then has the controller choose cards for each of the first *n*−1 piles, the remainder forming the last.
+MultiplePilesEffect is a concrete `SpellAbilityEffect` that resolves abilities asking players to divide a set of cards into a fixed number of piles. It overrides `getStackDescription` to produce a readable summary and `resolve` to perform the partitioning. For each in-game target playerâ€”ordered to start from the activatorâ€”it builds a candidate pool from explicitly defined cards or the player's cards in a given zone (defaulting to the battlefield), filters it via a `ValidCards` predicate using `CardLists`, then has the controller choose cards for each of the first *n*âˆ’1 piles, the remainder forming the last.
 
-It records each player's piles and notifies the game of the result. When `RandomChosen` is set, it picks one pile per player, remembers those cards on the host card, and delegates to a `ChosenPile` sub-ability via `AbilityUtils`—separating pile creation from downstream effects. It collaborates with `Card`, `CardCollection`/`CardCollectionView`, `Player`, and `ZoneType`.
+It records each player's piles and notifies the game of the result. When `RandomChosen` is set, it picks one pile per player, remembers those cards on the host card, and delegates to a `ChosenPile` sub-ability via `AbilityUtils`â€”separating pile creation from downstream effects. It collaborates with `Card`, `CardCollection`/`CardCollectionView`, `Player`, and `ZoneType`.
 
 ## Source
 `forge-game/src/main/java/forge/game/ability/effects/MultiplePilesEffect.java`
@@ -155,4 +155,92 @@ public class MultiplePilesEffect extends SpellAbilityEffect {
         }
     }
 }
+```
+
+## Python
+`forge/game/ability/effects/MultiplePilesEffect.py`
+
+```python
+from typing import List, Dict
+
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.card.CardLists import CardLists
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.Aggregates import Aggregates
+from forge.util.Lang import Lang
+from forge.util.Localizer import Localizer
+
+
+class MultiplePilesEffect(SpellAbilityEffect):
+
+    def getStackDescription(self, sa: SpellAbility) -> str:
+        sb = []
+
+        piles = sa.getParam("Piles")
+        valid = sa.getParamOrDefault("ValidCards", "")
+
+        sb.append("Separate all ")
+        sb.append(valid)
+        sb.append(" cards ")
+
+        sb.append(Lang.joinHomogenous(self.getTargetPlayers(sa)))
+
+        sb.append("controls into ")
+        sb.append(piles)
+        sb.append(" piles.")
+        return "".join(sb)
+
+    def resolve(self, sa: SpellAbility) -> None:
+        source = sa.getHostCard()
+        zone = ZoneType.smartValueOf(sa.getParam("Zone")) if sa.hasParam("Zone") else ZoneType.Battlefield
+        randomChosen = sa.hasParam("RandomChosen")
+        piles = int(sa.getParam("Piles"))
+        record: Dict[Player, List[CardCollectionView]] = {}
+
+        valid = sa.getParamOrDefault("ValidCards", "")
+
+        tgtPlayers = self.getTargetPlayers(sa)
+        # starting with the activator
+        pSize = len(tgtPlayers)
+        activator = sa.getActivatingPlayer()
+        while activator in tgtPlayers and not activator == (tgtPlayers[0] if tgtPlayers else None):
+            tgtPlayers.insert(pSize - 1, tgtPlayers.pop(0))
+
+        for p in tgtPlayers:
+            if not p.isInGame():
+                continue
+
+            if sa.hasParam("DefinedCards"):
+                pool = AbilityUtils.getDefinedCards(source, sa.getParam("DefinedCards"), sa)
+            else:
+                pool = CardCollection(p.getCardsIn(zone))
+            pool = CardLists.getValidCards(pool, valid, source.getController(), source, sa)
+
+            pileList: List[CardCollectionView] = []
+
+            for i in range(1, piles):
+                size = pool.size()
+                pile = p.getController().chooseCardsForEffect(pool, sa, Localizer.getInstance().getMessage("lblChooseCardsInTargetPile", i), 0, size, False, None)
+                pileList.append(pile)
+                pool.removeAll(pile)
+
+            pileList.append(pool)
+            p.getGame().getAction().notifyOfValue(sa, p, str(pileList), p)
+            record[p] = pileList
+
+        if randomChosen:
+            for p, pileValue in record.items():
+                chosen = Aggregates.random(pileValue)
+                source.addRemembered(chosen)
+
+            sub = sa.getAdditionalAbility("ChosenPile")
+            if sub is not None:
+                AbilityUtils.resolve(sub)
+            source.clearRemembered()
 ```

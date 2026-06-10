@@ -74,3 +74,42 @@ public record CounterCustomType(String keyword) implements CounterType {
     }
 }
 ```
+
+## Python
+`forge/game/card/CounterCustomType.py`
+
+```python
+from forge.game.card.CounterType import CounterType
+
+
+class CounterCustomType(CounterType):
+    sMap: dict[str, "CounterCustomType"] = {}
+
+    def __init__(self, keyword: str):
+        self.keyword = keyword
+
+    @staticmethod
+    def get(s: str) -> "CounterCustomType":
+        if s not in CounterCustomType.sMap:
+            CounterCustomType.sMap[s] = CounterCustomType(s)
+        return CounterCustomType.sMap[s]
+
+    @staticmethod
+    def getValues() -> set[CounterType]:
+        return set(CounterCustomType.sMap.values())
+
+    def toString(self) -> str:
+        return self.keyword
+
+    def __str__(self) -> str:
+        return self.keyword
+
+    def getName(self) -> str:
+        return self.keyword
+
+    def __eq__(self, other) -> bool:
+        return isinstance(other, CounterCustomType) and self.keyword == other.keyword
+
+    def __hash__(self) -> int:
+        return hash(self.keyword)
+```

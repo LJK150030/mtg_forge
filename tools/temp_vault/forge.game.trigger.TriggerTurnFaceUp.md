@@ -37,6 +37,10 @@ classDiagram
 - [[forge.game.card.Card|Card]]
 - [[forge.game.spellability.SpellAbility|SpellAbility]]
 
+## Design Description
+
+TriggerTurnFaceUp is a concrete trigger that fires when a permanent is turned face up, recognizing the relevant game event and exposing it to the triggered ability system. As a subclass of Trigger, it implements the framework's template methods: performTest filters firings against the optional ValidCard and ValidCause restrictions, setTriggeringObjects binds the affected Card and its Cause into the triggering context for the resolving SpellAbility, and getImportantStackObjects builds a localized stack description naming the card turned face up. It collaborates with AbilityKey to key run parameters and triggering objects, keeping event matching data-driven and consistent with sibling trigger types. The use of Localizer for its stack label reflects the engine's broader intent to keep user-facing text translatable, while the thin, declarative implementation delegates all shared trigger plumbing to the supertype.
+
 ## Source
 `forge-game/src/main/java/forge/game/trigger/TriggerTurnFaceUp.java`
 
@@ -121,4 +125,39 @@ public class TriggerTurnFaceUp extends Trigger {
     }
 
 }
+```
+
+## Python
+`forge/game/trigger/TriggerTurnFaceUp.py`
+
+```python
+from forge.game.trigger.Trigger import Trigger
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Localizer import Localizer
+
+
+class TriggerTurnFaceUp(Trigger):
+
+    def __init__(self, params: dict[str, str], host: Card, intrinsic: bool):
+        super().__init__(params, host, intrinsic)
+
+    def performTest(self, runParams: dict[AbilityKey, object]) -> bool:
+        if not self.matchesValidParam("ValidCard", runParams.get(AbilityKey.Card)):
+            return False
+        if not self.matchesValidParam("ValidCause", runParams.get(AbilityKey.Cause)):
+            return False
+
+        return True
+
+    def setTriggeringObjects(self, sa: SpellAbility, runParams: dict[AbilityKey, object]) -> None:
+        sa.setTriggeringObjectsFrom(runParams, AbilityKey.Card, AbilityKey.Cause)
+
+    def getImportantStackObjects(self, sa: SpellAbility) -> str:
+        sb = []
+        sb.append(Localizer.getInstance().getMessage("lblTurnFaceUp"))
+        sb.append(": ")
+        sb.append(str(sa.getTriggeringObject(AbilityKey.Card)))
+        return "".join(sb)
 ```

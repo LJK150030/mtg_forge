@@ -42,7 +42,7 @@ PredicateCoreType is a private, immutable helper that implements `Predicate<ICar
 Each instance captures a target `CardType.CoreType` operand and a `shouldBeEqual` flag, allowing the same class to express both "has this type" and "lacks this type" queries. Its `test` method null-guards the face, then delegates to the face's `CardType` via `hasType`, comparing the result against the desired polarity. The `private`/`final` design and constructor-only initialization signal that instances are meant to be created internally and treated as stateless, thread-safe value objects collaborating with the `forge.card` type model.
 
 ## Source
-`forge-core/src/main/java/forge/card/CardFacePredicates.java` â€” declaration excerpt
+`forge-core/src/main/java/forge/card/CardFacePredicates.java` Ã¢â‚¬â€ declaration excerpt
 
 ```java
     private static class PredicateCoreType implements Predicate<ICardFace> {
@@ -62,4 +62,23 @@ Each instance captures a target `CardType.CoreType` operand and a `shouldBeEqual
             this.shouldBeEqual = wantEqual;
         }
     }
+```
+
+## Python
+`forge/card/CardFacePredicates/PredicateCoreType.py`
+
+```python
+from forge.card.CardType import CardType
+from forge.card.ICardFace import ICardFace
+
+
+class PredicateCoreType(Predicate[ICardFace]):
+    def __init__(self, type: CardType.CoreType, wantEqual: bool):
+        self.operand: CardType.CoreType = type
+        self.shouldBeEqual: bool = wantEqual
+
+    def test(self, face: ICardFace) -> bool:
+        if face is None:
+            return False
+        return self.shouldBeEqual == face.getType().hasType(self.operand)
 ```

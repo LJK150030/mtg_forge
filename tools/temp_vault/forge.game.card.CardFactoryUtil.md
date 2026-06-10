@@ -290,7 +290,7 @@ public class CardFactoryUtil {
     public static SpellAbility abilityTurnFaceUp(final CardState cardState, final Cost cost, String key, String desc, String reminderDesc) {
         StringBuilder sbCost = new StringBuilder();
         if (!cost.isOnlyManaCost()) {
-            sbCost.append(" â€” ");
+            sbCost.append(" Ã¢â‚¬â€ ");
         }
         sbCost.append(cost.toString());
 
@@ -1038,7 +1038,7 @@ public class CardFactoryUtil {
                     if (secondary) {
                         trigStr.append(" | Secondary$ True");
                     }
-                    trigStr.append("| TriggerDescription$ ").append(desc).append(" â€” ").append(sa.getDescription());
+                    trigStr.append("| TriggerDescription$ ").append(desc).append(" Ã¢â‚¬â€ ").append(sa.getDescription());
                     final Trigger t = TriggerHandler.parseTrigger(trigStr.toString(), card, intrinsic);
                     t.setOverridingAbility(sa);
                     inst.addTrigger(t);
@@ -1060,7 +1060,7 @@ public class CardFactoryUtil {
             String costDesc = cost.toSimpleString();
 
             if (!cost.isOnlyManaCost()) {
-                costDesc = "â€”" + costDesc;
+                costDesc = "Ã¢â‚¬â€" + costDesc;
             }
 
             String upkeepTrig = "Mode$ Phase | Phase$ Upkeep | ValidPlayer$ You | TriggerZones$ Battlefield " +
@@ -1739,7 +1739,7 @@ public class CardFactoryUtil {
             final Cost cost = new Cost(k[1], false);
             String costDesc = cost.toSimpleString();
             if (!cost.isOnlyManaCost()) {
-                costDesc = "â€”" + costDesc;
+                costDesc = "Ã¢â‚¬â€" + costDesc;
             }
 
             final String trigStr = "Mode$ ChangesZone | Destination$ Battlefield | ValidCard$ Card.Self | CheckSVar$ Offspring | Secondary$ True " +
@@ -1877,7 +1877,7 @@ public class CardFactoryUtil {
             final Cost cost = new Cost(recoverCost, false);
             String costDesc = cost.toSimpleString();
             if (!cost.isOnlyManaCost()) {
-                costDesc = "â€”" + costDesc;
+                costDesc = "Ã¢â‚¬â€" + costDesc;
             }
 
             String trigObject = card.isCreature() ? "Creature.Other+YouOwn" : "Creature.YouOwn";
@@ -2106,7 +2106,7 @@ public class CardFactoryUtil {
             final String[] k = keyword.split(":");
 
             SpellAbility sa = AbilityFactory.getAbility(card, k[1]);
-            String descStr = "Visit â€” " + sa.getDescription();
+            String descStr = "Visit Ã¢â‚¬â€ " + sa.getDescription();
 
             final String trigStr = "Mode$ VisitAttraction | TriggerZones$ Battlefield | ValidCard$ Card.Self" +
                     "| TriggerDescription$ " + descStr;
@@ -2118,7 +2118,7 @@ public class CardFactoryUtil {
             final String[] k = keyword.split(":");
 
             SpellAbility sa = AbilityFactory.getAbility(card, k[1]);
-            String descStr = "Prize â€” " + sa.getDescription();
+            String descStr = "Prize Ã¢â‚¬â€ " + sa.getDescription();
 
             final String trigStr = "Mode$ ClaimPrize | Static$ True | TriggerZones$ Battlefield | ValidCard$ Card.Self" +
                     "| TriggerDescription$ " + descStr;
@@ -2137,7 +2137,7 @@ public class CardFactoryUtil {
                 String roomName = sa.getParam("RoomName");
                 StringBuilder trigStr = new StringBuilder("Mode$ RoomEntered | TriggerZones$ Command");
                 trigStr.append(" | ValidCard$ Card.Self | ValidRoom$ ").append(roomName);
-                trigStr.append(" | TriggerDescription$ ").append(roomName).append(" â€” ").append(sa.getDescription());
+                trigStr.append(" | TriggerDescription$ ").append(roomName).append(" Ã¢â‚¬â€ ").append(sa.getDescription());
                 if (sa.hasParam("NextRoom")) {
                     boolean first = true;
                     StringBuilder nextRoomParam = new StringBuilder();
@@ -2297,7 +2297,7 @@ public class CardFactoryUtil {
             sb.append("Event$ Moved | ValidCard$ Card.Self | Origin$ Stack | Destination$ Graveyard | Fizzle$ False ");
             sb.append("| Secondary$ True | ValidStackSa$ Spell.Buyback | Description$ Buyback");
 
-            sb.append(cost.isOnlyManaCost() ? " " : "â€”");
+            sb.append(cost.isOnlyManaCost() ? " " : "Ã¢â‚¬â€");
 
             sb.append(cost.toSimpleString());
 
@@ -2411,7 +2411,7 @@ public class CardFactoryUtil {
             if (keyword.contains(":")) { // K:Flashback:Cost:ExtraParams:ExtraDescription
                 final String[] k = keyword.split(":");
                 final Cost cost = new Cost(k[1], false);
-                sb.append(cost.isOnlyManaCost() ? " " : "â€”").append(cost.toSimpleString());
+                sb.append(cost.isOnlyManaCost() ? " " : "Ã¢â‚¬â€").append(cost.toSimpleString());
                 sb.append(cost.isOnlyManaCost() ? "" : ".");
 
                 String extraDesc =  k.length > 3 ? k[3] : "";
@@ -2445,7 +2445,7 @@ public class CardFactoryUtil {
             if (keyword.contains(":")) {
                 final String[] k = keyword.split(":");
                 final Cost cost = new Cost(k[1], false);
-                sb.append(cost.isOnlyManaCost() ? " " : "â€”").append(cost.toSimpleString());
+                sb.append(cost.isOnlyManaCost() ? " " : "Ã¢â‚¬â€").append(cost.toSimpleString());
                 sb.append(cost.isOnlyManaCost() ? "" : ".");
 
                 String extraDesc =  k.length > 3 ? k[3] : "";
@@ -2851,7 +2851,7 @@ public class CardFactoryUtil {
                 }
                 remTxt = sbRem.toString();
             }
-            sbDesc.append(onlyMana ? " " : "â€”").append(bCost.toSimpleString()).append(!onlyMana ? "." : "");
+            sbDesc.append(onlyMana ? " " : "Ã¢â‚¬â€").append(bCost.toSimpleString()).append(!onlyMana ? "." : "");
             sbDesc.append(" (").append(remTxt).append(")");
             sa.setDescription(sbDesc.toString());
             sa.setStackDescription("Bestow - " + card.getName());
@@ -2957,7 +2957,7 @@ public class CardFactoryUtil {
 
             StringBuilder sbCost = new StringBuilder("Disturb");
             if (!disturbCost.isOnlyManaCost()) { //Something other than a mana cost
-                sbCost.append("â€”");
+                sbCost.append("Ã¢â‚¬â€");
             } else {
                 sbCost.append(" ");
             }
@@ -3029,7 +3029,7 @@ public class CardFactoryUtil {
             String flavor = "";
             // Flavor keyword titles should be last in the card script K: line
             if (keyword.contains(":Flavor ")) {
-                flavor = (keyword.split(":Flavor ", 2)[1]) + (" â€” ");
+                flavor = (keyword.split(":Flavor ", 2)[1]) + (" Ã¢â‚¬â€ ");
                 keyword = keyword.substring(0, keyword.indexOf(":Flavor "));
                 hasFlav = true;
             }
@@ -3061,7 +3061,7 @@ public class CardFactoryUtil {
             }
             Cost cost = new Cost(equipCost, true);
             if (!cost.isOnlyManaCost() || (altCost && extra.contains("<"))) { //Something other than a mana cost
-                abilityStr.append("â€”");
+                abilityStr.append("Ã¢â‚¬â€");
             } else {
                 abilityStr.append(" ");
             }
@@ -3095,7 +3095,7 @@ public class CardFactoryUtil {
 
             sb.append(" | PrecostDesc$ Eternalize");
             if (!cost.isOnlyManaCost()) { //Something other than a mana cost
-                sb.append("â€”");
+                sb.append("Ã¢â‚¬â€");
             } else {
                 sb.append(" ");
             }
@@ -3121,7 +3121,7 @@ public class CardFactoryUtil {
 
             final StringBuilder desc = new StringBuilder();
             boolean onlyMana = evokedCost.isOnlyManaCost();
-            desc.append("Evoke").append(onlyMana ? " " : "â€”").append(evokedCost.toSimpleString());
+            desc.append("Evoke").append(onlyMana ? " " : "Ã¢â‚¬â€").append(evokedCost.toSimpleString());
             desc.append(onlyMana ? "" : ".").append(" (").append(inst.getReminderText()).append(")");
 
             newSA.setDescription(desc.toString());
@@ -3201,7 +3201,7 @@ public class CardFactoryUtil {
             abilityStr.append("| SorcerySpeed$ True | AILogic$ Pump | IsPresent$ Fortification.Self+nonCreature ");
             abilityStr.append("| PrecostDesc$ Fortify");
             Cost cost = new Cost(equipCost, true);
-            abilityStr.append(cost.isOnlyManaCost() ? " " : "â€”");
+            abilityStr.append(cost.isOnlyManaCost() ? " " : "Ã¢â‚¬â€");
             abilityStr.append("| CostDesc$ ").append(cost.toSimpleString());
             abilityStr.append(" | SpellDescription$ (");
             abilityStr.append(inst.getReminderText()).append(")");
@@ -3220,7 +3220,7 @@ public class CardFactoryUtil {
             newSA.putParam("PrecostDesc", "Freerunning");
             StringBuilder costDesc = new StringBuilder();
             if (!freerunningCost.isOnlyManaCost()) {
-                costDesc.append("â€”");
+                costDesc.append("Ã¢â‚¬â€");
             } else {
                 costDesc.append(" ");
             }
@@ -3378,7 +3378,7 @@ public class CardFactoryUtil {
             abilityStr.append("| SorcerySpeed$ True | PrecostDesc$ Outlast");
             Cost cost = new Cost(manacost, true);
             if (!cost.isOnlyManaCost()) { //Something other than a mana cost
-                abilityStr.append("â€”");
+                abilityStr.append("Ã¢â‚¬â€");
             } else {
                 abilityStr.append(" ");
             }
@@ -3681,7 +3681,7 @@ public class CardFactoryUtil {
         } else if (keyword.startsWith("Specialize")) {
             final String[] k = keyword.split(":");
             final String cost = k[1];
-            String flavor = k.length > 2 && !k[2].isEmpty() ? k[2] + " â€“ " : "";
+            String flavor = k.length > 2 && !k[2].isEmpty() ? k[2] + " Ã¢â‚¬â€œ " : "";
             String condition = k.length > 3 && !k[3].isEmpty() ? ". " + k[3] : "";
             String extra = k.length > 4 && !k[4].isEmpty() ? k[4] + " | " : "";
 
@@ -3763,7 +3763,7 @@ public class CardFactoryUtil {
                 }
             };
             final StringBuilder sbDesc = new StringBuilder();
-            sbDesc.append("Suspend ").append(k[1]).append("â€”").append(cost.toSimpleString());
+            sbDesc.append("Suspend ").append(k[1]).append("Ã¢â‚¬â€").append(cost.toSimpleString());
             sbDesc.append(k[2].contains("XMin1") ? ". X can't be 0." : "");
             sbDesc.append(" (").append(inst.getReminderText()).append(")");
             suspend.setDescription(sbDesc.toString());
@@ -3827,7 +3827,7 @@ public class CardFactoryUtil {
 
             StringBuilder sbCost = new StringBuilder("Warp");
             if (!warpCost.isOnlyManaCost()) { //Something other than a mana cost
-                sbCost.append("â€”");
+                sbCost.append("Ã¢â‚¬â€");
             } else {
                 sbCost.append(" ");
             }
@@ -3897,7 +3897,7 @@ public class CardFactoryUtil {
             sb.append("AB$ Draw | Cost$ ");
             sb.append(manacost);
             sb.append(" Discard<1/CARDNAME> | ActivationZone$ Hand | PrecostDesc$ Cycling");
-            sb.append(cost.isOnlyManaCost() ? " " : "â€”");
+            sb.append(cost.isOnlyManaCost() ? " " : "Ã¢â‚¬â€");
             sb.append("| CostDesc$ ").append(cost.toSimpleString());
             sb.append(" | SpellDescription$ (").append(inst.getReminderText()).append(")");
 
@@ -3945,7 +3945,7 @@ public class CardFactoryUtil {
 
             StringBuilder sb = new StringBuilder("Blitz");
             if (!cost.isOnlyManaCost()) {
-                sb.append("â€”");
+                sb.append("Ã¢â‚¬â€");
             } else {
                 sb.append(" ");
             }
@@ -4060,7 +4060,7 @@ public class CardFactoryUtil {
 
             StringBuilder sb = new StringBuilder("Escalate");
             if (!cost.isOnlyManaCost()) {
-                sb.append("â€”");
+                sb.append("Ã¢â‚¬â€");
             } else {
                 sb.append(" ");
             }
@@ -4320,3 +4320,1815 @@ public class CardFactoryUtil {
     }
 }
 ```
+
+## Python
+`forge/game/card/CardFactoryUtil.py`
+
+````python
+Continuing the Python source from the Harmonize branch:
+
+```python
+            saExile = AbilityFactory.getAbility(abExile, card)
+
+            if not intrinsic:
+                saExile.setIntrinsic(False)
+
+            re = ReplacementHandler.parseReplacement(repeffstr, host, intrinsic, card)
+
+            re.setOverridingAbility(saExile)
+
+            inst.addReplacement(re)
+        elif keyword.startswith("Graft"):
+            k = keyword.split(":")
+            m = k[1]
+
+            sb = "etbCounter:P1P1:"
+            sb += m + ":no Condition:"
+            sb += "Graft "
+            sb += m
+            sb += " (" + inst.getReminderText() + ")"
+
+            re = CardFactoryUtil.makeEtbCounter(sb, card, intrinsic)
+
+            inst.addReplacement(re)
+        elif keyword.startswith("Impending") and isinstance(inst, KeywordWithCostAndAmount):
+            impending = inst
+            effect = ("DB$ PutCounter | Defined$ ReplacedCard | CounterType$ TIME | CounterNum$ " + impending.getAmountString()
+                      + " | ETB$ True | SpellDescription$ " + impending.getTitle())
+
+            re = CardFactoryUtil.createETBReplacement(card, ReplacementLayer.Other, effect, False, True, intrinsic, "Card.Self+impended", "")
+
+            inst.addReplacement(re)
+        elif keyword == "Jump-start":
+            sb = ""
+            sb += "Event$ Moved | ValidCard$ Card.Self | Origin$ Stack | ExcludeDestination$ Exile "
+            sb += "| Secondary$ True | ValidStackSa$ Spell.Jumpstart | Description$ Jump-start ("
+            sb += inst.getReminderText()
+            sb += ")"
+
+            repeffstr = sb
+
+            abExile = "DB$ ChangeZone | Defined$ Self | Origin$ Stack | Destination$ Exile"
+
+            saExile = AbilityFactory.getAbility(abExile, card)
+
+            if not intrinsic:
+                saExile.setIntrinsic(False)
+
+            re = ReplacementHandler.parseReplacement(repeffstr, host, intrinsic, card)
+
+            re.setOverridingAbility(saExile)
+
+            inst.addReplacement(re)
+        elif keyword.startswith("Madness"):
+            k = keyword.split(":")
+            manacost = k[1]
+
+            desc = "Madness"
+            if "ManaCost" != manacost:
+                desc += " " + ManaCostParser.parse(manacost)
+            desc += ": If you discard this card, discard it into exile."
+
+            repeffstr = ("Event$ Moved | ActiveZones$ Hand | ValidCard$ Card.Self | Discard$ True | Secondary$ True "
+                         + " | Description$ " + desc)
+            re = ReplacementHandler.parseReplacement(repeffstr, host, intrinsic, card)
+            sVarMadness = "DB$ ChangeZone | Hidden$ True | Origin$ All | Destination$ Exile | Defined$ ReplacedCard"
+
+            re.setOverridingAbility(AbilityFactory.getAbility(sVarMadness, card))
+
+            inst.addReplacement(re)
+        elif keyword.startswith("Megamorph"):
+            repeffStr = "Event$ TurnFaceUp | ValidCard$ Card.Self | ValidCause$ SpellAbility.SameKeyword | Decription$ Megamorph"
+            counterStr = "DB$ PutCounter | CounterType$ P1P1 | CounterNum$ 1"
+            countersSA = AbilityFactory.getAbility(counterStr, card)
+
+            if not intrinsic:
+                countersSA.setIntrinsic(False)
+
+            re = ReplacementHandler.parseReplacement(repeffStr, host, intrinsic, card)
+
+            re.setOverridingAbility(countersSA)
+
+            inst.addReplacement(re)
+        elif keyword.startswith("Modular") and isinstance(inst, Modular):
+            modular = inst
+            m = modular.getAmountString()
+
+            sb = "etbCounter:P1P1:"
+            sb += m + ":no Condition:"
+            sb += modular.getTitle() + " (" + inst.getReminderText() + ")"
+
+            re = CardFactoryUtil.makeEtbCounter(sb, card, intrinsic)
+            if "Sunburst" == m:
+                re.getOverridingAbility().setSVar("Sunburst", "Count$Converge")
+            inst.addReplacement(re)
+        elif keyword == "Ravenous":
+            repeffStr = ("Event$ Moved | ValidCard$ Card.Self | Destination$ Battlefield | " +
+                         " | ReplacementResult$ Updated | Description$ Ravenous (" + inst.getReminderText() + ")")
+
+            counterStr = "DB$ PutCounter | CounterType$ P1P1 | ETB$ True | CounterNum$ X"
+            countersSA = AbilityFactory.getAbility(counterStr, card)
+
+            if not intrinsic:
+                countersSA.setIntrinsic(False)
+
+            re = ReplacementHandler.parseReplacement(repeffStr, host, intrinsic, card)
+
+            re.setOverridingAbility(countersSA)
+            countersSA.setSVar("X", "Count$xPaid")
+
+            inst.addReplacement(re)
+        elif keyword == "Read ahead":
+            repeffstr = "Event$ Moved | ValidCard$ Card.Self | Destination$ Battlefield | Secondary$ True | ReplacementResult$ Updated | Description$ Choose a chapter and start with that many lore counters."
+            effStr = "DB$ PutCounter | Defined$ Self | CounterType$ LORE | ETB$ True | UpTo$ True | UpToMin$ 1 | CounterNum$ FinalChapterNr"
+
+            saCounter = AbilityFactory.getAbility(effStr, card)
+            saCounter.setSVar("FinalChapterNr", "Count$FinalChapterNr")
+
+            if not intrinsic:
+                saCounter.setIntrinsic(False)
+
+            re = ReplacementHandler.parseReplacement(repeffstr, host, intrinsic, card)
+
+            re.setOverridingAbility(saCounter)
+
+            inst.addReplacement(re)
+        elif keyword == "Rebound":
+            repeffstr = ("Event$ Moved | ValidLKI$ Card.Self+wasCastFromHand+YouOwn+YouCtrl "
+                         + " | Origin$ Stack | Destination$ Graveyard | Fizzle$ False "
+                         + " | Description$ Rebound (" + inst.getReminderText() + ")")
+
+            abExile = "DB$ ChangeZone | Defined$ ReplacedCard | Origin$ Stack | Destination$ Exile | RememberChanged$ True"
+            delTrig = ("DB$ DelayedTrigger | Mode$ Phase | Phase$ Upkeep | ValidPlayer$ You " +
+                       " | OptionalDecider$ You | RememberObjects$ Remembered | TriggerDescription$"
+                       + " At the beginning of your next upkeep, you may cast " + card.toString() + " without paying its mana cost.")
+            abPlay = "DB$ Play | Defined$ DelayTriggerRememberedLKI | WithoutManaCost$ True | Optional$ True"
+
+            saExile = AbilityFactory.getAbility(abExile, card)
+
+            delsub = AbilityFactory.getAbility(delTrig, card)
+
+            saPlay = AbilityFactory.getAbility(abPlay, card)
+
+            delsub.setAdditionalAbility("Execute", saPlay)
+
+            saExile.setSubAbility(delsub)
+
+            if not intrinsic:
+                saExile.setIntrinsic(False)
+
+            re = ReplacementHandler.parseReplacement(repeffstr, host, intrinsic, card)
+
+            re.setOverridingAbility(saExile)
+
+            inst.addReplacement(re)
+        elif keyword.startswith("Reflect:"):
+            k = keyword.split(":")
+
+            repeatStr = "DB$ RepeatEach | RepeatPlayers$ Opponent"
+            payStr = ("DB$ ImmediateTrigger | RememberObjects$ Player.IsRemembered | TriggerDescription$ Copy CARDNAME | "
+                      + "UnlessPayer$ Player.IsRemembered | UnlessSwitched$ True | UnlessCost$ " + k[1])
+            copyStr = "DB$ CopyPermanent | Defined$ Self | Controller$ Player.IsTriggerRemembered | RemoveKeywords$ Reflect"
+
+            repeatSA = AbilityFactory.getAbility(repeatStr, card)
+            paySA = AbilityFactory.getAbility(payStr, card)
+            copySA = AbilityFactory.getAbility(copyStr, card)
+
+            repeatSA.setAdditionalAbility("RepeatSubAbility", paySA)
+            paySA.setAdditionalAbility("Execute", copySA)
+
+            cardre = CardFactoryUtil.createETBReplacement(card, ReplacementLayer.Other, repeatSA, False, True, intrinsic, "Card.Self", "")
+
+            inst.addReplacement(cardre)
+        elif keyword == "Riot":
+            hasteStr = "DB$ Animate | Defined$ Self | Keywords$ Haste | Duration$ Permanent | UnlessCost$ AddCounter<1/P1P1> | UnlessPayer$ You | SpellDescription$ Riot"
+
+            hasteSa = AbilityFactory.getAbility(hasteStr, card)
+            cardre = CardFactoryUtil.createETBReplacement(card, ReplacementLayer.Other, hasteSa, False, True, intrinsic, "Card.Self", "")
+
+            inst.addReplacement(cardre)
+        elif keyword == "Sunburst":
+            # Rule 702.43a If this object is entering the battlefield as a creature,
+            # ignoring any type-changing effects that would affect it
+            t = CounterEnumType.P1P1 if host.isCreature() else CounterEnumType.CHARGE
+
+            sb = "etbCounter:"
+            sb += str(t) + ":Sunburst:no Condition:"
+            sb += "Sunburst (" + inst.getReminderText() + ")"
+
+            re = CardFactoryUtil.makeEtbCounter(sb, card, intrinsic)
+            re.getOverridingAbility().setSVar("Sunburst", "Count$Converge")
+
+            inst.addReplacement(re)
+        elif keyword.startswith("Tribute"):
+            k = keyword.split(":")
+            tributeAmount = k[1]
+
+            effect = ("DB$ PutCounter | Defined$ ReplacedCard | CounterType$ P1P1 | CounterNum$ " + tributeAmount
+                      + " | ETB$ True | SpellDescription$ Tribute " + tributeAmount
+                      + " (" + inst.getReminderText() + ")")
+
+            cardre = CardFactoryUtil.createETBReplacement(card, ReplacementLayer.Other, effect, False, True, intrinsic, "Card.Self", "")
+
+            inst.addReplacement(cardre)
+        elif keyword == "Umbra armor":
+            repeffstr = ("Event$ Destroy | ActiveZones$ Battlefield | ValidCard$ Card.EnchantedBy | Secondary$ True"
+                         + " | Description$ Umbra armor (" + inst.getReminderText() + ")")
+
+            abprevDamage = "DB$ DealDamage | Defined$ ReplacedCard | Remove$ All"
+            abdestroy = "DB$ Destroy | Defined$ Self"
+
+            sa = AbilityFactory.getAbility(abprevDamage, card)
+
+            dessub = AbilityFactory.getAbility(abdestroy, card)
+
+            sa.setSubAbility(dessub)
+
+            if not intrinsic:
+                sa.setIntrinsic(False)
+
+            re = ReplacementHandler.parseReplacement(repeffstr, host, intrinsic, card)
+
+            re.setOverridingAbility(sa)
+
+            inst.addReplacement(re)
+        elif keyword == "Unleash":
+            effect = "DB$ PutCounter | Defined$ Self | CounterType$ P1P1 | ETB$ True | CounterNum$ 1 | SpellDescription$ Unleash (" + inst.getReminderText() + ")"
+
+            cardre = CardFactoryUtil.createETBReplacement(card, ReplacementLayer.Other, effect, True, True, intrinsic, "Card.Self", "")
+
+            inst.addReplacement(cardre)
+        elif keyword.startswith("Vanishing:") and isinstance(inst, Vanishing):
+            vanishing = inst
+            # Vanishing could be added to a card, but this Effect should only be done when it has amount
+
+            sb = "etbCounter:TIME:"
+            sb += str(vanishing.getAmount()) + ":no Condition:"
+            sb += vanishing.getTitle() + " (" + inst.getReminderText() + ")"
+
+            re = CardFactoryUtil.makeEtbCounter(sb, card, intrinsic)
+
+            inst.addReplacement(re)
+
+        # extra part for the Damage Prevention keywords
+        if keyword.startswith("Prevent all "):
+            # TODO add intrinsic warning
+
+            isCombat = False
+            from_ = False
+            to = False
+
+            if keyword == "Prevent all combat damage that would be dealt to and dealt by CARDNAME.":
+                isCombat = from_ = to = True
+            elif keyword == "Prevent all combat damage that would be dealt by CARDNAME.":
+                isCombat = from_ = True
+            elif keyword == "Prevent all combat damage that would be dealt to CARDNAME.":
+                isCombat = to = True
+            elif keyword == "Prevent all damage that would be dealt to and dealt by CARDNAME.":
+                from_ = to = True
+            elif keyword == "Prevent all damage that would be dealt by CARDNAME.":
+                from_ = True
+            elif keyword == "Prevent all damage that would be dealt to CARDNAME.":
+                to = True
+
+            rep = "Event$ DamageDone | Prevent$ True"
+            if isCombat:
+                rep += "| IsCombat$ True"
+            rep += "| Secondary$ True | Description$ " + keyword
+
+            if from_:
+                fromRep = rep + " | ValidSource$ Card.Self"
+                re = ReplacementHandler.parseReplacement(fromRep, host, intrinsic, card)
+
+                inst.addReplacement(re)
+            if to:
+                toRep = rep + " | ValidTarget$ Card.Self"
+                re = ReplacementHandler.parseReplacement(toRep, host, intrinsic, card)
+
+                inst.addReplacement(re)
+        elif keyword.startswith("Protection"):
+            validSource = CardFactoryUtil.getProtectionValid(keyword, True)
+
+            rep = "Event$ DamageDone | Prevent$ True | ActiveZones$ Battlefield | ValidTarget$ Card.Self"
+            if validSource != "":
+                rep += " | ValidSource$ " + validSource
+            rep += " | Secondary$ True | Description$ " + keyword
+
+            re = ReplacementHandler.parseReplacement(rep, host, intrinsic, card)
+            inst.addReplacement(re)
+
+        if keyword.startswith("ETBReplacement"):
+            splitkw = keyword.split(":")
+            layer = ReplacementLayer.smartValueOf(splitkw[1])
+
+            optional = len(splitkw) >= 4 and "Optional" in splitkw[3]
+
+            valid = splitkw[5] if len(splitkw) >= 6 else "Card.Self"
+            zone = splitkw[4] if len(splitkw) >= 5 else ""
+            re = CardFactoryUtil.createETBReplacement(
+                    card, layer, card.getSVar(splitkw[2]), optional, False, intrinsic, valid, zone)
+
+            inst.addReplacement(re)
+        elif keyword.startswith("etbCounter"):
+            re = CardFactoryUtil.makeEtbCounter(keyword, card, intrinsic)
+
+            inst.addReplacement(re)
+
+    @staticmethod
+    def addSpellAbility(inst, card, intrinsic):
+        keyword = inst.getOriginal()
+        host = card.getCard()
+        if keyword == "Aftermath" and card.getStateName() == CardStateName.RightSplit:
+            # Aftermath does modify existing SA, and does not add new one
+
+            # only target RightSplit of it
+            origSA = card.getFirstSpellAbility()
+            origSA.setAftermath(True)
+            origSA.getRestrictions().setZone(ZoneType.Graveyard)
+            # The Exile part is done by the System itself
+        elif keyword.startswith("Aura swap"):
+            k = keyword.split(":")
+            manacost = k[1]
+
+            effect = ("AB$ ExchangeZone | Cost$ " + manacost + " | Zone2$ Hand | Type$ Aura "
+                      + " | PrecostDesc$ Aura swap | CostDesc$ " + ManaCostParser.parse(manacost)
+                      + " | StackDescription$ SpellDescription | SpellDescription$ (" + inst.getReminderText() + ")")
+
+            sa = AbilityFactory.getAbility(effect, card)
+            sa.setIntrinsic(intrinsic)
+            inst.addSpellAbility(sa)
+        elif keyword.startswith("Awaken") and isinstance(inst, KeywordWithCostAndAmount):
+            awaken = inst
+            awakenSpell = card.getFirstSpellAbility().copyWithDefinedCost(awaken.getCost())
+
+            putCounter = ("DB$ PutCounter | CounterType$ P1P1 | CounterNum$ " + awaken.getAmount() + " | "
+                          + "ValidTgts$ Land.YouCtrl | TgtPrompt$ Select target land you control | Awaken$ True")
+            animate = ("DB$ Animate | Defined$ ParentTarget | Power$ 0 | Toughness$ 0 | Types$"
+                       + " Creature,Elemental | Duration$ Permanent | Keywords$ Haste")
+
+            awakenSub = AbilityFactory.getAbility(putCounter, card)
+            animateSub = AbilityFactory.getAbility(animate, card)
+
+            awakenSub.setSubAbility(animateSub)
+            awakenSpell.appendSubAbility(awakenSub)
+            awakenSpell.setDescription(awaken.getTitle() + " (" + inst.getReminderText() + ")")
+            awakenSpell.setAlternativeCost(AlternativeCost.Awaken)
+            awakenSpell.setIntrinsic(intrinsic)
+            inst.addSpellAbility(awakenSpell)
+        elif keyword.startswith("Bestow"):
+            params = keyword.split(":")
+            cost = params[1]
+
+            sbAttach = ""
+            sbAttach += "SP$ Attach | ValidTgts$ Creature | Cost$ "
+            sbAttach += cost
+            sbAttach += " | AILogic$ " + (params[2] if len(params) > 2 else "Pump")
+
+            sa = AbilityFactory.getAbility(sbAttach, card)
+            sbDesc = ""
+            sbDesc += "Bestow"
+            bCost = Cost(cost, False)
+            onlyMana = bCost.isOnlyManaCost()
+            remTxt = inst.getReminderText()
+            if not onlyMana:
+                sbRem = ""
+                sbRem += "To pay this bestow cost, "
+                i = 0
+                for part in bCost.getCostParts():
+                    if isinstance(part, CostPartMana):
+                        sbRem += "pay " + part.toString()
+                    elif isinstance(part, CostCollectEvidence):
+                        sbRem += "exile cards with total mana value " + str(part.getAmount())
+                        sbRem += " or greater from your graveyard"
+                    else:
+                        sbRem += part.toString()
+                    sbRem += "." if i + 1 == len(bCost.getCostParts()) else " and "
+                    i += 1
+                remTxt = sbRem
+            sbDesc += (" " if onlyMana else "????????") + bCost.toSimpleString() + ("" if onlyMana else ".")
+            sbDesc += " (" + remTxt + ")"
+            sa.setDescription(sbDesc)
+            sa.setStackDescription("Bestow - " + card.getName())
+            sa.setAlternativeCost(AlternativeCost.Bestow)
+            sa.setIntrinsic(intrinsic)
+            inst.addSpellAbility(sa)
+        elif keyword.startswith("Blitz"):
+            k = keyword.split(":")
+            blitzCost = Cost(k[1], False)
+
+            newSA = card.getFirstSpellAbilityWithFallback().copyWithManaCostReplaced(host.getController(), blitzCost)
+
+            if len(k) > 2:
+                newSA.getMapParams().put("ValidAfterStack", k[2])
+
+            desc = ""
+            desc += "Blitz " + blitzCost.toSimpleString() + " ("
+            desc += inst.getReminderText()
+            desc += ")"
+
+            newSA.setDescription(desc)
+
+            sb = ""
+            sb += card.getName() + " (Blitz)"
+            newSA.setStackDescription(sb)
+
+            newSA.setAlternativeCost(AlternativeCost.Blitz)
+            newSA.setIntrinsic(intrinsic)
+            inst.addSpellAbility(newSA)
+        elif keyword == "Cipher":
+            dbStr = "DB$ Encode"
+
+            newSA = AbilityFactory.getAbility(dbStr, card)
+            origSA = card.getFirstSpellAbility()
+
+            origSA.appendSubAbility(newSA)
+        elif keyword.startswith("Class"):
+            k = keyword.split(":")
+            level = int(k[1])
+
+            sbClass = ""
+            sbClass += "AB$ ClassLevelUp | Cost$ " + k[2]
+            sbClass += " | ClassLevel$ EQ" + str(level - 1)
+            sbClass += " | SorcerySpeed$ True"
+            sbClass += " | StackDescription$ SpellDescription | SpellDescription$ Level " + str(level)
+
+            sa = AbilityFactory.getAbility(sbClass, card)
+            sa.setIntrinsic(intrinsic)
+            inst.addSpellAbility(sa)
+        elif isinstance(inst, Craft):
+            craft = inst
+            # Create return transformed ability string
+            ab = ("AB$ ChangeZone | CostDesc$ " + craft.getTitle() + " | Cost$ Exile<1/CARDNAME> " + craft.getCostString() + " | " +
+                  "Origin$ Exile | Destination$ Battlefield | Transformed$ True | Defined$ CorrectedSelf | " +
+                  "XAnnounceTitle$ " + Localizer.getInstance().getMessage("lblCraft") + " | " +
+                  "SorcerySpeed$ True | StackDescription$ Return this card transformed under its owner's control. " +
+                  "(Craft) | SpellDescription$ (" + inst.getReminderText() + ")")
+            newSA = AbilityFactory.getAbility(ab, card)
+            newSA.setIntrinsic(intrinsic)
+            inst.addSpellAbility(newSA)
+        elif keyword.startswith("Dash"):
+            k = keyword.split(":")
+            dashCost = Cost(k[1], False)
+
+            newSA = card.getFirstSpellAbility().copyWithDefinedCost(dashCost)
+
+            desc = ""
+            desc += "Dash " + dashCost.toSimpleString() + " ("
+            desc += inst.getReminderText()
+            desc += ")"
+
+            newSA.setDescription(desc)
+
+            sb = ""
+            sb += card.getName() + " (Dash)"
+            newSA.setStackDescription(sb)
+
+            newSA.setAlternativeCost(AlternativeCost.Dash)
+            newSA.setIntrinsic(intrinsic)
+            inst.addSpellAbility(newSA)
+        elif keyword.startswith("Disguise") and isinstance(inst, KeywordWithCost):
+            withCost = inst
+            k = keyword.split(":")
+            reduceCost = k[2] if len(k) > 2 else None
+
+            faceDown = CardFactoryUtil.abilityCastFaceDown(card, intrinsic, "Disguise")
+            faceDown.putParam("FaceDownKeyword", "Ward:2")
+
+            faceUp = CardFactoryUtil.abilityTurnFaceUp(card, withCost.getCost(), "DisguiseUp", "Disguise", "disguise")
+            faceUp.setIntrinsic(intrinsic)
+            if reduceCost is not None:
+                faceUp.putParam("ReduceCost", reduceCost)
+                faceUp.setSVar(reduceCost, card.getSVar(reduceCost))
+
+            inst.addSpellAbility(faceDown)
+            inst.addSpellAbility(faceUp)
+        elif keyword.startswith("Disturb"):
+            k = keyword.split(":")
+            disturbCost = Cost(k[1], True)
+
+            newSA = host.getAlternateState().getFirstSpellAbilityWithFallback().copyWithDefinedCost(disturbCost)
+            newSA.setCardState(host.getAlternateState())
+
+            sbCost = "Disturb"
+            if not disturbCost.isOnlyManaCost():  # Something other than a mana cost
+                sbCost += "????????"
+            else:
+                sbCost += " "
+
+            newSA.putParam("PrecostDesc", sbCost)
+            newSA.putParam("CostDesc", disturbCost.toString())
+
+            # makes new SpellDescription
+            desc = ""
+            desc += newSA.getCostDescription()
+            desc += "(" + inst.getReminderText() + ")"
+            newSA.setDescription(desc)
+            newSA.putParam("AfterDescription", "(Disturbed)")
+
+            newSA.setAlternativeCost(AlternativeCost.Disturb)
+            newSA.getRestrictions().setZone(ZoneType.Graveyard)
+            newSA.setIntrinsic(intrinsic)
+            inst.addSpellAbility(newSA)
+        elif isinstance(inst, Emerge):
+            emerge = inst
+            desc = "(" + emerge.getTitleWithoutCost() + ")"
+
+            sa = card.getFirstSpellAbilityWithFallback()
+            newSA = sa.copyWithDefinedCost(emerge.getCost())
+
+            newSA.getRestrictions().setIsPresent(emerge.getValidType() + ".YouCtrl+CanBeSacrificedBy")
+            newSA.putParam("Secondary", "True")
+            newSA.setAlternativeCost(AlternativeCost.Emerge)
+
+            newSA.setDescription(sa.getDescription() + " " + desc)
+            newSA.putParam("AfterDescription", desc)
+            newSA.setIntrinsic(intrinsic)
+            inst.addSpellAbility(newSA)
+        elif keyword.startswith("Embalm"):
+            kw = keyword.split(":")
+            costStr = kw[1]
+
+            effect = ("AB$ CopyPermanent | Cost$ " + costStr + " ExileFromGrave<1/CARDNAME> " +
+                      "| ActivationZone$ Graveyard | SorcerySpeed$ True " +
+                      "| RemoveCost$ True | SetColor$ White | AddTypes$ Zombie" +
+                      "| PrecostDesc$ Embalm | CostDesc$ " + ManaCostParser.parse(costStr) + " | Defined$ Self " +
+                      "| StackDescription$ Embalm - CARDNAME " +
+                      "| SpellDescription$ (" + inst.getReminderText() + ")")
+            sa = AbilityFactory.getAbility(effect, card)
+            sa.setIntrinsic(intrinsic)
+            inst.addSpellAbility(sa)
+        elif keyword == "Epic":
+            # Epic does modify existing SA, and does not add new one
+
+            # Add the Epic effect as a subAbility
+            dbStr = "DB$ Effect | Triggers$ EpicTrigger | StaticAbilities$ EpicCantBeCast | Duration$ Permanent | ConditionDefined$ Self | ConditionPresent$ Card.hasKeywordEpic"
+
+            newSA = AbilityFactory.getAbility(dbStr, card)
+
+            newSA.setSVar("EpicCantBeCast", "Mode$ CantBeCast | Caster$ You | EffectZone$ Command | Description$ For the rest of the game, you can't cast spells.")
+            newSA.setSVar("EpicTrigger", "Mode$ Phase | Phase$ Upkeep | ValidPlayer$ You | Execute$ EpicCopy | TriggerDescription$ "
+                    + "At the beginning of each of your upkeeps, copy " + card.toString() + " except for its epic ability.")
+            newSA.setSVar("EpicCopy", "DB$ CopySpellAbility | Defined$ EffectSource | Epic$ True | MayChooseTarget$ True")
+
+            origSA = card.getFirstSpellAbility()
+
+            # append to original SA
+            origSA.appendSubAbility(newSA)
+        elif keyword.startswith("Equip"):
+            if ":" not in keyword:
+                print("Malformed Equip entry! - Card: " + card.toString(), file=sys.stderr)
+                return
+            hasFlav = False
+            flavor = ""
+            # Flavor keyword titles should be last in the card script K: line
+            if ":Flavor " in keyword:
+                flavor = (keyword.split(":Flavor ", 1)[1]) + (" ???????? ")
+                keyword = keyword[0:keyword.find(":Flavor ")]
+                hasFlav = True
+            k = keyword.split(":")
+            # Get cost string
+            equipCost = k[1]
+            valid = k[2] if len(k) > 2 and k[2] != "" else "Creature.YouCtrl"
+            vstr = k[3] if len(k) > 3 and k[3] != "" else "creature"
+            extra = k[4] if len(k) > 4 else ""
+            altCost = "AlternateCost" in extra
+            extraDesc = k[5] if len(k) > 5 else ""
+            # Create attach ability string
+            abilityStr = ""
+            abilityStr += "AB$ Attach | Cost$ "
+            abilityStr += equipCost
+            abilityStr += " | ValidTgts$ " + valid
+            abilityStr += " | TgtPrompt$ Select target " + vstr + " you control"
+            # the if the Equipment can really attach should be part of the Attach Effect
+            abilityStr += " | SorcerySpeed$ True | AILogic$ Pump"
+            # add AttachAi for some special cards
+            if card.hasSVar("AttachAi"):
+                abilityStr += "| " + card.getSVar("AttachAi")
+            abilityStr += " | PrecostDesc$ "
+            if hasFlav:
+                abilityStr += flavor
+            abilityStr += "Equip"
+            if len(k) > 3 and k[3] != "":
+                abilityStr += " " + vstr
+            cost = Cost(equipCost, True)
+            if not cost.isOnlyManaCost() or (altCost and "<" in extra):  # Something other than a mana cost
+                abilityStr += "????????"
+            else:
+                abilityStr += " "
+            if not altCost:
+                abilityStr += "| CostDesc$ " + cost.toSimpleString() + " "
+            abilityStr += " | SpellDescription$ "
+            if extraDesc != "":
+                abilityStr += ". " + extraDesc + ". "
+            if not altCost and not hasFlav:
+                abilityStr += "(" + inst.getReminderText() + ")"
+            if extra != "":
+                abilityStr += " | " + extra
+            # instantiate attach ability
+            newSA = AbilityFactory.getAbility(abilityStr, card)
+            newSA.setIntrinsic(intrinsic)
+            inst.addSpellAbility(newSA)
+        elif keyword.startswith("Eternalize"):
+            kw = keyword.split(":")
+            costStr = kw[1]
+            cost = Cost(costStr, True)
+
+            sb = ""
+
+            sb += "AB$ CopyPermanent | Cost$ " + costStr + " ExileFromGrave<1/CARDNAME>"
+            sb += " | Defined$ Self | ActivationZone$ Graveyard | SorcerySpeed$ True"
+            sb += " | RemoveCost$ True | SetColor$ Black | AddTypes$ Zombie | SetPower$ 4 | SetToughness$ 4"
+
+            sb += " | PrecostDesc$ Eternalize"
+            if not cost.isOnlyManaCost():  # Something other than a mana cost
+                sb += "????????"
+            else:
+                sb += " "
+            # don't use SimpleString there because it does has "and" between cost i don't want that
+            costStr = cost.toString()
+            # but now it has ": " at the end i want to remove
+            sb += "| CostDesc$ " + costStr[0:len(costStr) - 2]
+            if not cost.isOnlyManaCost():
+                sb += "."
+
+            sb += " | StackDescription$ Eternalize - CARDNAME "
+            sb += "| SpellDescription$ (" + inst.getReminderText() + ")"
+            sa = AbilityFactory.getAbility(sb, card)
+            sa.setIntrinsic(intrinsic)
+            inst.addSpellAbility(sa)
+        elif keyword.startswith("Evoke"):
+            k = keyword.split(":")
+            evokedCost = Cost(k[1], False)
+            sa = card.getFirstSpellAbility()
+
+            newSA = sa.copyWithDefinedCost(evokedCost)
+
+            desc = ""
+            onlyMana = evokedCost.isOnlyManaCost()
+            desc += "Evoke" + (" " if onlyMana else "????????") + evokedCost.toSimpleString()
+            desc += ("" if onlyMana else ".") + " (" + inst.getReminderText() + ")"
+
+            newSA.setDescription(desc)
+
+            sb = ""
+            sb += card.getName() + " (Evoked)"
+            newSA.setStackDescription(sb)
+            newSA.setAlternativeCost(AlternativeCost.Evoke)
+            newSA.setIntrinsic(intrinsic)
+            inst.addSpellAbility(newSA)
+        elif keyword.startswith("Foretell"):
+            class _Foretell(AbilityStatic):
+                def canPlay(self):
+                    if not self.getRestrictions().canPlay(self.getHostCard(), self):
+                        return False
+
+                    activator = self.getActivatingPlayer()
+                    game = activator.getGame()
+
+                    if not activator.hasKeyword("Foretell on any player's turn") and not game.getPhaseHandler().isPlayerTurn(activator):
+                        return False
+
+                    return True
+
+                def isForetelling(self):
+                    return True
+
+                def resolve(self):
+                    game = self.getHostCard().getGame()
+                    moveParams = AbilityKey.newMap()
+                    zoneMovements = AbilityKey.addCardZoneTableParams(moveParams, self)
+
+                    c = game.getAction().exile(self.getHostCard(), self, moveParams)
+                    zoneMovements.triggerChangesZoneAll(game, self)
+
+                    c.setForetold(True)
+                    c.turnFaceDown(True)
+                    # look at the exiled card
+                    c.addMayLookFaceDownExile(self.getActivatingPlayer())
+
+                    # only done when the card is foretold by the static ability
+                    self.getActivatingPlayer().addForetoldThisTurn()
+
+                    if not self.isIntrinsic():
+                        # because it doesn't work other wise
+                        c.setForetoldCostByEffect(True)
+                    game.fireEvent(GameEventCardForetold(PlayerView.get(self.getActivatingPlayer())))
+
+            foretell = _Foretell(card.getCard(), Cost(ManaCost.TWO, False), None)
+            sbDesc = ""
+            sbDesc += "Foretell (" + inst.getReminderText() + ")"
+            foretell.setDescription(sbDesc)
+            foretell.putParam("Secondary", "True")
+
+            foretell.setCardState(card)
+
+            foretell.getRestrictions().setZone(ZoneType.Hand)
+            foretell.setIntrinsic(intrinsic)
+            inst.addSpellAbility(foretell)
+        elif keyword.startswith("Fortify"):
+            k = keyword.split(":")
+            # Get cost string
+            equipCost = k[1]
+            # Create attach ability string
+            abilityStr = ""
+            abilityStr += "AB$ Attach | Cost$ "
+            abilityStr += equipCost
+            abilityStr += " | ValidTgts$ Land.YouCtrl | TgtPrompt$ Select target land you control "
+            abilityStr += "| SorcerySpeed$ True | AILogic$ Pump | IsPresent$ Fortification.Self+nonCreature "
+            abilityStr += "| PrecostDesc$ Fortify"
+            cost = Cost(equipCost, True)
+            abilityStr += " " if cost.isOnlyManaCost() else "????????"
+            abilityStr += "| CostDesc$ " + cost.toSimpleString()
+            abilityStr += " | SpellDescription$ ("
+            abilityStr += inst.getReminderText() + ")"
+
+            # instantiate attach ability
+            sa = AbilityFactory.getAbility(abilityStr, card)
+            inst.addSpellAbility(sa)
+        elif keyword.startswith("Freerunning"):
+            k = keyword.split(":")
+            freerunningCost = Cost(k[1], False)
+            newSA = card.getFirstSpellAbilityWithFallback().copyWithDefinedCost(freerunningCost)
+
+            if host.isInstant() or host.isSorcery():
+                newSA.putParam("Secondary", "True")
+            newSA.putParam("PrecostDesc", "Freerunning")
+            costDesc = ""
+            if not freerunningCost.isOnlyManaCost():
+                costDesc += "????????"
+            else:
+                costDesc += " "
+            costDesc += freerunningCost.toSimpleString()
+            newSA.putParam("CostDesc", costDesc)
+
+            # makes new SpellDescription
+            sb = ""
+            sb += newSA.getCostDescription()
+            sb += "(" + inst.getReminderText() + ")"
+            newSA.setDescription(sb)
+
+            newSA.setAlternativeCost(AlternativeCost.Freerunning)
+
+            newSA.setIntrinsic(intrinsic)
+            inst.addSpellAbility(newSA)
+        elif keyword.startswith("Fuse") and card.getStateName() == CardStateName.Original:
+            sa = AbilityFactory.buildFusedAbility(card.getCard())
+            inst.addSpellAbility(sa)
+        elif keyword.startswith("Haunt"):
+            if not host.isCreature() and intrinsic:
+                k = keyword.split(":")
+                hauntSVarName = k[1]
+
+                # no nice way to get the cost
+                abString = TextUtil.concatNoSpace(
+                        TextUtil.fastReplace(card.getSVar(hauntSVarName), "DB$", "SP$"),
+                        " | Cost$ 0 | StackDescription$ SpellDescription"
+                )
+                sa = AbilityFactory.getAbility(abString, card)
+                sa.setPayCosts(Cost(card.getManaCost(), False))
+                sa.setIntrinsic(intrinsic)
+                inst.addSpellAbility(sa)
+        elif keyword.startswith("Impending") and isinstance(inst, KeywordWithCostAndAmount):
+            impending = inst
+            cost = impending.getCost()
+            newSA = card.getFirstSpellAbility().copyWithDefinedCost(cost)
+
+            newSA.putParam("PrecostDesc", impending.getTitleWithoutCost())
+            newSA.putParam("CostDesc", cost.toSimpleString())
+
+            # makes new SpellDescription
+            desc = ""
+            desc += newSA.getCostDescription()
+            desc += "(" + inst.getReminderText() + ")"
+            newSA.setDescription(desc)
+
+            sb = ""
+            sb += card.getName() + " (Impending)"
+            newSA.setStackDescription(sb)
+
+            newSA.setAlternativeCost(AlternativeCost.Impending)
+
+            newSA.putParam("Secondary", "True")
+            newSA.setIntrinsic(intrinsic)
+            inst.addSpellAbility(newSA)
+        elif keyword.startswith("Level up"):
+            k = keyword.split(":")
+            manacost = k[1]
+
+            sb = ""
+            sb += "AB$ PutCounter | Cost$ " + manacost + " | PrecostDesc$ Level up | CostDesc$ "
+            sb += ManaCostParser.parse(manacost) + " | SorcerySpeed$ True | Secondary$ True"
+            sb += "| CounterType$ LEVEL | StackDescription$ {p:You} levels up {c:Self}."
+            sb += " | SpellDescription$ (" + inst.getReminderText() + ")"
+
+            sa = AbilityFactory.getAbility(sb, card)
+            sa.setIntrinsic(intrinsic)
+            inst.addSpellAbility(sa)
+        elif keyword.startswith("Morph") and isinstance(inst, KeywordWithCost):
+            withCost = inst
+            inst.addSpellAbility(CardFactoryUtil.abilityCastFaceDown(card, intrinsic, "Morph"))
+            morphUp = CardFactoryUtil.abilityTurnFaceUp(card, withCost.getCost(), "MorphUp", "Morph", "morph")
+            morphUp.setIntrinsic(intrinsic)
+            inst.addSpellAbility(morphUp)
+        elif keyword.startswith("Megamorph") and isinstance(inst, KeywordWithCost):
+            withCost = inst
+            inst.addSpellAbility(CardFactoryUtil.abilityCastFaceDown(card, intrinsic, "Morph"))
+            morphUp = CardFactoryUtil.abilityTurnFaceUp(card, withCost.getCost(), "MorphUp", "Megamorph", "morph")
+            morphUp.setIntrinsic(intrinsic)
+            inst.addSpellAbility(morphUp)
+        elif keyword.startswith("More Than Meets the Eye"):
+            n = keyword.split(":")
+            convertCost = Cost(n[1], False)
+
+            sa = SpellPermanent(host, host.getAlternateState(), convertCost)
+            sa.setDescription(host.getAlternateState().getName() + " (" + inst.getReminderText() + ")")
+            sa.setCardState(host.getAlternateState())
+            sa.setAlternativeCost(AlternativeCost.MTMtE)
+
+            sa.putParam("Secondary", "True")
+            sa.putParam("PrecostDesc", n[0] + " ")
+            sa.putParam("CostDesc", convertCost.toString())
+            sa.putParam("AfterDescription", "(Converted)")
+            sa.setIntrinsic(intrinsic)
+            inst.addSpellAbility(sa)
+        elif keyword.startswith("Mutate"):
+            params = keyword.split(":")
+            cost = params[1]
+
+            sbMutate = ""
+            sbMutate += "SP$ Mutate | Cost$ "
+            sbMutate += cost
+            sbMutate += " | ValidTgts$ Creature.sharesOwnerWith+nonHuman"
+
+            sa = AbilityFactory.getAbility(sbMutate, card)
+            sa.setDescription("Mutate " + ManaCostParser.parse(cost) +
+                    " (" + inst.getReminderText() + ")")
+            sa.setStackDescription("Mutate - " + card.getName())
+            sa.setAlternativeCost(AlternativeCost.Mutate)
+            sa.setIntrinsic(intrinsic)
+            inst.addSpellAbility(sa)
+        elif keyword.startswith("Ninjutsu"):
+            k = keyword.split(":")
+            manacost = k[1]
+
+            desc = "Ninjutsu"
+            commander = False
+            if len(k) > 2 and k[2] == "Commander":
+                desc = "Commander " + desc
+                commander = True
+
+            effect = ("AB$ ChangeZone | Cost$ " + manacost +
+                      " Return<1/Creature.attacking+unblocked/unblocked attacker> " +
+                      "| PrecostDesc$ " + desc + " | CostDesc$ " + ManaCostParser.parse(manacost) +
+                      "| ActivationZone$ Hand | Origin$ Hand" +
+                      "| Destination$ Battlefield | Defined$ Self " +
+                      "| SpellDescription$ (" + inst.getReminderText() + ")")
+
+            sa = AbilityFactory.getAbility(effect, card)
+            sa.setIntrinsic(intrinsic)
+            inst.addSpellAbility(sa)
+
+            # extra secondary effect for Commander Ninjutsu
+            if commander:
+                effect = ("AB$ ChangeZone | Cost$ " + manacost +
+                          " Return<1/Creature.attacking+unblocked/unblocked attacker> " +
+                          "| PrecostDesc$ " + desc + " | CostDesc$ " + ManaCostParser.parse(manacost) +
+                          "| ActivationZone$ Command | Origin$ Command" +
+                          "| Destination$ Battlefield | Defined$ Self | Secondary$ True " +
+                          "| SpellDescription$ (" + inst.getReminderText() + ")")
+
+                sa = AbilityFactory.getAbility(effect, card)
+                sa.setIntrinsic(intrinsic)
+                inst.addSpellAbility(sa)
+        elif keyword.startswith("Outlast"):
+            k = keyword.split(":")
+            manacost = k[1]
+
+            # Create outlast ability string
+            abilityStr = ""
+            abilityStr += "AB$ PutCounter | Cost$ "
+            abilityStr += manacost
+            abilityStr += " T | Defined$ Self | CounterType$ P1P1 | CounterNum$ 1 "
+            abilityStr += "| SorcerySpeed$ True | PrecostDesc$ Outlast"
+            cost = Cost(manacost, True)
+            if not cost.isOnlyManaCost():  # Something other than a mana cost
+                abilityStr += "????????"
+            else:
+                abilityStr += " "
+            abilityStr += "| CostDesc$ " + cost.toSimpleString()
+            abilityStr += " | SpellDescription$ (" + inst.getReminderText() + ")"
+
+            sa = AbilityFactory.getAbility(abilityStr, card)
+            sa.setIntrinsic(intrinsic)
+            inst.addSpellAbility(sa)
+        elif keyword.startswith("Overload"):
+            k = keyword.split(":")
+            overloadCost = Cost(k[1], False)
+            newSA = card.getFirstSpellAbility().copyWithDefinedCost(overloadCost)
+
+            tgt = newSA.getTargetRestrictions()
+            defined = ",".join(tgt.getValidTgts())
+
+            if tgt.canTgtPlayer():
+                newSA.putParam("Defined", defined)
+            else:
+                zoneDef = ""
+                if not tgt.getZone().contains(ZoneType.Battlefield):
+                    zoneDef = StringUtils.join(tgt.getZone(), ",")
+                if newSA.hasParam("TargetType"):
+                    defined = defined.replace("Card", newSA.getParam("TargetType"))
+                newSA.putParam("Defined", "Valid" + zoneDef + " " + defined)
+            newSA.setTargetRestrictions(None)
+
+            if host.isInstant() or host.isSorcery():
+                newSA.putParam("Secondary", "True")
+            newSA.putParam("PrecostDesc", "Overload")
+            newSA.putParam("CostDesc", ManaCostParser.parse(k[1]))
+
+            # makes new StackDescription
+            stackD = newSA.getDescription().replace("Target", "Each").replace("target", "each")
+            newSA.putParam("StackDescription", stackD)
+
+            # makes new SpellDescription
+            sb = ""
+            sb += newSA.getCostDescription()
+            sb += "(" + inst.getReminderText() + ")"
+            newSA.setDescription(sb)
+            # need to store them for additional copies
+            newSA.getOriginalMapParams().putAll(newSA.getMapParams())
+
+            newSA.setIntrinsic(intrinsic)
+            newSA.setAlternativeCost(AlternativeCost.Overload)
+            inst.addSpellAbility(newSA)
+        elif keyword == "Paradigm":
+            # Add the Paradigm effect as a subAbility
+            abExile = "DB$ ChangeZone | Defined$ Self | Origin$ Stack | Destination$ Exile"
+            saExile = AbilityFactory.getAbility(abExile, card)
+
+            dbStr = "DB$ Effect | Triggers$ ParadigmTrigger | Duration$ Permanent | Unique$ True | Name$ " + card.getName() + "' Paradigm"
+            newSA = AbilityFactory.getAbility(dbStr, card)
+
+            newSA.setSVar("ParadigmTrigger", "Mode$ Phase | Phase$ Main1 | ValidPlayer$ You | OptionalDecider$ You | Execute$ ParadigmCopy | TriggerDescription$ Paradigm (" + inst.getReminderText() + ")")
+            newSA.setSVar("ParadigmCopy", "DB$ Play | Defined$ EffectSource | ValidSA$ Spell | ZoneRegardless$ True | WithoutManaCost$ True | Optional$ True | CopyCard$ True")
+
+            saExile.setSubAbility(newSA)
+
+            origSA = card.getFirstSpellAbility()
+
+            # append to original SA
+            origSA.appendSubAbility(saExile)
+        elif keyword.startswith("Plot"):
+            k = keyword.split(":")
+            manacost = k[1]
+
+            class _Plot(AbilityStatic):
+                def canPlay(self):
+                    # Reset the ZoneCheck
+                    self.getRestrictions().setZone(ZoneType.Hand)
+
+                    # add Extra Zone Check for Fblthp
+                    if StaticAbilityPlotZone.plotZone(self.getHostCard()):
+                        self.getRestrictions().setZone(self.getHostCard().getLastKnownZone().getZoneType())
+
+                    if not self.getRestrictions().canPlay(self.getHostCard(), self):
+                        return False
+
+                    return True
+
+                def isPlotting(self):
+                    return True
+
+                def resolve(self):
+                    game = self.getHostCard().getGame()
+                    moveParams = AbilityKey.newMap()
+                    zoneMovements = AbilityKey.addCardZoneTableParams(moveParams, self)
+
+                    c = game.getAction().exile(self.getHostCard(), self, moveParams)
+                    zoneMovements.triggerChangesZoneAll(game, self)
+
+                    c.setPlotted(True)
+
+                    game.fireEvent(GameEventCardPlotted(c, self.getActivatingPlayer()))
+
+            plot = _Plot(card.getCard(), Cost(manacost, False), None)
+
+            sbDesc = ""
+            sbDesc += "Plot (" + inst.getReminderText() + ")"
+            plot.setDescription(sbDesc)
+            plot.putParam("Secondary", "True")
+
+            plot.setCardState(card)
+
+            plot.getRestrictions().setSorcerySpeed(True)
+            plot.setIntrinsic(intrinsic)
+            inst.addSpellAbility(plot)
+        elif keyword.startswith("Prototype"):
+            k = keyword.split(":")
+            if len(k) < 4:
+                print("Malformed Prototype entry! - Card: " + card.toString(), file=sys.stderr)
+                return
+
+            protoCost = Cost(k[1], False)
+            newSA = card.getFirstSpellAbility().copyWithDefinedCost(protoCost)
+            newSA.putParam("SetManaCost", k[1])
+            newSA.putParam("SetColorByManaCost", "True")
+            newSA.putParam("SetPower", k[2])
+            newSA.putParam("SetToughness", k[3])
+            newSA.putParam("Prototype", "True")
+
+            # need to store them for additional copies
+            newSA.getOriginalMapParams().putAll(newSA.getMapParams())
+
+            # only makes description for prompt
+            newSA.setDescription(k[0] + " " + ManaCostParser.parse(k[1]) + " [" + k[2] + "/" + k[3] + "]")
+
+            newSA.setIntrinsic(intrinsic)
+            inst.addSpellAbility(newSA)
+        elif keyword.startswith("Prowl"):
+            k = keyword.split(":")
+            prowlCost = Cost(k[1], False)
+            newSA = card.getFirstSpellAbilityWithFallback().copyWithDefinedCost(prowlCost)
+
+            if host.isInstant() or host.isSorcery():
+                newSA.putParam("Secondary", "True")
+            newSA.putParam("PrecostDesc", "Prowl")
+            newSA.putParam("CostDesc", ManaCostParser.parse(k[1]))
+
+            # makes new SpellDescription
+            sb = ""
+            sb += newSA.getCostDescription()
+            sb += "(" + inst.getReminderText() + ")"
+            newSA.setDescription(sb)
+
+            newSA.setAlternativeCost(AlternativeCost.Prowl)
+
+            newSA.setIntrinsic(intrinsic)
+            inst.addSpellAbility(newSA)
+        elif keyword.startswith("Reconfigure"):
+            if ":" not in keyword:
+                print("Malformed Reconfigure entry! - Card: " + card.toString(), file=sys.stderr)
+                return
+            k = keyword.split(":")
+            extra = " | AlternateCost$ " + k[2] if len(k) > 2 else ""
+            bothStr = "| Cost$ " + k[1] + " | SorcerySpeed$ True | PrecostDesc$ Reconfigure | Secondary$ True" + extra
+            attachStr = ""
+            attachStr += "AB$ Attach | ValidTgts$ Creature.YouCtrl+Other | TgtPrompt$ Select target creature you control "
+            attachStr += "| AILogic$ Pump | SpellDescription$ Attach " + bothStr
+            unattachStr = ""
+            unattachStr += "AB$ Unattach | Defined$ Self | SpellDescription$ Unattach | IsPresent$ Card.Self+AttachedTo Creature"
+            unattachStr += bothStr
+            # instantiate attach ability
+            attachSA = AbilityFactory.getAbility(attachStr, card)
+            attachSA.setIntrinsic(intrinsic)
+            inst.addSpellAbility(attachSA)
+            # instantiate unattach ability
+            unattachSA = AbilityFactory.getAbility(unattachStr, card)
+            unattachSA.setIntrinsic(intrinsic)
+            inst.addSpellAbility(unattachSA)
+        elif keyword.startswith("Reinforce") and isinstance(inst, KeywordWithCostAndAmount):
+            reinforce = inst
+            n = reinforce.getAmountString()
+            manacost = reinforce.getCostString()
+
+            sb = ""
+            sb += "AB$ PutCounter | CounterType$ P1P1 | ActivationZone$ Hand | ValidTgts$ Creature "
+            sb += "| Cost$ " + manacost + " Discard<1/CARDNAME>"
+            sb += "| CounterNum$ " + n
+            sb += "| CostDesc$ " + ManaCostParser.parse(manacost)  # to hide the Discard from the cost
+            sb += "| PrecostDesc$ " + reinforce.getTitleWithoutCost()
+            sb += "| SpellDescription$ (" + inst.getReminderText() + ")"
+
+            sa = AbilityFactory.getAbility(sb, card)
+            sa.setIntrinsic(intrinsic)
+
+            if n == "X":
+                sa.setSVar("X", "Count$xPaid")
+            inst.addSpellAbility(sa)
+        elif keyword.startswith("Saddle"):
+            k = keyword.split(":")
+            power = k[1]
+
+            # tapXType has a special check for withTotalPower, and NEEDS it to be "+withTotalPowerGE"
+            effect = ("AB$ AlterAttribute | Cost$ tapXType<Any/Creature.Other+withTotalPowerGE" + power + ">" +
+                      "| CostDesc$ Saddle " + power + " | Attributes$ Saddle | Secondary$ True | Defined$ Self | SorcerySpeed$ True " +
+                      "| SpellDescription$ (" + inst.getReminderText() + ")")
+
+            sa = AbilityFactory.getAbility(effect, card)
+            sa.setIntrinsic(intrinsic)
+            inst.addSpellAbility(sa)
+        elif keyword.startswith("Scavenge"):
+            k = keyword.split(":")
+            manacost = k[1]
+
+            effect = ("AB$ PutCounter | Cost$ " + manacost + " ExileFromGrave<1/CARDNAME> " +
+                      "| ActivationZone$ Graveyard | ValidTgts$ Creature | CounterType$ P1P1 " +
+                      "| CounterNum$ ScavengeX | SorcerySpeed$ True " +
+                      "| PrecostDesc$ Scavenge | CostDesc$ " + ManaCostParser.parse(manacost) +
+                      "| SpellDescription$ (" + inst.getReminderText() + ")")
+
+            sa = AbilityFactory.getAbility(effect, card)
+            sa.setSVar("ScavengeX", "Exiled$CardPower")
+            sa.setIntrinsic(intrinsic)
+            inst.addSpellAbility(sa)
+        elif keyword.startswith("Sneak"):
+            k = keyword.split(":")
+            manaCost = k[1]
+            webCost = Cost(manaCost + " Return<1/Creature.attacking+unblocked/unblocked attacker>", False)
+
+            newSA = card.getFirstSpellAbilityWithFallback().copyWithManaCostReplaced(host.getController(), webCost)
+
+            if len(k) > 2:
+                newSA.getMapParams().put("ValidAfterStack", k[2])
+
+            desc = ""
+            desc += "Sneak " + ManaCostParser.parse(manaCost) + " ("
+            desc += inst.getReminderText()
+            desc += ")"
+
+            newSA.setDescription(desc)
+
+            sb = ""
+            sb += card.getName() + " (Sneak)"
+            newSA.setStackDescription(sb)
+            newSA.putParam("Secondary", "True")
+            newSA.setAlternativeCost(AlternativeCost.Sneak)
+            newSA.getRestrictions().setInstantSpeed(True)
+
+            newSA.setIntrinsic(intrinsic)
+            inst.addSpellAbility(newSA)
+        elif keyword.startswith("Station"):
+            effect = ("AB$ PutCounter | Cost$ tapXType<1/Creature.Other> | Defined$ Self " +
+                      "| CounterType$ CHARGE | CounterNum$ StationX | SorcerySpeed$ True " +
+                      "| CostDesc$ | SpellDescription$ Station (" + inst.getReminderText() + ")")
+
+            sa = AbilityFactory.getAbility(effect, card)
+            sa.setSVar("StationX", "TappedCards$TapPowerValue")
+            sa.setIntrinsic(intrinsic)
+            inst.addSpellAbility(sa)
+        elif keyword.startswith("Encore"):
+            k = keyword.split(":")
+            manacost = k[1]
+            extra = "| " + k[2] if len(k) > 2 else ""
+
+            effect = ("AB$ CopyPermanent | Cost$ " + manacost + " ExileFromGrave<1/CARDNAME> | ActivationZone$ Graveyard" +
+                      "| SorcerySpeed$ True | Defined$ Self | PumpKeywords$ Haste | RememberTokens$ True | ForEach$ Opponent" +
+                      "| AtEOT$ Sacrifice | PrecostDesc$ Encore | CostDesc$ " + ManaCostParser.parse(manacost) +
+                      "| SpellDescription$ (" + inst.getReminderText() + ")" + extra)
+
+            sa = AbilityFactory.getAbility(effect, card)
+
+            repeatStr = "DB$ RepeatEach | DefinedCards$ Remembered | UseImprinted$ True"
+            repeatSub = AbilityFactory.getAbility(repeatStr, card)
+            sa.setSubAbility(repeatSub)
+
+            effectStr = "DB$ Effect | RememberObjects$ Imprinted & ImprintedRemembered | ExileOnMoved$ Battlefield | StaticAbilities$ AttackChosen"
+            effectSub = AbilityFactory.getAbility(effectStr, card)
+            repeatSub.setAdditionalAbility("RepeatSubAbility", effectSub)
+
+            attackStaticStr = ("Mode$ MustAttack | ValidCreature$ Card.IsRemembered | MustAttack$ RememberedPlayer" +
+                               " | Description$ This token copy attacks that opponent this turn if able.")
+            effectSub.setSVar("AttackChosen", attackStaticStr)
+
+            cleanStr = "DB$ Cleanup | Defined$ Imprinted | ForgetDefined$ Remembered"
+            cleanSub = AbilityFactory.getAbility(cleanStr, card)
+            effectSub.setSubAbility(cleanSub)
+
+            sa.setIntrinsic(intrinsic)
+            inst.addSpellAbility(sa)
+        elif keyword.startswith("Specialize"):
+            k = keyword.split(":")
+            cost = k[1]
+            flavor = k[2] + " ???????? " if len(k) > 2 and k[2] != "" else ""
+            condition = ". " + k[3] if len(k) > 3 and k[3] != "" else ""
+            extra = k[4] + " | " if len(k) > 4 and k[4] != "" else ""
+
+            effect = ("AB$ SetState | Cost$ " + cost + " ChooseColor<1> Discard<1/Card.ChosenColor;" +
+                      "Card.AssociatedWithChosenColor/card of the chosen color or its associated basic land type> | " +
+                      "Mode$ Specialize | SorcerySpeed$ True | " + extra + "PrecostDesc$ " + flavor + "Specialize | " +
+                      "CostDesc$ " + ManaCostParser.parse(cost) + condition + " | SpellDescription$ (" +
+                      inst.getReminderText() + ")")
+
+            sa = AbilityFactory.getAbility(effect, card)
+            sa.setIntrinsic(intrinsic)
+            inst.addSpellAbility(sa)
+        elif keyword.startswith("Spectacle"):
+            k = keyword.split(":")
+            cost = Cost(k[1], False)
+            newSA = card.getFirstSpellAbility().copyWithDefinedCost(cost)
+
+            newSA.setAlternativeCost(AlternativeCost.Spectacle)
+
+            desc = "Spectacle " + cost.toSimpleString() + " (" + inst.getReminderText() + ")"
+            newSA.setDescription(desc)
+
+            newSA.setIntrinsic(intrinsic)
+            inst.addSpellAbility(newSA)
+        elif keyword.startswith("Surge"):
+            k = keyword.split(":")
+            surgeCost = Cost(k[1], False)
+            newSA = card.getFirstSpellAbility().copyWithDefinedCost(surgeCost)
+
+            newSA.setAlternativeCost(AlternativeCost.Surge)
+
+            desc = "Surge " + surgeCost.toSimpleString() + " (" + inst.getReminderText() + ")"
+            newSA.setDescription(desc)
+
+            newSA.setIntrinsic(intrinsic)
+            inst.addSpellAbility(newSA)
+        elif keyword.startswith("Suspend") and keyword != "Suspend":
+            # only add it if suspend has counter and cost
+            k = keyword.split(":")
+
+            # be careful with Suspend ability, it will not hit the stack
+            cost = Cost(k[2], True)
+
+            class _Suspend(AbilityStatic):
+                def canPlay(self):
+                    if not (self.getRestrictions().canPlay(self.getHostCard(), self)):
+                        return False
+
+                    if self.getHostCard().getGame().getStack().isSplitSecondOnStack():
+                        return False
+
+                    if StaticAbilityCantBeCast.cantBeCastAbility(self, self.getHostCard(), self.getActivatingPlayer()):
+                        return False
+
+                    return self.getHostCard().getFirstSpellAbility().canCastTiming(self.getHostCard(), self.getActivatingPlayer())
+
+                def resolve(self):
+                    game = self.getHostCard().getGame()
+                    moveParams = AbilityKey.newMap()
+                    zoneMovements = AbilityKey.addCardZoneTableParams(moveParams, self)
+
+                    c = game.getAction().exile(self.getHostCard(), self, moveParams)
+                    zoneMovements.triggerChangesZoneAll(game, self)
+
+                    counters = AbilityUtils.calculateAmount(c, k[1], self)
+                    table = GameEntityCounterTable()
+                    c.addCounter(CounterEnumType.TIME, counters, self.getActivatingPlayer(), table)
+                    table.replaceCounterEffect(game, self)  # this is a special Action, not an Effect
+
+                    sb = TextUtil.concatWithSpace(self.getActivatingPlayer().toString(), "has suspended", c.getDisplayName(), "with", str(counters), "time counters on it.")
+                    game.fireEvent(GameEventAddLog(GameLogEntryType.STACK_RESOLVE, sb))
+                    # reveal suspended card
+                    game.getAction().reveal(CardCollection(c), c.getOwner(), True, c.getDisplayName() + " is suspended with " + str(counters) + " time counters in ")
+
+            suspend = _Suspend(host, cost, None)
+            sbDesc = ""
+            sbDesc += "Suspend " + k[1] + "????????" + cost.toSimpleString()
+            sbDesc += ". X can't be 0." if "XMin1" in k[2] else ""
+            sbDesc += " (" + inst.getReminderText() + ")"
+            suspend.setDescription(sbDesc)
+
+            svar = "X"  # emulate "References X" here
+            suspend.setSVar(svar, card.getSVar(svar))
+            suspend.setCardState(card)
+
+            sbStack = ""
+            sbStack += card.getName() + " suspending for "
+            sbStack += Lang.nounWithNumeral(k[1], "turn") + ".)"
+            suspend.setStackDescription(sbStack)
+
+            suspend.getRestrictions().setZone(ZoneType.Hand)
+            inst.addSpellAbility(suspend)
+        elif keyword.startswith("Transfigure"):
+            k = keyword.split(":")
+            manacost = k[1]
+            effect = ("AB$ ChangeZone | Cost$ " + manacost + " Sac<1/CARDNAME>"
+                      + " | PrecostDesc$ Transfigure | CostDesc$ " + ManaCostParser.parse(manacost)
+                      + " | Origin$ Library | Destination$ Battlefield | ChangeType$ Creature.cmcEQTransfigureX"
+                      + " | SorcerySpeed$ True | StackDescription$ SpellDescription | SpellDescription$ ("
+                      + inst.getReminderText() + ")")
+
+            sa = AbilityFactory.getAbility(effect, card)
+            sa.setSVar("TransfigureX", "Count$CardManaCost")
+            sa.setIntrinsic(intrinsic)
+            inst.addSpellAbility(sa)
+        elif keyword.startswith("Transmute"):
+            k = keyword.split(":")
+            manacost = k[1]
+
+            effect = ("AB$ ChangeZone | Cost$ " + manacost + " Discard<1/CARDNAME>"
+                      + " | PrecostDesc$ Transmute | CostDesc$ " + ManaCostParser.parse(manacost) + " | ActivationZone$ Hand"
+                      + " | Origin$ Library | Destination$ Hand | ChangeType$ Card.cmcEQTransmuteX"
+                      + " | SorcerySpeed$ True | StackDescription$ SpellDescription | SpellDescription$ ("
+                      + inst.getReminderText() + ")")
+
+            sa = AbilityFactory.getAbility(effect, card)
+            sa.setSVar("TransmuteX", "Count$CardManaCost")
+            sa.setIntrinsic(intrinsic)
+            inst.addSpellAbility(sa)
+        elif keyword.startswith("Unearth"):
+            k = keyword.split(":")
+            manacost = k[1]
+
+            effect = ("AB$ ChangeZone | Cost$ " + manacost + " | Defined$ Self" +
+                      " | Origin$ Graveyard | Destination$ Battlefield | SorcerySpeed$ True" +
+                      " | ActivationZone$ Graveyard | PrecostDesc$ Unearth | CostDesc$ " + ManaCostParser.parse(manacost)
+                      + " | StackDescription$ Unearth: Return CARDNAME to the battlefield. | SpellDescription$" +
+                      " (" + inst.getReminderText() + ")")
+
+            sa = AbilityFactory.getAbility(effect, card)
+            sa.setIntrinsic(intrinsic)
+            inst.addSpellAbility(sa)
+        elif keyword.startswith("Warp"):
+            k = keyword.split(":")
+            warpCost = Cost(k[1], True)
+
+            newSA = card.getFirstSpellAbility().copyWithDefinedCost(warpCost)
+
+            sbCost = "Warp"
+            if not warpCost.isOnlyManaCost():  # Something other than a mana cost
+                sbCost += "????????"
+            else:
+                sbCost += " "
+
+            newSA.putParam("PrecostDesc", sbCost)
+            newSA.putParam("CostDesc", warpCost.toString())
+            # need to add the "."?
+
+            # makes new SpellDescription
+            desc = ""
+            desc += newSA.getCostDescription()
+            desc += "(" + inst.getReminderText() + ")"
+            newSA.setDescription(desc)
+            newSA.putParam("AfterDescription", "(Warped)")
+
+            newSA.getRestrictions().setZone(ZoneType.Hand)
+            newSA.setAlternativeCost(AlternativeCost.Warp)
+            newSA.setIntrinsic(intrinsic)
+            inst.addSpellAbility(newSA)
+        elif keyword.startswith("Web-slinging"):
+            k = keyword.split(":")
+            manaCost = k[1]
+            webCost = Cost(manaCost + " Return<1/Creature.tapped>", False)
+
+            newSA = card.getFirstSpellAbilityWithFallback().copyWithManaCostReplaced(host.getController(), webCost)
+
+            if len(k) > 2:
+                newSA.getMapParams().put("ValidAfterStack", k[2])
+
+            desc = ""
+            desc += "Web-Slinging " + ManaCostParser.parse(manaCost) + " ("
+            desc += inst.getReminderText()
+            desc += ")"
+
+            newSA.setDescription(desc)
+
+            sb = ""
+            sb += card.getName() + " (Web-Slinging)"
+            newSA.setStackDescription(sb)
+
+            newSA.setAlternativeCost(AlternativeCost.WebSlinging)
+            newSA.setIntrinsic(intrinsic)
+            inst.addSpellAbility(newSA)
+        elif keyword.startswith("Crew"):
+            k = keyword.split(":")
+            power = k[1]
+
+            # tapXType has a special check for withTotalPower, and NEEDS it to be "+withTotalPowerGE"
+            effect = ("AB$ Animate | Cost$ tapXType<Any/Creature.Other+withTotalPowerGE" + power + "> | " +
+                      "PrecostDesc$ Crew | CostDesc$ " + power + " (Tap any number of creatures you control with total power " + power +
+                      " or more: | Secondary$ True | Defined$ Self | Types$ Artifact,Creature | " +
+                      "SpellDescription$ CARDNAME becomes an artifact creature until end of turn.)")
+            if len(k) > 2:
+                effect += " | " + k[2]
+
+            sa = AbilityFactory.getAbility(effect, card)
+            sa.setIntrinsic(intrinsic)
+            inst.addSpellAbility(sa)
+        elif keyword.startswith("Cycling"):
+            k = keyword.split(":")
+            manacost = k[1]
+            cost = Cost(manacost, True)
+
+            sb = ""
+            sb += "AB$ Draw | Cost$ "
+            sb += manacost
+            sb += " Discard<1/CARDNAME> | ActivationZone$ Hand | PrecostDesc$ Cycling"
+            sb += " " if cost.isOnlyManaCost() else "????????"
+            sb += "| CostDesc$ " + cost.toSimpleString()
+            sb += " | SpellDescription$ (" + inst.getReminderText() + ")"
+
+            sa = AbilityFactory.getAbility(sb, card)
+            sa.setIntrinsic(intrinsic)
+            inst.addSpellAbility(sa)
+        elif keyword.startswith("TypeCycling") and isinstance(inst, KeywordWithCostAndType):
+            typeCycling = inst
+            sb = ""
+            sb += "AB$ ChangeZone | Cost$ " + typeCycling.getCostString()
+
+            sb += " Discard<1/CARDNAME> | ActivationZone$ Hand | PrecostDesc$ " + typeCycling.getTitleWithoutCost()
+            sb += " | CostDesc$ " + typeCycling.getCost().toSimpleString()
+            sb += " | Origin$ Library | Destination$ Hand"
+            sb += " | ChangeType$ " + typeCycling.getValidType()
+            sb += " | SpellDescription$ (" + inst.getReminderText() + ")"
+
+            sa = AbilityFactory.getAbility(sb, card)
+            sa.setIntrinsic(intrinsic)
+            inst.addSpellAbility(sa)
+
+    @staticmethod
+    def addStaticAbility(inst, state, intrinsic):
+        keyword = inst.getOriginal()
+
+        if isinstance(inst, Affinity):
+            affinity = inst
+            t = affinity.getValidType()
+
+            sb = ""
+            sb += "Mode$ ReduceCost | ValidCard$ Card.Self | Type$ Spell | Amount$ AffinityX | EffectZone$ All"
+            sb += "| Description$ " + affinity.getTitle()
+            sb += " (" + inst.getReminderText() + ")"
+            effect = sb
+
+            st = StaticAbility.create(effect, state.getCard(), state, intrinsic)
+
+            sb2 = ""
+            sb2 += "Count$Valid " + t + ("+" if "." in t else ".") + "YouCtrl"
+            st.setSVar("AffinityX", sb2)
+            inst.addStaticAbility(st)
+        elif keyword.startswith("Blitz"):
+            k = keyword.split(":")
+            manacost = k[1]
+            cost = Cost(manacost, False)
+
+            sb = "Blitz"
+            if not cost.isOnlyManaCost():
+                sb += "????????"
+            else:
+                sb += " "
+            sb += cost.toSimpleString()
+            effect = ("Mode$ Continuous | Affected$ Card.Self+blitzed+castKeyword | AddKeyword$ Haste | AddTrigger$ Dies"
+                      + " | Secondary$ True | Description$ " + sb + " (" + inst.getReminderText() + ")")
+            trig = ("Mode$ ChangesZone | Origin$ Battlefield | Destination$ Graveyard | ValidCard$ Card.Self" +
+                    " | Execute$ TrigDraw | Secondary$ True | TriggerDescription$ When this creature dies, draw a card.")
+            ab = "DB$ Draw"
+
+            st = StaticAbility.create(effect, state.getCard(), state, intrinsic)
+
+            st.setSVar("Dies", trig)
+            st.setSVar("TrigDraw", ab)
+
+            inst.addStaticAbility(st)
+        elif keyword == "Changeling":
+            effect = ("Mode$ Continuous | EffectZone$ All | Affected$ Card.Self" +
+                      " | CharacteristicDefining$ True | AddAllCreatureTypes$ True | Secondary$ True" +
+                      " | Description$ Changeling (" + inst.getReminderText() + ")")
+            inst.addStaticAbility(StaticAbility.create(effect, state.getCard(), state, intrinsic))
+        elif keyword == "Cipher":
+            sb = ""
+            sb += "Mode$ Continuous | EffectZone$ Exile | Affected$ Card.EncodedWithSource"
+            sb += " | AddTrigger$ CipherTrigger"
+            sb += " | Description$ Cipher (" + inst.getReminderText() + ")"
+
+            effect = sb
+
+            sb = ""
+
+            sb += "Mode$ DamageDone | ValidSource$ Card.Self | ValidTarget$ Player | Execute$ PlayEncoded"
+            sb += " | CombatDamage$ True | OptionalDecider$ You | TriggerDescription$ "
+            sb += "Whenever CARDNAME deals combat damage to a player, its controller may cast a copy of "
+            sb += state.getName() + " without paying its mana cost."
+
+            trig = sb
+
+            ab = "DB$ Play | Defined$ OriginalHost | WithoutManaCost$ True | CopyCard$ True"
+
+            st = StaticAbility.create(effect, state.getCard(), state, intrinsic)
+
+            st.setSVar("CipherTrigger", trig)
+            st.setSVar("PlayEncoded", ab)
+
+            inst.addStaticAbility(st)
+        elif keyword.startswith("Class"):
+            k = keyword.split(":")
+            level = k[1]
+            params = k[3]
+
+            # get Description from CardTraits
+            desc = ""
+            descAdded = False
+            mapParams = AbilityFactory.getMapParams(params)
+            if "AddTrigger" in mapParams:
+                for s in mapParams.get("AddTrigger").split(" & "):
+                    if descAdded:
+                        desc += "\r\n"
+                    desc += AbilityFactory.getMapParams(state.getSVar(s)).get("TriggerDescription")
+                    descAdded = True
+            if "AddStaticAbility" in mapParams:
+                for s in mapParams.get("AddStaticAbility").split(" & "):
+                    if descAdded:
+                        desc += "\r\n"
+                    desc += AbilityFactory.getMapParams(state.getSVar(s)).get("Description")
+                    descAdded = True
+            if "AddReplacementEffect" in mapParams:
+                for s in mapParams.get("AddReplacementEffect").split(" & "):
+                    if descAdded:
+                        desc += "\r\n"
+                    desc += AbilityFactory.getMapParams(state.getSVar(s)).get("Description")
+                    descAdded = True
+
+            effect = "Mode$ Continuous | Affected$ Card.Self | ClassLevel$ " + level + " | " + params
+            if descAdded:
+                effect += " | Description$ " + desc
+
+            inst.addStaticAbility(StaticAbility.create(effect, state.getCard(), state, intrinsic))
+        elif keyword.startswith("Dash"):
+            effect = "Mode$ Continuous | Affected$ Card.Self+dashed+castKeyword | AddKeyword$ Haste"
+            inst.addStaticAbility(StaticAbility.create(effect, state.getCard(), state, intrinsic))
+        elif keyword == "Daybound":
+            effect = "Mode$ CantTransform | ValidCard$ Creature.Self | ExceptCause$ SpellAbility.Daybound | Secondary$ True | Description$ This permanent can't be transformed except by its daybound ability."
+            inst.addStaticAbility(StaticAbility.create(effect, state.getCard(), state, intrinsic))
+        elif keyword == "Decayed":
+            effect = "Mode$ CantBlock | ValidCard$ Creature.Self | Secondary$ True | Description$ CARDNAME can't block."
+            st = StaticAbility.create(effect, state.getCard(), state, intrinsic)
+            inst.addStaticAbility(st)
+        elif keyword == "Defender":
+            effect = "Mode$ CantAttack | ValidCard$ Card.Self | Secondary$ True"
+            inst.addStaticAbility(StaticAbility.create(effect, state.getCard(), state, intrinsic))
+        elif keyword == "Devoid":
+            effect = ("Mode$ Continuous | EffectZone$ All | Affected$ Card.Self" +
+                      " | CharacteristicDefining$ True | SetColor$ Colorless | Secondary$ True" +
+                      " | Description$ Devoid (" + inst.getReminderText() + ")")
+            inst.addStaticAbility(StaticAbility.create(effect, state.getCard(), state, intrinsic))
+        elif keyword.startswith("Escalate"):
+            k = keyword.split(":")
+            manacost = k[1]
+            cost = Cost(manacost, False)
+
+            sb = "Escalate"
+            if not cost.isOnlyManaCost():
+                sb += "????????"
+            else:
+                sb += " "
+            sb += cost.toSimpleString()
+
+            effect = ("Mode$ RaiseCost | ValidCard$ Card.Self | Type$ Spell | Secondary$ True"
+                      + " | Amount$ Escalate | Cost$ " + manacost + " | EffectZone$ All"
+                      + " | Description$ " + sb + " (" + inst.getReminderText() + ")")
+            inst.addStaticAbility(StaticAbility.create(effect, state.getCard(), state, intrinsic))
+        elif keyword == "Enlist":
+            effect = ("Mode$ OptionalAttackCost | ValidCard$ Card.Self | Cost$ Enlist<1/CARDNAME/creature> | Secondary$ True" +
+                      "| Trigger$ TrigEnlist | Description$ Enlist (" + inst.getReminderText() + ")")
+            st = StaticAbility.create(effect, state.getCard(), state, intrinsic)
+            st.setSVar("TrigEnlist", "DB$ Pump | NumAtt$ TriggerRemembered$CardPower" +
+            " | SpellDescription$ When you do, add its power to this creature's until end of turn.")
+            inst.addStaticAbility(st)
+        elif keyword == "Fear":
+            effect = ("Mode$ CantBlockBy | ValidAttacker$ Creature.Self | ValidBlocker$ Creature.nonArtifact+nonBlack | Secondary$ True" +
+                      " | Description$ Fear (" + inst.getReminderText() + ")")
+            inst.addStaticAbility(StaticAbility.create(effect, state.getCard(), state, intrinsic))
+        elif keyword == "Flying":
+            effect = ("Mode$ CantBlockBy | ValidAttacker$ Creature.Self | ValidBlocker$ Creature.withoutFlying+withoutReach | Secondary$ True" +
+                      " | Description$ Flying (" + inst.getReminderText() + ")")
+            inst.addStaticAbility(StaticAbility.create(effect, state.getCard(), state, intrinsic))
+        elif keyword.startswith("Harmonize"):
+            reduceEffect = ("Mode$ ReduceCost | ValidCard$ Card.Self | ValidSpell$ Spell.Harmonize | Secondary$ True"
+                            + " | Amount$ AffectedX | EffectZone$ All | Description$ Harmonize (" + inst.getReminderText() + ")")
+            stAb = StaticAbility.create(reduceEffect, state.getCard(), state, intrinsic)
+            stAb.setSVar("AffectedX", "Count$OptionalKeywordAmount")
+            inst.addStaticAbility(stAb)
+        elif keyword.startswith("Hexproof") and isinstance(inst, Hexproof):
+            hexproof = inst
+            sbValid = ""
+
+            if hexproof.getValidType() != "":
+                param = "ValidSA$ " if "abilities" in hexproof.getTypeDescription() else "ValidSource$ "
+                sbValid += "| " + param + hexproof.getValidType()
+
+            effect = ("Mode$ CantTarget | ValidTarget$ Card.Self | Secondary$ True"
+                      + sbValid + " | Activator$ Opponent | Description$ "
+                      + inst.getTitle() + " (" + inst.getReminderText() + ")")
+            inst.addStaticAbility(StaticAbility.create(effect, state.getCard(), state, intrinsic))
+        elif keyword == "Horsemanship":
+            effect = ("Mode$ CantBlockBy | ValidAttacker$ Creature.Self | ValidBlocker$ Creature.withoutHorsemanship | Secondary$ True " +
+                      " | Description$ Horsemanship (" + inst.getReminderText() + ")")
+            inst.addStaticAbility(StaticAbility.create(effect, state.getCard(), state, intrinsic))
+        elif keyword.startswith("Impending"):
+            effect = "Mode$ Continuous | Affected$ Card.Self+impended+counters_GE1_TIME | RemoveType$ Creature | Secondary$ True"
+            inst.addStaticAbility(StaticAbility.create(effect, state.getCard(), state, intrinsic))
+        elif keyword == "Intimidate":
+            effect = ("Mode$ CantBlockBy | ValidAttacker$ Creature.Self | ValidBlocker$ Creature.nonArtifact+!SharesColorWith | Secondary$ True " +
+                      " | Description$ Intimidate (" + inst.getReminderText() + ")")
+            inst.addStaticAbility(StaticAbility.create(effect, state.getCard(), state, intrinsic))
+        elif isinstance(inst, Landwalk):
+            landwalk = inst
+            effect = ("Mode$ CantBlockBy | ValidAttacker$ Creature.Self | ValidDefender$ Player.controls" + landwalk.getValidType() +
+                      " | Description$ " + landwalk.getTitle() + " (" + inst.getReminderText() + ")")
+            inst.addStaticAbility(StaticAbility.create(effect, state.getCard(), state, intrinsic))
+        elif keyword == "Living metal":
+            effect = "Mode$ Continuous | Affected$ Card.Self | AddType$ Creature | Condition$ PlayerTurn | Secondary$ True"
+            inst.addStaticAbility(StaticAbility.create(effect, state.getCard(), state, intrinsic))
+        elif keyword == "Nightbound":
+            effect = "Mode$ CantTransform | ValidCard$ Creature.Self | ExceptCause$ SpellAbility.Nightbound | Secondary$ True | Description$ This permanent can't be transformed except by its nightbound ability."
+            inst.addStaticAbility(StaticAbility.create(effect, state.getCard(), state, intrinsic))
+        elif keyword.startswith("Protection"):
+            valid = CardFactoryUtil.getProtectionValid(keyword, False)
+
+            # Block
+            effect = "Mode$ CantBlockBy | ValidAttacker$ Creature.Self | Secondary$ True "
+            desc = "Protection (" + inst.getReminderText() + ")"
+            if valid != "":
+                effect += "| ValidBlocker$ " + valid
+            effect += " | Description$ " + desc
+            inst.addStaticAbility(StaticAbility.create(effect, state.getCard(), state, intrinsic))
+
+            # Target
+            effect = "Mode$ CantTarget | ValidTarget$ Card.Self | Secondary$ True "
+            if valid != "":
+                effect += "| ValidSource$ " + valid
+            effect += " | Description$ " + desc
+            inst.addStaticAbility(StaticAbility.create(effect, state.getCard(), state, intrinsic))
+
+            # Attach
+            effect = "Mode$ CantAttach | Target$ Card.Self | Secondary$ True "
+            if valid != "":
+                effect += "| ValidCard$ " + valid
+            # This effect doesn't remove something
+            if keyword.startswith("Protection:"):
+                kws = keyword.split(":")
+                if len(kws) > 3:
+                    effect += "| Exceptions$ " + kws[3]
+                if len(kws) > 4:
+                    effect += " | ExceptionSBA$ True"
+            effect += " | Description$ " + desc
+            inst.addStaticAbility(StaticAbility.create(effect, state.getCard(), state, intrinsic))
+        elif keyword == "Read ahead":
+            effect = ("Mode$ DisableTriggers | ValidCard$ Card.Self+ThisTurnEntered | ValidTrigger$ Triggered.ChapterNotLore | Secondary$ True" +
+                      " | Description$ Chapter abilities of this Saga can't trigger the turn it entered the battlefield unless it has exactly the number of lore counters on it specified in the chapter symbol of that ability.")
+            inst.addStaticAbility(StaticAbility.create(effect, state.getCard(), state, intrinsic))
+        elif keyword == "Shroud":
+            effect = ("Mode$ CantTarget | ValidTarget$ Card.Self | Secondary$ True"
+                      + " | Description$ Shroud (" + inst.getReminderText() + ")")
+            inst.addStaticAbility(StaticAbility.create(effect, state.getCard(), state, intrinsic))
+        elif keyword == "Skulk":
+            effect = ("Mode$ CantBlockBy | ValidAttacker$ Creature.Self | ValidBlocker$ Creature.powerGTX | Secondary$ True " +
+                      " | Description$ Skulk (" + inst.getReminderText() + ")")
+            st = StaticAbility.create(effect, state.getCard(), state, intrinsic)
+            st.setSVar("X", "Count$CardPower")
+            inst.addStaticAbility(st)
+        elif keyword == "Spree":
+            effect = ("Mode$ RaiseCost | ValidCard$ Card.Self | Type$ Spell | Secondary$ True | Amount$ Spree | EffectZone$ All"
+                      + " | Description$ Spree (" + inst.getReminderText() + ")")
+            inst.addStaticAbility(StaticAbility.create(effect, state.getCard(), state, intrinsic))
+        elif keyword.startswith("Strive"):
+            k = keyword.split(":")
+            manacost = k[1]
+
+            effect = ("Mode$ RaiseCost | ValidCard$ Card.Self | Type$ Spell | Amount$ Strive | Cost$ " + manacost + " | EffectZone$ All" +
+                      " | Description$ Strive - " + inst.getReminderText())
+            inst.addStaticAbility(StaticAbility.create(effect, state.getCard(), state, intrinsic))
+        elif keyword == "Tiered":
+            effect = ("Mode$ RaiseCost | ValidCard$ Card.Self | Type$ Spell | Secondary$ True | Amount$ Tiered | EffectZone$ All"
+                      + " | Description$ Tiered (" + inst.getReminderText() + ")")
+            inst.addStaticAbility(StaticAbility.create(effect, state.getCard(), state, intrinsic))
+        elif keyword == "Unleash":
+            effect = "Mode$ CantBlock | ValidCard$ Creature.Self+counters_GE1_P1P1 | Secondary$ True | Description$ CARDNAME can't block."
+            inst.addStaticAbility(StaticAbility.create(effect, state.getCard(), state, intrinsic))
+        elif keyword == "Undaunted":
+            effect = ("Mode$ ReduceCost | ValidCard$ Card.Self | Type$ Spell | Secondary$ True"
+                      + "| Amount$ Undaunted | EffectZone$ All | Description$ Undaunted (" + inst.getReminderText() + ")")
+            inst.addStaticAbility(StaticAbility.create(effect, state.getCard(), state, intrinsic))
+        elif keyword == "Vigilance":
+            effect = "Mode$ AttackVigilance | ValidCard$ Card.Self | Secondary$ True | Description$ Vigilance (" + inst.getReminderText() + ")"
+            inst.addStaticAbility(StaticAbility.create(effect, state.getCard(), state, intrinsic))
+        elif keyword == "MayFlashSac":
+            effect = ("Mode$ Continuous | EffectZone$ All | Affected$ Card.Self | Secondary$ True | MayPlay$ True | MayPlayDontGrantZonePermissions$ True"
+                      + " | MayPlayNotSorcerySpeed$ True | MayPlayWithFlash$ True | MayPlayText$ Sacrifice at the next cleanup step"
+                      + " | AffectedZone$ Exile,Graveyard,Hand,Library,Stack | Description$ " + inst.getReminderText())
+            inst.addStaticAbility(StaticAbility.create(effect, state.getCard(), state, intrinsic))
+
+    @staticmethod
+    def setupSiegeAbilities(card):
+        chooseSB = ""
+        chooseSB += "Event$ Moved | ValidCard$ Card.Self | Destination$ Battlefield | ReplacementResult$ Updated | BattleProtector$ True"
+        chooseSB += " | Description$ (As a Siege enters, choose an opponent to protect it. You and others can attack it. When it's defeated, exile it, then cast it transformed.)"
+        chooseProtector = "DB$ ChoosePlayer | Defined$ You | Choices$ Opponent | Protect$ True | ChoiceTitle$ Choose an opponent to protect this battle"
+
+        re = ReplacementHandler.parseReplacement(chooseSB, card, True)
+        re.setOverridingAbility(AbilityFactory.getAbility(chooseProtector, card))
+        card.addReplacementEffect(re)
+
+        # Defeated trigger
+        triggerDefeated = ""
+        triggerDefeated += "Mode$ CounterRemovedOnce | ValidCard$ Card.Self | Secondary$ True | CounterType$ DEFENSE | Remaining$ 0 | TriggerZones$ Battlefield |"
+        triggerDefeated += " TriggerDescription$ When CARDNAME is defeated, exile it, then cast it transformed."
+
+        castExileBattle = "DB$ ChangeZone | Defined$ Self | Origin$ Battlefield | Destination$ Exile | RememberChanged$ True"
+        # note full rules text:
+        # When the last defense counter is removed from this permanent, exile it, then you may cast it transformed
+        # without paying its mana cost.
+        castDefeatedBattle = "DB$ Play | Defined$ Remembered | WithoutManaCost$ True | Optional$ True | CastTransformed$ True"
+
+        defeatedTrigger = TriggerHandler.parseTrigger(triggerDefeated, card, True)
+        exileAbility = AbilityFactory.getAbility(castExileBattle, card)
+        castAbility = AbilityFactory.getAbility(castDefeatedBattle, card)
+
+        exileAbility.setSubAbility(castAbility)
+        defeatedTrigger.setOverridingAbility(exileAbility)
+        card.addTrigger(defeatedTrigger)
+
+    @staticmethod
+    def setupAdventureAbility(card):
+        sb = ""
+        sb += "Event$ Moved | ValidCard$ Card.Self | Origin$ Stack | ExcludeDestination$ Exile "
+        sb += "| ValidStackSa$ Spell.Adventure | Fizzle$ False | Secondary$ True | Description$ Adventure"
+
+        repeffstr = sb
+
+        abExile = "DB$ ChangeZone | Defined$ Self | Origin$ Stack | Destination$ Exile | StackDescription$ None"
+
+        saExile = AbilityFactory.getAbility(abExile, card)
+
+        abEffect = "DB$ Effect | RememberObjects$ Self | StaticAbilities$ Play | ForgetOnMoved$ Exile | Duration$ Permanent | ConditionDefined$ Self | ConditionPresent$ Card.!copiedSpell+!token | Adventure$ True"
+        saEffect = AbilityFactory.getAbility(abEffect, card)
+
+        sbPlay = ""
+        sbPlay += "Mode$ Continuous | MayPlay$ True | EffectZone$ Command | Affected$ Card.IsRemembered+!Adventure"
+        sbPlay += " | AffectedZone$ Exile | Description$ You may cast EFFECTSOURCE."
+        saEffect.setSVar("Play", sbPlay)
+
+        saExile.setSubAbility(saEffect)
+
+        re = ReplacementHandler.parseReplacement(repeffstr, card.getCard(), True)
+
+        re.setOverridingAbility(saExile)
+        return re
+
+    @staticmethod
+    def setupOmenAbility(card):
+        sb = ""
+        sb += "Event$ Moved | ValidCard$ Card.Self | Origin$ Stack "
+        sb += "| ValidStackSa$ Spell.Omen | Fizzle$ False | Secondary$ True | Description$ Omen"
+
+        repeffstr = sb
+
+        abShuffle = "DB$ ChangeZone | Defined$ Self | Origin$ Stack | Destination$ Library | Shuffle$ True | StackDescription$ None"
+        saShuffle = AbilityFactory.getAbility(abShuffle, card)
+
+        re = ReplacementHandler.parseReplacement(repeffstr, card.getCard(), True)
+
+        re.setOverridingAbility(saShuffle)
+
+        return re
+
+    @staticmethod
+    def setFaceDownState(c, sa):
+        source = sa.getHostCard()
+        faceDown = c.getFaceDownState()
+
+        # set New Pt doesn't work because this values need to be copyable for clone effects
+        if sa.hasParam("FaceDownPower"):
+            faceDown.setBasePower(AbilityUtils.calculateAmount(
+                    source, sa.getParam("FaceDownPower"), sa))
+        if sa.hasParam("FaceDownToughness"):
+            faceDown.setBaseToughness(AbilityUtils.calculateAmount(
+                    source, sa.getParam("FaceDownToughness"), sa))
+
+        if sa.hasParam("FaceDownSetType"):
+            faceDown.setType(CardType(sa.getParam("FaceDownSetType").split(" & "), False))
+        if sa.hasParam("FaceDownKeyword"):
+            faceDown.setIntrinsicKeywords([], False)
+            faceDown.addIntrinsicKeywords(sa.getParam("FaceDownKeyword").split(" & "))
+
+        if (sa.hasParam("FaceDownPower") or sa.hasParam("FaceDownToughness")
+                or sa.hasParam("FaceDownSetType") or sa.hasParam("FaceDownKeyword")):
+            class _Unanimate(GameCommand):
+                serialVersionUID = 8853789549297846163
+
+                def run(self):
+                    c.clearStates(CardStateName.FaceDown, True)
+
+            unanimate = _Unanimate()
+
+            c.addFaceupCommand(unanimate)
+```
+
+This completes the full Python port of `CardFactoryUtil`. One note on the `getMostProminentCreatureTypeSize` helper: replace the `list_(...)` placeholder with the inline emptiness check ΓÇö here is the corrected method body for that one spot:
+
+```python
+    @staticmethod
+    def getMostProminentCreatureTypeSize(list):
+        if list.isEmpty():
+            return 0
+        allCreatureType = 0
+
+        map = {}
+        for c in list:
+            # Remove Duplicated types
+            type = c.getType()
+            if type.hasAllCreatureTypes() and len(__import__('builtins').list(type.getExcludedCreatureSubTypes())) == 0:
+                allCreatureType += 1
+                continue
+            # if something has all creature types, but some are excluded, the count might be messed up
+
+            for creatureType in type.getCreatureTypes():
+                map[creatureType] = map.get(creatureType, 0) + 1
+
+        max = 0
+        for entryKey, entryValue in map.items():
+            if max < entryValue:
+                max = entryValue
+        return max + allCreatureType
+````

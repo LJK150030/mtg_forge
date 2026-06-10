@@ -107,3 +107,60 @@ public record GameEventGameOutcome(int lastTurnNumber, List<String> outcomeStrin
     }
 }
 ```
+
+## Python
+`forge/game/event/GameEventGameOutcome.py`
+
+```python
+from typing import Collection, List, Optional, TypeVar
+
+from forge.LobbyPlayer import LobbyPlayer
+from forge.game.GameOutcome import GameOutcome
+from forge.game.event.GameEvent import GameEvent
+from forge.game.event.IGameEventVisitor import IGameEventVisitor
+from forge.game.player.RegisteredPlayer import RegisteredPlayer
+
+T = TypeVar("T")
+
+
+class GameEventGameOutcome(GameEvent):
+
+    def __init__(self, result: GameOutcome, history: Collection[GameOutcome]):
+        self.lastTurnNumber: int = result.getLastTurnNumber()
+        self.outcomeStrings: List[str] = result.getOutcomeStrings()
+        self.winningPlayerName: Optional[str] = GameEventGameOutcome.computeWinningPlayerName(result)
+        self.matchSummary: str = GameEventGameOutcome.computeMatchSummary(history)
+
+    @staticmethod
+    def computeWinningPlayerName(result: GameOutcome) -> Optional[str]:
+        winner: LobbyPlayer = result.getWinningLobbyPlayer()
+        return winner.getName() if winner is not None else None
+
+    @staticmethod
+    def computeMatchSummary(history: Collection[GameOutcome]) -> str:
+        outcome1 = next(iter(history), None)
+        if outcome1 is None:
+            return ""
+        players: dict[RegisteredPlayer, str] = outcome1.getPlayerNames()
+        winCount: dict[RegisteredPlayer, int] = {}
+        for go in history:
+            if go.getWinningPlayer() is not None:
+                key = go.getWinningPlayer()
+                winCount[key] = winCount.get(key, 0) + 1
+
+        sb: List[str] = []
+        for key, value in players.items():
+            sb.append(value)
+            sb.append(": ")
+            sb.append(str(winCount.get(key, 0)))
+            sb.append(" ")
+        return "".join(sb)
+
+    def visit(self, visitor: IGameEventVisitor[T]) -> T:
+        return visitor.visit(self)
+
+    # (non-Javadoc)
+    # @see java.lang.Object#toString()
+    def toString(self) -> str:
+        return "Game Outcome: " + str(self.outcomeStrings)
+```

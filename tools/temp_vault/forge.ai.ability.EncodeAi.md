@@ -46,9 +46,9 @@ classDiagram
 
 ## Design Description
 
-EncodeAi is the forge-ai decision component for the "encode" mechanic, extending `SpellAbilityAi` to supply the computer player's behavior when casting and resolving an Encode spell. It overrides the base hooks—`canPlay`/`chkDrawback` (which unconditionally return a high-confidence WillPlay decision), `confirmAction`, and `chooseSingleCard`—delegating the substantive work to a private `chooseCard` helper.
+EncodeAi is the forge-ai decision component for the "encode" mechanic, extending `SpellAbilityAi` to supply the computer player's behavior when casting and resolving an Encode spell. It overrides the base hooksâ€”`canPlay`/`chkDrawback` (which unconditionally return a high-confidence WillPlay decision), `confirmAction`, and `chooseSingleCard`â€”delegating the substantive work to a private `chooseCard` helper.
 
-That helper encodes the strategic intent: it prefers to host the encoded ciphertext on a creature that can attack next turn and is unblockable by any opponent, falling back to the best available attacker and, when the choice is mandatory, to the overall best creature. It collaborates with combat-evaluation utilities (`ComputerUtilCombat`, `CombatUtil`) and card-ranking helpers (`ComputerUtilCard`, `CardLists`) over `Card`/`Player` objects, returning its verdicts as `AiAbilityDecision` values—keeping all encode-specific AI heuristics isolated from the shared ability framework.
+That helper encodes the strategic intent: it prefers to host the encoded ciphertext on a creature that can attack next turn and is unblockable by any opponent, falling back to the best available attacker and, when the choice is mandatory, to the overall best creature. It collaborates with combat-evaluation utilities (`ComputerUtilCombat`, `CombatUtil`) and card-ranking helpers (`ComputerUtilCard`, `CardLists`) over `Card`/`Player` objects, returning its verdicts as `AiAbilityDecision` valuesâ€”keeping all encode-specific AI heuristics isolated from the shared ability framework.
 
 ## Source
 `forge-ai/src/main/java/forge/ai/ability/EncodeAi.java`
@@ -163,4 +163,62 @@ public final class EncodeAi extends SpellAbilityAi {
         return choice;
     }
 }
+```
+
+## Python
+`forge/ai/ability/EncodeAi.py`
+
+```python
+from forge.ai.SpellAbilityAi import SpellAbilityAi
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.ai.ComputerUtilCombat import ComputerUtilCombat
+from forge.ai.ComputerUtilCard import ComputerUtilCard
+from forge.game.card.Card import Card
+from forge.game.card.CardLists import CardLists
+from forge.game.combat.CombatUtil import CombatUtil
+from forge.game.player.Player import Player
+from forge.game.player.PlayerActionConfirmMode import PlayerActionConfirmMode
+from forge.game.spellability.SpellAbility import SpellAbility
+
+from typing import Iterable, List, Map
+
+
+class EncodeAi(SpellAbilityAi):
+    def canPlay(self, aiPlayer: Player, sa: SpellAbility) -> AiAbilityDecision:
+        return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+    def chkDrawback(self, ai: Player, sa: SpellAbility) -> AiAbilityDecision:
+        return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+    def confirmAction(self, player: Player, sa: SpellAbility, mode: PlayerActionConfirmMode, message: str, params: dict) -> bool:
+        # only try to encode if there is a creature it can be used on
+        return self.chooseCard(player, player.getCreaturesInPlay(), True) is not None
+
+    def chooseSingleCard(self, ai: Player, sa: SpellAbility, options: Iterable[Card], isOptional: bool, targetedPlayer: Player, params: dict) -> Card:
+        return self.chooseCard(ai, options, isOptional)
+
+    def chooseCard(self, ai: Player, list: Iterable[Card], isOptional: bool) -> Card:
+        choice = None
+        # final String logic = sa.getParam("AILogic");
+        # if (logic == null) {
+        attackers = CardLists.filter(list, ComputerUtilCombat.canAttackNextTurn)
+
+        def _isUnblockable(c):
+            canAttackOpponent = False
+            for opp in ai.getOpponents():
+                if CombatUtil.canAttack(c, opp) and not CombatUtil.canBeBlocked(c, None, opp):
+                    canAttackOpponent = True
+                    break
+            return canAttackOpponent
+
+        unblockables = CardLists.filter(attackers, _isUnblockable)
+        if unblockables:
+            choice = ComputerUtilCard.getBestAI(unblockables)
+        elif attackers:
+            choice = ComputerUtilCard.getBestAI(attackers)
+        elif not isOptional:
+            choice = ComputerUtilCard.getBestAI(list)
+        # }
+        return choice
 ```

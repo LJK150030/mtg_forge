@@ -243,3 +243,130 @@ public class CostPutCardToLib extends CostPartWithList {
     }
 }
 ```
+
+## Python
+`forge/game/cost/CostPutCardToLib.py`
+
+```python
+from forge.game.Game import Game
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.cost.ICostVisitor import ICostVisitor
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.collect.FCollectionView import FCollectionView
+
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CardPredicates import CardPredicates
+from forge.game.cost.CostPartWithList import CostPartWithList
+from forge.game.cost.Cost import Cost
+
+
+class CostPutCardToLib(CostPartWithList):
+    # PutCardToLibFromHand<Num/LibPos/Type{/TypeDescription}>
+    # PutCardToLibFromSameGrave<Num/LibPos/Type{/TypeDescription}>
+    # PutCardToLibFromGrave<Num/LibPos/Type{/TypeDescription}>
+
+    # Serializables need a version ID.
+    serialVersionUID = 1
+
+    def getFrom(self) -> ZoneType:
+        return self.from_
+
+    def getLibPos(self) -> str:
+        return self.libPosition
+
+    def isSameZone(self) -> bool:
+        return self.sameZone
+
+    def __init__(self, amount: str, libpos: str, type: str, description: str, from0: ZoneType, sameZone0: bool = False):
+        super().__init__(amount, type, description)
+        self.from_ = ZoneType.Hand if from0 is None else from0
+        self.libPosition = libpos
+        self.sameZone = sameZone0
+
+    def paymentOrder(self) -> int:
+        return 10
+
+    def toString(self) -> str:
+        sb = []
+        i = self.convertAmount()
+        sb.append("Put ")
+
+        desc = self.getType() if self.getTypeDescription() is None else self.getTypeDescription()
+        if self.payCostFromSource():
+            sb.append(self.getType())
+        else:
+            sb.append(Cost.convertAmountTypeToWords(i, self.getAmount(), desc))
+
+        if self.sameZone:
+            sb.append(" from the same ")
+            sb.append(str(self.from_))
+        elif not self.payCostFromSource():
+            sb.append(" from your ")
+            sb.append(str(self.from_))
+
+        sb.append(" on ")
+
+        if self.libPosition == "0":
+            sb.append("top of")
+        else:
+            sb.append("the bottom of")
+
+        if self.sameZone:
+            sb.append(" their owner's library")
+        elif self.payCostFromSource():
+            sb.append(" its owner's library")
+        else:
+            sb.append(" your library")
+
+        return "".join(sb)
+
+    def __str__(self) -> str:
+        return self.toString()
+
+    def getHashForLKIList(self) -> str:
+        return "CardPutToLib"
+
+    def getHashForCardList(self) -> str:
+        return "CardPutToLibCards"
+
+    def canPay(self, ability: SpellAbility, payer: Player, effect: bool) -> bool:
+        source = ability.getHostCard()
+        game = source.getGame()
+
+        i = self.getAbilityAmount(ability)
+
+        if self.sameZone:
+            typeList = game.getCardsIn(self.getFrom())
+        else:
+            typeList = payer.getCardsIn(self.getFrom())
+
+        if self.payCostFromSource():
+            return typeList.contains(source)
+
+        typeList = CardLists.getValidCards(typeList, self.getType().split(";"), payer, source, ability)
+
+        if typeList.size() < i:
+            return False
+
+        if self.sameZone:
+            foundPayable = False
+            players = game.getPlayers()
+            for p in players:
+                if CardLists.count(typeList, CardPredicates.isController(p)) >= i:
+                    foundPayable = True
+                    break
+            return foundPayable
+        return True
+
+    def doPayment(self, payer: Player, ability: SpellAbility, targetCard: Card, effect: bool) -> Card:
+        moveParams = AbilityKey.newMap()
+        AbilityKey.addCardZoneTableParams(moveParams, self.table)
+        return targetCard.getGame().getAction().moveToLibrary(targetCard, int(self.getLibPos()), None, moveParams)
+
+    def accept(self, visitor: ICostVisitor):
+        return visitor.visit(self)
+```

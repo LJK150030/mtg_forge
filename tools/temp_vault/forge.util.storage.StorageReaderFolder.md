@@ -36,6 +36,12 @@ classDiagram
 **Extends:**
 - [[forge.util.storage.StorageReaderBase|StorageReaderBase]]
 
+## Design Description
+
+StorageReaderFolder is an abstract, generic base for storage readers that treat each file in a directory as one named, deserializable object. Extending StorageReaderBase, it manages the backing directoryâ€”validating and creating it in the constructorâ€”and implements readAll() to iterate over filter-selected files, deserialize each via the abstract read hook, and build a Nameâ†’Object map keyed by the inherited keySelector function. Concrete subclasses supply only the read and getFileFilter logic for their specific item type.
+
+Design intent is visible in its robustness and extensibility: key collisions are disambiguated by appending the filename before warning on overwrite, items that fail to load are collected into objectsThatFailedToLoad rather than aborting the whole read, and optional getSubFolders support lets consumers handle nested directories at their discretion.
+
 ## Source
 `forge-core/src/main/java/forge/util/storage/StorageReaderFolder.java`
 
@@ -177,4 +183,109 @@ public abstract class StorageReaderFolder<T> extends StorageReaderBase<T> {
         return Arrays.asList(list);
     }
 }
+```
+
+## Python
+`forge/util/storage/StorageReaderFolder.py`
+
+```python
+from forge.util.storage.StorageReaderBase import StorageReaderBase
+from forge.util.TextUtil import TextUtil
+
+import os
+
+
+class StorageReaderFolder(StorageReaderBase):
+    """
+    This class treats every file in the given folder as a source for a named
+    object. The descendant should implement read method to deserialize a single
+    item. So that readAll will return a map of Name => Object as read from disk
+
+    @param <T> the generic type
+    """
+
+    def getDirectory(self):
+        """
+        @return the directory
+        """
+        return self.directory
+
+    def getFullPath(self):
+        return self.directory.getPath()
+
+    def __init__(self, itemDir0, keySelector0):
+        """
+        Instantiates a new storage reader folder.
+
+        @param itemDir0 the item dir0
+        """
+        super().__init__(keySelector0)
+
+        self.directory = itemDir0
+
+        self.objectsThatFailedToLoad = []
+
+        if self.directory is None:
+            raise ValueError("No directory specified")
+        try:
+            if self.directory.isFile():
+                raise IOError("Not a directory")
+            else:
+                self.directory.mkdirs()
+                if not self.directory.isDirectory():
+                    raise IOError("Directory can't be created")
+        except IOError as ex:
+            raise RuntimeError("StorageReaderFolder.ctor() error, " + str(ex))
+
+    def readAll(self):
+        """
+        (non-Javadoc)
+        @see forge.util.IItemReader#readAll()
+        """
+        result = self.createMap()
+
+        files = self.directory.listFiles(self.getFileFilter())
+        for file in files:
+            try:
+                newDeck = self.read(file)
+                if newDeck is None:
+                    msg = "An object stored in " + file.getPath() + " failed to load.\nPlease submit this as a bug with the mentioned file/directory attached."
+                    raise RuntimeError(msg)
+
+                newKey = self.keySelector.apply(newDeck)
+                if newKey in result:
+                    newKey += "-" + file.getName()
+                if newKey in result:
+                    import sys
+                    print("StorageReaderFolder: Overwriting an object with key " + newKey, file=sys.stderr)
+                result[newKey] = newDeck
+            except StopIteration as ex:
+                message = TextUtil.concatWithSpace(file.getName(), "failed to load because ----", str(ex))
+                self.objectsThatFailedToLoad.append(message)
+        return result
+
+    def read(self, file):
+        """
+        Read the object from file.
+
+        @param file the file
+        @return the object deserialized by inherited class
+        """
+        raise NotImplementedError
+
+    def getFileFilter(self):
+        """
+        TODO: Write javadoc for this method.
+
+        @return FilenameFilter to pick only relevant objects for deserialization
+        """
+        raise NotImplementedError
+
+    def getItemKey(self, item):
+        return self.keySelector.apply(item)
+
+    # methods handling nested folders are provided. It's up to consumer whether to use these or not.
+    def getSubFolders(self):
+        list = self.directory.listFiles(lambda file: file.isDirectory() and not file.isHidden())
+        return list
 ```

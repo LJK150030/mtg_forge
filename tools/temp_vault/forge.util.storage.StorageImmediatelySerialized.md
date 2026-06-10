@@ -44,6 +44,12 @@ classDiagram
 - [[forge.util.storage.IStorage|IStorage]]
 - [[forge.util.storage.StorageNestedFolders|StorageNestedFolders]]
 
+## Design Description
+
+StorageImmediatelySerialized is a generic `IStorage<T>` implementation, extending `StorageBase<T>`, that persists each item to disk the moment it is mutated rather than batching a deferred save. Its `add` and `delete` operations update the in-memory map inherited from the base class and immediately delegate to an injected `IItemSerializer<T>`, which owns the actual read/write/erase logic and resolves the backing directory and subfolder list.
+
+The class optionally models a hierarchical, folder-based store: when constructed with `withSubFolders`, it builds a `StorageNestedFolders` view of child storages via a `nestedFactory` that recursively wraps each subdirectory in another StorageImmediatelySerialized. Path-based navigation (`tryGetFolder`, `getFolderOrCreate`) splits paths on `/` and recurses one segment at a time, lazily creating subfolders on demand. This design separates persistence concerns (the serializer) from storage structure and traversal, letting the same type serve both flat collections and nested folder trees.
+
 ## Source
 `forge-core/src/main/java/forge/util/storage/StorageImmediatelySerialized.java`
 
@@ -181,4 +187,73 @@ public class StorageImmediatelySerialized<T> extends StorageBase<T> {
         return storage;
     }
 }
+```
+
+## Python
+`forge/util/storage/StorageImmediatelySerialized.py`
+
+```python
+from forge.util.IItemSerializer import IItemSerializer
+from forge.util.TextUtil import TextUtil
+from forge.util.storage.StorageBase import StorageBase
+from forge.util.storage.IStorage import IStorage
+from forge.util.storage.StorageNestedFolders import StorageNestedFolders
+
+import os
+
+
+class StorageImmediatelySerialized(StorageBase):
+    def __init__(self, name, io, withSubFolders=False):
+        super().__init__(name, io)
+        self.serializer = io
+        self.nestedFactory = lambda file: StorageImmediatelySerialized(
+            os.path.basename(file), self.serializer.getReaderForFolder(file), True)
+        self.subfolders = StorageNestedFolders(
+            io.getDirectory(), io.getSubFolders(), self.nestedFactory) if withSubFolders else None
+
+    def add(self, item):
+        name = self.serializer.getItemKey(item)
+        self.map[name] = item
+        self.serializer.save(item)
+
+    def delete(self, itemName):
+        try:
+            self.serializer.erase(self.map.pop(itemName, None))
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+
+    def getFolders(self):
+        return super().getFolders() if self.subfolders is None else self.subfolders
+
+    def tryGetFolder(self, path):
+        parts = TextUtil.split(path, '/', 2)
+        if len(parts) == 0:
+            return self
+        elif len(parts) == 1:
+            return self if parts[0] == "." else self.getFolders().get(parts[0])
+        elif len(parts) == 2:
+            subFolder = self.getFolders().get(parts[0])
+            return None if subFolder is None else subFolder.tryGetFolder(parts[1])
+        # should not reach this unless split is broken
+        raise ValueError(path)
+
+    def getFolderOrCreate(self, path):
+        parts = TextUtil.split(path, '/', 2)
+        if len(parts) == 0:
+            return self
+        elif len(parts) == 1:
+            return self if parts[0] == "." else self.getOrCreateSubfolder(parts[0])
+        elif len(parts) == 2:
+            return self.getOrCreateSubfolder(parts[0]).getFolderOrCreate(parts[1])
+        # should not reach this unless split is broken
+        raise ValueError(path)
+
+    def getOrCreateSubfolder(self, name):
+        # Have to filter name for incorrect symbols
+        storage = self.getFolders().get(name)
+        if storage is None:
+            storage = StorageImmediatelySerialized(name, self.serializer)
+            self.subfolders.add(storage)
+        return storage
 ```

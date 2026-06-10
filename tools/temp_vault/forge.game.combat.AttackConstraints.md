@@ -69,7 +69,7 @@ classDiagram
 
 ## Design Description
 
-AttackConstraints models the legality of a Magic combat declaration: given a `Combat`, it gathers the attacking player's creatures as possible attackers and the available `GameEntity` defenders, then builds per-creature `AttackRestriction` and `AttackRequirement` maps alongside `GlobalAttackRestrictions` and static "must attack" `playerRequirements`. Its core responsibility is to compute a legal attack assignment — `getLegalAttackers()` returns the creature-to-defender mapping that satisfies all restrictions while violating the fewest requirements, and `countViolations()` scores any candidate.
+AttackConstraints models the legality of a Magic combat declaration: given a `Combat`, it gathers the attacking player's creatures as possible attackers and the available `GameEntity` defenders, then builds per-creature `AttackRestriction` and `AttackRequirement` maps alongside `GlobalAttackRestrictions` and static "must attack" `playerRequirements`. Its core responsibility is to compute a legal attack assignment â€” `getLegalAttackers()` returns the creature-to-defender mapping that satisfies all restrictions while violating the fewest requirements, and `countViolations()` scores any candidate.
 
 The class is a self-contained solver rather than a participant in an inheritance hierarchy: it collaborates with `Combat`, `Card`, `CardCollection`, and the restriction/requirement types but extends nothing. Notable design intent includes the private immutable `Attack` value type used to drive a recursive, backtracking search (`collectLegalAttackers` clones requirement lists to explore branches with and without each creature), priority sorting of requirements, and explicit handling of restriction types such as `ONLY_ALONE`, `NOT_ALONE`, and `NEED_TWO_OTHERS`.
 
@@ -476,4 +476,335 @@ public class AttackConstraints {
         return violations;
     }
 }
+```
+
+## Python
+`forge/game/combat/AttackConstraints.py`
+
+```python
+import typing
+from typing import Dict, List, Optional, Tuple
+
+from forge.game.GameEntity import GameEntity
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.combat.AttackRequirement import AttackRequirement
+from forge.game.combat.AttackRestriction import AttackRestriction
+from forge.game.combat.AttackRestrictionType import AttackRestrictionType
+from forge.game.combat.Combat import Combat
+from forge.game.combat.CombatUtil import CombatUtil
+from forge.game.combat.GlobalAttackRestrictions import GlobalAttackRestrictions
+from forge.game.staticability.StaticAbility import StaticAbility
+from forge.game.staticability.StaticAbilityMustAttack import StaticAbilityMustAttack
+from forge.util.IterableUtil import IterableUtil
+from forge.util.collect.FCollection import FCollection
+from forge.util.collect.FCollectionView import FCollectionView
+
+
+def _removeIf(lst, predicate):
+    lst[:] = [x for x in lst if not predicate(x)]
+
+
+class AttackConstraints:
+
+    class Attack:
+        def __init__(self, attacker, defender, requirements):
+            self.attacker = attacker
+            self.defender = defender
+            self.requirements = requirements
+
+        def compareTo(self, other):
+            return (self.requirements > other.requirements) - (self.requirements < other.requirements)
+
+        def __lt__(self, other):
+            return self.requirements < other.requirements
+
+        def __str__(self):
+            return "[" + str(self.requirements) + "] " + str(self.attacker) + " to " + str(self.defender)
+
+    def __init__(self, combat: Combat):
+        self.possibleAttackers = combat.getAttackingPlayer().getCreaturesInPlay()
+        self.possibleDefenders = combat.getDefenders()
+        self.globalRestrictions = GlobalAttackRestrictions.getGlobalRestrictions(combat.getAttackingPlayer(), self.possibleDefenders)
+        self.playerRequirements = StaticAbilityMustAttack.mustAttackSpecific(combat.getAttackingPlayer(), self.possibleDefenders)
+
+        self.restrictions: Dict[Card, AttackRestriction] = {}
+        self.requirements: Dict[Card, AttackRequirement] = {}
+
+        # TODO extend for "SharedTurnModes"
+        for possibleAttacker in self.possibleAttackers:
+            self.restrictions[possibleAttacker] = AttackRestriction(possibleAttacker, self.possibleDefenders)
+
+            causesToAttack = StaticAbilityMustAttack.getAttackRequirements(
+                possibleAttacker,
+                [p for p in self.possibleAttackers if p != possibleAttacker])
+
+            r = AttackRequirement(possibleAttacker, causesToAttack, self.possibleDefenders)
+            self.requirements[possibleAttacker] = r
+
+    def getRestrictions(self) -> Dict[Card, AttackRestriction]:
+        return self.restrictions
+
+    def getGlobalRestrictions(self) -> GlobalAttackRestrictions:
+        return self.globalRestrictions
+
+    def getRequirements(self) -> Dict[Card, AttackRequirement]:
+        return self.requirements
+
+    def getLegalAttackers(self) -> Tuple[Dict[Card, GameEntity], int]:
+        gmax = self.globalRestrictions.getMax()
+        myMax = min(gmax if gmax is not None else 2147483647, self.possibleAttackers.size())
+        if myMax == 0:
+            return ({}, 0)
+
+        possible = []
+        reqs = self.getSortedFilteredRequirements()
+        myPossibleAttackers = CardCollection(self.possibleAttackers)
+
+        # First, remove all requirements of creatures that aren't going attack this combat anyway
+        attackersToRemove = CardCollection()
+        for attacker in myPossibleAttackers:
+            types = self.restrictions.get(attacker).getTypes()
+            if ((AttackRestrictionType.NEED_TWO_OTHERS in types and myMax <= 2)
+                    or (AttackRestrictionType.NOT_ALONE in types and myMax <= 1)
+                    or (AttackRestrictionType.NEED_BLACK_OR_GREEN in types and myMax <= 1)
+                    or (AttackRestrictionType.NEED_GREATER_POWER in types and myMax <= 1)):
+                _removeIf(reqs, AttackConstraints.findAll(attacker))
+                attackersToRemove.add(attacker)
+        myPossibleAttackers.removeAll(attackersToRemove)
+        attackersToRemove.clear()
+
+        # Next, remove creatures with constraints that can't be fulfilled.
+        for attacker in myPossibleAttackers:
+            types = self.restrictions.get(attacker).getTypes()
+            if AttackRestrictionType.NEED_BLACK_OR_GREEN in types:
+                if not myPossibleAttackers.anyMatch(AttackRestrictionType.NEED_BLACK_OR_GREEN.getPredicate(attacker)):
+                    attackersToRemove.add(attacker)
+            elif AttackRestrictionType.NEED_GREATER_POWER in types:
+                if not myPossibleAttackers.anyMatch(AttackRestrictionType.NEED_GREATER_POWER.getPredicate(attacker)):
+                    attackersToRemove.add(attacker)
+        myPossibleAttackers.removeAll(attackersToRemove)
+        for toRemove in attackersToRemove:
+            _removeIf(reqs, AttackConstraints.findAll(toRemove))
+
+        # First, successively try each creature that must attack alone.
+        for attacker in myPossibleAttackers:
+            if AttackRestrictionType.ONLY_ALONE in self.restrictions.get(attacker).getTypes():
+                attack = AttackConstraints.findFirst(reqs, attacker)
+                if attack is None:
+                    # no requirements, we don't care anymore
+                    continue
+                attackMap = {attack.attacker: attack.defender}
+                violations = self.countViolations(attackMap)
+                if violations != -1:
+                    possible.append((attackMap, violations))
+                # remove them from the requirements, as they'll not be relevant to this calculation any more
+                _removeIf(reqs, AttackConstraints.findAll(attacker))
+
+        # Now try all others (plus empty attack) and count their violations
+        legalAttackers = self.collectLegalAttackers(reqs, myMax)
+        for m in legalAttackers.asSet():
+            possible.append((m, self.countViolations(m)))
+        empty = self.countViolations({})
+        if empty != -1:
+            possible.append(({}, empty))
+
+        # take the case with the fewest violations
+        return min(possible, key=lambda e: e[1])
+
+    def collectLegalAttackers(self, *args):
+        if len(args) == 2:
+            reqs, maximum = args
+            return FCollection(
+                self.collectLegalAttackers({}, AttackConstraints.deepClone(reqs), CardCollection(), maximum))
+
+        attackers, reqs, reserved, maximum = args
+        result = []
+
+        localMaximum = maximum
+        isLimited = self.globalRestrictions.getMax() is not None
+        myAttackers = dict(attackers)
+        toDefender: Dict[GameEntity, int] = {}
+        attackersNeeded = 0
+
+        while reqs:
+            req = reqs[0]
+            isReserved = reserved.contains(req.attacker)
+
+            skip = False
+            if not isReserved:
+                if localMaximum <= 0:
+                    # can't add any more creatures (except reserved creatures)
+                    skip = True
+                elif req.requirements == 0 and attackersNeeded == 0 and reserved.isEmpty():
+                    # we don't need this creature
+                    skip = True
+            defMax = self.globalRestrictions.getDefenderMax().get(req.defender)
+            if defMax is not None and toDefender.get(req.defender, 0) >= defMax:
+                # too many to this defender already
+                skip = True
+            elif CombatUtil.getAttackCost(req.attacker.getGame(), req.attacker, req.defender) is not None:
+                # has to pay a cost: skip!
+                skip = True
+
+            if skip:
+                del reqs[0]
+                continue
+
+            haveTriedWithout = False
+            restriction = self.restrictions.get(req.attacker)
+            requirement = self.requirements.get(req.attacker)
+
+            # construct the predicate restrictions
+            predicateRestrictions = []
+            for rType in restriction.getTypes():
+                predicate = rType.getPredicate(req.attacker)
+                if predicate is not None:
+                    predicateRestrictions.append(predicate)
+
+            if not requirement.getCausesToAttack().isEmpty():
+                clonedReqs = AttackConstraints.deepClone(reqs)
+                for cKey, cVals in requirement.getCausesToAttack().asMap().items():
+                    for a in IterableUtil.filter(reqs, AttackConstraints.findAll(cKey)):
+                        a.requirements += len(cVals)
+                # if maximum < no of possible attackers, try both with and without this creature
+                if isLimited:
+                    # try without
+                    _removeIf(clonedReqs, AttackConstraints.findAll(req.attacker))
+                    clonedReserved = CardCollection(reserved)
+                    result.extend(self.collectLegalAttackers(myAttackers, clonedReqs, clonedReserved, localMaximum))
+                    haveTriedWithout = True
+
+            continue_outer = False
+            for predicateRestriction in predicateRestrictions:
+                union = set(myAttackers.keys()) | set(reserved.asSet())
+                if any(predicateRestriction(c) for c in union):
+                    # predicate fulfilled already, ignore!
+                    continue
+                # otherwise: reserve first creature to match it!
+                match = AttackConstraints.findFirst(reqs, predicateRestriction)
+                if match is None:
+                    # no match: remove this creature completely
+                    _removeIf(reqs, AttackConstraints.findAll(req.attacker))
+                    continue_outer = True
+                    break
+                # found one! add it to reserve and lower local maximum
+                reserved.add(match.attacker)
+                localMaximum -= 1
+
+                # if limited, try both with and without this creature
+                if not haveTriedWithout and isLimited:
+                    # try without
+                    clonedReqs = AttackConstraints.deepClone(reqs)
+                    _removeIf(clonedReqs, AttackConstraints.findAll(req.attacker))
+                    clonedReserved = CardCollection(reserved)
+                    result.extend(self.collectLegalAttackers(myAttackers, clonedReqs, clonedReserved, localMaximum))
+                    haveTriedWithout = True
+
+            if continue_outer:
+                continue
+
+            # finally: add the creature
+            myAttackers[req.attacker] = req.defender
+            toDefender[req.defender] = toDefender.get(req.defender, 0) + 1
+            _removeIf(reqs, AttackConstraints.findAll(req.attacker))
+            reserved.remove(req.attacker)
+            localMaximum -= 1
+
+            # need two other attackers: set that number to the number of attackers we still need (but never < 0)
+            if AttackRestrictionType.NEED_TWO_OTHERS in self.restrictions.get(req.attacker).getTypes():
+                previousNeeded = attackersNeeded
+                attackersNeeded = max(3 - (len(myAttackers) + reserved.size()), 0)
+                localMaximum -= max(attackersNeeded - previousNeeded, 0)
+            elif AttackRestrictionType.NOT_ALONE in self.restrictions.get(req.attacker).getTypes():
+                attackersNeeded = max(2 - (len(myAttackers) + reserved.size()), 0)
+
+        # success if we've added everything we want
+        if reserved.isEmpty() and attackersNeeded == 0:
+            result.append(myAttackers)
+
+        return result
+
+    def getSortedFilteredRequirements(self) -> List["AttackConstraints.Attack"]:
+        result = []
+        sortedRequirements = {card: req.getSortedRequirements() for card, req in self.requirements.items()}
+        for card, lst in sortedRequirements.items():
+            restriction = self.restrictions.get(card)
+            for attackReq in lst:
+                if restriction.canAttack(attackReq.getLeft()):
+                    result.append(AttackConstraints.Attack(card, attackReq.getLeft(), attackReq.getRight()))
+
+        result.sort(key=lambda a: a.requirements, reverse=True)
+
+        playerReqs = {k: list(v) for k, v in self.playerRequirements.asMap().items()}
+        usedAttackers = CardCollection()
+        while any(playerReqs.values()):
+            playerReq = max((it for it in playerReqs.items() if it[1]), key=lambda e: len(e[1]), default=None)
+            if playerReq is None:
+                break
+            key, vals = playerReq
+            # find best attack to also fulfill the additional requirements
+            bestMatch = next((att for att in result
+                              if not usedAttackers.contains(att.attacker) and att.defender == key), None)
+            if bestMatch is not None:
+                bestMatch.requirements += len(vals)
+                usedAttackers.add(bestMatch.attacker)
+                # recalculate remaining requirements
+                valsSnapshot = list(vals)
+                for k2 in list(playerReqs.keys()):
+                    playerReqs[k2] = [s for s in playerReqs[k2] if s not in valsSnapshot]
+            else:
+                playerReqs.pop(key, None)
+        if not usedAttackers.isEmpty():
+            # order could have changed
+            result.sort(key=lambda a: a.requirements, reverse=True)
+
+        return result
+
+    @staticmethod
+    def deepClone(original):
+        newList = []
+        for attack in original:
+            newList.append(AttackConstraints.Attack(attack.attacker, attack.defender, attack.requirements))
+        return newList
+
+    @staticmethod
+    def findFirst(reqs, predicate):
+        if not callable(predicate):
+            attacker = predicate
+            predicate = lambda c: c == attacker
+        for req in reqs:
+            if predicate(req.attacker):
+                return req
+        return None
+
+    @staticmethod
+    def findAll(attacker):
+        return lambda input: input.attacker == attacker
+
+    def countViolations(self, attackers: Dict[Card, GameEntity]) -> int:
+        if not self.globalRestrictions.isLegal(attackers):
+            return -1
+        for attacker in attackers.items():
+            restriction = self.restrictions.get(attacker[0])
+            if restriction is not None and not restriction.canAttack(attacker[0], attackers):
+                # Violating a restriction!
+                return -1
+
+        violations = 0
+        for possibleAttacker in self.possibleAttackers:
+            requirement = self.requirements.get(possibleAttacker)
+            if requirement is not None:
+                violations += requirement.countViolations(attackers.get(possibleAttacker), attackers)
+
+        inverted: Dict[StaticAbility, List[GameEntity]] = {}
+        for ge, abilities in self.playerRequirements.asMap().items():
+            for sa in abilities:
+                inverted.setdefault(sa, []).append(ge)
+        attackerDefenders = list(attackers.values())
+        for defSet in inverted.values():
+            if all(d not in attackerDefenders for d in defSet):
+                violations += 1
+
+        return violations
 ```

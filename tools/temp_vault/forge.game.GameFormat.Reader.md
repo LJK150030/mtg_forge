@@ -46,12 +46,12 @@ classDiagram
 
 ## Design Description
 
-The `Reader` is a static nested class within `GameFormat` that loads format definitions from disk, extending `StorageReaderRecursiveFolderWithUserFolder<GameFormat>` to recursively scan both the bundled Forge formats folder and a user-supplied custom folder, keying each entry by its format name. Its core responsibility is the `read(File)` override, which parses a `.txt` definition via `FileSection` into a fully-constructed `GameFormat`—resolving the format's `FormatType` and `FormatSubType` enums, effective date, allowed sets, banned/restricted/additional card lists, and permitted `CardRarity` values.
+The `Reader` is a static nested class within `GameFormat` that loads format definitions from disk, extending `StorageReaderRecursiveFolderWithUserFolder<GameFormat>` to recursively scan both the bundled Forge formats folder and a user-supplied custom folder, keying each entry by its format name. Its core responsibility is the `read(File)` override, which parses a `.txt` definition via `FileSection` into a fully-constructed `GameFormat`â€”resolving the format's `FormatType` and `FormatSubType` enums, effective date, allowed sets, banned/restricted/additional card lists, and permitted `CardRarity` values.
 
-Notable design intent includes a hard-coded `coreFormats` whitelist that, unless `includeArchived` is set, restricts loading to the canonical formats (Standard, Modern, Commander, etc.), and graceful degradation when parsing unknown enum values—falling back to `CUSTOM` and migrating the deprecated `Historic` type to `ARCHIVED` with a warning. It also maintains a `naturallyOrdered` list to preserve file-encountered order, and exposes a `TXT_FILE_FILTER` so directory recursion descends folders while only consuming `.txt` files.
+Notable design intent includes a hard-coded `coreFormats` whitelist that, unless `includeArchived` is set, restricts loading to the canonical formats (Standard, Modern, Commander, etc.), and graceful degradation when parsing unknown enum valuesâ€”falling back to `CUSTOM` and migrating the deprecated `Historic` type to `ARCHIVED` with a warning. It also maintains a `naturallyOrdered` list to preserve file-encountered order, and exposes a `TXT_FILE_FILTER` so directory recursion descends folders while only consuming `.txt` files.
 
 ## Source
-`forge-game/src/main/java/forge/game/GameFormat.java` â€” declaration excerpt
+`forge-game/src/main/java/forge/game/GameFormat.java` Ã¢â‚¬â€ declaration excerpt
 
 ```java
     public static class Reader extends StorageReaderRecursiveFolderWithUserFolder<GameFormat> {
@@ -168,4 +168,105 @@ Notable design intent includes a hard-coded `coreFormats` whitelist that, unless
 
         public static final FilenameFilter TXT_FILE_FILTER = (dir, name) -> name.endsWith(".txt") || dir.isDirectory();
     }
+```
+
+## Python
+`forge/game/GameFormat/Reader.py`
+
+```python
+from forge.util.storage.StorageReaderRecursiveFolderWithUserFolder import StorageReaderRecursiveFolderWithUserFolder
+from forge.card.CardRarity import CardRarity
+from forge.game.GameFormat import GameFormat
+from forge.game.GameFormat.FormatSubType import FormatSubType
+from forge.game.GameFormat.FormatType import FormatType
+from forge.util.FileSection import FileSection
+
+
+class Reader(StorageReaderRecursiveFolderWithUserFolder):
+    TXT_FILE_FILTER = staticmethod(lambda dir, name: name.endswith(".txt") or dir.isDirectory())
+
+    def __init__(self, forgeFormats, customFormats, includeArchived):
+        super().__init__(forgeFormats, customFormats, GameFormat.getName)
+        self.naturallyOrdered = []
+        self.coreFormats = []
+        self.coreFormats.append("Standard.txt")
+        self.coreFormats.append("Pioneer.txt")
+        self.coreFormats.append("Historic.txt")
+        self.coreFormats.append("Modern.txt")
+        self.coreFormats.append("Legacy.txt")
+        self.coreFormats.append("Vintage.txt")
+        self.coreFormats.append("Commander.txt")
+        self.coreFormats.append("Extended.txt")
+        self.coreFormats.append("Brawl.txt")
+        self.coreFormats.append("Oathbreaker.txt")
+        self.coreFormats.append("Premodern.txt")
+        self.coreFormats.append("Pauper.txt")
+        self.coreFormats.append("PreDH.txt")
+        self.includeArchived = includeArchived
+
+    def read(self, file):
+        if not self.includeArchived and file.getName() not in self.coreFormats:
+            return None
+        contents = FileSection.parseSections(FileUtil.readFile(file))
+        sets = None  # default: all sets allowed
+        bannedCards = None  # default: nothing banned
+        restrictedCards = None  # default: nothing restricted
+        restrictedLegendary = False
+        additionalCards = None  # default: nothing additional
+        rarities = None
+        formatStrings = contents.get("format")
+        if formatStrings is None:
+            return None
+        section = FileSection.parse(formatStrings, FileSection.COLON_KV_SEPARATOR)
+        title = section.get("name")
+        try:
+            formatType = FormatType.valueOf(section.get("type").upper())
+        except Exception as e:
+            if "HISTORIC" == section.get("type").upper():
+                print("Historic is no longer used as a format Type. Please update " + file.getAbsolutePath() + " to use 'Archived' instead")
+                formatType = FormatType.ARCHIVED
+            else:
+                formatType = FormatType.CUSTOM
+        try:
+            formatsubType = FormatSubType.valueOf(section.get("subtype").upper())
+        except Exception as e:
+            formatsubType = FormatSubType.CUSTOM
+        idx = section.getInt("order")
+        dateStr = section.get("effective")
+        if dateStr is None:
+            dateStr = DEFAULTDATE
+        date = parseDate(dateStr)
+        strSets = section.get("sets")
+        if strSets is not None:
+            sets = strSets.split(", ")
+        strCars = section.get("banned")
+        if strCars is not None:
+            bannedCards = strCars.split("; ")
+
+        strCars = section.get("restricted")
+        if strCars is not None:
+            restrictedCards = strCars.split("; ")
+
+        strRestrictedLegendary = section.getBoolean("restrictedlegendary")
+        if strRestrictedLegendary is not None:
+            restrictedLegendary = strRestrictedLegendary
+
+        strCars = section.get("additional")
+        if strCars is not None:
+            additionalCards = strCars.split("; ")
+
+        strCars = section.get("rarities")
+        if strCars is not None:
+            rarities = []
+            for s in strCars.split(", "):
+                cr = CardRarity.smartValueOf(s)
+                if cr.name() != "Unknown":
+                    rarities.append(cr)
+
+        result = GameFormat(title, date, sets, bannedCards, restrictedCards, restrictedLegendary, additionalCards, rarities, idx, formatType, formatsubType)
+        self.naturallyOrdered.append(result)
+        return result
+
+    def getFileFilter(self):
+        return Reader.TXT_FILE_FILTER
 ```

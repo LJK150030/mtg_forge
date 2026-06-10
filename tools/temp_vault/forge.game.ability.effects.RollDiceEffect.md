@@ -661,3 +661,483 @@ public class RollDiceEffect extends SpellAbilityEffect {
     }
 }
 ```
+
+## Python
+`forge/game/ability/effects/RollDiceEffect.py`
+
+```python
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CounterEnumType import CounterEnumType
+from forge.game.cost.Cost import Cost
+from forge.game.event.GameEventRollDie import GameEventRollDie
+from forge.game.player.Player import Player
+from forge.game.player.PlayerCollection import PlayerCollection
+from forge.game.player.PlayerController import PlayerController
+from forge.game.replacement.ReplacementType import ReplacementType
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.trigger.TriggerType import TriggerType
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.Lang import Lang
+from forge.util.Localizer import Localizer
+from forge.util.MyRandom import MyRandom
+
+
+class RollDiceEffect(SpellAbilityEffect):
+
+    @staticmethod
+    def makeFormatedDescription(sa):
+        sb = []
+        key = "ResultSubAbilities"
+        if sa.hasParam(key):
+            diceAbilities = sa.getParam(key).split(",")
+            for ab in diceAbilities:
+                kv = ab.split(":")
+                desc = sa.getAdditionalAbility(kv[0]).getDescription()
+                if desc:
+                    sb.append("\n")
+                    sb.append(desc)
+
+        return "".join(sb)
+
+    class DieRollResult:
+        def __init__(self, naturalValue, modifiedValue):
+            self.naturalValue = naturalValue
+            self.modifiedValue = modifiedValue
+
+        def getNaturalValue(self):
+            return self.naturalValue
+
+        def getModifiedValue(self):
+            return self.modifiedValue
+
+        def setNaturalValue(self, naturalValue):
+            self.naturalValue = naturalValue
+
+        def setModifiedValue(self, modifiedValue):
+            self.modifiedValue = modifiedValue
+
+        def __str__(self):
+            return str(self.modifiedValue)
+
+    @staticmethod
+    def getResultsList(naturalResults):
+        results = []
+        for r in naturalResults:
+            results.append(RollDiceEffect.DieRollResult(r, r))
+        return results
+
+    @staticmethod
+    def getNaturalResults(results):
+        naturalResults = []
+        for r in results:
+            naturalResults.append(r.getNaturalValue())
+        return naturalResults
+
+    @staticmethod
+    def getFinalResults(results):
+        naturalResults = []
+        for r in results:
+            naturalResults.append(r.getModifiedValue())
+        return naturalResults
+
+    def getStackDescription(self, sa):
+        player = self.getTargetPlayers(sa)
+
+        if sa.hasParam("ToVisitYourAttractions"):
+            if player.size() == 1 and player.get(0).equals(sa.getActivatingPlayer()):
+                return "Roll to Visit Your Attractions."
+            else:
+                return "%s %s to visit their Attractions." % (Lang.joinHomogenous(player), Lang.joinVerb(player, "roll"))
+
+        stringBuilder = []
+        if player.size() == 1 and player.get(0).equals(sa.getActivatingPlayer()):
+            stringBuilder.append("Roll ")
+        else:
+            stringBuilder.append(str(player))
+            stringBuilder.append(" rolls ")
+        stringBuilder.append(sa.getParamOrDefault("Amount", "a"))
+        stringBuilder.append(" d")
+        stringBuilder.append(sa.getParamOrDefault("Sides", "6"))
+        if sa.hasParam("IgnoreLower"):
+            stringBuilder.append(" and ignore the lower roll")
+        stringBuilder.append(".")
+        return "".join(stringBuilder)
+
+    @staticmethod
+    def rollDiceForPlayer(sa, player, amount, sides):
+        toVisitAttractions = sa is not None and sa.hasParam("ToVisitYourAttractions")
+        return RollDiceEffect._rollDiceForPlayer(sa, player, amount, sides, 0, 0, None, toVisitAttractions)
+
+    @staticmethod
+    def rollDiceForPlayerToVisitAttractions(player):
+        return RollDiceEffect._rollDiceForPlayer(None, player, 1, 6, 0, 0, None, True)
+
+    @staticmethod
+    def _rollDiceForPlayer(sa, player, amount, sides, ignore, modifier, rollsResult, toVisitAttractions):
+        if amount == 0:
+            return 0
+
+        ignoreChosenMap = {}
+        dicePTExchanges = set()
+
+        repParams = AbilityKey.mapFromAffected(player)
+        ignored = []
+        naturalRolls = RollDiceEffect.rollAction(amount, sides, ignore, rollsResult, ignored, ignoreChosenMap, dicePTExchanges, player, repParams)
+
+        if sa is not None and sa.hasParam("UseHighestRoll"):
+            del naturalRolls[0:len(naturalRolls) - 1]
+
+        # Reroll Phase:
+        monitorKeyword = "Once each turn, you may pay {1} to reroll one or more dice you rolled."
+        canRerollDice = RollDiceEffect.getRerollCards(player, monitorKeyword)
+        while not canRerollDice.isEmpty():
+            diceToReroll = player.getController().chooseDiceToReroll(naturalRolls)
+            if not diceToReroll:
+                break
+
+            message = Localizer.getInstance().getMessage("lblChooseRerollCard")
+            c = player.getController().chooseSingleEntityForEffect(canRerollDice, sa, message, None)
+
+            parts = c.getSVar("ModsThisTurn").split("$")
+            activationsThisTurn = int(parts[1])
+            modifierSA = c.getFirstSpellAbility()
+            cost = Cost(c.getSVar("RollRerollCost"), False)
+            paid = player.getController().payCostDuringRoll(cost, modifierSA)
+            if paid:
+                for roll in diceToReroll:
+                    naturalRolls.remove(roll)
+                amountToReroll = len(diceToReroll)
+                rerolls = RollDiceEffect.rollAction(amountToReroll, sides, 0, None, ignored, {}, dicePTExchanges, player, repParams)
+                naturalRolls.extend(rerolls)
+                activationsThisTurn += 1
+                c.setSVar("ModsThisTurn", "Number$" + str(activationsThisTurn))
+                canRerollDice.remove(c)
+
+        # Modification Phase:
+        resultsList = []
+        xenoKeyword = "After you roll a die, you may remove a +1/+1 counter from Xenosquirrels. If you do, increase or decrease the result by 1."
+        nightShiftKeyword = "After you roll a die, you may pay 1 life. If you do, increase or decrease the result by 1. Do this only once each turn."
+        canIncrementDice = RollDiceEffect.getIncrementCards(player, xenoKeyword, nightShiftKeyword)
+        hasBeenModified = False
+
+        if canIncrementDice:
+            while True:
+                rollToModify = player.getController().chooseRollToModify(naturalRolls)
+                if rollToModify is None:
+                    break
+
+                modified = False
+                dieResult = RollDiceEffect.DieRollResult(rollToModify, rollToModify)
+                # canIncrementThisRoll won't be empty the first iteration because canIncrementDice wasn't empty
+                canIncrementThisRoll = CardCollection(canIncrementDice)
+                while True:
+                    message = Localizer.getInstance().getMessage("lblChooseRollIncrementCard", rollToModify)
+                    c = player.getController().chooseSingleEntityForEffect(canIncrementThisRoll, sa, message, None)
+
+                    parts = c.getSVar("ModsThisTurn").split("$")
+                    activationsThisTurn = int(parts[1])
+                    modifierSA = c.getFirstSpellAbility()
+                    costString = c.getSVar("RollModifyCost")
+                    cost = Cost(costString, False)
+                    paid = player.getController().payCostDuringRoll(cost, modifierSA)
+                    if paid:
+                        message = Localizer.getInstance().getMessage("lblChooseRollIncrement", rollToModify)
+                        isPositive = player.getController().chooseBinary(sa, message, PlayerController.BinaryChoiceType.IncreaseOrDecrease)
+                        increment = 1 if isPositive else -1
+                        if not modified:
+                            naturalRolls.remove(rollToModify)
+                            modified = True
+                        rollToModify += increment
+                        activationsThisTurn += 1
+                        c.setSVar("ModsThisTurn", "Number$" + str(activationsThisTurn))
+                        canIncrementThisRoll.remove(c)
+                    if canIncrementThisRoll.isEmpty():
+                        break
+                if modified:
+                    dieResult.setModifiedValue(rollToModify)
+                    resultsList.append(dieResult)
+                    hasBeenModified = True
+                canIncrementDice = RollDiceEffect.getIncrementCards(player, xenoKeyword, nightShiftKeyword)
+                if not naturalRolls or not canIncrementDice:
+                    break
+
+        # finish roll list
+        for unmodified in naturalRolls:
+            # Add all the unmodified rolls into the results
+            resultsList.append(RollDiceEffect.DieRollResult(unmodified, unmodified))
+
+        # Vedalken Exchange
+        vedalkenSwaps = CardCollection(dicePTExchanges)
+        if not vedalkenSwaps.isEmpty():
+            while True:
+                rollToSwap = player.getController().chooseRollToSwap(resultsList)
+                if rollToSwap is None:
+                    break
+
+                message = Localizer.getInstance().getMessage("lblChooseCardToDiceSwap", rollToSwap.getModifiedValue())
+                c = player.getController().chooseSingleEntityForEffect(vedalkenSwaps, sa, message, None)
+                cPower = c.getCurrentPower()
+                cToughness = c.getCurrentToughness()
+                labelPower = Localizer.getInstance().getMessage("lblPower")
+                labelToughness = Localizer.getInstance().getMessage("lblToughness")
+                choices = [labelPower, labelToughness]
+                powerOrToughness = player.getController().chooseRollSwapValue(choices, rollToSwap.getModifiedValue(), cPower, cToughness)
+                if powerOrToughness is not None:
+                    tempRollValue = rollToSwap.getModifiedValue()
+                    if powerOrToughness == labelPower:
+                        rollToSwap.setModifiedValue(cPower)
+                        c.addNewPT(tempRollValue, cToughness, player.getGame().getNextTimestamp(), 0)
+                    elif powerOrToughness == labelToughness:
+                        rollToSwap.setModifiedValue(cToughness)
+                        c.addNewPT(cPower, tempRollValue, player.getGame().getNextTimestamp(), 0)
+                    else:
+                        raise RuntimeError("Unexpected value: " + powerOrToughness)
+                    vedalkenSwaps.remove(c)
+                if vedalkenSwaps.isEmpty():
+                    break
+
+        # Notify of results
+        if amount > 0:
+            sb = []
+            rollResults = ", ".join(str(x) for x in RollDiceEffect.getFinalResults(resultsList))
+            resultMessage = "lblAttractionRollResult" if toVisitAttractions else "lblPlayerRolledResult"
+            sb.append(Localizer.getInstance().getMessage(resultMessage, player, rollResults))
+            if ignored:
+                sb.append("\r\n")
+                sb.append(Localizer.getInstance().getMessage("lblIgnoredRolls",
+                        ", ".join(str(x) for x in ignored)))
+            if hasBeenModified:
+                sb.append("\r\n")
+                sb.append(Localizer.getInstance().getMessage("lblNaturalRolls",
+                        ", ".join(str(x) for x in RollDiceEffect.getNaturalResults(resultsList))))
+            player.getGame().getAction().notifyOfValue(sa, player, "".join(sb), None)
+            player.addDieRollThisTurn(RollDiceEffect.getFinalResults(resultsList))
+
+        rolls = []
+        oddResults = 0
+        evenResults = 0
+        differentResults = 0
+        countMaxRolls = 0
+        for i in resultsList:
+            naturalRoll = i.getNaturalValue()
+            modifiedRoll = i.getModifiedValue() + modifier
+
+            i.setModifiedValue(modifiedRoll)
+
+            if modifiedRoll not in rolls:
+                differentResults += 1
+            rolls.append(modifiedRoll)
+            if modifiedRoll % 2 == 0:
+                evenResults += 1
+            else:
+                oddResults += 1
+            if naturalRoll == sides:
+                countMaxRolls += 1
+        if sa is not None:
+            if sa.hasParam("EvenOddResults"):
+                sa.setSVar("EvenResults", str(evenResults))
+                sa.setSVar("OddResults", str(oddResults))
+            if sa.hasParam("DifferentResults"):
+                sa.setSVar("DifferentResults", str(differentResults))
+            if sa.hasParam("MaxRollsResults"):
+                sa.setSVar("MaxRolls", str(countMaxRolls))
+
+        rollNum = 1
+        for roll in resultsList:
+            runParams = AbilityKey.mapFromPlayer(player)
+            runParams[AbilityKey.Sides] = sides
+            runParams[AbilityKey.Result] = roll.getModifiedValue()
+            runParams[AbilityKey.NaturalResult] = roll.getNaturalValue()
+            runParams[AbilityKey.RolledToVisitAttractions] = toVisitAttractions
+            runParams[AbilityKey.Number] = player.getNumRollsThisTurn() - amount + rollNum
+            player.getGame().getTriggerHandler().runTrigger(TriggerType.RolledDie, runParams, False)
+            rollNum += 1
+        runParams = AbilityKey.mapFromPlayer(player)
+        runParams[AbilityKey.Sides] = sides
+        runParams[AbilityKey.Result] = RollDiceEffect.getFinalResults(resultsList)
+        runParams[AbilityKey.RolledToVisitAttractions] = toVisitAttractions
+        player.getGame().getTriggerHandler().runTrigger(TriggerType.RolledDieOnce, runParams, False)
+
+        return sum(RollDiceEffect.getFinalResults(resultsList))
+
+    @staticmethod
+    def getRerollCards(player, monitorKeyword):
+        monitors = CardLists.getKeyword(player.getCardsIn(ZoneType.Battlefield), monitorKeyword)
+
+        def _filter(card):
+            activationLimit = card.getSVar("RollModificationsLimit")
+            parts = card.getSVar("ModsThisTurn").split("$")
+            activationsThisTurn = int(parts[1])
+            return activationLimit == "None" or activationsThisTurn < int(activationLimit)
+
+        return monitors.filter(_filter)
+
+    @staticmethod
+    def getIncrementCards(player, xenoKeyword, nightShiftKeyword):
+        xenosquirrels = CardLists.getKeyword(player.getCardsIn(ZoneType.Battlefield), xenoKeyword)
+        nightShifts = CardLists.getKeyword(player.getCardsIn(ZoneType.Battlefield), nightShiftKeyword)
+        canIncrementDice = []
+        for c in xenosquirrels:
+            # Xenosquirrels must have a P1P1 counter on it to remove in order to modify
+            P1P1Counters = c.getCounters().get(CounterEnumType.P1P1)
+            if P1P1Counters is not None and P1P1Counters > 0 and c.canRemoveCounters(CounterEnumType.P1P1):
+                canIncrementDice.append(c)
+        for c in nightShifts:
+            # Night Shift of the Living Dead has a limit of once per turn, player must be able to pay the 1 life cost
+            activationLimit = c.getSVar("RollModificationsLimit")
+            parts = c.getSVar("ModsThisTurn").split("$")
+            activationsThisTurn = int(parts[1])
+            if (activationLimit == "None" or activationsThisTurn < int(activationLimit)) and player.canPayLife(1, True, c.getFirstSpellAbility()):
+                canIncrementDice.append(c)
+        return canIncrementDice
+
+    @staticmethod
+    def rollAction(amount, sides, ignore, rollsResult, ignored, ignoreChosenMap, dicePTExchanges, player, repParams):
+        repParams[AbilityKey.Sides] = sides
+        repParams[AbilityKey.Number] = amount
+        repParams[AbilityKey.Ignore] = ignore
+        repParams[AbilityKey.DicePTExchanges] = dicePTExchanges
+        repParams[AbilityKey.IgnoreChosen] = ignoreChosenMap
+        result = player.getGame().getReplacementHandler().run(ReplacementType.RollDice, repParams)
+        if result == ReplacementType.NotReplaced:
+            pass
+        elif result == ReplacementType.Updated:
+            amount = repParams.get(AbilityKey.Number)
+            ignore = repParams.get(AbilityKey.Ignore)
+            ignoreChosenMap = repParams.get(AbilityKey.IgnoreChosen)
+        else:
+            pass
+
+        naturalRolls = [] if rollsResult is None else rollsResult
+
+        for i in range(amount):
+            roll = MyRandom.getRandom().nextInt(sides) + 1
+            # Play the die roll sound
+            player.getGame().fireEvent(GameEventRollDie())
+            player.roll()
+            naturalRolls.append(roll)
+
+        naturalRolls.sort()
+
+        # Ignore lowest rolls
+        if ignore > 0:
+            for i in range(ignore - 1, -1, -1):
+                ignored.append(naturalRolls[i])
+                del naturalRolls[i]
+        # Player chooses to ignore rolls
+        for chooser in list(ignoreChosenMap.keys()):
+            for ig in range(ignoreChosenMap.get(chooser)):
+                ign = chooser.getController().chooseRollToIgnore(naturalRolls)
+                ignored.append(ign)
+                naturalRolls.remove(ign)
+
+        return naturalRolls
+
+    @staticmethod
+    def resolveSub(sa, num):
+        diceAbilities = sa.getAdditionalAbilities()
+        resultAbility = None
+        for diceKey, value in diceAbilities.items():
+            if "-" in diceKey:
+                ranges = diceKey.split("-")
+                if int(ranges[0]) <= num and int(ranges[1]) >= num:
+                    resultAbility = value
+                    break
+            elif diceKey.isdigit() and int(diceKey) == num:
+                resultAbility = value
+                break
+        if resultAbility is not None:
+            AbilityUtils.resolve(resultAbility)
+        elif sa.hasAdditionalAbility("Else"):
+            AbilityUtils.resolve(sa.getAdditionalAbility("Else"))
+
+    def rollDice(self, sa, player, amount, sides):
+        host = sa.getHostCard()
+        modifier = AbilityUtils.calculateAmount(host, sa.getParamOrDefault("Modifier", "0"), sa)
+        ignore = AbilityUtils.calculateAmount(host, sa.getParamOrDefault("IgnoreLower", "0"), sa)
+
+        rolls = []
+        total = RollDiceEffect._rollDiceForPlayer(sa, player, amount, sides, ignore, modifier, rolls, sa.hasParam("ToVisitYourAttractions"))
+
+        if sa.hasParam("UseDifferenceBetweenRolls"):
+            total = max(rolls) - min(rolls)
+
+        if sa.hasParam("StoreResults"):
+            host.addStoredRolls(rolls)
+        if sa.hasParam("ResultSVar"):
+            sa.setSVar(sa.getParam("ResultSVar"), str(total))
+        if sa.hasParam("ChosenSVar"):
+            chosen = player.getController().chooseNumber(sa, Localizer.getInstance().getMessage("lblChooseAResult"), rolls, player)
+            message = Localizer.getInstance().getMessage("lblPlayerChooseValue", player, chosen)
+            player.getGame().getAction().notifyOfValue(sa, player, message, player)
+            sa.setSVar(sa.getParam("ChosenSVar"), str(chosen))
+            if sa.hasParam("OtherSVar"):
+                other = rolls[0]
+                for i in range(1, len(rolls)):
+                    if rolls[i] != chosen:
+                        other = rolls[i]
+                        break
+                sa.setSVar(sa.getParam("OtherSVar"), str(other))
+
+        if sa.hasParam("SubsForEach"):
+            for roll in rolls:
+                RollDiceEffect.resolveSub(sa, roll)
+        else:
+            RollDiceEffect.resolveSub(sa, total)
+
+        if sa.hasParam("NoteDoubles"):
+            unique = set()
+            for roll in rolls:
+                if roll in unique:
+                    sa.setSVar("Doubles", "1")
+                else:
+                    unique.add(roll)
+
+        return total
+
+    def resolve(self, sa):
+        host = sa.getHostCard()
+
+        amount = AbilityUtils.calculateAmount(host, sa.getParamOrDefault("Amount", "1"), sa)
+        sides = AbilityUtils.calculateAmount(host, sa.getParamOrDefault("Sides", "6"), sa)
+        rememberHighest = sa.hasParam("RememberHighestPlayer")
+
+        playersToRoll = self.getTargetPlayers(sa)
+        results = []
+
+        for player in playersToRoll:
+            if sa.hasParam("RerollResults"):
+                self.rerollDice(sa, host, player, sides)
+            else:
+                result = self.rollDice(sa, player, amount, sides)
+                results.append(result)
+                if sa.hasParam("ToVisitYourAttractions"):
+                    player.visitAttractions(result)
+        if rememberHighest:
+            highest = 0
+            for result in results:
+                if highest < result:
+                    highest = result
+            for i in range(len(results)):
+                if highest == results[i]:
+                    host.addRemembered(playersToRoll.get(i))
+
+    def rerollDice(self, sa, host, roller, sides):
+        toReroll = []
+
+        for storedResult in host.getStoredRolls():
+            if roller.getController().confirmAction(sa, None,
+                    Localizer.getInstance().getMessage("lblRerollResult", storedResult), None):
+                toReroll.append(storedResult)
+
+        replaceMap = {}
+        for old in toReroll:
+            newRoll = self.rollDice(sa, roller, 1, sides)
+            replaceMap[old] = newRoll
+        host.replaceStoredRoll(replaceMap)
+```

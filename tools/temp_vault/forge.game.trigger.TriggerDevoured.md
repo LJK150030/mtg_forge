@@ -37,6 +37,12 @@ classDiagram
 - [[forge.game.card.Card|Card]]
 - [[forge.game.spellability.SpellAbility|SpellAbility]]
 
+## Design Description
+
+TriggerDevoured is a concrete trigger type that fires when a creature is devouredâ€”sacrificed to another permanent as it enters the battlefield. Extending the abstract Trigger base class, it implements the engine's standard trigger contract: performTest gates firing by matching the configured "ValidDevoured" parameter against the devoured object supplied in the run parameters, while setTriggeringObjects publishes that object into the spell ability's triggering context under the AbilityKey.Devoured key.
+
+It collaborates with Card (its host), SpellAbility (the resolving effect it feeds), and the AbilityKey enum that keys triggered-object lookups. The design follows Forge's data-driven trigger pattern, where each subclass supplies only event-specific matching and object-binding logic, deferring construction and lifecycle to the superclass. getImportantStackObjects adds a localized, human-readable stack summary, keeping presentation concerns isolated to a single overridable method.
+
 ## Source
 `forge-game/src/main/java/forge/game/trigger/TriggerDevoured.java`
 
@@ -117,4 +123,41 @@ public class TriggerDevoured extends Trigger {
         return sb.toString();
     }
 }
+```
+
+## Python
+`forge/game/trigger/TriggerDevoured.py`
+
+```python
+package forge.game.trigger;
+
+from typing import Map
+
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Localizer import Localizer
+from forge.game.trigger.Trigger import Trigger
+
+
+class TriggerDevoured(Trigger):
+
+    def __init__(self, params: dict[str, str], host: Card, intrinsic: bool):
+        super().__init__(params, host, intrinsic)
+
+    def performTest(self, runParams: dict[AbilityKey, object]) -> bool:
+        if not self.matchesValidParam("ValidDevoured", runParams.get(AbilityKey.Devoured)):
+            return False
+
+        return True
+
+    def setTriggeringObjects(self, sa: SpellAbility, runParams: dict[AbilityKey, object]) -> None:
+        sa.setTriggeringObjectsFrom(runParams, AbilityKey.Devoured)
+
+    def getImportantStackObjects(self, sa: SpellAbility) -> str:
+        sb = []
+        sb.append(Localizer.getInstance().getMessage("lblDevoured"))
+        sb.append(": ")
+        sb.append(str(sa.getTriggeringObject(AbilityKey.Devoured)))
+        return "".join(sb)
 ```

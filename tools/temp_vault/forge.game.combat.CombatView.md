@@ -61,7 +61,7 @@ classDiagram
 
 CombatView is a read-only, presentation-layer snapshot of a combat's structure, exposing which attackers are assigned to which defenders and which (actual and planned) blockers oppose each attacker or attacking band. As a `TrackableObject` subtype, it stores its six relationship maps as `TrackableProperty` values so changes propagate through the engine's `Tracker`-based view-synchronization mechanism, keeping the UI in sync with the underlying game state. It collaborates with `CardView`, `GameEntityView`, and `FCollection` to model attackers, defenders/banding, and blocker groups respectively.
 
-Notable design intent: instances take unique negative IDs (`nextId--`) deliberately to stay unregistered with the tracker—each combat view is a distinct, transient object rather than a shared tracked entity. Concurrent maps plus `synchronized` defensive copies make reads thread-safe, and parallel "planned blocker" maps support a targeting/preview overlay separate from committed blocks.
+Notable design intent: instances take unique negative IDs (`nextId--`) deliberately to stay unregistered with the trackerâ€”each combat view is a distinct, transient object rather than a shared tracked entity. Concurrent maps plus `synchronized` defensive copies make reads thread-safe, and parallel "planned blocker" maps support a targeting/preview overlay separate from committed blocks.
 
 ## Source
 `forge-game/src/main/java/forge/game/combat/CombatView.java`
@@ -258,4 +258,145 @@ public class CombatView extends TrackableObject {
         this.getBandsWithPlannedBlockers().put(attackingBandCopy, plannedBlockersCopy);
     }
 }
+```
+
+## Python
+`forge/game/combat/CombatView.py`
+
+```python
+from typing import List, Map
+import threading
+
+from forge.game.GameEntityView import GameEntityView
+from forge.game.card.CardView import CardView
+from forge.trackable.TrackableObject import TrackableObject
+from forge.trackable.TrackableProperty import TrackableProperty
+from forge.trackable.Tracker import Tracker
+from forge.util.collect.FCollection import FCollection
+
+
+class CombatView(TrackableObject):
+    serialVersionUID = 68085618912864942
+
+    # Unique negative IDs so TrackableObject.equals() distinguishes instances.
+    # Negative IDs avoid tracker registration (only id >= 0 is registered).
+    nextId = -2
+
+    def __init__(self, tracker: Tracker):
+        super().__init__(CombatView.nextId, tracker)
+        CombatView.nextId -= 1
+        self._lock = threading.RLock()
+        self.set(TrackableProperty.AttackersWithDefenders, {})
+        self.set(TrackableProperty.AttackersWithBlockers, {})
+        self.set(TrackableProperty.BandsWithDefenders, {})
+        self.set(TrackableProperty.BandsWithBlockers, {})
+        self.set(TrackableProperty.AttackersWithPlannedBlockers, {})
+        self.set(TrackableProperty.BandsWithPlannedBlockers, {})
+
+    def getAttackersWithDefenders(self) -> dict[CardView, GameEntityView]:
+        return self.get(TrackableProperty.AttackersWithDefenders)
+
+    def getAttackersWithBlockers(self) -> dict[CardView, FCollection]:
+        return self.get(TrackableProperty.AttackersWithBlockers)
+
+    def getBandsWithDefenders(self) -> dict[FCollection, GameEntityView]:
+        return self.get(TrackableProperty.BandsWithDefenders)
+
+    def getBandsWithBlockers(self) -> dict[FCollection, FCollection]:
+        return self.get(TrackableProperty.BandsWithBlockers)
+
+    def getAttackersWithPlannedBlockers(self) -> dict[CardView, FCollection]:
+        return self.get(TrackableProperty.AttackersWithPlannedBlockers)
+
+    def getBandsWithPlannedBlockers(self) -> dict[FCollection, FCollection]:
+        return self.get(TrackableProperty.BandsWithPlannedBlockers)
+
+    def getNumAttackers(self) -> int:
+        return len(self.getAttackersWithDefenders())
+
+    def isAttacking(self, card: CardView) -> bool:
+        return card in self.getAttackersWithDefenders()
+
+    def getAttackers(self) -> Iterable[CardView]:
+        with self._lock:
+            allAttackers = set(self.getAttackersWithDefenders().keys())
+        return allAttackers
+
+    def getDefenders(self) -> Iterable[GameEntityView]:
+        with self._lock:
+            allDefenders = set(self.getAttackersWithDefenders().values())
+        return allDefenders
+
+    def getDefender(self, attacker: CardView) -> GameEntityView:
+        return self.getAttackersWithDefenders().get(attacker)
+
+    def isBlocking(self, card: CardView) -> bool:
+        with self._lock:
+            allBlockers = list(self.getAttackersWithBlockers().values())
+        for blockers in allBlockers:
+            if blockers is None:
+                continue
+            if card in blockers:
+                return True
+        return False
+
+    def getBlockers(self, attacker):
+        """
+        :param attacker:
+        :return: the blockers associated with an attacker, or None if the
+                 attacker is unblocked.
+        """
+        if isinstance(attacker, FCollection):
+            return self.getBandsWithBlockers().get(attacker)
+        return self.getAttackersWithBlockers().get(attacker)
+
+    def getPlannedBlockers(self, attacker):
+        """
+        :param attacker:
+        :return: the blockers associated with an attacker, or None if the
+                 attacker is unblocked (planning stage, for targeting overlay).
+        """
+        if isinstance(attacker, FCollection):
+            return self.getBandsWithPlannedBlockers().get(attacker)
+        return self.getAttackersWithPlannedBlockers().get(attacker)
+
+    def getAttackersOf(self, defender: GameEntityView) -> FCollection:
+        with self._lock:
+            attackersWithDefenders = list(self.getAttackersWithDefenders().items())
+        views = FCollection()
+        for key, value in attackersWithDefenders:
+            if defender is not None and defender == value:
+                views.add(key)
+        return views
+
+    def getAttackingBandsOf(self, defender: GameEntityView) -> Iterable[FCollection]:
+        with self._lock:
+            bandsWithDefenders = list(self.getBandsWithDefenders().items())
+        views = []
+        for key, value in bandsWithDefenders:
+            if value == defender:
+                views.append(key)
+        return views
+
+    def addAttackingBand(self, attackingBand: Iterable[CardView], defender: GameEntityView, blockers: Iterable[CardView], plannedBlockers: Iterable[CardView]) -> None:
+        if defender is None:
+            return
+
+        attackingBandCopy = FCollection()
+        blockersCopy = FCollection()
+        plannedBlockersCopy = FCollection()
+
+        attackingBandCopy.addAll(attackingBand)
+        if blockers is not None:
+            blockersCopy.addAll(blockers)
+        if plannedBlockers is not None:
+            plannedBlockersCopy.addAll(plannedBlockers)
+
+        for attacker in attackingBandCopy:
+            self.getAttackersWithDefenders()[attacker] = defender
+            self.getAttackersWithBlockers()[attacker] = blockersCopy
+            self.getAttackersWithPlannedBlockers()[attacker] = plannedBlockersCopy
+        self.getBandsWithDefenders()[attackingBandCopy] = defender
+        self.getBandsWithBlockers()[attackingBandCopy] = blockersCopy
+        self.getBandsWithPlannedBlockers()[attackingBandCopy] = plannedBlockersCopy
 ```

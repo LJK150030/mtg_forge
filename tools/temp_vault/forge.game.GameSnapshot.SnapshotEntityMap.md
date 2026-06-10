@@ -41,12 +41,12 @@ classDiagram
 
 ## Design Description
 
-SnapshotEntityMap is a private inner class of GameSnapshot that implements the IEntityMap interface, providing a translation layer between corresponding game entities across two Game instances—the original game and its snapshot copy. Its core responsibility is mapping a GameObject, Card, or Player from one game state to its counterpart in the other, delegating each lookup to the enclosing snapshot's findBy helper.
+SnapshotEntityMap is a private inner class of GameSnapshot that implements the IEntityMap interface, providing a translation layer between corresponding game entities across two Game instancesâ€”the original game and its snapshot copy. Its core responsibility is mapping a GameObject, Card, or Player from one game state to its counterpart in the other, delegating each lookup to the enclosing snapshot's findBy helper.
 
 The class exposes overloaded map methods specialized for the principal entity types, with the generic GameObject overload dispatching by runtime type to the appropriate handler. Its getGame method returns either the original or new Game depending on the snapshot's restore flag, so the same mapping logic serves both directions: capturing a snapshot and restoring from one. By relying on the outer class's state and helpers, it keeps entity resolution encapsulated within the snapshot machinery.
 
 ## Source
-`forge-game/src/main/java/forge/game/GameSnapshot.java` â€” declaration excerpt
+`forge-game/src/main/java/forge/game/GameSnapshot.java` Ã¢â‚¬â€ declaration excerpt
 
 ```java
     public class SnapshotEntityMap implements IEntityMap {
@@ -78,4 +78,35 @@ The class exposes overloaded map methods specialized for the principal entity ty
             return findBy(getGame(), p);
         }
     }
+```
+
+## Python
+`forge/game/GameSnapshot/SnapshotEntityMap.py`
+
+```python
+from forge.game.IEntityMap import IEntityMap
+from forge.game.Game import Game
+from forge.game.GameObject import GameObject
+from forge.game.card.Card import Card
+from forge.game.player.Player import Player
+
+
+class SnapshotEntityMap(IEntityMap):
+    def getGame(self) -> Game:
+        if self.restore:
+            return self.origGame
+        return self.newGame
+
+    def map(self, o: GameObject) -> GameObject:
+        if isinstance(o, Player):
+            return self.findBy(self.getGame(), o)
+        elif isinstance(o, Card):
+            return self.findBy(self.getGame(), o)
+        return None
+
+    def map(self, c: Card) -> Card:
+        return self.findBy(self.getGame(), c)
+
+    def map(self, p: Player) -> Player:
+        return self.findBy(self.getGame(), p)
 ```

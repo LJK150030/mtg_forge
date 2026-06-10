@@ -502,6 +502,12 @@ classDiagram
 - [[forge.game.trigger.WrappedAbility|WrappedAbility]]
 - [[forge.util.ITranslatable|ITranslatable]]
 
+## Design Description
+
+SpellAbility is the abstract base class for everything that can be put on the stack or activated in the game engine â€” spells, activated and triggered abilities, replacement effects, and mana abilities. Extending CardTraitBase and implementing ISpellAbility, IIdentifiable, and Comparable, it gives each instance a unique id and centralizes the state an effect needs: its host card, activating/targeting/choosing players, pay costs, restrictions and conditions, targeting choices, paid mana and resources, and the triggering/replacing object maps consumed during resolution.
+
+Abstract resolve() and canPlay() defer actual behavior to subclasses (Spell, AbilitySub, AbilityStatic, etc.), while the class itself threads operations down a parent/sub-ability chain â€” setHostCard, setActivatingPlayer, targeting, and text changes all recurse into sub-abilities. It collaborates broadly with Cost, TargetRestrictions/TargetChoices, AbilityManaPart, Trigger, ReplacementEffect, and StaticAbility, and exposes a SpellAbilityView for the UI. Extensive copy() variants support the engine's frequent need to clone abilities for LKI, copying effects, and alternative-cost casts.
+
 ## Source
 `forge-game/src/main/java/forge/game/spellability/SpellAbility.java`
 
@@ -3191,4 +3197,692 @@ public abstract class SpellAbility extends CardTraitBase implements ISpellAbilit
         maxWaterbend = AbilityUtils.calculateAmount(getHostCard(), cost.getMaxWaterbend(), this);
     }
 }
+```
+
+## Python
+`forge/game/spellability/SpellAbility.py`
+
+```python
+return self.getTargets().getDividedValue(c)
+
+    def getTotalDividedValue(self):
+        return self.getTargets().getTotalDividedValue()
+
+    def getStillToDivide(self):
+        if not self.isDividedAsYouChoose() or self.dividedValue is None:
+            return 0
+        return self.dividedValue - self.getTotalDividedValue()
+
+    def resetFirstTarget(self, c, originalSA):
+        sa = self
+        while sa is not None:
+            if sa.usesTargeting():
+                sa.resetTargets()
+                sa.getTargets().add(c)
+                if originalSA.getTargets().getDividedValues():
+                    sa.addDividedAllocation(c, next(iter(originalSA.getTargets().getDividedValues()), None))
+                break
+            sa = sa.getSubAbility()
+
+    def canAddMoreTarget(self):
+        if not self.usesTargeting():
+            return False
+        return self.getTargets().size() < self.getMaxTargets()
+
+    def isZeroTargets(self):
+        return self.getMinTargets() == 0 and self.getTargets().isEmpty()
+
+    def isMinTargetChosen(self):
+        return self.getTargetRestrictions().isMinTargetsChosen(self.hostCard, self)
+
+    def isMaxTargetChosen(self):
+        return self.getTargetRestrictions().isMaxTargetsChosen(self.hostCard, self)
+
+    def getMinTargets(self):
+        return self.getTargetRestrictions().getMinTargets(self.getHostCard(), self)
+
+    def getMaxTargets(self):
+        return self.getTargetRestrictions().getMaxTargets(self.getHostCard(), self)
+
+    def isTargetNumberValid(self):
+        if not self.usesTargeting():
+            return self.getTargets().isEmpty()
+
+        if not self.isMinTargetChosen():
+            return False
+
+        return self.getMaxTargets() >= self.getTargets().size()
+
+    def getAllTargetChoices(self):
+        res = []
+        sa = self.getRootAbility()
+
+        while sa is not None:
+            if sa.usesTargeting():
+                res.append(sa.getTargets())
+            sa = sa.getSubAbility()
+
+        return res
+
+    def getTargetCard(self):
+        return self.targetChosen.getFirstTargetedCard()
+
+    def setTargetCard(self, card):
+        if card is None:
+            print(str(self.getHostCard()) + " - SpellAbility.setTargetCard() called with null for target card.")
+            return
+
+        self.resetTargets()
+        self.targetChosen.add(card)
+        self.setStackDescription(self.getHostCard().getDisplayName() + " - targeting " + str(card))
+
+    def findTargetedCards(self):
+        # First search for targeted cards associated with current ability
+        if self.getTargets().isTargetingAnyCard():
+            return self.getTargets().getTargetCards()
+
+        # Next search for source cards of targeted SAs associated with current ability
+        if self.getTargets().isTargetingAnySpell():
+            res = CardCollection()
+            for ability in self.getTargets().getTargetSpells():
+                res.add(ability.getHostCard())
+            return res
+
+        # Lastly Search parent SAs that targets a card
+        parent = self.getParentTargetingCard()
+        if parent is not None:
+            return parent.findTargetedCards()
+
+        # Lastly Search parent SAs that targets an SA
+        parent = self.getParentTargetingSA()
+        if parent is not None:
+            return parent.findTargetedCards()
+
+        return CardCollection.EMPTY
+
+    def getSATargetingCard(self):
+        return self if self.getTargets().isTargetingAnyCard() else self.getParentTargetingCard()
+
+    def getParentTargetingCard(self):
+        parent = self.getParent()
+        while parent is not None:
+            if parent.getTargets().isTargetingAnyCard():
+                return parent
+            parent = parent.getParent()
+        return None
+
+    def getSATargetingSA(self):
+        return self if self.getTargets().isTargetingAnySpell() else self.getParentTargetingSA()
+
+    def getParentTargetingSA(self):
+        parent = self.getParent()
+        while parent is not None:
+            if parent.getTargets().isTargetingAnySpell():
+                return parent
+            parent = parent.getParent()
+        return None
+
+    def getSATargetingPlayer(self):
+        return self if self.getTargets().isTargetingAnyPlayer() else self.getParentTargetingPlayer()
+
+    def getParentTargetingPlayer(self):
+        parent = self.getParent()
+        while parent is not None:
+            if parent.getTargets().isTargetingAnyPlayer():
+                return parent
+            parent = parent.getParent()
+        return None
+
+    def getUniqueTargets(self):
+        targets = []
+        child = self.getParent()
+        while child is not None:
+            if child.usesTargeting():
+                targets.extend(child.getTargets())
+            child = child.getParent()
+        return targets
+
+    def canTargetSpellAbility(self, topSA):
+        if topSA.isWrapper():
+            topSA = topSA.getWrappedAbility()
+
+        tgt = self.getTargetRestrictions()
+
+        if self.equals(topSA):
+            return False
+
+        if self.hasParam("TargetType") and not topSA.isValid(self.getParam("TargetType").split(","), self.getActivatingPlayer(), self.getHostCard(), self):
+            return False
+        if self.hasParam("TargetsWithControllerProperty"):
+            prop = self.getParam("TargetsWithControllerProperty")
+            if prop == "cmcLECardsInGraveyard" \
+                    and topSA.getHostCard().getCMC() > len(topSA.getActivatingPlayer().getCardsIn(ZoneType.Graveyard)):
+                return False
+            elif prop == "powerLECardsInGraveyard" \
+                    and topSA.getHostCard().getNetPower() > len(topSA.getActivatingPlayer().getCardsIn(ZoneType.Graveyard)):
+                return False
+
+        splitTargetRestrictions = tgt.getSAValidTargeting()
+        if splitTargetRestrictions is not None:
+            result = False
+            subAb = topSA
+            while subAb is not None and not result:
+                if subAb.usesTargeting():
+                    matchTgt = subAb.getTargets()
+                    if matchTgt is None:
+                        continue
+                    for o in matchTgt:
+                        # CR 115.9b need to check current target state but nothing else that could make it illegal
+                        if o.isValid(splitTargetRestrictions.split(","), self.getActivatingPlayer(), self.getHostCard(), self):
+                            result = True
+                            break
+                subAb = subAb.getSubAbility()
+
+            if not result:
+                return False
+
+        host = topSA.getHostCard()
+        # if from an effect it's usually Delayed Trigger
+        if host.isImmutable() and not host.isEmblem():
+            if host.getEffectSource() is not None:
+                host = host.getEffectSource()
+            else:
+                # or it could be the monarch, in that case it's only targetable if no source restriction
+                return any((t in "Card") for t in tgt.getValidTgts())
+
+        return host.isValid(tgt.getValidTgts(), self.getActivatingPlayer(), self.getHostCard(), self)
+
+    def isTargeting(self, o):
+        if o in self.getTargets():
+            return True
+        p = self.getSubAbility()
+        return p is not None and p.isTargeting(o)
+
+    def setupNewTargets(self, forceTargetingPlayer):
+        # Skip to paying if parent ability doesn't target and has no subAbilities.
+        # (or trigger case where its already targeted)
+        currentAbility = self
+        while True:
+            if currentAbility.usesTargeting():
+                oldTargets = currentAbility.getTargets()
+                if forceTargetingPlayer.getController().chooseNewTargetsFor(currentAbility, None, True) is None:
+                    currentAbility.setTargets(oldTargets)
+            subAbility = currentAbility.getSubAbility()
+            if subAbility is not None:
+                # This is necessary for "TargetsWithDefinedController$ ParentTarget"
+                subAbility.setParent(currentAbility)
+            currentAbility = subAbility
+            if currentAbility is None:
+                break
+        return True
+
+    def setupTargets(self):
+        # Skip to paying if parent ability doesn't target and has no subAbilities.
+        # (or trigger case where its already targeted)
+        currentAbility = self
+        source = self.getHostCard()
+        while True:
+            if currentAbility.usesTargeting():
+                currentAbility.clearTargets()
+                if currentAbility.hasParam("TargetingPlayer"):
+                    candidates = AbilityUtils.getDefinedPlayers(source, currentAbility.getParam("TargetingPlayer"), currentAbility)
+                    # activator chooses targeting player
+                    targetingPlayer = self.getActivatingPlayer().getController().chooseSingleEntityForEffect(
+                        candidates, currentAbility, "Choose the targeting player", None)
+                else:
+                    targetingPlayer = self.getActivatingPlayer()
+                # don't set targeting player when forceful target,
+                # "targeting player controls" should not be reset when the spell is copied
+                currentAbility.setTargetingPlayer(targetingPlayer)
+                if not targetingPlayer.getController().chooseTargetsFor(currentAbility):
+                    return False
+            subAbility = currentAbility.getSubAbility()
+            if subAbility is not None:
+                # This is necessary for "TargetsWithDefinedController$ ParentTarget"
+                subAbility.setParent(currentAbility)
+            currentAbility = subAbility
+            if currentAbility is None:
+                break
+
+        # Check if meet MustTarget restriction
+        if not StaticAbilityMustTarget.meetsMustTargetRestriction(self):
+            message = Localizer.getInstance().getMessage("lblInvalidTargetSpecification")
+            self.getActivatingPlayer().getController().notifyOfValue(None, None, message)
+            return False
+
+        return True
+
+    def clearTargets(self):
+        if self.usesTargeting():
+            self.resetTargets()
+            if self.isDividedAsYouChoose():
+                self.dividedValue = AbilityUtils.calculateAmount(self.getHostCard(), self.getParam("DividedAsYouChoose"), self)
+
+    # Takes one argument like Permanent.Blue+withFlying
+    def isValid(self, restriction, sourceController, source, spellAbility):
+        # Inclusive restrictions are Card types
+        incR = restriction.split(".", 1)
+        root = self.getRootAbility()
+
+        testFailed = False
+        if incR[0].startswith("!"):
+            testFailed = True  # a bit counterintuitive
+            incR[0] = incR[0][1:]  # consume negation sign
+
+        if incR[0] == "Spell":
+            if not root.isSpell():
+                return testFailed
+        elif incR[0] == "Ability":
+            if not root.isAbility():
+                return testFailed
+        elif incR[0] == "Instant":
+            if not root.getCardState().getType().isInstant():
+                return testFailed
+        elif incR[0] == "Sorcery":
+            if not root.getCardState().getType().isSorcery():
+                return testFailed
+        elif incR[0] == "Triggered":
+            if not root.isTrigger():
+                return testFailed
+        elif incR[0] == "Activated":
+            if not root.isActivatedAbility():
+                return testFailed
+        elif incR[0] == "Static":
+            if not isinstance(root, AbilityStatic):
+                return testFailed
+        elif "LandAbility" in incR[0]:
+            if not root.isLandAbility():
+                return testFailed
+        elif incR[0] == "SpellAbility":
+            # Match anything
+            pass
+        else:  # not a spell/ability type
+            return testFailed
+
+        if len(incR) > 1:
+            excR = incR[1]
+            exR = excR.split("+")  # Exclusive Restrictions are ...
+            for s in exR:
+                if not self.hasProperty(s, sourceController, source, spellAbility):
+                    return testFailed
+        return not testFailed
+
+    # Takes arguments like Blue or withFlying
+    def hasProperty(self, property, sourceController, source, spellAbility):
+        if property.startswith("!"):
+            return not ForgeScript.spellAbilityHasProperty(self, property[1:], sourceController, source, spellAbility)
+        return ForgeScript.spellAbilityHasProperty(self, property, sourceController, source, spellAbility)
+
+    # Return whether this spell tracks what color mana is spent to cast it for the sake of the effect
+    def tracksManaSpent(self):
+        if self.hostCard is None or self.hostCard.getRules() is None:
+            return False
+
+        if self.isSpell() and self.hostCard.hasConverge():
+            return True
+
+        text = self.hostCard.getRules().getOracleText()
+        if self.isSpell() and "was spent to cast" in text:
+            return True
+        if self.isAbility() and "mana spent to pay" in text:
+            return True
+        return False
+
+    def getTotalManaSpent(self):
+        return len(self.getPayingMana())
+
+    def getChosenList(self):
+        return self.chosenList
+
+    def setChosenList(self, choices):
+        self.chosenList = choices
+
+    def changeText(self):
+        super().changeText()
+
+        if self.targetRestrictions is not None:
+            self.targetRestrictions.applyTargetTextChanges(self)
+
+        self.getPayCosts().applyTextChangeEffects(self)
+
+        self.stackDescription = AbilityUtils.applyDescriptionTextChangeEffects(self.originalStackDescription, self)
+        self.description = AbilityUtils.applyDescriptionTextChangeEffects(self.originalDescription, self)
+
+        self.getConditions().setConditions(self.getMapParams())
+        if self.getRestrictions() is not None:
+            self.getRestrictions().setRestrictions(self.getMapParams())
+
+        if self.subAbility is not None:
+            # if the parent of the subability is not this,
+            # then there might be a loop
+            if self.subAbility.getParent() is self:
+                self.subAbility.changeText()
+        for sa in self.additionalAbilities.values():
+            sa.changeText()
+
+        for list in self.additionalAbilityLists.values():
+            for sa in list:
+                sa.changeText()
+
+    def changeTextIntrinsic(self, colorMap, typeMap):
+        super().changeTextIntrinsic(colorMap, typeMap)
+
+        if self.subAbility is not None:
+            # if the parent of the subability is not this,
+            # then there might be a loop
+            if self.subAbility.getParent() is self:
+                self.subAbility.changeTextIntrinsic(colorMap, typeMap)
+        for sa in self.additionalAbilities.values():
+            sa.changeTextIntrinsic(colorMap, typeMap)
+
+        for list in self.additionalAbilityLists.values():
+            for sa in list:
+                sa.changeTextIntrinsic(colorMap, typeMap)
+
+    def setIntrinsic(self, i):
+        super().setIntrinsic(i)
+        if self.subAbility is not None:
+            self.subAbility.setIntrinsic(i)
+        for sa in self.additionalAbilities.values():
+            if sa.isIntrinsic() != i:
+                sa.setIntrinsic(i)
+        for list in self.additionalAbilityLists.values():
+            for sa in list:
+                if sa.isIntrinsic() != i:
+                    sa.setIntrinsic(i)
+
+    def getView(self):
+        self.view.updateHostCard(self)
+        self.view.updateDescription(self)
+        self.view.updatePromptIfOnlyPossibleAbility(self)
+        self.view.updateIsSpell(self)
+        return self.view
+
+    def compareTo(self, ab):
+        if self.isManaAbility() and ab.isManaAbility():
+            return self.calculateScoreForManaAbility() - ab.calculateScoreForManaAbility()
+        return 0
+
+    def calculateScoreForManaAbility(self):
+        score = 0
+        if self.manaPart is None:
+            score += 1  # Assume a mana ability can generate at least 1 mana if the amount of mana can't be determined now.
+        else:
+            mana = self.manaPart.mana(self)
+            if mana != "Any":
+                score += len(mana)
+                if not self.canProduce("C"):
+                    # Producing colorless should produce a slightly lower score
+                    score += 1
+            else:
+                score += 7
+
+        # increase score if any part of ability's cost is not reusable or renewable (such as paying life)
+        for costPart in self.payCosts.getCostParts():
+            if not costPart.isReusable():
+                score += 3
+            if not costPart.isRenewable():
+                score += 3
+            if isinstance(costPart, CostTap) and not self.getHostCard().canUntap(self.getActivatingPlayer(), True):
+                score += 10
+            if isinstance(costPart, CostSacrifice) and not costPart.payCostFromSource():
+                # Need to sacrifice "something else". Since we lose that something else, add a large sum since the AI
+                # isn't trustworthy to pick
+                score += 40
+            # Increase score by 1 for each costpart in general
+            score += 1
+
+        if not self.isUndoable():
+            score += 50  # only use non-undoable mana abilities as a last resort
+        if self.subAbility is not None:
+            # If the primary ability has a sub, it's probably "more expensive"
+            score += 2
+
+        return score
+
+    def getDamageMap(self):
+        if self.damageMap is not None:
+            return self.damageMap
+        elif self.getParent() is not None:
+            return self.getParent().getDamageMap()
+        return None
+
+    def getPreventMap(self):
+        if self.preventMap is not None:
+            return self.preventMap
+        elif self.getParent() is not None:
+            return self.getParent().getPreventMap()
+        return None
+
+    def getCounterTable(self):
+        if self.counterTable is not None:
+            return self.counterTable
+        elif self.getParent() is not None:
+            return self.getParent().getCounterTable()
+        return None
+
+    def getChangeZoneTable(self):
+        if self.changeZoneTable is not None:
+            return self.changeZoneTable
+        elif self.getParent() is not None:
+            return self.getParent().getChangeZoneTable()
+        return None
+
+    def getLoseLifeMap(self):
+        if self.loseLifeMap is not None:
+            return self.loseLifeMap
+        elif self.getParent() is not None:
+            return self.getParent().getLoseLifeMap()
+        return None
+
+    def setDamageMap(self, map):
+        self.damageMap = map
+
+    def setPreventMap(self, map):
+        self.preventMap = map
+
+    def setCounterTable(self, table):
+        self.counterTable = table
+
+    def setChangeZoneTable(self, table):
+        self.changeZoneTable = table
+
+    def setLoseLifeMap(self, map):
+        self.loseLifeMap = map
+
+    def getOriginalAbility(self):
+        if self.grantorOriginal is None:
+            return None
+        orig = self.grantorOriginal.getOriginalAbility()
+        return orig if orig is not None else self.grantorOriginal
+
+    def setOriginalAbility(self, sa):
+        self.grantorOriginal = sa
+
+    def getGrantorStatic(self):
+        return self.grantorStatic
+
+    def setGrantorStatic(self, st):
+        self.grantorStatic = st
+
+    def isAlternativeCost(self, ac):
+        if ac == self.altCost:
+            return True
+
+        parent = self.getParent()
+        if parent is not None:
+            return parent.isAlternativeCost(ac)
+        return False
+
+    def getAlternativeCost(self):
+        if self.altCost is not None:
+            return self.altCost
+
+        parent = self.getParent()
+        if parent is not None:
+            return parent.getAlternativeCost()
+        return None
+
+    def setAlternativeCost(self, ac):
+        self.altCost = ac
+
+    def getXManaCostPaid(self):
+        return self.xManaCostPaid
+
+    def setXManaCostPaid(self, n):
+        self.xManaCostPaid = n
+
+    def getXColor(self):
+        if not self.hasParam("XColor"):
+            return None
+
+        sb = []
+        parts = self.getParam("XColor").split(",")
+        for col in parts:
+            # color word used
+            if len(col) > 2:
+                col = MagicColor.toShortString(col)
+            sb.append(col)
+        return "".join(sb)
+
+    def isSkip(self):
+        return self.skip
+
+    def setSkip(self, val):
+        self.skip = val
+
+    def canCastTiming(self, a, b=None):
+        if b is None:
+            return self.canCastTiming(self.getHostCard(), a)
+        host, activator = a, b
+        # for companion
+        if isinstance(self, AbilityStatic) and self.getRestrictions().isSorcerySpeed() and not activator.canCastSorcery():
+            return False
+
+        # no spell or no activated ability, no check there
+        if not self.isSpell() and not self.isActivatedAbility():
+            return True
+
+        if activator.canCastSorcery() or self.withFlash(host, activator):
+            return True
+
+        # spells per default are sorcerySpeed
+        if self.isSpell():
+            return False
+
+        if self.isActivatedAbility():
+            # Activated Abilities are instant speed per default, except Planeswalker abilities
+            return not self.isPwAbility() and not self.getRestrictions().isSorcerySpeed()
+        return True
+
+    def withFlash(self, host, activator):
+        if self.getRestrictions().isInstantSpeed():
+            return True
+        if (self.isSpell() or self.isLandAbility()) and (self.isCastFromPlayEffect() or host.isInstant() or host.hasKeyword(Keyword.FLASH)):
+            return True
+
+        return StaticAbilityCastWithFlash.anyWithFlash(self, host, activator)
+
+    def checkRestrictions(self, a, b=None):
+        if b is None:
+            return self.checkRestrictions(self.getHostCard(), a)
+        return True
+
+    def addRollbackEffect(self, eff):
+        self.rollbackEffects.add(eff)
+
+    def rollback(self):
+        for c in self.rollbackEffects:
+            c.getGame().getAction().ceaseToExist(c, True)
+        self.rollbackEffects.clear()
+
+    def isHidden(self):
+        hidden = self.hasParam("Hidden")
+        if not hidden and self.hasParam("Origin"):
+            hidden = ZoneType.isHidden(self.getParam("Origin"))
+        return hidden
+
+    def isLegalAfterStack(self):
+        if not self.matchesValidParam("ValidAfterStack", self):
+            return False
+        return True
+
+    def isCounterableBy(self, sa):
+        return True
+
+    def getAlternateHost(self, source):
+        return None
+
+    def hasOptionalKeywordAmount(self, kw):
+        if isinstance(kw, Keyword):
+            return self.optionalKeywordAmount.containsRow(kw)
+        staticId = 0 if kw.getStatic() is None else kw.getStatic().getId()
+        return self.optionalKeywordAmount.contains(kw.getKeyword(), Pair.of(kw.getIdx(), staticId))
+
+    def getOptionalKeywords(self):
+        return self.optionalKeywordAmount.rowKeySet()
+
+    def getOptionalKeywordAmount(self, kw):
+        if isinstance(kw, Keyword):
+            return sum(self.optionalKeywordAmount.row(kw).values())
+        staticId = 0 if kw.getStatic() is None else kw.getStatic().getId()
+        val = self.optionalKeywordAmount.get(kw.getKeyword(), Pair.of(kw.getIdx(), staticId))
+        return val if val is not None else 0
+
+    def setOptionalKeywordAmount(self, kw, amount):
+        staticId = 0 if kw.getStatic() is None else kw.getStatic().getId()
+        self.optionalKeywordAmount.put(kw.getKeyword(), Pair.of(kw.getIdx(), staticId), amount)
+
+    def clearOptionalKeywordAmount(self):
+        self.optionalKeywordAmount.clear()
+
+    def getName(self):
+        return self.name
+
+    def setName(self, name):
+        self.name = name
+
+    def getMaxWaterbend(self):
+        return self.maxWaterbend
+
+    def setMaxWaterbend(self, cost):
+        if cost is None or cost.getMaxWaterbend() is None:
+            if self.maxWaterbend is not None:
+                self.maxWaterbend = 0
+            return
+        self.maxWaterbend = AbilityUtils.calculateAmount(self.getHostCard(), cost.getMaxWaterbend(), self)
+
+
+class EmptySa(SpellAbility):
+    def __init__(self, *args):
+        if len(args) == 1:
+            sourceCard = args[0]
+            super().__init__(sourceCard, Cost.Zero)
+            self.setActivatingPlayer(sourceCard.getController())
+        elif len(args) == 2:
+            if isinstance(args[0], ApiType):
+                api0, sourceCard = args
+                super().__init__(sourceCard, Cost.Zero)
+                self.setActivatingPlayer(sourceCard.getController())
+                self.api = api0
+            else:
+                sourceCard, activator = args
+                super().__init__(sourceCard, Cost.Zero)
+                self.setActivatingPlayer(activator)
+        else:
+            api0, sourceCard, activator = args
+            super().__init__(sourceCard, Cost.Zero)
+            self.setActivatingPlayer(activator)
+            self.api = api0
+
+    def resolve(self):
+        pass
+
+    def canPlay(self, checkOptionalCosts=_UNSET):
+        if checkOptionalCosts is _UNSET:
+            return False
+        return SpellAbility.canPlay(self, checkOptionalCosts)
+
+
+SpellAbility.EmptySa = EmptySa
 ```

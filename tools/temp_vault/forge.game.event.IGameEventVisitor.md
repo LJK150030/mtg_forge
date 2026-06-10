@@ -334,3 +334,144 @@ public interface IGameEventVisitor<T> {
     }
 }
 ```
+
+## Python
+`forge/game/event/IGameEventVisitor.py`
+
+```python
+from forge.game.event.GameEventAddLog import GameEventAddLog
+from forge.game.event.GameEventAnteCardsSelected import GameEventAnteCardsSelected
+from forge.game.event.GameEventAttackersDeclared import GameEventAttackersDeclared
+from forge.game.event.GameEventBlockersDeclared import GameEventBlockersDeclared
+from forge.game.event.GameEventCardAttachment import GameEventCardAttachment
+from forge.game.event.GameEventCardChangeZone import GameEventCardChangeZone
+from forge.game.event.GameEventCardCounters import GameEventCardCounters
+from forge.game.event.GameEventCardDamaged import GameEventCardDamaged
+from forge.game.event.GameEventCardDestroyed import GameEventCardDestroyed
+from forge.game.event.GameEventCardForetold import GameEventCardForetold
+from forge.game.event.GameEventCardModeChosen import GameEventCardModeChosen
+from forge.game.event.GameEventCardPhased import GameEventCardPhased
+from forge.game.event.GameEventCardPlotted import GameEventCardPlotted
+from forge.game.event.GameEventCardRegenerated import GameEventCardRegenerated
+from forge.game.event.GameEventCardSacrificed import GameEventCardSacrificed
+from forge.game.event.GameEventCardStatsChanged import GameEventCardStatsChanged
+from forge.game.event.GameEventCardTapped import GameEventCardTapped
+from forge.game.event.GameEventCombatChanged import GameEventCombatChanged
+from forge.game.event.GameEventCombatEnded import GameEventCombatEnded
+from forge.game.event.GameEventCombatUpdate import GameEventCombatUpdate
+from forge.game.event.GameEventDayTimeChanged import GameEventDayTimeChanged
+from forge.game.event.GameEventDoorChanged import GameEventDoorChanged
+from forge.game.event.GameEventFlipCoin import GameEventFlipCoin
+from forge.game.event.GameEventGameFinished import GameEventGameFinished
+from forge.game.event.GameEventGameOutcome import GameEventGameOutcome
+from forge.game.event.GameEventGameRestarted import GameEventGameRestarted
+from forge.game.event.GameEventGameStarted import GameEventGameStarted
+from forge.game.event.GameEventLandPlayed import GameEventLandPlayed
+from forge.game.event.GameEventManaBurn import GameEventManaBurn
+from forge.game.event.GameEventManaPool import GameEventManaPool
+from forge.game.event.GameEventMulligan import GameEventMulligan
+from forge.game.event.GameEventPlayerControl import GameEventPlayerControl
+from forge.game.event.GameEventPlayerCounters import GameEventPlayerCounters
+from forge.game.event.GameEventPlayerDamaged import GameEventPlayerDamaged
+from forge.game.event.GameEventPlayerLivesChanged import GameEventPlayerLivesChanged
+from forge.game.event.GameEventPlayerPoisoned import GameEventPlayerPoisoned
+from forge.game.event.GameEventPlayerPriority import GameEventPlayerPriority
+from forge.game.event.GameEventPlayerRadiation import GameEventPlayerRadiation
+from forge.game.event.GameEventPlayerShardsChanged import GameEventPlayerShardsChanged
+from forge.game.event.GameEventPlayerStatsChanged import GameEventPlayerStatsChanged
+from forge.game.event.GameEventRandomLog import GameEventRandomLog
+from forge.game.event.GameEventRollDie import GameEventRollDie
+from forge.game.event.GameEventScry import GameEventScry
+from forge.game.event.GameEventShuffle import GameEventShuffle
+from forge.game.event.GameEventSnapshotRestored import GameEventSnapshotRestored
+from forge.game.event.GameEventSpeedChanged import GameEventSpeedChanged
+from forge.game.event.GameEventSpellAbilityCast import GameEventSpellAbilityCast
+from forge.game.event.GameEventSpellRemovedFromStack import GameEventSpellRemovedFromStack
+from forge.game.event.GameEventSpellResolved import GameEventSpellResolved
+from forge.game.event.GameEventSprocketUpdate import GameEventSprocketUpdate
+from forge.game.event.GameEventSubgameEnd import GameEventSubgameEnd
+from forge.game.event.GameEventSubgameStart import GameEventSubgameStart
+from forge.game.event.GameEventSurveil import GameEventSurveil
+from forge.game.event.GameEventTokenCreated import GameEventTokenCreated
+from forge.game.event.GameEventTurnBegan import GameEventTurnBegan
+from forge.game.event.GameEventTurnEnded import GameEventTurnEnded
+from forge.game.event.GameEventTurnPhase import GameEventTurnPhase
+from forge.game.event.GameEventZone import GameEventZone
+
+from abc import ABC, abstractmethod
+from typing import Generic, Optional, TypeVar, Union
+
+T = TypeVar("T")
+
+GameEvent = Union[
+    GameEventAnteCardsSelected,
+    GameEventAttackersDeclared,
+    GameEventBlockersDeclared,
+    GameEventCardDamaged,
+    GameEventCardDestroyed,
+    GameEventCardAttachment,
+    GameEventCardChangeZone,
+    GameEventCardModeChosen,
+    GameEventCardRegenerated,
+    GameEventCardSacrificed,
+    GameEventCardPhased,
+    GameEventCardTapped,
+    GameEventCardStatsChanged,
+    GameEventCardCounters,
+    GameEventCombatChanged,
+    GameEventCombatEnded,
+    GameEventCombatUpdate,
+    GameEventGameFinished,
+    GameEventGameOutcome,
+    GameEventFlipCoin,
+    GameEventGameStarted,
+    GameEventGameRestarted,
+    GameEventLandPlayed,
+    GameEventPlayerLivesChanged,
+    GameEventManaPool,
+    GameEventManaBurn,
+    GameEventMulligan,
+    GameEventPlayerControl,
+    GameEventPlayerDamaged,
+    GameEventPlayerCounters,
+    GameEventPlayerPoisoned,
+    GameEventPlayerRadiation,
+    GameEventPlayerPriority,
+    GameEventPlayerShardsChanged,
+    GameEventPlayerStatsChanged,
+    GameEventRandomLog,
+    GameEventRollDie,
+    GameEventScry,
+    GameEventShuffle,
+    GameEventSpeedChanged,
+    GameEventSpellAbilityCast,
+    GameEventSpellResolved,
+    GameEventSpellRemovedFromStack,
+    GameEventSprocketUpdate,
+    GameEventSubgameStart,
+    GameEventSubgameEnd,
+    GameEventSurveil,
+    GameEventTokenCreated,
+    GameEventTurnBegan,
+    GameEventTurnEnded,
+    GameEventTurnPhase,
+    GameEventZone,
+    GameEventCardForetold,
+    GameEventCardPlotted,
+    GameEventDayTimeChanged,
+    GameEventDoorChanged,
+    GameEventSnapshotRestored,
+    GameEventAddLog,
+]
+
+
+class IGameEventVisitor(ABC, Generic[T]):
+    @abstractmethod
+    def visit(self, event: GameEvent) -> T:
+        ...
+
+    # This is base class for all visitors.
+    class Base(Generic[T]):
+        def visit(self, event: GameEvent) -> Optional[T]:
+            return None
+```

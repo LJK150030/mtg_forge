@@ -34,9 +34,9 @@ classDiagram
 
 ## Design Description
 
-`PerpetualPTBoost` is an immutable record that encapsulates a permanent ("perpetual") power/toughness modification applied to a card, capturing the boost amount (`power`, `toughness`) alongside the `timestamp` that orders it among other continuous effects. As an implementation of `PerpetualInterface`, it conforms to the engine's contract for perpetual effects—exposing its ordering timestamp via `getTimestamp()` and reapplying itself on demand through `applyEffect(Card)`—so it can be stored and replayed polymorphically alongside other perpetual modifications.
+`PerpetualPTBoost` is an immutable record that encapsulates a permanent ("perpetual") power/toughness modification applied to a card, capturing the boost amount (`power`, `toughness`) alongside the `timestamp` that orders it among other continuous effects. As an implementation of `PerpetualInterface`, it conforms to the engine's contract for perpetual effectsâ€”exposing its ordering timestamp via `getTimestamp()` and reapplying itself on demand through `applyEffect(Card)`â€”so it can be stored and replayed polymorphically alongside other perpetual modifications.
 
-Its sole collaborator is `Card`: `applyEffect` delegates to `Card.addPTBoost`, forwarding the stored values and timestamp so the boost survives state resets and re-derivation of the card's characteristics. The record form signals deliberate design intent—these effects are value objects, immutable and identity-free, with the timestamp guaranteeing deterministic layering order. Using boxed `Integer` fields allows a boost to affect only power or only toughness when one component is null.
+Its sole collaborator is `Card`: `applyEffect` delegates to `Card.addPTBoost`, forwarding the stored values and timestamp so the boost survives state resets and re-derivation of the card's characteristics. The record form signals deliberate design intentâ€”these effects are value objects, immutable and identity-free, with the timestamp guaranteeing deterministic layering order. Using boxed `Integer` fields allows a boost to affect only power or only toughness when one component is null.
 
 ## Source
 `forge-game/src/main/java/forge/game/card/perpetual/PerpetualPTBoost.java`
@@ -58,4 +58,26 @@ public record PerpetualPTBoost(long timestamp, Integer power, Integer toughness)
         c.addPTBoost(power, toughness, timestamp, (long) 0);
     }
 }
+```
+
+## Python
+`forge/game/card/perpetual/PerpetualPTBoost.py`
+
+```python
+from forge.game.card.Card import Card
+from forge.game.card.perpetual.PerpetualInterface import PerpetualInterface
+
+
+class PerpetualPTBoost(PerpetualInterface):
+
+    def __init__(self, timestamp: int, power: int, toughness: int):
+        self.timestamp = timestamp
+        self.power = power
+        self.toughness = toughness
+
+    def getTimestamp(self) -> int:
+        return self.timestamp
+
+    def applyEffect(self, c: Card) -> None:
+        c.addPTBoost(self.power, self.toughness, self.timestamp, 0)
 ```

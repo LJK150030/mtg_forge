@@ -47,7 +47,7 @@ classDiagram
 
 ## Design Description
 
-CostExert models the "Exert" payment as a concrete cost part within Forge's cost-payment framework. Extending `CostPartWithTrigger`, it represents the act of exerting a creature (or a chosen number of valid permanents) as part of paying for a `SpellAbility`, integrating with the engine's trigger machinery since exerting can fire delayed triggers. It validates affordability through `canPay`—either trivially when paid from the source, or by counting matching battlefield permanents owned by the payer against the required amount (also honoring announced values)—and performs the action in `doPayment` by invoking `Card.exert`.
+CostExert models the "Exert" payment as a concrete cost part within Forge's cost-payment framework. Extending `CostPartWithTrigger`, it represents the act of exerting a creature (or a chosen number of valid permanents) as part of paying for a `SpellAbility`, integrating with the engine's trigger machinery since exerting can fire delayed triggers. It validates affordability through `canPay`â€”either trivially when paid from the source, or by counting matching battlefield permanents owned by the payer against the required amount (also honoring announced values)â€”and performs the action in `doPayment` by invoking `Card.exert`.
 
 The class collaborates with `Card`, `CardCollectionView`, `Player`, and `SpellAbility` to filter and act on game state, and supplies stable list-hash keys ("Exerted"/"ExertedCards") so paid cards can be tracked. By implementing `accept` for `ICostVisitor`, it participates in the visitor pattern that lets external logic traverse cost components without the cost classes knowing their consumers, keeping each cost type a small, self-contained, polymorphic unit.
 
@@ -175,4 +175,79 @@ public class CostExert extends CostPartWithTrigger {
     }
 
 }
+```
+
+## Python
+`forge/game/cost/CostExert.py`
+
+```python
+from forge.game.card.Card import Card
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.card.CardLists import CardLists
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+from forge.game.cost.CostPartWithTrigger import CostPartWithTrigger
+from forge.game.cost.Cost import Cost
+from forge.game.cost.ICostVisitor import ICostVisitor
+
+
+class CostExert(CostPartWithTrigger):
+    """The Class CostExert."""
+
+    serialVersionUID = 1
+
+    def __init__(self, amount: str, type: str, description: str):
+        """
+        Instantiates a new cost Exert.
+
+        @param amount the amount
+        @param type the type
+        @param description the description
+        """
+        super().__init__(amount, type, description)
+
+    def toString(self) -> str:
+        sb = []
+        sb.append("Exert ")
+
+        i = self.convertAmount()
+
+        if self.payCostFromSource():
+            sb.append(self.getType())
+        else:
+            desc = self.getType() if self.getTypeDescription() is None else self.getTypeDescription()
+            if i is not None:
+                sb.append(Cost.convertIntAndTypeToWords(i, desc))
+            else:
+                sb.append(Cost.convertAmountTypeToWords(self.getAmount(), desc))
+        return "".join(sb)
+
+    def canPay(self, ability: SpellAbility, payer: Player, effect: bool) -> bool:
+        source = ability.getHostCard()
+
+        if not self.payCostFromSource():
+            needsAnnoucement = ability.hasParam("Announce") and ability.getParam("Announce") in self.getType()
+
+            typeList = payer.getCardsIn(ZoneType.Battlefield)
+            typeList = CardLists.getValidCards(typeList, self.getType().split(";"), payer, source, ability)
+            amount = self.getAbilityAmount(ability)
+
+            return needsAnnoucement or (typeList.size() >= amount)
+
+        return True
+
+    def doPayment(self, payer: Player, ability: SpellAbility, targetCard: Card, effect: bool) -> Card:
+        targetCard.exert(payer)
+        return targetCard
+
+    def getHashForLKIList(self) -> str:
+        return "Exerted"
+
+    def getHashForCardList(self) -> str:
+        return "ExertedCards"
+
+    # Inputs
+    def accept(self, visitor: ICostVisitor):
+        return visitor.visit(self)
 ```

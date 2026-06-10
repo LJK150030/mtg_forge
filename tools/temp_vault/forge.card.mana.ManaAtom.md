@@ -44,7 +44,7 @@ classDiagram
 
 ## Design Description
 
-ManaAtom is a non-instantiable utility class (declared `abstract` with only static members) that encodes every Magic: The Gathering mana symbol as an integer bitmask. It defines the canonical constants for the five colors, colorless, and generic—sourcing its base color bits from MagicColor—plus higher-bit modifier flags (IS_X, OR_2_GENERIC, OR_2_LIFE, IS_SNOW) deliberately placed above the byte boundary so they sit outside the color-packing range. Acting as a stateless constant-and-parser library for forge-core, it provides static helpers (`fromName`, `fromConversion`, `getIndexOfFirstManaType`, `getIndexFromName`) that translate textual notation—single characters, color words, two-letter color pairs, and "non"/"AnyColor"/"AnyType" expressions—into compact byte masks. Treating an unknown symbol as generic (0), it centralizes mana-symbol representation and conversion so the rest of the engine shares one authoritative encoding.
+ManaAtom is a non-instantiable utility class (declared `abstract` with only static members) that encodes every Magic: The Gathering mana symbol as an integer bitmask. It defines the canonical constants for the five colors, colorless, and genericâ€”sourcing its base color bits from MagicColorâ€”plus higher-bit modifier flags (IS_X, OR_2_GENERIC, OR_2_LIFE, IS_SNOW) deliberately placed above the byte boundary so they sit outside the color-packing range. Acting as a stateless constant-and-parser library for forge-core, it provides static helpers (`fromName`, `fromConversion`, `getIndexOfFirstManaType`, `getIndexFromName`) that translate textual notationâ€”single characters, color words, two-letter color pairs, and "non"/"AnyColor"/"AnyType" expressionsâ€”into compact byte masks. Treating an unknown symbol as generic (0), it centralizes mana-symbol representation and conversion so the rest of the engine shares one authoritative encoding.
 
 ## Source
 `forge-core/src/main/java/forge/card/mana/ManaAtom.java`
@@ -145,4 +145,108 @@ public abstract class ManaAtom {
         return getIndexOfFirstManaType(fromName(s));
     }
 }
+```
+
+## Python
+`forge/card/mana/ManaAtom.py`
+
+```python
+from forge.card.MagicColor import MagicColor
+
+
+class ManaAtom:
+    """A bitmask to represent any mana symbol as an integer."""
+
+    WHITE = MagicColor.WHITE
+    BLUE = MagicColor.BLUE
+    BLACK = MagicColor.BLACK
+    RED = MagicColor.RED
+    GREEN = MagicColor.GREEN
+    COLORLESS = 1 << 5
+
+    MANACOLORS = bytes([WHITE, BLUE, BLACK, RED, GREEN])
+    MANATYPES = bytes([WHITE, BLUE, BLACK, RED, GREEN, COLORLESS])
+
+    ALL_MANA_COLORS = WHITE | BLUE | BLACK | RED | GREEN
+    ALL_MANA_TYPES = ALL_MANA_COLORS | COLORLESS
+
+    GENERIC = 1 << 6
+
+    # Below here skip due to byte conversion shenanigans
+    IS_X = 1 << 8
+    OR_2_GENERIC = 1 << 9
+    OR_2_LIFE = 1 << 10
+    IS_SNOW = 1 << 11
+
+    @staticmethod
+    def fromName(c):
+        if isinstance(c, str) and len(c) != 1:
+            return ManaAtom._fromNameString(c)
+        ch = c if isinstance(c, str) else chr(c)
+        switch = ch.lower()
+        if switch == 'w':
+            return ManaAtom.WHITE
+        elif switch == 'u':
+            return ManaAtom.BLUE
+        elif switch == 'b':
+            return ManaAtom.BLACK
+        elif switch == 'r':
+            return ManaAtom.RED
+        elif switch == 'g':
+            return ManaAtom.GREEN
+        elif switch == 'c':
+            return ManaAtom.COLORLESS
+        return 0  # unknown means 'generic'
+
+    @staticmethod
+    def _fromNameString(s):
+        if s is None:
+            return 0
+        if len(s) == 2:  # if name is two characters, check for combination of two colors
+            return (ManaAtom.fromName(s[0]) | ManaAtom.fromName(s[1])) & 0xFF
+        elif len(s) == 1:
+            return ManaAtom.fromName(s[0])
+        s = s.lower()
+
+        if s == MagicColor.Constant.WHITE:
+            return ManaAtom.WHITE
+        elif s == MagicColor.Constant.BLUE:
+            return ManaAtom.BLUE
+        elif s == MagicColor.Constant.BLACK:
+            return ManaAtom.BLACK
+        elif s == MagicColor.Constant.RED:
+            return ManaAtom.RED
+        elif s == MagicColor.Constant.GREEN:
+            return ManaAtom.GREEN
+        elif s == MagicColor.Constant.COLORLESS:
+            return ManaAtom.COLORLESS
+        return 0  # generic
+
+    @staticmethod
+    def fromConversion(s):
+        if s == "AnyColor":
+            return ManaAtom.ALL_MANA_COLORS
+        elif s == "AnyType":
+            return ManaAtom.ALL_MANA_TYPES
+        if s.startswith("non"):
+            return (ManaAtom.fromName(s[3:]) ^ ManaAtom.ALL_MANA_TYPES) & 0xFF
+        b = 0
+        if len(s) > 2:
+            # check for color word
+            b = ManaAtom.fromName(s)
+        if b == 0:
+            for c in s:
+                b |= ManaAtom.fromName(c)
+        return b
+
+    @staticmethod
+    def getIndexOfFirstManaType(color):
+        for i in range(len(ManaAtom.MANATYPES)):
+            if (color & ManaAtom.MANATYPES[i]) != 0:
+                return i
+        return -1  # somehow the mana is not colored or colorless?
+
+    @staticmethod
+    def getIndexFromName(s):
+        return ManaAtom.getIndexOfFirstManaType(ManaAtom.fromName(s))
 ```

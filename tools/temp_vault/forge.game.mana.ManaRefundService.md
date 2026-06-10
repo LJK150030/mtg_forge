@@ -37,6 +37,12 @@ classDiagram
 - [[forge.game.player.PlayerCollection|PlayerCollection]]
 - [[forge.game.spellability.SpellAbility|SpellAbility]]
 
+## Design Description
+
+ManaRefundService encapsulates the logic for reversing mana payment when a spell or ability's cost needs to be refunded, taking a single SpellAbility through its constructor and exposing one operation, refundManaPaid(). It returns spent Mana to each contributing Player's mana pool, clears the SpellAbility's paying mana, and undoes the paying mana-abilities in reverse (most-recent-first) order, recursively constructing a new ManaRefundService for each to unwind nested payments and clearing their undo stacks.
+
+As a lightweight, stateless service object scoped to one SpellAbility, it collaborates with Mana, Player, and PlayerCollection to track affected payers, then fires a GameEventZone battlefield update so cards tapped for mana are redrawn as untapped. The recursive design and reverse-order traversal reflect deliberate intent to correctly unwind chained mana abilities, though an inline comment flags an unresolved edge case around abilities owned by a different player.
+
 ## Source
 `forge-game/src/main/java/forge/game/mana/ManaRefundService.java`
 
@@ -98,4 +104,56 @@ public class ManaRefundService {
         }
     }
 }
+```
+
+## Python
+`forge/game/mana/ManaRefundService.py`
+
+```python
+package forge.game.mana
+
+from forge.game.event.EventValueChangeType import EventValueChangeType
+from forge.game.event.GameEventZone import GameEventZone
+from forge.game.player.Player import Player
+from forge.game.player.PlayerCollection import PlayerCollection
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+
+
+class ManaRefundService:
+
+    def __init__(self, sa: SpellAbility):
+        self.sa = sa
+
+    def refundManaPaid(self) -> None:
+        payers = PlayerCollection(self.sa.getActivatingPlayer())
+
+        # move non-undoable paying mana back to floating
+        for mana in self.sa.getPayingMana():
+            pl = mana.getPlayer()
+            pl.getManaPool().addMana(mana)
+            payers.add(pl)
+
+        self.sa.getPayingMana().clear()
+
+        payingAbilities = self.sa.getPayingManaAbilities()
+
+        # start with the most recent
+        payingAbilities.reverse()
+
+        for am in payingAbilities:
+            # What if am is owned by a different player?
+            am.undo()
+
+        for am in payingAbilities:
+            # Recursively refund abilities that were used.
+            refundService = ManaRefundService(am)
+            refundService.refundManaPaid()
+            self.sa.getHostCard().getGame().getStack().clearUndoStack(am)
+
+        payingAbilities.clear()
+
+        # update battlefield of all activating players - to redraw cards used to pay mana as untapped
+        for p in payers:
+            p.getGame().fireEvent(GameEventZone(ZoneType.Battlefield, p, EventValueChangeType.ComplexUpdate, None))
 ```

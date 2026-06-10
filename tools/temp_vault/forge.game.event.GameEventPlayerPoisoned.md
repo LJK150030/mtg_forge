@@ -67,3 +67,30 @@ public record GameEventPlayerPoisoned(PlayerView receiver, PlayerView source, in
     }
 }
 ```
+
+## Python
+`forge/game/event/GameEventPlayerPoisoned.py`
+
+```python
+package forge.game.event;
+
+from forge.game.player.Player import Player
+from forge.game.player.PlayerView import PlayerView
+from forge.game.event.GameEvent import GameEvent
+from forge.game.event.IGameEventVisitor import IGameEventVisitor
+
+
+class GameEventPlayerPoisoned(GameEvent):
+    def __init__(self, receiver, source, oldValue: int, amount: int):
+        if isinstance(receiver, Player):
+            receiver = PlayerView.get(receiver)
+        if isinstance(source, Player):
+            source = PlayerView.get(source)
+        self.receiver = receiver
+        self.source = source
+        self.oldValue = oldValue
+        self.amount = amount
+
+    def visit(self, visitor: IGameEventVisitor):
+        return visitor.visit(self)
+```

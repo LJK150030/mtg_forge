@@ -37,6 +37,10 @@ classDiagram
 - [[forge.game.card.Card|Card]]
 - [[forge.game.spellability.SpellAbility|SpellAbility]]
 
+## Design Description
+
+Trigger fired when one or more permanents are destroyed. As a concrete subclass of `Trigger`, it specializes the trigger framework's template-method contract: `performTest` gates firing by matching the configured `ValidCauser` and `ValidCard` parameters against the destroyed card and its destroyer, while `setTriggeringObjects` binds the `Card` and `Causer` from the run parameters onto the resolving `SpellAbility`. It collaborates with `AbilityKey` to look up triggering data in the run-parameter map, `Card` as the trigger host, and `SpellAbility` as the ability it populates. `getImportantStackObjects` produces a localized stack summary naming the destroyed permanent and its destroyer, reflecting a design intent of data-driven, parameter-keyed trigger conditions consistent with Forge's broader trigger hierarchy.
+
 ## Source
 `forge-game/src/main/java/forge/game/trigger/TriggerDestroyed.java`
 
@@ -120,4 +124,48 @@ public class TriggerDestroyed extends Trigger {
         return sb.toString();
     }
 }
+```
+
+## Python
+`forge/game/trigger/TriggerDestroyed.py`
+
+```python
+from forge.game.trigger.Trigger import Trigger
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Localizer import Localizer
+
+
+class TriggerDestroyed(Trigger):
+    """
+    Trigger_Destroyed class.
+
+    @author Forge
+    @version $Id: TriggerDestroyed.java 17802 2012-10-31 08:05:14Z Max mtg $
+    """
+
+    def __init__(self, params: dict[str, str], host: Card, intrinsic: bool):
+        super().__init__(params, host, intrinsic)
+
+    def performTest(self, runParams: dict[AbilityKey, object]) -> bool:
+        if not self.matchesValidParam("ValidCauser", runParams.get(AbilityKey.Causer)):
+            return False
+        if not self.matchesValidParam("ValidCard", runParams.get(AbilityKey.Card)):
+            return False
+        return True
+
+    def setTriggeringObjects(self, sa: SpellAbility, runParams: dict[AbilityKey, object]) -> None:
+        sa.setTriggeringObjectsFrom(runParams, AbilityKey.Card, AbilityKey.Causer)
+
+    def getImportantStackObjects(self, sa: SpellAbility) -> str:
+        sb = []
+        sb.append(Localizer.getInstance().getMessage("lblDestroyed"))
+        sb.append(": ")
+        sb.append(str(sa.getTriggeringObject(AbilityKey.Card)))
+        sb.append(", ")
+        sb.append(Localizer.getInstance().getMessage("lblDestroyer"))
+        sb.append(": ")
+        sb.append(str(sa.getTriggeringObject(AbilityKey.Causer)))
+        return "".join(sb)
 ```

@@ -37,6 +37,12 @@ classDiagram
 - [[forge.game.card.Card|Card]]
 - [[forge.game.spellability.SpellAbility|SpellAbility]]
 
+## Design Description
+
+TriggerFightOnce is a concrete trigger that fires when a fight between two creatures occurs, specializing the abstract Trigger base class for the "fight once" event. It overrides performTest to validate the participating Fighters against the ValidCard parameter, setTriggeringObjects to bind those fighters into the spell ability's triggering context via AbilityKey.Fighters, and getImportantStackObjects to produce a localized, human-readable summary of the two combatants.
+
+Collaborating with Card, SpellAbility, and the AbilityKey enum, it follows the engine's standard trigger contract: the base class drives the matching and firing lifecycle while this subclass supplies only event-specific testing and data extraction. Its reliance on Localizer for fighter labels reflects an intent to keep player-facing stack descriptions translatable, and the focused single-event responsibility keeps each trigger type small and uniform.
+
 ## Source
 `forge-game/src/main/java/forge/game/trigger/TriggerFightOnce.java`
 
@@ -113,4 +119,50 @@ public class TriggerFightOnce extends Trigger {
         return sb.toString();
     }
 }
+```
+
+## Python
+`forge/game/trigger/TriggerFightOnce.py`
+
+```python
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Localizer import Localizer
+
+from forge.game.trigger.Trigger import Trigger
+
+
+class TriggerFightOnce(Trigger):
+    """
+    Constructor for Trigger_Fight.
+
+    :param params: a HashMap object.
+    :param host: a Card object.
+    :param intrinsic: the intrinsic
+    """
+
+    def __init__(self, params: dict[str, str], host: Card, intrinsic: bool):
+        super().__init__(params, host, intrinsic)
+
+    def performTest(self, runParams: dict[AbilityKey, object]) -> bool:
+        if not self.matchesValidParam("ValidCard", runParams.get(AbilityKey.Fighters)):
+            return False
+
+        return True
+
+    def setTriggeringObjects(self, sa: SpellAbility, runParams: dict[AbilityKey, object]) -> None:
+        sa.setTriggeringObjectsFrom(runParams, AbilityKey.Fighters)
+
+    def getImportantStackObjects(self, sa: SpellAbility) -> str:
+        sb = []
+        fighters: list[Card] = sa.getTriggeringObject(AbilityKey.Fighters)
+        sb.append(Localizer.getInstance().getMessage("lblFighter"))
+        sb.append(" 1: ")
+        sb.append(str(fighters[0]))
+        sb.append(", ")
+        sb.append(Localizer.getInstance().getMessage("lblFighter"))
+        sb.append(" 2: ")
+        sb.append(str(fighters[1]))
+        return "".join(sb)
 ```

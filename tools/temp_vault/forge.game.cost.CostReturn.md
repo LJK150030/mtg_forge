@@ -203,3 +203,93 @@ public class CostReturn extends CostPartWithList {
 
 }
 ```
+
+## Python
+`forge/game/cost/CostReturn.py`
+
+```python
+from forge.game.cost.CostPartWithList import CostPartWithList
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.card.CardLists import CardLists
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+from forge.game.cost.Cost import Cost
+from forge.game.cost.ICostVisitor import ICostVisitor
+
+
+class CostReturn(CostPartWithList):
+    """The Class CostReturn."""
+    # Return<Num/Type{/TypeDescription}>
+
+    # Serializables need a version ID.
+    serialVersionUID = 1
+
+    def __init__(self, amount: str, type: str, description: str):
+        """
+        Instantiates a new cost return.
+
+        :param amount: the amount
+        :param type: the type
+        :param description: the description
+        """
+        super().__init__(amount, type, description)
+
+    def paymentOrder(self) -> int:
+        return 10
+
+    def getMaxAmountX(self, ability: SpellAbility, payer: Player, effect: bool):
+        source = ability.getHostCard()
+
+        typeList = payer.getCardsIn(ZoneType.Battlefield)
+        typeList = CardLists.getValidCards(typeList, self.getType().split(";"), payer, source, ability)
+
+        return typeList.size()
+
+    def toString(self) -> str:
+        sb = []
+        sb.append("Return ")
+
+        i = self.convertAmount()
+        pronoun = "its"
+
+        if self.payCostFromSource():
+            sb.append(self.getType())
+        else:
+            desc = self.getDescriptiveType()
+            if i is not None:
+                sb.append(Cost.convertIntAndTypeToWords(i, desc))
+                if i > 1:
+                    pronoun = "their"
+            else:
+                sb.append(Cost.convertAmountTypeToWords(self.getAmount(), desc))
+
+            sb.append(" you control")
+        sb.append(" to ")
+        sb.append(pronoun)
+        sb.append(" owner's hand")
+        return "".join(sb)
+
+    def canPay(self, ability: SpellAbility, payer: Player, effect: bool) -> bool:
+        source = ability.getHostCard()
+        if self.payCostFromSource():
+            return source.isInPlay()
+
+        return self.getMaxAmountX(ability, payer, effect) >= self.getAbilityAmount(ability)
+
+    def doPayment(self, payer: Player, ability: SpellAbility, targetCard: Card, effect: bool) -> Card:
+        moveParams = AbilityKey.newMap()
+        AbilityKey.addCardZoneTableParams(moveParams, self.table)
+        return targetCard.getGame().getAction().moveToHand(targetCard, None, moveParams)
+
+    def getHashForLKIList(self) -> str:
+        return "Returned"
+
+    def getHashForCardList(self) -> str:
+        return "ReturnedCards"
+
+    def accept(self, visitor: ICostVisitor):
+        return visitor.visit(self)
+```

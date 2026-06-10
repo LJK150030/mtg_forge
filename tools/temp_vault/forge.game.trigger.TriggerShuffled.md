@@ -37,6 +37,12 @@ classDiagram
 - [[forge.game.card.Card|Card]]
 - [[forge.game.spellability.SpellAbility|SpellAbility]]
 
+## Design Description
+
+TriggerShuffled is a concrete trigger that fires when a library is shuffled, extending the abstract Trigger base class within Forge's event-driven triggered-ability framework. It specializes the template by implementing performTest to gate firing against the event's run parametersâ€”matching the ValidPlayer constraint and optionally requiring that the shuffle came from an effect (ShuffleFromEffect) or was caused by the shuffling player themselves (ShuffleBySelfControlled).
+
+Collaborating through AbilityKey-keyed run parameters, it extracts the shuffling Player via setTriggeringObjects to populate the resolving SpellAbility, and surfaces a localized description through getImportantStackObjects. The design follows Forge's data-driven pattern: behavioral variation is expressed via string params rather than subclassing, keeping each trigger type a thin, declarative specialization of the shared matching and triggering machinery.
+
 ## Source
 `forge-game/src/main/java/forge/game/trigger/TriggerShuffled.java`
 
@@ -128,4 +134,44 @@ public class TriggerShuffled extends Trigger {
         return sb.toString();
     }
 }
+```
+
+## Python
+`forge/game/trigger/TriggerShuffled.py`
+
+```python
+from forge.game.trigger.Trigger import Trigger
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Localizer import Localizer
+
+
+class TriggerShuffled(Trigger):
+
+    def __init__(self, params: dict[str, str], host: Card, intrinsic: bool):
+        super().__init__(params, host, intrinsic)
+
+    def performTest(self, runParams: dict[AbilityKey, object]) -> bool:
+        if not self.matchesValidParam("ValidPlayer", runParams.get(AbilityKey.Player)):
+            return False
+
+        if self.hasParam("ShuffleFromEffect"):
+            if runParams.get(AbilityKey.Source) is None:
+                return False
+        if self.hasParam("ShuffleBySelfControlled"):
+            source = runParams.get(AbilityKey.Source)
+            if not source.getActivatingPlayer().equals(runParams.get(AbilityKey.Player)):
+                return False
+        return True
+
+    def setTriggeringObjects(self, sa: SpellAbility, runParams: dict[AbilityKey, object]) -> None:
+        sa.setTriggeringObjectsFrom(runParams, AbilityKey.Player)
+
+    def getImportantStackObjects(self, sa: SpellAbility) -> str:
+        sb = []
+        sb.append(Localizer.getInstance().getMessage("lblShuffler"))
+        sb.append(": ")
+        sb.append(str(sa.getTriggeringObject(AbilityKey.Player)))
+        return "".join(sb)
 ```

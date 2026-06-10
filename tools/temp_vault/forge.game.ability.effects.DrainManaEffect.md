@@ -116,3 +116,55 @@ public class DrainManaEffect extends SpellAbilityEffect {
 
 }
 ```
+
+## Python
+`forge/game/ability/effects/DrainManaEffect.py`
+
+```python
+from typing import List, Dict
+
+from forge.game.Game import Game
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.mana.Mana import Mana
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.staticability.StaticAbilityUnspentMana import StaticAbilityUnspentMana
+from forge.game.trigger.TriggerType import TriggerType
+from forge.util.Lang import Lang
+
+
+class DrainManaEffect(SpellAbilityEffect):
+    def getStackDescription(self, sa: SpellAbility) -> str:
+        sb = []
+
+        sb.append(Lang.joinHomogenous(self.getTargetPlayers(sa)))
+
+        sb.append(" loses all unspent mana.")
+
+        return "".join(sb)
+
+    def resolve(self, sa: SpellAbility) -> None:
+        game = sa.getHostCard().getGame()
+        drained: List[Mana] = []
+        lossMap: Dict[Player, int] = {}
+
+        for p in self.getTargetPlayers(sa):
+            if not p.isInGame():
+                continue
+            cleared = p.getManaPool().clearPool(False)
+            drained.extend(cleared)
+            if StaticAbilityUnspentMana.hasManaBurn(p):
+                lost = p.loseLife(len(cleared), False, True)
+                if lost > 0:
+                    lossMap[p] = lost
+
+        if lossMap:  # Run triggers if any player actually lost life
+            runLifeLostParams = AbilityKey.mapFromPIMap(lossMap)
+            game.getTriggerHandler().runTrigger(TriggerType.LifeLostAll, runLifeLostParams, False)
+
+        if sa.hasParam("DrainMana"):
+            sa.getActivatingPlayer().getManaPool().add(drained)
+        if sa.hasParam("RememberDrainedMana"):
+            sa.getHostCard().addRemembered(len(drained))
+```

@@ -277,6 +277,12 @@ classDiagram
 - [[forge.util.ITriggerEvent|ITriggerEvent]]
 - [[forge.util.collect.FCollectionView|FCollectionView]]
 
+## Design Description
+
+PlayerController is the abstract decision-making interface through which a single player's choices are resolved during a game. It encapsulates a Player, the LobbyPlayer that owns the seat, and a GameView for read access, exposing a comprehensive set of promptsâ€”target selection, payment, combat declaration, mulligans, voting, revealing, and the dozens of effect-driven choices required by Magic's rulesâ€”that the game engine invokes whenever input is needed.
+
+As an abstract base, it defines the contract that concrete subclasses must fulfill (human-GUI and AI implementations), with `isAI`, `isGuiPlayer`, and cheat hooks like `cheatShuffle` defaulting to non-AI, non-GUI behavior. Convenience overloads delegate to the abstract core methods to keep the subclass surface minimal, while the `FullControlFlag` set and `BinaryChoiceType` enum capture optional fine-grained control modes. It collaborates broadly with SpellAbility, Card/CardCollection, Cost, Combat, and Mana types, acting as the central abstraction that decouples rules execution from how decisions are actually made.
+
 ## Source
 `forge-game/src/main/java/forge/game/player/PlayerController.java`
 
@@ -644,4 +650,598 @@ public abstract class PlayerController {
 
     public boolean isOrderedZone() { return false; }
 }
+```
+
+## Python
+`forge/game/player/PlayerController.py`
+
+```python
+from abc import ABC, abstractmethod
+from enum import Enum, auto
+from typing import TypeVar, Callable, Iterable, Collection
+
+from forge.LobbyPlayer import LobbyPlayer
+from forge.card.ColorSet import ColorSet
+from forge.card.ICardFace import ICardFace
+from forge.card.mana.ManaCost import ManaCost
+from forge.card.mana.ManaCostShard import ManaCostShard
+from forge.deck.Deck import Deck
+from forge.deck.DeckSection import DeckSection
+from forge.game.Game import Game
+from forge.game.GameEntity import GameEntity
+from forge.game.GameObject import GameObject
+from forge.game.GameOutcome.AnteResult import AnteResult
+from forge.game.GameType import GameType
+from forge.game.GameView import GameView
+from forge.game.Match import Match
+from forge.game.PlanarDice import PlanarDice
+from forge.game.ability.effects.RollDiceEffect import RollDiceEffect
+from forge.game.ability.effects.RollDiceEffect.DieRollResult import DieRollResult
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.card.CardState import CardState
+from forge.game.card.CardView import CardView
+from forge.game.card.CounterType import CounterType
+from forge.game.combat.Combat import Combat
+from forge.game.cost.Cost import Cost
+from forge.game.cost.CostDecisionMakerBase import CostDecisionMakerBase
+from forge.game.cost.CostPart import CostPart
+from forge.game.cost.CostPartMana import CostPartMana
+from forge.game.cost.CostPartWithList import CostPartWithList
+from forge.game.keyword.KeywordInterface import KeywordInterface
+from forge.game.mana.Mana import Mana
+from forge.game.mana.ManaConversionMatrix import ManaConversionMatrix
+from forge.game.mana.ManaCostBeingPaid import ManaCostBeingPaid
+from forge.game.player.DelayedReveal import DelayedReveal
+from forge.game.player.Player import Player
+from forge.game.player.PlayerActionConfirmMode import PlayerActionConfirmMode
+from forge.game.player.PlayerView import PlayerView
+from forge.game.replacement.ReplacementEffect import ReplacementEffect
+from forge.game.spellability.AbilitySub import AbilitySub
+from forge.game.spellability.OptionalCostValue import OptionalCostValue
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.spellability.SpellAbilityStackInstance import SpellAbilityStackInstance
+from forge.game.spellability.TargetChoices import TargetChoices
+from forge.game.staticability.StaticAbility import StaticAbility
+from forge.game.trigger.WrappedAbility import WrappedAbility
+from forge.game.zone.PlayerZone import PlayerZone
+from forge.game.zone.ZoneType import ZoneType
+from forge.item.PaperCard import PaperCard
+from forge.util.ITriggerEvent import ITriggerEvent
+from forge.util.collect.FCollectionView import FCollectionView
+
+T = TypeVar("T", bound=GameEntity)
+
+
+class PlayerController(ABC):
+    """
+    A prototype for player controller class
+
+    Handles phase skips for now.
+    """
+
+    class BinaryChoiceType(Enum):
+        HeadsOrTails = auto()  # coin
+        TapOrUntap = auto()
+        PlayOrDraw = auto()
+        OddsOrEvens = auto()
+        UntapOrLeaveTapped = auto()
+        LeftOrRight = auto()
+        AddOrRemove = auto()
+        IncreaseOrDecrease = auto()
+
+    class FullControlFlag(Enum):
+        ChooseCostOrder = auto()
+        ChooseCostReductionOrderAndVariableAmount = auto()
+        ChooseManaPoolShard = auto()  # select shard with special properties //TODO: UI option to enable this one
+        NoPaymentFromManaAbility = auto()
+        NoFreeCombatCostHandling = auto()
+        AllowPaymentStartWithMissingResources = auto()
+        LayerTimestampOrder = auto()  # for StaticEffect$, tokens later etc.
+
+    def __init__(self, game0: Game, p: Player, lp: LobbyPlayer):
+        self.fullControls: set = set()
+        self.gameView: GameView = game0.getView()
+        self.player: Player = p
+        self.lobbyPlayer: LobbyPlayer = lp
+
+    def isAI(self) -> bool:
+        return False
+
+    def getGame(self) -> Game:
+        return self.gameView.getGame()
+
+    def getMatch(self) -> Match:
+        return self.gameView.getMatch()
+
+    def getPlayer(self) -> Player:
+        return self.player
+
+    def getLobbyPlayer(self) -> LobbyPlayer:
+        return self.lobbyPlayer
+
+    def tempShowCards(self, cards: Iterable[Card]) -> None:
+        pass  # show cards in UI until ended
+
+    def endTempShowCards(self) -> None:
+        pass
+
+    @abstractmethod
+    def getAbilityToPlay(self, hostCard: Card, abilities: list[SpellAbility], triggerEvent: ITriggerEvent = None) -> SpellAbility:
+        ...
+
+    @abstractmethod
+    def playSpellAbilityNoStack(self, effectSA: SpellAbility, mayChoseNewTargets: bool) -> None:
+        ...
+
+    @abstractmethod
+    def orderSimultaneousSa(self, activePlayerSAs: list[SpellAbility]) -> list[SpellAbility]:
+        ...
+
+    @abstractmethod
+    def orderAndPlaySimultaneousSa(self, activePlayerSAs: list[SpellAbility]) -> None:
+        ...
+
+    @abstractmethod
+    def playTrigger(self, host: Card, wrapperAbility: WrappedAbility, isMandatory: bool) -> bool:
+        ...
+
+    @abstractmethod
+    def playSaFromPlayEffect(self, tgtSA: SpellAbility) -> bool:
+        ...
+
+    @abstractmethod
+    def sideboard(self, deck: Deck, gameType: GameType, message: str) -> list[PaperCard]:
+        ...
+
+    @abstractmethod
+    def chooseCardsYouWonToAddToDeck(self, losses: list[PaperCard]) -> list[PaperCard]:
+        ...
+
+    @abstractmethod
+    def assignCombatDamage(self, attacker: Card, blockers: CardCollectionView, remaining: CardCollectionView, damageDealt: int, defender: GameEntity, overrideOrder: bool) -> dict[Card, int]:
+        ...
+
+    @abstractmethod
+    def divideShield(self, effectSource: Card, affected: dict[GameEntity, int], shieldAmount: int) -> dict[GameEntity, int]:
+        ...
+
+    @abstractmethod
+    def specifyManaCombo(self, sa: SpellAbility, colorSet: ColorSet, manaAmount: int, different: bool) -> dict[int, int]:
+        ...
+
+    @abstractmethod
+    def choosePermanentsToSacrifice(self, sa: SpellAbility, min: int, max: int, validTargets: CardCollectionView, message: str) -> CardCollectionView:
+        ...
+
+    @abstractmethod
+    def choosePermanentsToDestroy(self, sa: SpellAbility, min: int, max: int, validTargets: CardCollectionView, message: str) -> CardCollectionView:
+        ...
+
+    @abstractmethod
+    def announceRequirements(self, ability: SpellAbility, min: int, max: int, announce: str) -> int:
+        ...
+
+    @abstractmethod
+    def chooseNewTargetsFor(self, ability: SpellAbility, filter: Callable[[GameObject], bool], optional: bool) -> TargetChoices:
+        ...
+
+    @abstractmethod
+    def chooseTargetsFor(self, currentAbility: SpellAbility) -> bool:
+        ...  # this is bad a function for it assigns targets to sa inside its body
+
+    # Specify a target of a spell (Spellskite)
+    @abstractmethod
+    def chooseTarget(self, sa: SpellAbility, allTargets: list):
+        ...
+
+    @abstractmethod
+    def helpPayForAssistSpell(self, cost: ManaCostBeingPaid, sa: SpellAbility, max: int, requested: int) -> bool:
+        ...
+
+    @abstractmethod
+    def choosePlayerToAssistPayment(self, optionList: FCollectionView, sa: SpellAbility, title: str, max: int) -> Player:
+        ...
+
+    # Q: why is there min/max and optional at once? A: This is to handle cases like 'choose 3 to 5 cards or none at all'
+    @abstractmethod
+    def chooseCardsForEffect(self, sourceList: CardCollectionView, sa: SpellAbility, title: str, min: int, max: int, isOptional: bool, params: dict) -> CardCollectionView:
+        ...
+
+    @abstractmethod
+    def chooseCardsForEffectMultiple(self, validMap: dict[str, CardCollection], sa: SpellAbility, title: str, isOptional: bool) -> CardCollection:
+        ...
+
+    @abstractmethod
+    def chooseSingleEntityForEffect(self, optionList: FCollectionView, sa: SpellAbility, title: str, delayedReveal: DelayedReveal = None, isOptional: bool = False, relatedPlayer: Player = None, params: dict = None) -> T:
+        ...
+
+    @abstractmethod
+    def chooseEntitiesForEffect(self, optionList: FCollectionView, min: int, max: int, delayedReveal: DelayedReveal, sa: SpellAbility, title: str, relatedPlayer: Player, params: dict) -> list:
+        ...
+
+    @abstractmethod
+    def chooseSpellAbilitiesForEffect(self, spells: list[SpellAbility], sa: SpellAbility, title: str, num: int, params: dict) -> list[SpellAbility]:
+        ...
+
+    @abstractmethod
+    def chooseSingleSpellForEffect(self, spells: list[SpellAbility], sa: SpellAbility, title: str, params: dict) -> SpellAbility:
+        ...
+
+    @abstractmethod
+    def confirmAction(self, sa: SpellAbility, mode: PlayerActionConfirmMode, message: str, options: list[str] = None, cardToShow: Card = None, params: dict = None) -> bool:
+        ...
+
+    @abstractmethod
+    def confirmBidAction(self, sa: SpellAbility, bidlife: PlayerActionConfirmMode, string: str, bid: int, winner: Player) -> bool:
+        ...
+
+    @abstractmethod
+    def confirmReplacementEffect(self, replacementEffect: ReplacementEffect, effectSA: SpellAbility, affected: GameEntity, question: str) -> bool:
+        ...
+
+    @abstractmethod
+    def confirmStaticApplication(self, hostCard: Card, mode: PlayerActionConfirmMode, message: str, logic: str) -> bool:
+        ...
+
+    @abstractmethod
+    def confirmTrigger(self, sa: WrappedAbility) -> bool:
+        ...
+
+    @abstractmethod
+    def exertAttackers(self, attackers: list[Card]) -> list[Card]:
+        ...
+
+    @abstractmethod
+    def enlistAttackers(self, attackers: list[Card]) -> list[Card]:
+        ...
+
+    @abstractmethod
+    def declareAttackers(self, attacker: Player, combat: Combat) -> None:
+        ...
+
+    @abstractmethod
+    def declareBlockers(self, defender: Player, combat: Combat) -> None:
+        ...
+
+    @abstractmethod
+    def orderBlockers(self, attacker: Card, blockers: CardCollection) -> CardCollection:
+        ...
+
+    def orderBlocker(self, attacker: Card, blocker: Card, oldBlockers: CardCollection) -> CardCollection:
+        """
+        Add a card to a pre-existing blocking order.
+        :param attacker: the attacking creature.
+        :param blocker: the new blocker.
+        :param oldBlockers: the creatures already blocking the attacker (in order).
+        :return: The new order of creatures blocking the attacker.
+        """
+        raise NotImplementedError
+
+    orderBlocker = abstractmethod(orderBlocker)
+
+    @abstractmethod
+    def orderAttackers(self, blocker: Card, attackers: CardCollection) -> CardCollection:
+        ...
+
+    # Shows the card to this player
+    def reveal(self, cards, zone: ZoneType = None, owner=None, messagePrefix: str = None, addMsgSuffix: bool = True) -> None:
+        if isinstance(cards, DelayedReveal):
+            delayedReveal = cards
+            for zt in delayedReveal.getZone():
+                self.reveal([c for c in delayedReveal.getCards() if c.getZone() == zt], zt, delayedReveal.getOwner(), delayedReveal.getMessagePrefix())
+            return
+        raise NotImplementedError
+
+    # Shows message to player to reveal chosen cardName, creatureType, number etc. AI must analyze API to understand what that is
+    @abstractmethod
+    def notifyOfValue(self, saSource: SpellAbility, realtedTarget: GameObject, value: str) -> None:
+        ...
+
+    @abstractmethod
+    def arrangeForScry(self, topN: CardCollection):
+        ...
+
+    @abstractmethod
+    def arrangeForSurveil(self, topN: CardCollection):
+        ...
+
+    @abstractmethod
+    def willPutCardOnTop(self, c: Card) -> bool:
+        ...
+
+    @abstractmethod
+    def orderMoveToZoneList(self, cards: CardCollectionView, destinationZone: ZoneType, source: SpellAbility) -> CardCollectionView:
+        """
+        Prompts the player to choose the order for cards being moved into a zone.
+        The cards will be returned in the order that they should be moved, one at a time,
+        to the given zone and position. Be aware that when moving cards to the top of a
+        deck, this will be the reverse of the order they will ultimately end up in.
+        """
+        ...
+
+    # p = target player, validCards - possible discards, min cards to discard.
+    # visibleToChooser - all cards the chooser is allowed to see during the choice (a superset of validCards
+    #  when an effect has revealed extra cards, e.g. Reveal/Look modes).
+    @abstractmethod
+    def chooseCardsToDiscardFrom(self, playerDiscard: Player, sa: SpellAbility, validCards: CardCollection, min: int, max: int, visibleToChooser: CardCollectionView = None) -> CardCollectionView:
+        ...
+
+    @abstractmethod
+    def chooseCardsToDiscardUnlessType(self, min: int, hand: CardCollectionView, unlessTypes: list[str], sa: SpellAbility) -> CardCollectionView:
+        ...
+
+    @abstractmethod
+    def chooseCardsToDiscardToMaximumHandSize(self, numDiscard: int) -> CardCollection:
+        ...
+
+    @abstractmethod
+    def chooseCardsToDelve(self, genericAmount: int, grave: CardCollection) -> CardCollectionView:
+        ...
+
+    @abstractmethod
+    def chooseCardsForConvokeOrImprovise(self, sa: SpellAbility, manaCost: ManaCost, untappedCards: CardCollectionView, artifacts: bool, creatures: bool, maxReduction: int) -> dict[Card, ManaCostShard]:
+        ...
+
+    @abstractmethod
+    def chooseCardsForSplice(self, sa: SpellAbility, cards: list[Card]) -> list[Card]:
+        ...
+
+    @abstractmethod
+    def chooseCardsToRevealFromHand(self, min: int, max: int, valid: CardCollectionView) -> CardCollectionView:
+        ...
+
+    @abstractmethod
+    def chooseSaToActivateFromOpeningHand(self, usableFromOpeningHand: list[SpellAbility]) -> list[SpellAbility]:
+        ...
+
+    @abstractmethod
+    def chooseStartingPlayer(self, isFirstGame: bool) -> Player:
+        ...
+
+    @abstractmethod
+    def chooseStartingHand(self, zones: list[PlayerZone]) -> PlayerZone:
+        ...
+
+    @abstractmethod
+    def chooseManaFromPool(self, manaChoices: list[Mana]) -> Mana:
+        ...
+
+    @abstractmethod
+    def chooseSomeType(self, kindOfType: str, sa: SpellAbility, validTypes: Collection[str], isOptional: bool = False) -> str:
+        ...
+
+    @abstractmethod
+    def chooseSector(self, assignee: Card, ai: str, sectors: list[str] = ["Alpha", "Beta", "Gamma"]) -> str:
+        ...
+
+    @abstractmethod
+    def chooseContraptionsToCrank(self, contraptions: list[Card]) -> list[Card]:
+        ...
+
+    @abstractmethod
+    def chooseSprocket(self, assignee: Card, sprockets: list[int] = [1, 2, 3]) -> int:
+        ...
+
+    @abstractmethod
+    def choosePDRollToIgnore(self, rolls: list[PlanarDice]) -> PlanarDice:
+        ...
+
+    @abstractmethod
+    def chooseRollToIgnore(self, rolls: list[int]) -> int:
+        ...
+
+    @abstractmethod
+    def chooseDiceToReroll(self, rolls: list[int]) -> list[int]:
+        ...
+
+    @abstractmethod
+    def chooseRollToModify(self, rolls: list[int]) -> int:
+        ...
+
+    @abstractmethod
+    def chooseRollToSwap(self, rolls: list[DieRollResult]) -> DieRollResult:
+        ...
+
+    @abstractmethod
+    def chooseRollSwapValue(self, swapChoices: list[str], currentResult: int, power: int, toughness: int) -> str:
+        ...
+
+    @abstractmethod
+    def vote(self, sa: SpellAbility, prompt: str, options: list, votes, forPlayer: Player, optional: bool) -> object:
+        ...
+
+    @abstractmethod
+    def mulliganKeepHand(self, player: Player, cardsToReturn: int) -> bool:
+        ...
+
+    @abstractmethod
+    def tuckCardsViaMulligan(self, hand: CardCollectionView, cardsToReturn: int) -> CardCollectionView:
+        ...
+
+    @abstractmethod
+    def chooseSpellAbilityToPlay(self) -> list[SpellAbility]:
+        ...
+
+    @abstractmethod
+    def playChosenSpellAbility(self, sa: SpellAbility) -> bool:
+        ...
+
+    @abstractmethod
+    def chooseModeForAbility(self, sa: SpellAbility, possible: list[AbilitySub], min: int, num: int, allowRepeat: bool) -> list[AbilitySub]:
+        ...
+
+    @abstractmethod
+    def chooseNumberForCostReduction(self, sa: SpellAbility, min: int, max: int) -> int:
+        ...
+
+    @abstractmethod
+    def chooseNumberForKeywordCost(self, sa: SpellAbility, cost: Cost, keyword: KeywordInterface, prompt: str, max: int) -> int:
+        ...
+
+    def addKeywordCost(self, sa: SpellAbility, cost: Cost, keyword: KeywordInterface, prompt: str) -> bool:
+        return self.chooseNumberForKeywordCost(sa, cost, keyword, prompt, 1) == 1
+
+    @abstractmethod
+    def chooseNumber(self, sa: SpellAbility, title: str, min: int = None, max: int = None, values: list[int] = None, relatedPlayer: Player = None, params: dict = None) -> int:
+        ...
+
+    @abstractmethod
+    def chooseBinary(self, sa: SpellAbility, question: str, kindOfChoice: "PlayerController.BinaryChoiceType", defaultChoice: bool = None, params: dict = None) -> bool:
+        ...
+
+    @abstractmethod
+    def chooseFlipResult(self, sa: SpellAbility, flipper: Player, call: bool) -> bool:
+        ...
+
+    @abstractmethod
+    def chooseColor(self, message: str, sa: SpellAbility, colors: ColorSet) -> int:
+        ...
+
+    @abstractmethod
+    def chooseColorAllowColorless(self, message: str, c: Card, colors: ColorSet) -> int:
+        ...
+
+    @abstractmethod
+    def chooseColors(self, message: str, sa: SpellAbility, min: int, max: int, options: ColorSet) -> ColorSet:
+        ...
+
+    @abstractmethod
+    def chooseSingleCardFace(self, sa: SpellAbility, message: str = None, cpp: Callable[[ICardFace], bool] = None, name: str = None, faces: list[ICardFace] = None) -> ICardFace:
+        ...
+
+    @abstractmethod
+    def chooseSingleCardState(self, sa: SpellAbility, states: list[CardState], message: str, params: dict) -> CardState:
+        ...
+
+    @abstractmethod
+    def chooseCardsPile(self, sa: SpellAbility, pile1: CardCollectionView, pile2: CardCollectionView, faceUp: str) -> bool:
+        ...
+
+    @abstractmethod
+    def chooseCounterType(self, options: list[CounterType], sa: SpellAbility, prompt: str, params: dict) -> CounterType:
+        ...
+
+    @abstractmethod
+    def chooseKeywordForPump(self, options: list[str], sa: SpellAbility, prompt: str, tgtCard: Card) -> str:
+        ...
+
+    @abstractmethod
+    def confirmPayment(self, costPart: CostPart, string: str, sa: SpellAbility) -> bool:
+        ...
+
+    @abstractmethod
+    def chooseSingleReplacementEffect(self, possibleReplacers: list[ReplacementEffect]) -> ReplacementEffect:
+        ...
+
+    @abstractmethod
+    def chooseSingleStaticAbility(self, possibleReplacers: list[StaticAbility]) -> StaticAbility:
+        ...
+
+    @abstractmethod
+    def chooseProtectionType(self, sa: SpellAbility, choices: list[str]) -> str:
+        ...
+
+    @abstractmethod
+    def revealAnte(self, message: str, removedAnteCards) -> None:
+        ...
+
+    @abstractmethod
+    def revealAISkipCards(self, message: str, deckCards: dict) -> None:
+        ...
+
+    @abstractmethod
+    def revealUnsupported(self, unsupported: dict) -> None:
+        ...
+
+    # These 2 are for AI
+    def cheatShuffle(self, list: CardCollectionView) -> CardCollectionView:
+        return list
+
+    def complainCardsCantPlayWell(self, myDeck: Deck) -> dict:
+        return None
+
+    def resetAtEndOfTurn(self) -> None:
+        # currently used by the AI to perform card memory cleanup
+        pass
+
+    @abstractmethod
+    def chooseOptionalCosts(self, choosen: SpellAbility, optionalCostValues: list[OptionalCostValue]) -> list[OptionalCostValue]:
+        ...
+
+    @abstractmethod
+    def orderCosts(self, costs: list[CostPart]) -> list[CostPart]:
+        ...
+
+    @abstractmethod
+    def payCostToPreventEffect(self, cost: Cost, sa: SpellAbility, alreadyPaid: bool, allPayers: FCollectionView) -> bool:
+        ...
+
+    @abstractmethod
+    def payCostDuringRoll(self, cost: Cost, sa: SpellAbility) -> bool:
+        ...
+
+    @abstractmethod
+    def payCombatCost(self, card: Card, cost: Cost, sa: SpellAbility, prompt: str) -> bool:
+        ...
+
+    @abstractmethod
+    def payManaCost(self, costPartMana: CostPartMana, sa: SpellAbility, prompt: str, matrix: ManaConversionMatrix, effect: bool, toPay: ManaCost = None) -> bool:
+        ...
+
+    @abstractmethod
+    def applyManaToCost(self, toPay: ManaCostBeingPaid, ability: SpellAbility, prompt: str, matrix: ManaConversionMatrix, effect: bool) -> bool:
+        ...
+
+    @abstractmethod
+    def chooseCardsForCost(self, optionList: CardCollectionView, sa: SpellAbility, cpl: CostPartWithList, amount: int, isOptional: bool, prompt: str) -> CardCollectionView:
+        ...
+
+    @abstractmethod
+    def getCostDecisionMaker(self, player: Player, ability: SpellAbility, effect: bool, prompt: str = None) -> CostDecisionMakerBase:
+        ...
+
+    @abstractmethod
+    def chooseCardName(self, sa: SpellAbility, cpp: Callable[[ICardFace], bool] = None, valid: str = None, message: str = None, faces: list[ICardFace] = None) -> str:
+        ...
+
+    # better to have this odd method than those if playerType comparison in ChangeZone
+    @abstractmethod
+    def chooseSingleCardForZoneChange(self, destination: ZoneType, origin: list[ZoneType], sa: SpellAbility, fetchList: CardCollection, delayedReveal: DelayedReveal, selectPrompt: str, isOptional: bool, decider: Player) -> Card:
+        ...
+
+    @abstractmethod
+    def chooseCardsForZoneChange(self, destination: ZoneType, origin: list[ZoneType], sa: SpellAbility, fetchList: CardCollection, min: int, max: int, delayedReveal: DelayedReveal, selectPrompt: str, decider: Player) -> list[Card]:
+        ...
+
+    def getFullControl(self) -> set:
+        return self.fullControls
+
+    def isFullControl(self, f: "PlayerController.FullControlFlag") -> bool:
+        return f in self.fullControls
+
+    @abstractmethod
+    def autoPassCancel(self) -> None:
+        ...
+
+    @abstractmethod
+    def awaitNextInput(self) -> None:
+        ...
+
+    @abstractmethod
+    def cancelAwaitNextInput(self) -> None:
+        ...
+
+    def isGuiPlayer(self) -> bool:
+        return False
+
+    def canPlayUnlimitedLands(self) -> bool:
+        return False
+
+    def getAnteResult(self) -> AnteResult:
+        return self.gameView.getAnteResult(self.player.getView())
+
+    def isOrderedZone(self) -> bool:
+        return False
 ```

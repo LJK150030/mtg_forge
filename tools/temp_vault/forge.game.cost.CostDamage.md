@@ -143,3 +143,53 @@ public class CostDamage extends CostPart {
     }
 }
 ```
+
+## Python
+`forge/game/cost/CostDamage.py`
+
+```python
+from forge.game.GameEntityCounterTable import GameEntityCounterTable
+from forge.game.card.Card import Card
+from forge.game.card.CardDamageMap import CardDamageMap
+from forge.game.cost.CostPart import CostPart
+from forge.game.cost.ICostVisitor import ICostVisitor
+from forge.game.cost.PaymentDecision import PaymentDecision
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+
+
+class CostDamage(CostPart):
+    """The Class CostDamage."""
+
+    serialVersionUID = 1
+
+    def __init__(self, amount: str):
+        self.setAmount(amount)
+
+    def paymentOrder(self) -> int:
+        return 8
+
+    def toString(self) -> str:
+        sb = []
+        sb.append("Deal ")
+        sb.append(self.getAmount())
+        sb.append(" damage to you")
+        return "".join(str(x) for x in sb)
+
+    def canPay(self, ability: SpellAbility, payer: Player, effect: bool) -> bool:
+        return True
+
+    def payAsDecided(self, payer: Player, decision: PaymentDecision, sa: SpellAbility, effect: bool) -> bool:
+        source = sa.getHostCard()
+        damageMap = CardDamageMap()
+        preventMap = CardDamageMap()
+        table = GameEntityCounterTable()
+
+        damageMap.put(source, payer, decision.c)
+        source.getGame().getAction().dealDamage(False, damageMap, preventMap, table, sa)
+
+        return decision.c > 0
+
+    def accept(self, visitor: ICostVisitor):
+        return visitor.visit(self)
+```

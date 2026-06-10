@@ -26,6 +26,10 @@ classDiagram
     }
 ```
 
+## Design Description
+
+MyRandom is a static utility wrapper that centralizes pseudo-random number generation for the Forge engine, defaulting to a cryptographically strong `SecureRandom` held in a single shared static field. It exposes convenience operations atop the underlying `java.util.Random`: `percentTrue` for probability-weighted boolean rolls, and `splitIntoRandomGroups` for distributing a count across buckets by repeated sampling. As a standalone class with no supertype, it collaborates only with the JDK's `Random`/`SecureRandom`, which it accesses exclusively through static methods so all callers draw from one consistent source. The mutable `setRandom` accessor is the key design intent: it lets tests or simulations inject a deterministic, seeded `Random`, making otherwise random game behavior reproducible.
+
 ## Source
 `forge-core/src/main/java/forge/util/MyRandom.java`
 
@@ -105,4 +109,37 @@ public class MyRandom {
         return groups;
     }
 }
+```
+
+## Python
+`forge/util/MyRandom.py`
+
+```python
+from forge.util.MyRandom import MyRandom
+import secrets
+
+
+class MyRandom:
+    random = secrets.SystemRandom()
+
+    @staticmethod
+    def percentTrue(percent: int) -> bool:
+        return percent > MyRandom.getRandom().randrange(100)
+
+    @staticmethod
+    def getRandom():
+        return MyRandom.random
+
+    @staticmethod
+    def setRandom(random) -> None:
+        MyRandom.random = random
+
+    @staticmethod
+    def splitIntoRandomGroups(value: int, numGroups: int) -> list[int]:
+        groups = [0] * numGroups
+
+        for i in range(value):
+            groups[MyRandom.random.randrange(numGroups)] += 1
+
+        return groups
 ```

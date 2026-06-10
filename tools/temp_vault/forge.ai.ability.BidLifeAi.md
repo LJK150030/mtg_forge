@@ -44,7 +44,7 @@ classDiagram
 
 BidLifeAi provides the AI's decision logic for spell abilities keyed to the "BidLife" API, extending the abstract `SpellAbilityAi` base and overriding `checkApiLogic` to decide whether the computer player should activate the ability. It reads the ability's `TargetRestrictions` to pick a legal target: when creatures are targetable it selects the best creature controlled by the preferred defending opponent (via `AiAttackController` and `ComputerUtilCard`); when the stack is targetable it targets the top spell only if it is counterable and owned by another player.
 
-The method returns an `AiAbilityDecision` pairing a score with an `AiPlayDecision`—zero on targeting or play failure, 100/`WillPlay` otherwise. As a small, stateless handler, it embodies Forge's API-keyed AI dispatch pattern, delegating to shared game-state and card-evaluation utilities rather than holding state itself.
+The method returns an `AiAbilityDecision` pairing a score with an `AiPlayDecision`â€”zero on targeting or play failure, 100/`WillPlay` otherwise. As a small, stateless handler, it embodies Forge's API-keyed AI dispatch pattern, delegating to shared game-state and card-evaluation utilities rather than holding state itself.
 
 ## Source
 `forge-ai/src/main/java/forge/ai/ability/BidLifeAi.java`
@@ -107,4 +107,53 @@ public class BidLifeAi extends SpellAbilityAi {
     }
 
 }
+```
+
+## Python
+`forge/ai/ability/BidLifeAi.py`
+
+```python
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiAttackController import AiAttackController
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.ai.ComputerUtilCard import ComputerUtilCard
+from forge.ai.SpellAbilityAi import SpellAbilityAi
+from forge.game.Game import Game
+from forge.game.card.Card import Card
+from forge.game.card.CardLists import CardLists
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.spellability.TargetRestrictions import TargetRestrictions
+from forge.game.zone.ZoneType import ZoneType
+
+
+class BidLifeAi(SpellAbilityAi):
+
+    def checkApiLogic(self, aiPlayer: Player, sa: SpellAbility) -> AiAbilityDecision:
+        source = sa.getHostCard()
+        game = source.getGame()
+        tgt = sa.getTargetRestrictions()
+        if tgt is not None:
+            sa.resetTargets()
+            if tgt.canTgtCreature():
+                list = CardLists.getTargetableCards(AiAttackController.choosePreferredDefenderPlayer(aiPlayer).getCardsIn(ZoneType.Battlefield), sa)
+                if len(list) == 0:
+                    return AiAbilityDecision(0, AiPlayDecision.TargetingFailed)
+                c = ComputerUtilCard.getBestCreatureAI(list)
+                if sa.canTarget(c):
+                    sa.getTargets().add(c)
+                else:
+                    return AiAbilityDecision(0, AiPlayDecision.TargetingFailed)
+            elif ZoneType.Stack in tgt.getZone():
+                if game.getStack().isEmpty():
+                    return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+                topSA = game.getStack().peekAbility()
+                if not topSA.isCounterableBy(sa) or aiPlayer.equals(topSA.getActivatingPlayer()):
+                    return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+                if sa.canTargetSpellAbility(topSA):
+                    sa.getTargets().add(topSA)
+                else:
+                    return AiAbilityDecision(0, AiPlayDecision.TargetingFailed)
+
+        return AiAbilityDecision(100, AiPlayDecision.WillPlay)
 ```

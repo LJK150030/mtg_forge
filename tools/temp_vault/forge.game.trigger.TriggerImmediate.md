@@ -37,6 +37,12 @@ classDiagram
 - [[forge.game.card.Card|Card]]
 - [[forge.game.spellability.SpellAbility|SpellAbility]]
 
+## Design Description
+
+TriggerImmediate is a concrete trigger type in Forge's triggered-ability subsystem, extending the abstract Trigger base class to model an event that fires immediately as part of resolving a spell or ability. It overrides the three abstract hooks Trigger requires: performTest gates whether the trigger should fire, setTriggeringObjects supplies contextual data for the resolving SpellAbility (here a no-op, since this trigger carries no triggering objects), and getImportantStackObjects returns an empty descriptor.
+
+Its only conditional logic lives in performTest, which suppresses the trigger when the optional "AfterReplacement" parameter is set and the game's ReplacementHandler is currently mid-replacement, preventing the immediate trigger from firing during replacement-effect processing. The class collaborates with AbilityKey-keyed run-parameter maps, the host Card, and SpellAbility, reflecting the standard data-passing contract shared across all Trigger subclasses.
+
 ## Source
 `forge-game/src/main/java/forge/game/trigger/TriggerImmediate.java`
 
@@ -94,4 +100,37 @@ public class TriggerImmediate extends Trigger {
         return "";
     }
 }
+```
+
+## Python
+`forge/game/trigger/TriggerImmediate.py`
+
+```python
+from typing import Map
+
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.trigger.Trigger import Trigger
+
+
+class TriggerImmediate(Trigger):
+
+    def __init__(self, params: dict[str, str], host: Card, intrinsic: bool):
+        super().__init__(params, host, intrinsic)
+
+    # {@inheritDoc}
+    # @param runParams
+    def performTest(self, runParams: dict[AbilityKey, object]) -> bool:
+        if self.hasParam("AfterReplacement") and self.hostCard.getGame().getReplacementHandler().isReplacing():
+            return False
+
+        return True
+
+    # {@inheritDoc}
+    def setTriggeringObjects(self, sa: SpellAbility, runParams: dict[AbilityKey, object]) -> None:
+        pass
+
+    def getImportantStackObjects(self, sa: SpellAbility) -> str:
+        return ""
 ```

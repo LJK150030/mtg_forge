@@ -37,6 +37,12 @@ classDiagram
 - [[forge.game.card.Card|Card]]
 - [[forge.game.spellability.SpellAbility|SpellAbility]]
 
+## Design Description
+
+Adapt is a triggered ability that fires when a permanent enters or undergoes the adapt mechanic. TriggerAdapt is a concrete trigger that fires in response to a creature adapting, watching for the relevant card event and matching it against the trigger's validity criteria.
+
+As a subclass of `Trigger`, it specializes the framework's three extension points: `performTest` gates firing by checking the triggering `Card` against the `ValidCard` parameter; `setTriggeringObjects` exposes that card to the resolving `SpellAbility` via the `AbilityKey.Card` key; and `getImportantStackObjects` produces a localized stack description. It collaborates with `AbilityKey` for keyed run-parameter lookup and `Card` as the triggering object, while delegating construction and shared trigger behavior to its superclass â€” keeping the adapt-specific logic minimal and declarative.
+
 ## Source
 `forge-game/src/main/java/forge/game/trigger/TriggerAdapt.java`
 
@@ -115,4 +121,36 @@ public class TriggerAdapt extends Trigger {
         return sb.toString();
     }
 }
+```
+
+## Python
+`forge/game/trigger/TriggerAdapt.py`
+
+```python
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Localizer import Localizer
+
+from forge.game.trigger.Trigger import Trigger
+
+
+class TriggerAdapt(Trigger):
+    def __init__(self, params: dict[str, str], host: Card, intrinsic: bool):
+        super().__init__(params, host, intrinsic)
+
+    def performTest(self, runParams: dict[AbilityKey, object]) -> bool:
+        if not self.matchesValidParam("ValidCard", runParams.get(AbilityKey.Card)):
+            return False
+        return True
+
+    def setTriggeringObjects(self, sa: SpellAbility, runParams: dict[AbilityKey, object]) -> None:
+        sa.setTriggeringObjectsFrom(runParams, AbilityKey.Card)
+
+    def getImportantStackObjects(self, sa: SpellAbility) -> str:
+        sb = []
+        sb.append(Localizer.getInstance().getMessage("lblAdapt"))
+        sb.append(": ")
+        sb.append(str(sa.getTriggeringObject(AbilityKey.Card)))
+        return "".join(sb)
 ```

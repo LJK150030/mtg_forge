@@ -56,7 +56,7 @@ classDiagram
 
 ## Design Description
 
-`CostRemoveCounter` models a payment cost that is satisfied by removing counters from one or more cards, implemented as a concrete subclass of the abstract `CostPart` cost hierarchy. It captures the `CounterType` to remove (null meaning any counter), the eligible source `ZoneType`s, and an `oneOrMore` flag, while delegating shared amount/type/description handling to its supertype. Its core responsibility is determining feasibility and capacity—`canPay` and `getMaxAmountX` inspect a `SpellAbility`'s host card or valid target cards via `CardLists`, accounting for "All"/"X" amounts, phased-out permanents, and counter totals—then `payAsDecided` applies a `PaymentDecision`'s counter table to the affected `GameEntity` objects and records the total removed in an SVar.
+`CostRemoveCounter` models a payment cost that is satisfied by removing counters from one or more cards, implemented as a concrete subclass of the abstract `CostPart` cost hierarchy. It captures the `CounterType` to remove (null meaning any counter), the eligible source `ZoneType`s, and an `oneOrMore` flag, while delegating shared amount/type/description handling to its supertype. Its core responsibility is determining feasibility and capacityâ€”`canPay` and `getMaxAmountX` inspect a `SpellAbility`'s host card or valid target cards via `CardLists`, accounting for "All"/"X" amounts, phased-out permanents, and counter totalsâ€”then `payAsDecided` applies a `PaymentDecision`'s counter table to the affected `GameEntity` objects and records the total removed in an SVar.
 
 The class collaborates with `Card`, `Player`, and `GameEntity` to query and mutate game state, and produces human-readable rules text in `toString` (special-casing loyalty as planeswalker-style "-N"). Its `accept` method participates in a visitor pattern over `ICostVisitor`, keeping cost-type-specific dispatch external to the cost hierarchy.
 
@@ -267,4 +267,136 @@ public class CostRemoveCounter extends CostPart {
     }
 
 }
+```
+
+## Python
+`forge/game/cost/CostRemoveCounter.py`
+
+```python
+from forge.game.cost.CostPart import CostPart
+from forge.game.GameEntity import GameEntity
+from forge.game.card.Card import Card
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CounterEnumType import CounterEnumType
+from forge.game.card.CounterType import CounterType
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+from forge.game.cost.ICostVisitor import ICostVisitor
+from forge.game.cost.PaymentDecision import PaymentDecision
+from forge.util.Lang import Lang
+
+from typing import List, Optional, TypeVar
+
+T = TypeVar("T")
+
+
+class CostRemoveCounter(CostPart):
+    """The Class CostRemoveCounter."""
+    # SubCounter<Num/Counter/{Type/TypeDescription/Zone}>
+
+    serialVersionUID = 1
+
+    def __init__(self, amount: str, counter: CounterType, type: str, description: str, zone: List[ZoneType], oneOrMore: bool):
+        super().__init__(amount, type, description)
+
+        self.counter = counter
+        self.zone = zone
+        self.oneOrMore = oneOrMore
+
+    def paymentOrder(self) -> int:
+        return 8
+
+    def getMaxAmountX(self, ability: SpellAbility, payer: Player, effect: bool) -> Optional[int]:
+        cntrs = self.counter
+        source = ability.getHostCard()
+        type = self.getType()
+        anyCounters = cntrs is None
+
+        if self.payCostFromSource():
+            return source.getNumAllCounters() if anyCounters else source.getCounters(cntrs)
+
+        if type == "OriginalHost":
+            typeList = [ability.getOriginalHost()]
+        else:
+            typeList = CardLists.getValidCards(payer.getCardsIn(self.zone), type.split(";"), payer, source, ability)
+
+        # Single Target
+        maxcount = 0
+        for c in typeList:
+            maxcount = max(maxcount, c.getNumAllCounters()) if anyCounters else max(maxcount, c.getCounters(cntrs))
+        return maxcount
+
+    def toString(self) -> str:
+        sb = []
+        anyCounter = self.counter is None
+        ctrName = "counters" if anyCounter else self.counter.getName().lower() + " counters"
+        if self.counter is not None and self.counter.is_(CounterEnumType.LOYALTY) and self.payCostFromSource():
+            sb.append("-")
+            sb.append(self.getAmount())
+        else:
+            sb.append("Remove ")
+            if self.getAmount() == "X":
+                if self.oneOrMore:
+                    sb.append("one or more ")
+                elif anyCounter:
+                    sb.append("X ")
+                else:
+                    sb.append("any number of ")
+                sb.append(ctrName)
+            elif self.getAmount() == "All":
+                sb.append("all ")
+                sb.append(ctrName)
+            else:
+                sb.append(Lang.nounWithNumeralExceptOne(self.getAmount(),
+                        "counter" if anyCounter else self.counter.getName().lower() + " counter"))
+
+            sb.append(" from ")
+
+            if self.payCostFromSource():
+                sb.append(self.getType())
+            else:
+                desc = self.getType() if self.getTypeDescription() is None else self.getTypeDescription()
+                sb.append(desc)
+        return "".join(sb)
+
+    def canPay(self, ability: SpellAbility, payer: Player, effect: bool) -> bool:
+        cntrs = self.counter
+        source = ability.getHostCard()
+        type = self.getType()
+        anyCounters = cntrs is None
+
+        if self.getAmount() == "All":
+            amount = source.getNumAllCounters() if anyCounters else source.getCounters(cntrs)
+        else:
+            amount = self.getAbilityAmount(ability)
+        if self.payCostFromSource():
+            return not source.isPhasedOut() and ((source.getNumAllCounters() if anyCounters else source.getCounters(cntrs)) - amount) >= 0
+
+        if type == "OriginalHost":
+            typeList = [ability.getOriginalHost()]
+        else:
+            typeList = CardLists.getValidCards(payer.getCardsIn(self.zone), type.split(";"), payer, source, ability)
+
+        # (default logic) remove X counters from a single permanent
+        for c in typeList:
+            if ((c.getNumAllCounters() if anyCounters else c.getCounters(cntrs)) - amount) >= 0:
+                return True
+
+        return False
+
+    def payAsDecided(self, ai: Player, decision: PaymentDecision, ability: SpellAbility, effect: bool) -> bool:
+        removed = 0
+        for entity, counterMap in decision.counterTable.row(Optional.empty()).items():
+            for counterType, value in counterMap.items():
+                removed += value
+                entity.subtractCounter(counterType, value, ai)
+            if isinstance(entity, Card):
+                entity.getGame().updateLastStateForCard(entity)
+
+        ability.setSVar("CostCountersRemoved", str(removed))
+        return True
+
+    def accept(self, visitor: ICostVisitor) -> T:
+        return visitor.visit(self)
 ```

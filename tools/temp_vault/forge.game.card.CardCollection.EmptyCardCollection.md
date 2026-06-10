@@ -41,7 +41,7 @@ An unmodifiable, empty implementation of `CardCollection` used as a shared, immu
 The design intent is deliberate restriction: the class is declared `private final static` with a single private no-argument constructor, ensuring it cannot be subclassed, instantiated externally, or mutated. This makes it suitable as a reusable singleton-style placeholder returned in place of `null`, avoiding allocation of empty collections and eliminating null checks on the consuming side.
 
 ## Source
-`forge-game/src/main/java/forge/game/card/CardCollection.java` â€” declaration excerpt
+`forge-game/src/main/java/forge/game/card/CardCollection.java` Ã¢â‚¬â€ declaration excerpt
 
 ```java
     /**
@@ -54,4 +54,20 @@ The design intent is deliberate restriction: the class is declared `private fina
             super();
         }
     }
+```
+
+## Python
+`forge/game/card/CardCollection/EmptyCardCollection.py`
+
+```python
+from forge.util.collect.FCollection.EmptyFCollection import EmptyFCollection
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.card.Card import Card
+
+
+class EmptyCardCollection(EmptyFCollection, CardCollectionView):
+    serialVersionUID = -3218771134502034727
+
+    def __init__(self):
+        super().__init__()
 ```

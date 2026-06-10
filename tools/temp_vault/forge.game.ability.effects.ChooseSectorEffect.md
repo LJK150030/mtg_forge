@@ -58,3 +58,20 @@ public class ChooseSectorEffect extends SpellAbilityEffect {
     }
 }
 ```
+
+## Python
+`forge/game/ability/effects/ChooseSectorEffect.py`
+
+```python
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.spellability.SpellAbility import SpellAbility
+
+
+class ChooseSectorEffect(SpellAbilityEffect):
+
+    def resolve(self, sa: SpellAbility) -> None:
+        card = sa.getHostCard()
+        chosen = card.getController().getController().chooseSector(None, sa.getParamOrDefault("AILogic", ""))
+        card.setChosenSector(chosen)
+```

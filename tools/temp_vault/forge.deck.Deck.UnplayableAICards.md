@@ -42,7 +42,7 @@ Forge's `UnplayableAICards` is a static nested helper of `Deck` that captures, a
 Iterating each `DeckSection`'s `CardPool`, it collects every `PaperCard` whose rules carry the `remAIDecks` AI hint into the immutable `unplayable` map, and separately records the Main-deck count in `inMainDeck`. The design favors a simple, read-only data carrier: final fields populated once at construction, exposing aggregate counts and per-section lists so callers can warn players that a deck may be unsuitable for AI opponents.
 
 ## Source
-`forge-core/src/main/java/forge/deck/Deck.java` â€” declaration excerpt
+`forge-core/src/main/java/forge/deck/Deck.java` Ã¢â‚¬â€ declaration excerpt
 
 ```java
     public static final class UnplayableAICards {
@@ -68,4 +68,30 @@ Iterating each `DeckSection`'s `CardPool`, it collects every `PaperCard` whose r
             inMainDeck = mainDeck;
         }
     }
+```
+
+## Python
+`forge/deck/Deck/UnplayableAICards.py`
+
+```python
+from forge.deck.CardPool import CardPool
+from forge.deck.Deck import Deck
+from forge.deck.DeckSection import DeckSection
+from forge.item.PaperCard import PaperCard
+
+
+class UnplayableAICards:
+    def __init__(self, myDeck: Deck):
+        self.unplayable: dict[DeckSection, list[PaperCard]] = {}
+        mainDeck = 0
+        for ds in myDeck:
+            result: list[PaperCard] = []
+            for cp in ds.getValue():
+                if cp.getKey().getRules().getAiHints().getRemAIDecks():
+                    result.append(cp.getKey())
+            if ds.getKey() == DeckSection.Main:
+                mainDeck = len(result)
+            if result:
+                self.unplayable[ds.getKey()] = result
+        self.inMainDeck: int = mainDeck
 ```

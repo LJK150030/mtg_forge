@@ -151,3 +151,85 @@ public class ChooseColorEffect extends SpellAbilityEffect {
     }
 }
 ```
+
+## Python
+`forge/game/ability/effects/ChooseColorEffect.py`
+
+```python
+from forge.card.ColorSet import ColorSet
+from forge.card.MagicColor import MagicColor
+from forge.card.MagicColor.Color import Color
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.card.CardUtil import CardUtil
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Aggregates import Aggregates
+from forge.util.Lang import Lang
+from forge.util.Localizer import Localizer
+
+
+class ChooseColorEffect(SpellAbilityEffect):
+
+    def getStackDescription(self, sa: SpellAbility) -> str:
+        sb = []
+
+        sb.append(Lang.joinHomogenous(self.getTargetPlayers(sa)))
+
+        sb.append(" chooses a color")
+        if sa.hasParam("OrColors"):
+            sb.append(" or colors")
+        sb.append(".")
+
+        return "".join(sb)
+
+    def resolve(self, sa: SpellAbility) -> None:
+        card = sa.getHostCard()
+
+        colorChoices = list(MagicColor.Constant.ONLY_COLORS)
+        if sa.hasParam("Choices"):
+            restrictedChoices = sa.getParam("Choices").split(",")
+            colorChoices = list(restrictedChoices)
+        if sa.hasParam("ColorsFrom"):
+            cs = CardUtil.getColorsFromCards(AbilityUtils.getDefinedCards(card, sa.getParam("ColorsFrom"), sa))
+            if cs.isColorless():
+                return
+            colorChoices = [str(c) for c in cs.stream()]
+        if sa.hasParam("Exclude"):
+            for s in sa.getParam("Exclude").split(","):
+                if s in colorChoices:
+                    colorChoices.remove(s)
+
+        for p in self.getTargetPlayers(sa):
+            if not p.isInGame():
+                p = self.getNewChooser(sa, p)
+
+            cntMin = 0 if sa.hasParam("UpTo") else 2 if sa.hasParam("TwoColors") else 1
+            cntMax = 2 if sa.hasParam("TwoColors") else len(colorChoices) if sa.hasParam("OrColors") else 1
+            prompt = None
+            if cntMax == 1:
+                prompt = Localizer.getInstance().getMessage("lblChooseAColor")
+            elif cntMax > cntMin:
+                if cntMax >= MagicColor.NUMBER_OR_COLORS:
+                    prompt = Localizer.getInstance().getMessage("lblAtLastChooseNumColors", Lang.getNumeral(cntMin))
+                else:
+                    prompt = Localizer.getInstance().getMessage("lblChooseSpecifiedRangeColors", Lang.getNumeral(cntMin), Lang.getNumeral(cntMax))
+            else:
+                prompt = Localizer.getInstance().getMessage("lblChooseNColors", Lang.getNumeral(cntMax))
+            chosenColors = ColorSet.C
+            noNotify = p
+            if sa.hasParam("Random"):
+                for i in range(cntMin):
+                    choice = Aggregates.random(colorChoices)
+                    colorChoices.remove(choice)
+                    chosenColors = ColorSet.combine(chosenColors, ColorSet.fromNames(choice))
+                noNotify = None
+            else:
+                chosenColors = p.getController().chooseColors(prompt, sa, cntMin, cntMax, ColorSet.fromNames(colorChoices))
+            if chosenColors.isColorless():
+                return
+            card.setChosenColors([Color.getName(c) for c in chosenColors.stream()])
+            desc = Lang.joinHomogenous([Color.getTranslatedName(c) for c in chosenColors.stream()])
+            p.getGame().getAction().notifyOfValue(sa, p, desc, noNotify)
+```

@@ -53,3 +53,23 @@ public record AiAbilityDecision(int rating, AiPlayDecision decision) {
     }
 }
 ```
+
+## Python
+`forge/ai/AiAbilityDecision.py`
+
+```python
+from dataclasses import dataclass
+
+from forge.ai.AiPlayDecision import AiPlayDecision
+
+
+@dataclass(frozen=True)
+class AiAbilityDecision:
+    rating: int
+    decision: AiPlayDecision
+
+    MIN_RATING = 30
+
+    def willingToPlay(self) -> bool:
+        return self.rating > AiAbilityDecision.MIN_RATING and self.decision.willingToPlay()
+```

@@ -185,6 +185,12 @@ classDiagram
 - [[forge.game.phase.PhaseType|PhaseType]]
 - [[forge.game.zone.ZoneType|ZoneType]]
 
+## Design Description
+
+SpellAbilityVariables is a plain mutable data holder that captures the activation and condition restrictions governing when a SpellAbility may be cast or activated. It stores casting constraints â€” legal zone, permitted phases, instant/sorcery speed, whose turn it is, per-turn and per-game usage limits â€” alongside conditional-state flags for ability words and mechanics (threshold, metalcraft, delirium, hellbent, revolt, desert, blessing), SVar comparison operands/operators, presence checks, mana-spent conditions, and optional-cost markers (kicked, bargain, foretold). Exposed almost entirely through getters and setters, each field carries a sensible default (Battlefield zone, "GE1" comparisons, sorcery speed) intended to be overridden by AbilityFactory during parsing.
+
+It collaborates with the enums it references â€” ZoneType, PhaseType, and GameType â€” to type its restriction values, and implements Cloneable so copy() can produce a shallow duplicate, letting each ability instance hold an independent set of variables.
+
 ## Source
 `forge-game/src/main/java/forge/game/spellability/SpellAbilityVariables.java`
 
@@ -1015,4 +1021,448 @@ public class SpellAbilityVariables implements Cloneable {
         classLevelOperator = op;
     }
 }
+```
+
+## Python
+`forge/game/spellability/SpellAbilityVariables.py`
+
+```python
+from forge.game.GameType import GameType
+from forge.game.phase.PhaseType import PhaseType
+from forge.game.zone.ZoneType import ZoneType
+
+import copy
+
+
+class SpellAbilityVariables:
+    # A class for handling SpellAbility Variables. These restrictions include:
+    # Zone, Phase, OwnTurn, Speed (instant/sorcery), Amount per Turn, Player,
+    # Threshold, Metalcraft, Hellbent, LevelRange, etc
+    # Each value will have a default, that can be overridden (mostly by
+    # AbilityFactory)
+
+    def __init__(self):
+        # default values for Sorcery speed abilities
+        # The zone.
+        self.zone = ZoneType.Battlefield
+
+        # The phases.
+        self.phases = set()
+
+        self.firstCombatOnly = False
+
+        self.afterBlockersOnly = False
+
+        # The GameTypes
+        self.gameTypes = set()
+
+        # The b sorcery speed.
+        self.sorcerySpeed = False
+
+        # The b instant speed.
+        self.instantSpeed = False
+
+        # The b any player.
+        self.activator = "You"
+
+        # The b opponent turn.
+        self.opponentTurn = False
+
+        # The b player turn.
+        self.playerTurn = False
+
+        # The limitToCheck to check.
+        self.limitToCheck = None
+
+        # The gameLimitToCheck to check.
+        self.gameLimitToCheck = None
+
+        # Conditional States for Cards
+        self.threshold = False
+        self.metalcraft = False
+        self.delirium = False
+        self.hellbent = False
+        self.revolt = False
+        self.desert = False
+        self.blessing = False
+        self.solved = False
+
+        # The s is present.
+        self.isPresent = None
+        self.isPresent2 = None
+
+        # The present compare.
+        self.presentCompare = "GE1"  # Default: greater than or equal to 1
+        self.presentCompare2 = "GE1"
+
+        # The present defined.
+        self.presentDefined = None
+        self.presentDefined2 = None
+
+        # The player defined.
+        self.playerDefined = None
+
+        # The player contains.
+        self.playerContains = None
+
+        # The present zone.
+        self.presentZone = ZoneType.Battlefield
+
+        # The svar to check.
+        self.sVarToCheck = None
+        self.sVarToCheck2 = None
+
+        # The svar operator.
+        self.sVarOperator = "GE"
+        self.sVarOperator2 = "GE"
+
+        # The svar operand.
+        self.sVarOperand = "1"
+        self.sVarOperand2 = "1"
+
+        # The life total.
+        self.lifeTotal = None
+
+        # The life amount.
+        self.lifeAmount = "GE1"
+
+        # The shareAllColors.
+        self.noDifferentColors = None
+
+        # The mana spent.
+        self.manaSpent = ""
+        self.manaNotSpent = ""
+
+        # The chosen colors string.
+        self.chosenColors = None
+
+        # The target valid targeting
+        self.targetValidTargeting = None
+
+        # The b targetsSingleTargeting
+        self.targetsSingleTarget = False
+
+        # The class level.
+        self.classLevel = None
+        self.classLevelOperator = "EQ"
+
+        # Optional Costs
+        self.kicked = False
+        self.kicked1 = False  # http://magiccards.info/query?q=o%3A%22kicker%22+not+o%3A%22multikicker%22+o%3A%22and%2For+{%22
+        self.kicked2 = False  # Some spells have 2 kickers with different effects
+        self.altCostPaid = False
+        self.optionalCostPaid = False  # Undergrowth other Pseudo-kickers
+        self.optionalBoolean = True  # Just in case you need to check if something wasn't kicked, etc
+        self.surgeCostPaid = False
+        self.bargain = False
+        self.foretold = False
+
+    def setManaSpent(self, s: str) -> None:
+        self.manaSpent = s
+
+    def getManaSpent(self) -> str:
+        return self.manaSpent
+
+    def setManaNotSpent(self, s: str) -> None:
+        self.manaNotSpent = s
+
+    def getManaNotSpent(self) -> str:
+        return self.manaNotSpent
+
+    def setZone(self, zone: ZoneType) -> None:
+        self.zone = zone
+
+    def getZone(self) -> ZoneType:
+        return self.zone
+
+    def setSorcerySpeed(self, bSpeed: bool) -> None:
+        self.sorcerySpeed = bSpeed
+
+    def isSorcerySpeed(self) -> bool:
+        return self.sorcerySpeed
+
+    def setInstantSpeed(self, bSpeed: bool) -> None:
+        self.instantSpeed = bSpeed
+
+    def isInstantSpeed(self) -> bool:
+        return self.instantSpeed
+
+    def setActivator(self, player: str) -> None:
+        self.activator = player
+
+    def getActivator(self) -> str:
+        return self.activator
+
+    def setPlayerTurn(self, bTurn: bool) -> None:
+        self.playerTurn = bTurn
+
+    def getPlayerTurn(self) -> bool:
+        return self.isPlayerTurn()
+
+    def setOpponentTurn(self, bTurn: bool) -> None:
+        self.opponentTurn = bTurn
+
+    def getOpponentTurn(self) -> bool:
+        return self.isOpponentTurn()
+
+    def setPhases(self, phases: set) -> None:
+        self.phases.update(phases)
+
+    def getGameTypes(self) -> set:
+        return self.gameTypes
+
+    def setGameTypes(self, gameTypes: set) -> None:
+        self.gameTypes.clear()
+        self.gameTypes.update(gameTypes)
+
+    def setHellbent(self, bHellbent: bool) -> None:
+        self.hellbent = bHellbent
+
+    def setThreshold(self, bThreshold: bool) -> None:
+        self.threshold = bThreshold
+
+    def setMetalcraft(self, bMetalcraft: bool) -> None:
+        self.metalcraft = bMetalcraft
+
+    def setDelirium(self, delirium: bool) -> None:
+        self.delirium = delirium
+
+    def setRevolt(self, bRevolt: bool) -> None:
+        self.revolt = bRevolt
+
+    def setDesert(self, bDesert: bool) -> None:
+        self.desert = bDesert
+
+    def setBlessing(self, bBlessing: bool) -> None:
+        self.blessing = bBlessing
+
+    def setSolved(self, bSolved: bool) -> None:
+        self.solved = bSolved
+
+    # IsPresent for Valid battlefield stuff
+
+    def setIsPresent(self, present: str) -> None:
+        self.isPresent = present
+
+    def setIsPresent2(self, present: str) -> None:
+        self.isPresent2 = present
+
+    def setPresentCompare(self, compare: str) -> None:
+        self.presentCompare = compare
+
+    def setPresentCompare2(self, compare: str) -> None:
+        self.presentCompare2 = compare
+
+    def getPresentZone(self) -> ZoneType:
+        return self.presentZone
+
+    def setPresentZone(self, presentZone: ZoneType) -> None:
+        self.presentZone = presentZone
+
+    def setPresentDefined(self, defined: str) -> None:
+        self.presentDefined = defined
+
+    def setPresentDefined2(self, defined: str) -> None:
+        self.presentDefined2 = defined
+
+    # Checking the values of SVars (Mostly for Traps)
+    def setSvarToCheck(self, sVar: str) -> None:
+        self.setsVarToCheck(sVar)
+
+    def setSvarToCheck2(self, sVar: str) -> None:
+        self.setsVarToCheck2(sVar)
+
+    def setSvarOperator(self, operator: str) -> None:
+        self.setsVarOperator(operator)
+
+    def setSvarOperand(self, operand: str) -> None:
+        self.setsVarOperand(operand)
+
+    # for second possible SVar condition
+    def setSvarOperator2(self, operator: str) -> None:
+        self.setsVarOperator2(operator)
+
+    def setSvarOperand2(self, operand: str) -> None:
+        self.setsVarOperand2(operand)
+
+    def setLimitToCheck(self, limit: str) -> None:
+        self.limitToCheck = limit
+
+    def setGameLimitToCheck(self, limit: str) -> None:
+        self.gameLimitToCheck = limit
+
+    def getLimitToCheck(self) -> str:
+        return self.limitToCheck
+
+    def getGameLimitToCheck(self) -> str:
+        return self.gameLimitToCheck
+
+    def isThreshold(self) -> bool:
+        return self.threshold
+
+    def isMetalcraft(self) -> bool:
+        return self.metalcraft
+
+    def isDelirium(self) -> bool:
+        return self.delirium
+
+    def isHellbent(self) -> bool:
+        return self.hellbent
+
+    def isRevolt(self) -> bool:
+        return self.revolt
+
+    def isDesert(self) -> bool:
+        return self.desert
+
+    def isBlessing(self) -> bool:
+        return self.blessing
+
+    def isSolved(self) -> bool:
+        return self.solved
+
+    def getNoDifferentColors(self) -> str:
+        return self.noDifferentColors
+
+    def setNoDifferentColors(self, noDifferentColors: str) -> None:
+        self.noDifferentColors = noDifferentColors
+
+    def isPlayerTurn(self) -> bool:
+        return self.playerTurn
+
+    def getPresentCompare(self) -> str:
+        return self.presentCompare
+
+    def getPresentCompare2(self) -> str:
+        return self.presentCompare2
+
+    def getLifeTotal(self) -> str:
+        return self.lifeTotal
+
+    def setLifeTotal(self, lifeTotal0: str) -> None:
+        self.lifeTotal = lifeTotal0
+
+    def getLifeAmount(self) -> str:
+        return self.lifeAmount
+
+    def setLifeAmount(self, lifeAmount0: str) -> None:
+        self.lifeAmount = lifeAmount0
+
+    def getPhases(self) -> set:
+        return self.phases
+
+    def getFirstCombatOnly(self) -> bool:
+        return self.firstCombatOnly
+
+    def setFirstCombatOnly(self, first: bool) -> bool:
+        self.firstCombatOnly = first
+        return self.firstCombatOnly
+
+    def getAfterBlockersOnly(self) -> bool:
+        return self.afterBlockersOnly
+
+    def setAfterBlockersOnly(self, first: bool) -> bool:
+        self.afterBlockersOnly = first
+        return self.afterBlockersOnly
+
+    def getPresentDefined(self) -> str:
+        return self.presentDefined
+
+    def getPresentDefined2(self) -> str:
+        return self.presentDefined2
+
+    def setPlayerDefined(self, b: str) -> None:
+        self.playerDefined = b
+
+    def getPlayerDefined(self) -> str:
+        return self.playerDefined
+
+    def getPlayerContains(self) -> str:
+        return self.playerContains
+
+    def setPlayerContains(self, contains: str) -> None:
+        self.playerContains = contains
+
+    def getsVarOperand(self) -> str:
+        return self.sVarOperand
+
+    def getsVarOperand2(self) -> str:
+        return self.sVarOperand2
+
+    def setsVarOperand(self, sVarOperand0: str) -> None:
+        self.sVarOperand = sVarOperand0
+
+    def setsVarOperand2(self, sVarOperand0: str) -> None:
+        self.sVarOperand2 = sVarOperand0
+
+    def getsVarToCheck(self) -> str:
+        return self.sVarToCheck
+
+    def getsVarToCheck2(self) -> str:
+        return self.sVarToCheck2
+
+    def setsVarToCheck(self, sVarToCheck: str) -> None:
+        self.sVarToCheck = sVarToCheck
+
+    def setsVarToCheck2(self, sVarToCheck: str) -> None:
+        self.sVarToCheck2 = sVarToCheck
+
+    def getsVarOperator(self) -> str:
+        return self.sVarOperator
+
+    def getsVarOperator2(self) -> str:
+        return self.sVarOperator2
+
+    def setsVarOperator(self, sVarOperator0: str) -> None:
+        self.sVarOperator = sVarOperator0
+
+    def setsVarOperator2(self, sVarOperator0: str) -> None:
+        self.sVarOperator2 = sVarOperator0
+
+    def isOpponentTurn(self) -> bool:
+        return self.opponentTurn
+
+    def getIsPresent(self) -> str:
+        return self.isPresent
+
+    def getIsPresent2(self) -> str:
+        return self.isPresent2
+
+    def setColorToCheck(self, s: str) -> None:
+        self.chosenColors = s
+
+    def getColorToCheck(self) -> str:
+        return self.chosenColors
+
+    def getTargetValidTargeting(self) -> str:
+        return self.targetValidTargeting
+
+    def setTargetValidTargeting(self, targetValidTargeting: str) -> None:
+        self.targetValidTargeting = targetValidTargeting
+
+    def targetsSingleTarget(self) -> bool:
+        return self.targetsSingleTarget
+
+    def setTargetsSingleTarget(self, b: bool) -> None:
+        self.targetsSingleTarget = b
+
+    def copy(self) -> "SpellAbilityVariables":
+        try:
+            return copy.copy(self)
+        except Exception as e:
+            import sys
+            print(e, file=sys.stderr)
+        return None
+
+    def getClassLevel(self) -> str:
+        return self.classLevel
+
+    def setClassLevel(self, level: str) -> None:
+        self.classLevel = level
+
+    def getClassLevelOperator(self) -> str:
+        return self.classLevelOperator
+
+    def setClassLevelOperator(self, op: str) -> None:
+        self.classLevelOperator = op
 ```

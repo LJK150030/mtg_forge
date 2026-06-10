@@ -32,7 +32,7 @@ classDiagram
 
 ## Design Description
 
-Permanent enchantments and other noncreature permanents resolve through this class, which extends `PermanentEffect` to provide the shared resolution machinery for putting a permanent onto the battlefield. Its sole specialization is overriding `getStackDescription`, which renders the spell's stack entry simply as the translated name of the card being cast—relying on `SpellAbility.getCardState()` to obtain the relevant face and `CardTranslation` to localize it. The design intent is minimalism: because a noncreature permanent's stack representation needs nothing beyond its name (unlike effects that describe targets or modes), the class delegates all real work to its supertype and contributes only this lightweight display override.
+Permanent enchantments and other noncreature permanents resolve through this class, which extends `PermanentEffect` to provide the shared resolution machinery for putting a permanent onto the battlefield. Its sole specialization is overriding `getStackDescription`, which renders the spell's stack entry simply as the translated name of the card being castâ€”relying on `SpellAbility.getCardState()` to obtain the relevant face and `CardTranslation` to localize it. The design intent is minimalism: because a noncreature permanent's stack representation needs nothing beyond its name (unlike effects that describe targets or modes), the class delegates all real work to its supertype and contributes only this lightweight display override.
 
 ## Source
 `forge-game/src/main/java/forge/game/ability/effects/PermanentNoncreatureEffect.java`
@@ -55,4 +55,21 @@ public class PermanentNoncreatureEffect extends PermanentEffect {
         return CardTranslation.getTranslatedName(sa.getCardState().getName());
     }
 }
+```
+
+## Python
+`forge/game/ability/effects/PermanentNoncreatureEffect.py`
+
+```python
+from forge.game.ability.effects.PermanentEffect import PermanentEffect
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.CardTranslation import CardTranslation
+
+
+# TODO: Write javadoc for this type.
+class PermanentNoncreatureEffect(PermanentEffect):
+
+    def getStackDescription(self, sa: SpellAbility) -> str:
+        # CardView toString return translated name,don't need call CardTranslation.getTranslatedName in this.
+        return CardTranslation.getTranslatedName(sa.getCardState().getName())
 ```

@@ -40,7 +40,7 @@ The Scarab God is a specialized AI helper, implemented as a static nested class 
 The class collaborates with `Player`, `SpellAbility`, and `Card` to select a target, preferring the best creature in an opponent's graveyard and falling back to the AI's own weakest graveyard creature. It mutates the supplied `SpellAbility`'s targets directly, returning a high-confidence `WillPlay` decision when a target is secured or a `TargetingFailed` decision otherwise. The stateless, method-only design reflects its role as a pluggable, card-specific override within Forge's broader AI decision framework.
 
 ## Source
-`forge-ai/src/main/java/forge/ai/SpecialCardAi.java` â€” declaration excerpt
+`forge-ai/src/main/java/forge/ai/SpecialCardAi.java` Ã¢â‚¬â€ declaration excerpt
 
 ```java
     // The Scarab God
@@ -65,4 +65,39 @@ The class collaborates with `Player`, `SpellAbility`, and `Card` to select a tar
             }
         }
     }
+```
+
+## Python
+`forge/ai/SpecialCardAi/TheScarabGod.py`
+
+```python
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.ai.ComputerUtilCard import ComputerUtilCard
+from forge.game.card.Card import Card
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CardPredicates import CardPredicates
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+
+
+class TheScarabGod:
+    @staticmethod
+    def consider(ai: Player, sa: SpellAbility) -> AiAbilityDecision:
+        bestOppCreat = ComputerUtilCard.getBestAI(CardLists.filter(ai.getOpponents().getCardsIn(ZoneType.Graveyard), CardPredicates.CREATURES))
+        worstOwnCreat = ComputerUtilCard.getWorstAI(CardLists.filter(ai.getCardsIn(ZoneType.Graveyard), CardPredicates.CREATURES))
+
+        sa.resetTargets()
+        if bestOppCreat is not None:
+            sa.getTargets().add(bestOppCreat)
+        elif worstOwnCreat is not None:
+            sa.getTargets().add(worstOwnCreat)
+
+        if not sa.getTargets().isEmpty():
+            # If we have a target, we can play this ability
+            return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+        else:
+            # No valid targets, can't play this ability
+            return AiAbilityDecision(0, AiPlayDecision.TargetingFailed)
 ```

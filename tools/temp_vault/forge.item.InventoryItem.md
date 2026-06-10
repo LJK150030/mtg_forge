@@ -32,6 +32,12 @@ classDiagram
 **Extends:**
 - [[forge.util.ITranslatable|ITranslatable]]
 
+## Design Description
+
+Inventory items embody anything a player's collection can holdâ€”printed cards, boosters, pets, plants, and the likeâ€”exposing a uniform contract for type identification (`getItemType`), image lookup (`getImageKey`), and display naming. As an interface extending `ITranslatable`, it folds inventory items into Forge's localization framework, supplying a default `getUntranslatedType` that delegates to `getItemType` so every item is translatable without extra boilerplate.
+
+The design favors default methods to keep implementers lightweight: `getDisplayName` falls back to the inherited `getName`, while `hasFlavorName` returns false, letting most items behave conventionally and reserving overrides for special cases like cards bearing flavor names. This separation of display name from actual name cleanly accommodates MTG-specific presentation needs without burdening the common case.
+
 ## Source
 `forge-core/src/main/java/forge/item/InventoryItem.java`
 
@@ -85,4 +91,28 @@ public interface InventoryItem extends ITranslatable {
         return getItemType();
     }
 }
+```
+
+## Python
+`forge/item/InventoryItem.py`
+
+```python
+from forge.util.ITranslatable import ITranslatable
+
+
+class InventoryItem(ITranslatable):
+    def getItemType(self) -> str:
+        ...
+
+    def getImageKey(self, altState: bool) -> str:
+        ...
+
+    def getDisplayName(self) -> str:
+        return self.getName()
+
+    def hasFlavorName(self) -> bool:
+        return False
+
+    def getUntranslatedType(self) -> str:
+        return self.getItemType()
 ```

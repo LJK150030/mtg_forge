@@ -29,10 +29,10 @@ classDiagram
 
 ProgressObserver is a callback interface nested within `CardStorageReader` that decouples the card-loading process from any UI or logging that needs to track its progress. It defines two operations: `setOperationName`, which labels the current task and indicates whether progress should be shown as percentages, and `report`, which communicates the current and total item counts as loading proceeds.
 
-The interface follows the Null Object pattern through its static `emptyObserver` field — a no-op implementation that callers can substitute when no real observer is supplied, sparing `CardStorageReader` from repeated null checks. By depending only on this abstraction rather than a concrete reporter, the reader stays in the core module and lets higher-level layers provide whatever progress display they choose.
+The interface follows the Null Object pattern through its static `emptyObserver` field â€” a no-op implementation that callers can substitute when no real observer is supplied, sparing `CardStorageReader` from repeated null checks. By depending only on this abstraction rather than a concrete reporter, the reader stays in the core module and lets higher-level layers provide whatever progress display they choose.
 
 ## Source
-`forge-core/src/main/java/forge/CardStorageReader.java` â€” declaration excerpt
+`forge-core/src/main/java/forge/CardStorageReader.java` Ã¢â‚¬â€ declaration excerpt
 
 ```java
     public interface ProgressObserver{
@@ -45,4 +45,31 @@ The interface follows the Null Object pattern through its static `emptyObserver`
             @Override public void report(final int current, final int total) {}
         };
     }
+```
+
+## Python
+`forge/CardStorageReader/ProgressObserver.py`
+
+```python
+from forge.CardStorageReader import CardStorageReader
+
+
+class ProgressObserver:
+    def setOperationName(self, name: str, usePercents: bool) -> None:
+        ...
+
+    def report(self, current: int, total: int) -> None:
+        ...
+
+
+class _EmptyProgressObserver(ProgressObserver):
+    # does nothing, used when they pass null instead of an instance
+    def setOperationName(self, name: str, usePercents: bool) -> None:
+        pass
+
+    def report(self, current: int, total: int) -> None:
+        pass
+
+
+ProgressObserver.emptyObserver = _EmptyProgressObserver()
 ```

@@ -29,6 +29,12 @@ classDiagram
     }
 ```
 
+## Design Description
+
+BuildInfo is a stateless utility class in `forge.util` that exposes the running application's version and build metadata. As a final-style helper with a private constructor and only static members, it is never instantiated; instead it answers queries about the current releaseâ€”reporting the version string (falling back to "GIT" when unknown), flagging development or snapshot builds, and constructing the HTTP User-Agent header.
+
+It also derives the build timestamp by lazily reading and parsing a bundled `/build.txt` classpath resource, caching the result in a static field. Collaborating with `StringUtils` for version checks and `DateUtil` for elapsed-time math, its `verifyTimestamp` method compares the build time against an update timestamp to decideâ€”using a 23-hour thresholdâ€”whether an update should be permitted, making it the central source of truth for version-gated update logic.
+
 ## Source
 `forge-core/src/main/java/forge/util/BuildInfo.java`
 
@@ -130,4 +136,92 @@ public class BuildInfo {
         return resultStringBuilder.toString();
     }
 }
+```
+
+## Python
+`forge/util/BuildInfo.py`
+
+```python
+from forge.util.DateUtil import DateUtil
+from org.apache.commons.lang3.StringUtils import StringUtils
+
+import io
+import traceback
+from datetime import datetime
+
+
+class BuildInfo:
+    """
+    Provides access to information about the current version and build ID.
+    """
+
+    timestamp = None
+
+    # disable instantiation
+    def __init__(self):
+        raise RuntimeError("BuildInfo is not instantiable")
+
+    @staticmethod
+    def getVersionString() -> str:
+        """
+        Get the current version of Forge.
+
+        :return: a String representing the version specifier, or "GIT" if unknown.
+        """
+        version = BuildInfo.__class__.getPackage().getImplementationVersion()
+        if StringUtils.isEmpty(version):
+            return "GIT"
+        return version
+
+    @staticmethod
+    def isDevelopmentVersion() -> bool:
+        forgeVersion = BuildInfo.getVersionString()
+        return StringUtils.containsIgnoreCase(forgeVersion, "git") or \
+            StringUtils.containsIgnoreCase(forgeVersion, "snapshot")
+
+    @staticmethod
+    def getTimestamp() -> datetime:
+        if BuildInfo.timestamp is not None:
+            return BuildInfo.timestamp
+        try:
+            inputStream = BuildInfo._getResourceAsStream("/build.txt")
+            data = BuildInfo.readFromInputStream(inputStream)
+            BuildInfo.timestamp = datetime.strptime(data.strip(), "%Y-%m-%d %H:%M:%S")
+        except Exception:
+            traceback.print_exc()
+        return BuildInfo.timestamp
+
+    @staticmethod
+    def verifyTimestamp(updateTimestamp: datetime) -> bool:
+        if updateTimestamp is None:
+            return False
+        if BuildInfo.getTimestamp() is None:
+            return False
+        # System.err.println("Update Timestamp: " + updateTimestamp + "\nBuild Timestamp: " + getTimestamp());
+        # if morethan 23 hours the difference, then allow to update.
+        return DateUtil.getElapsedHours(BuildInfo.getTimestamp(), updateTimestamp) > 23
+
+    @staticmethod
+    def getUserAgent() -> str:
+        return "Forge/" + BuildInfo.getVersionString()
+
+    @staticmethod
+    def readFromInputStream(inputStream) -> str:
+        resultStringBuilder = []
+        br = io.TextIOWrapper(inputStream)
+        try:
+            line = br.readline()
+            while line:
+                resultStringBuilder.append(line.rstrip("\n"))
+                resultStringBuilder.append("\n")
+                line = br.readline()
+        finally:
+            br.close()
+        return "".join(resultStringBuilder)
+
+    @staticmethod
+    def _getResourceAsStream(name: str):
+        import os
+        path = name[1:] if name.startswith("/") else name
+        return open(path, "rb")
 ```

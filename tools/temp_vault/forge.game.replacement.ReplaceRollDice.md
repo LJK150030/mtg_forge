@@ -36,6 +36,12 @@ classDiagram
 - [[forge.game.card.Card|Card]]
 - [[forge.game.spellability.SpellAbility|SpellAbility]]
 
+## Design Description
+
+ReplaceRollDice is a concrete replacement effect that intercepts dice-roll events in Forge's game engine, allowing card abilities to modify or substitute the outcome of a die roll before it resolves. Extending `ReplacementEffect`, it implements the standard `canReplace`/`setReplacingObjects` contract: `canReplace` gates the effect by validating the affected player and, optionally, matching a required die size via the `ValidSides` parameter, while `setReplacingObjects` exposes the roll's mutable detailsâ€”the rolled number, ignore flags, and any die power/toughness exchangesâ€”on the triggering `SpellAbility` for downstream resolution.
+
+It collaborates with `AbilityKey` as the typed key into the replacement run-parameter map, `Card` as its host, and `SpellAbility` as the carrier of replacing objects. The design keeps the class declarative and data-driven, deriving all matching behavior from string parameters rather than hard-coded logic, consistent with Forge's parameterized replacement-effect framework.
+
 ## Source
 `forge-game/src/main/java/forge/game/replacement/ReplaceRollDice.java`
 
@@ -87,4 +93,46 @@ public class ReplaceRollDice extends ReplacementEffect {
         sa.setReplacingObject(AbilityKey.DicePTExchanges, runParams.get(AbilityKey.DicePTExchanges));
     }
 }
+```
+
+## Python
+`forge/game/replacement/ReplaceRollDice.py`
+
+```python
+from forge.game.replacement.ReplacementEffect import ReplacementEffect
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.spellability.SpellAbility import SpellAbility
+
+from typing import Map
+
+
+class ReplaceRollDice(ReplacementEffect):
+
+    def __init__(self, params: dict[str, str], host: Card, intrinsic: bool):
+        """
+        Instantiates a new replace roll planar dice.
+
+        :param params: the params
+        :param host:   the host
+        """
+        super().__init__(params, host, intrinsic)
+
+    # (non-Javadoc)
+    # @see forge.card.replacement.ReplacementEffect#canReplace(java.util.HashMap)
+    def canReplace(self, runParams: dict[AbilityKey, object]) -> bool:
+        if not self.matchesValidParam("ValidPlayer", runParams.get(AbilityKey.Affected)):
+            return False
+        if self.hasParam("ValidSides"):
+            if int(runParams.get(AbilityKey.Sides)) != int(self.getParam("ValidSides")):
+                return False
+        return True
+
+    # (non-Javadoc)
+    # @see forge.card.replacement.ReplacementEffect#setReplacingObjects(java.util.Map, forge.card.spellability.SpellAbility)
+    def setReplacingObjects(self, runParams: dict[AbilityKey, object], sa: SpellAbility) -> None:
+        sa.setReplacingObject(AbilityKey.Number, runParams.get(AbilityKey.Number))
+        sa.setReplacingObject(AbilityKey.Ignore, runParams.get(AbilityKey.Ignore))
+        sa.setReplacingObject(AbilityKey.IgnoreChosen, runParams.get(AbilityKey.IgnoreChosen))
+        sa.setReplacingObject(AbilityKey.DicePTExchanges, runParams.get(AbilityKey.DicePTExchanges))
 ```

@@ -40,6 +40,12 @@ classDiagram
     }
 ```
 
+## Design Description
+
+FileSection is a `forge-core` utility that parses configuration-style text into key/value data and named sections. Its core responsibility is splitting bar-delimited lines into trimmed key/value pairs against a configurable separator (`$`, `->`, `=`, or `:`, exposed as reusable `Pattern` constants), storing them in a case-insensitive `TreeMap`, and exposing typed accessors (`getInt`, `getDouble`, `getBoolean`, `get`) with default-value fallbacks that swallow parse errors. The static `parseSections` extracts `[section]` blocks into an order-preserving `LinkedHashMap`, skipping comments.
+
+As a standalone base class with only a protected constructor, instances are created exclusively through the static `parse` factory, while `parseToMap` serves as a stateless helper. It collaborates with Guava's `Table` to cache `parseToMap` results as unmodifiable maps keyed by line and separator, reflecting design intent toward immutability and avoiding repeated parsing of frequently encountered lines.
+
 ## Source
 `forge-core/src/main/java/forge/util/FileSection.java`
 
@@ -211,4 +217,147 @@ public class FileSection {
         return "true".equalsIgnoreCase(field);
     }
 }
+```
+
+## Python
+`forge/util/FileSection.py`
+
+```python
+from __future__ import annotations
+
+import re
+from types import MappingProxyType
+from typing import Iterable, List, Map  # noqa: F401
+
+import locale
+
+
+class _CaseInsensitiveMap(dict):
+    """A dict that compares keys case-insensitively, emulating Java's
+    TreeMap(String.CASE_INSENSITIVE_ORDER)."""
+
+    @staticmethod
+    def _k(key):
+        return key.lower() if isinstance(key, str) else key
+
+    def __init__(self):
+        super().__init__()
+        self._orig = {}
+
+    def __setitem__(self, key, value):
+        super().__setitem__(self._k(key), value)
+        self._orig[self._k(key)] = key
+
+    def __getitem__(self, key):
+        return super().__getitem__(self._k(key))
+
+    def __delitem__(self, key):
+        super().__delitem__(self._k(key))
+        del self._orig[self._k(key)]
+
+    def __contains__(self, key):
+        return super().__contains__(self._k(key))
+
+    def get(self, key, default=None):
+        return super().get(self._k(key), default)
+
+    def put(self, key, value):
+        self[key] = value
+
+    def containsKey(self, key):
+        return self.__contains__(key)
+
+
+class FileSection:
+    """Parse text file to extract [sections] and key/value data.
+    Store the result in a HashMap."""
+
+    DOLLAR_SIGN_KV_SEPARATOR = re.compile(re.escape("$"))
+    ARROW_KV_SEPARATOR = re.compile(re.escape("->"))
+    EQUALS_KV_SEPARATOR = re.compile(re.escape("="))
+    COLON_KV_SEPARATOR = re.compile(re.escape(":"))
+    _BAR_PAIR_SPLITTER = re.escape("|")
+
+    _parseToMapCache: dict = {}
+
+    def __init__(self):
+        # The lines.
+        self.lines = _CaseInsensitiveMap()
+
+    @staticmethod
+    def parseToMap(line: str, kvSeparator) -> dict[str, str]:
+        cached = FileSection._parseToMapCache.get((line, kvSeparator))
+        if cached is not None:
+            return cached
+
+        result = _CaseInsensitiveMap()
+        if line:
+            for dd in re.split(FileSection._BAR_PAIR_SPLITTER, line):
+                v = kvSeparator.split(dd, 1)
+                result.put(v[0].strip(), v[1].strip() if len(v) > 1 else "")
+        cached = MappingProxyType(result)
+        FileSection._parseToMapCache[(line, kvSeparator)] = cached
+        return cached
+
+    @staticmethod
+    def parse(lines: Iterable[str], kvSeparator) -> "FileSection":
+        result = FileSection()
+        for dd in lines:
+            v = kvSeparator.split(dd, 1)
+            result.lines.put(v[0].strip(), v[1].strip() if len(v) > 1 else "")
+
+        return result
+
+    @staticmethod
+    def parseSections(lines: List[str]) -> dict[str, list[str]]:
+        result: dict[str, list[str]] = {}
+        section = None
+
+        if lines is not None and len(lines) != 0:
+            for l in lines:
+                line = l.strip()
+                if line.startswith("#"):
+                    continue
+                if line.startswith("[") and line.endswith("]"):
+                    section = line[1:len(line) - 1]
+                    if section not in result:
+                        result[section] = []
+                elif section is not None and line != "":
+                    result[section].append(line)
+
+        return result
+
+    def get(self, fieldName: str, defaultValue: str = None) -> str:
+        if defaultValue is None:
+            return self.lines.get(fieldName)
+        return self.lines.get(fieldName) if self.lines.containsKey(fieldName) else defaultValue
+
+    def contains(self, fieldName: str) -> bool:
+        return self.lines.containsKey(fieldName)
+
+    def getDouble(self, fieldName: str, defaultValue: float) -> float:
+        field = self.get(fieldName)
+        if field is None:
+            return defaultValue
+        try:
+            saved = locale.setlocale(locale.LC_NUMERIC)
+            try:
+                locale.setlocale(locale.LC_NUMERIC, "en_US")
+                return locale.atof(field)
+            finally:
+                locale.setlocale(locale.LC_NUMERIC, saved)
+        except (ValueError, locale.Error):
+            return defaultValue
+
+    def getInt(self, fieldName: str, defaultValue: int = 0) -> int:
+        try:
+            return int(self.get(fieldName))
+        except (ValueError, TypeError):
+            return defaultValue
+
+    def getBoolean(self, fieldName: str, defaultValue: bool = False) -> bool:
+        field = self.get(fieldName)
+        if field is None:
+            return defaultValue
+        return field.lower() == "true"
 ```

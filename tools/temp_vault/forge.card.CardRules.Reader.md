@@ -64,12 +64,12 @@ classDiagram
 
 ## Design Description
 
-`CardRules.Reader` is a static nested builder/parser that translates a Forge card-script file (`cardname.txt`) into an immutable `CardRules` instance. It accumulates parse state across mutable fields — up to seven `CardFace` slots (for alternate, split, meld, and specialize faces), AI deck restrictions, mana cost, colors, and deck-hint metadata — then assembles them in `getCard()`. Its central routine, `parseLine`, dispatches on each line's leading character and key to populate the appropriate face or builder field, recursing for functional variants.
+`CardRules.Reader` is a static nested builder/parser that translates a Forge card-script file (`cardname.txt`) into an immutable `CardRules` instance. It accumulates parse state across mutable fields â€” up to seven `CardFace` slots (for alternate, split, meld, and specialize faces), AI deck restrictions, mana cost, colors, and deck-hint metadata â€” then assembles them in `getCard()`. Its central routine, `parseLine`, dispatches on each line's leading character and key to populate the appropriate face or builder field, recursing for functional variants.
 
 By design it is reusable: `reset()` clears all fields so a single Reader can parse many cards without reallocating, and `readCard` drives the full reset-parse-build cycle. It collaborates with `CardFace` (per-face data), `CardAiHints` and `DeckHints` (AI/deck guidance), and value types like `ColorSet`, `ManaCost`, and `CardSplitType` to interpret script tokens, keeping all parsing logic encapsulated away from the `CardRules` it produces.
 
 ## Source
-`forge-core/src/main/java/forge/card/CardRules.java` â€” declaration excerpt
+`forge-core/src/main/java/forge/card/CardRules.java` Ã¢â‚¬â€ declaration excerpt
 
 ```java
     // Reads cardname.txt
@@ -370,4 +370,277 @@ By design it is reusable: `reset()` clears all fields so a single Reader can par
             }
         }
     }
+```
+
+## Python
+`forge/card/CardRules/Reader.py`
+
+```python
+from forge.card.CardAiHints import CardAiHints
+from forge.card.CardFace import CardFace
+from forge.card.CardRules import CardRules
+from forge.card.CardSplitType import CardSplitType
+from forge.card.ColorSet import ColorSet
+from forge.card.DeckHints import DeckHints
+from forge.card.mana.ManaCost import ManaCost
+from forge.card.CardType import CardType
+
+
+class Reader:
+    # fields to build
+    def __init__(self):
+        self.faces: list[CardFace] = [None, None, None, None, None, None, None]
+        self.curFace: int = 0
+        self.altMode: CardSplitType = CardSplitType.None_
+        self.meldWith: str = ""
+        self.partnerWith: str = ""
+        self.partnerType: str = ""
+        self.setColorID: int = 0
+        self.handLife: str = None
+        self.normalizedName: str = ""
+        self.supportedFunctionalVariants: set[str] = None
+        self.placeholderFaces: dict[int, str] = None
+
+        self.tokens: list[str] = []
+
+        # fields to build CardAiHints
+        self.removedFromAIDecks: bool = False
+        self.removedFromRandomDecks: bool = False
+        self.removedFromNonCommanderDecks: bool = False
+        self.hints: DeckHints = None
+        self.needs: DeckHints = None
+        self.has: DeckHints = None
+
+    def reset(self) -> None:
+        """Reset all fields to parse next card (to avoid allocating new CardRulesReader N times)"""
+        self.setColorID = 0
+        self.curFace = 0
+        self.faces[0] = None
+        self.faces[1] = None
+        self.faces[2] = None
+        self.faces[3] = None
+        self.faces[4] = None
+        self.faces[5] = None
+        self.faces[6] = None
+
+        self.handLife = None
+        self.altMode = CardSplitType.None_
+
+        self.removedFromAIDecks = False
+        self.removedFromRandomDecks = False
+        self.removedFromNonCommanderDecks = False
+        self.needs = None
+        self.hints = None
+        self.has = None
+        self.meldWith = ""
+        self.partnerWith = ""
+        self.partnerType = ""
+        self.normalizedName = ""
+        self.supportedFunctionalVariants = None
+        self.placeholderFaces = None
+        self.tokens = []
+
+    def getCard(self) -> CardRules:
+        """Gets the card.
+
+        :return: the card
+        """
+        cah = CardAiHints(self.removedFromAIDecks, self.removedFromRandomDecks, self.removedFromNonCommanderDecks, self.hints, self.needs, self.has)
+        if None is not self.faces[0]:
+            self.faces[0].assignMissingFields()
+        else:
+            assert self.placeholderFaces is not None
+        if None is not self.faces[1]:
+            self.faces[1].assignMissingFields()
+        if None is not self.faces[2]:
+            self.faces[2].assignMissingFields()
+        if None is not self.faces[3]:
+            self.faces[3].assignMissingFields()
+        if None is not self.faces[4]:
+            self.faces[4].assignMissingFields()
+        if None is not self.faces[5]:
+            self.faces[5].assignMissingFields()
+        if None is not self.faces[6]:
+            self.faces[6].assignMissingFields()
+        result = CardRules(self.faces, self.altMode, cah)
+
+        result.normalizedName = self.normalizedName
+        result.meldWith = self.meldWith
+        result.partnerWith = self.partnerWith
+        result.partnerType = self.partnerType
+        result.setColorID = self.setColorID
+        if self.tokens:
+            result.tokens = self.tokens
+        if self.handLife is not None and self.handLife.strip():
+            result.setVanguardProperties(self.handLife)
+        result.supportedFunctionalVariants = self.supportedFunctionalVariants
+        result.placeholderFaces = self.placeholderFaces
+        return result
+
+    def readCard(self, script, filename: str = None) -> CardRules:
+        self.reset()
+        for line in script:
+            if len(line) == 0 or line[0] == '#':
+                continue
+            self.parseLine(line, self.faces[self.curFace])
+        self.normalizedName = filename
+        return self.getCard()
+
+    def parseLine(self, line: str, face: CardFace = None) -> None:
+        """Parses a single line of a card script.
+
+        :param line: Line of text to parse.
+        """
+        if face is None:
+            face = self.faces[self.curFace]
+
+        colonPos = line.find(':')
+        key = line[0:colonPos] if colonPos > 0 else line
+        value = line[1 + colonPos:].strip() if colonPos > 0 else None
+
+        if value is not None:
+            tokIdx = value.find("TokenScript$")
+            if tokIdx > 0:
+                tokenParam = value[tokIdx + 12:].strip()
+                endIdx = tokenParam.find("|")
+                if endIdx > 0:
+                    tokenParam = tokenParam[0:endIdx].strip()
+                self.tokens.extend(tokenParam.split(","))
+
+        c = key[0]
+        if c == 'A':
+            if "A" == key:
+                face.addAbility(value)
+            elif "AI" == key:
+                colonPos = value.find(':')
+                variable = value[0:colonPos] if colonPos > 0 else value
+                value = value[1 + colonPos:] if colonPos > 0 else None
+
+                if "RemoveDeck" == variable:
+                    self.removedFromAIDecks |= (value is not None and "All".lower() == value.lower())
+                    self.removedFromRandomDecks |= (value is not None and "Random".lower() == value.lower())
+                    self.removedFromNonCommanderDecks |= (value is not None and "NonCommander".lower() == value.lower())
+            elif "AlternateMode" == key:
+                self.altMode = CardSplitType.smartValueOf(value)
+            elif "ALTERNATE" == key:
+                self.curFace = 1
+
+        elif c == 'C':
+            if "Colors" == key:
+                newCol = ColorSet.fromNames(value.split(","))
+                face.setColor(newCol)
+            elif "CopyFaceFrom" == key:
+                if self.placeholderFaces is None:
+                    self.placeholderFaces = {}
+                assert self.faces[self.curFace] is None
+                self.placeholderFaces[self.curFace] = value
+
+        elif c == 'D':
+            if "DeckHints" == key:
+                self.hints = DeckHints(value)
+            elif "DeckNeeds" == key:
+                self.needs = DeckHints(value)
+            elif "DeckHas" == key:
+                self.has = DeckHints(value)
+            elif "Defense" == key:
+                face.setDefense(value)
+            elif "Draft" == key:
+                face.addDraftAction(value)
+
+        elif c == 'F':
+            if "FlavorName" == key:
+                face.setFlavorName(value)
+            # falls through to 'H' in Java (no break)
+            if "HandLifeModifier" == key:
+                self.handLife = value
+
+        elif c == 'H':
+            if "HandLifeModifier" == key:
+                self.handLife = value
+
+        elif c == 'K':
+            if "K" == key:
+                face.addKeyword(value)
+                if value.startswith("Partner with:"):
+                    self.partnerWith = value.split(":")[1]
+                if value.startswith("Partner:"):
+                    self.partnerType = value.split(":")[1]
+
+        elif c == 'L':
+            if "Loyalty" == key:
+                face.setInitialLoyalty(value)
+            if "Lights" == key:
+                face.setAttractionLights(value)
+
+        elif c == 'M':
+            if "ManaCost" == key:
+                face.setManaCost(ManaCost.NO_COST if "no cost" == value else ManaCost(value))
+            elif "MeldPair" == key:
+                self.meldWith = value
+
+        elif c == 'N':
+            if "Name" == key:
+                assert self.placeholderFaces is None or self.curFace not in self.placeholderFaces
+                self.faces[self.curFace] = CardFace(value)
+
+        elif c == 'O':
+            if "Oracle" == key:
+                face.setOracleText(value)
+
+        elif c == 'P':
+            if "PT" == key:
+                face.setPtText(value)
+
+        elif c == 'R':
+            if "R" == key:
+                face.addReplacementEffect(value)
+
+        elif c == 'S':
+            if "S" == key:
+                face.addStaticAbility(value)
+            elif key.startswith("SPECIALIZE"):
+                if value == "WHITE":
+                    self.curFace = 2
+                elif value == "BLUE":
+                    self.curFace = 3
+                elif value == "BLACK":
+                    self.curFace = 4
+                elif value == "RED":
+                    self.curFace = 5
+                elif value == "GREEN":
+                    self.curFace = 6
+            elif "SVar" == key:
+                if value is None:
+                    raise ValueError("SVar has no variable name")
+
+                colonPos = value.find(':')
+                variable = value[0:colonPos] if colonPos > 0 else value
+                value = value[1 + colonPos:] if colonPos > 0 else None
+
+                face.addSVar(variable, value)
+            elif key.startswith("SETCOLORID"):
+                self.setColorID = int(value)
+
+        elif c == 'T':
+            if "T" == key:
+                face.addTrigger(value)
+            elif "Types" == key:
+                face.setType(CardType.parse(value, False))
+            elif "Text" == key and value is not None and value.strip():
+                face.setNonAbilityText(value)
+
+        elif c == 'V':
+            if "Variant" == key:
+                if value is None:
+                    value = ""
+                colonPos = value.find(':')
+                if colonPos <= 0:
+                    raise ValueError("Missing variant name")
+                variantName = value[0:colonPos]
+                varFace = face.getOrCreateFunctionalVariant(variantName)
+                variantLine = value[1 + colonPos:]
+                self.parseLine(variantLine, varFace)
+                if self.supportedFunctionalVariants is None:
+                    self.supportedFunctionalVariants = set()
+                self.supportedFunctionalVariants.add(variantName)
 ```

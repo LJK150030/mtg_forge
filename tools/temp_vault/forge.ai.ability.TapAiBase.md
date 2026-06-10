@@ -370,3 +370,236 @@ public abstract class TapAiBase extends SpellAbilityAi {
     }
 }
 ```
+
+## Python
+`forge/ai/ability/TapAiBase.py`
+
+```python
+from forge.ai.SpellAbilityAi import SpellAbilityAi
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.ai.ComputerUtil import ComputerUtil
+from forge.ai.ComputerUtilCard import ComputerUtilCard
+from forge.ai.ComputerUtilAbility import ComputerUtilAbility
+from forge.ai.AiAttackController import AiAttackController
+from forge.game.Game import Game
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.ability.ApiType import ApiType
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CardPredicates import CardPredicates
+from forge.game.combat.CombatUtil import CombatUtil
+from forge.game.phase.PhaseHandler import PhaseHandler
+from forge.game.phase.PhaseType import PhaseType
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+
+from typing import List
+
+
+class TapAiBase(SpellAbilityAi):
+
+    def tapTargetList(self, ai: Player, sa: SpellAbility, tapList: CardCollection, mandatory: bool) -> bool:
+        source = sa.getHostCard()
+
+        tapList.removeAll(sa.getTargets().getTargetCards())
+
+        if tapList.isEmpty():
+            return False
+
+        while sa.canAddMoreTarget():
+            choice = None
+
+            if tapList.isEmpty():
+                if not sa.isMinTargetChosen() or sa.isZeroTargets():
+                    if not mandatory:
+                        sa.resetTargets()
+                    return False
+                else:
+                    if not ComputerUtil.shouldCastLessThanMax(ai, source):
+                        return False
+                    break
+
+            choice = ComputerUtilCard.getBestAI(tapList)
+
+            if choice is None:  # can't find anything left
+                if not sa.isMinTargetChosen() or sa.isZeroTargets():
+                    if not mandatory:
+                        sa.resetTargets()
+                    return False
+                else:
+                    if not ComputerUtil.shouldCastLessThanMax(ai, source):
+                        return False
+                    break
+
+            tapList.remove(choice)
+            sa.getTargets().add(choice)
+
+        return True
+
+    def tapPrefTargeting(self, ai: Player, source: Card, sa: SpellAbility, mandatory: bool) -> bool:
+        game = ai.getGame()
+        tapList = CardLists.getTargetableCards(ai.getOpponents().getCardsIn(ZoneType.Battlefield), sa)
+        tapList = ComputerUtil.filterAITgts(sa, ai, tapList, False)
+        tapList = CardLists.filter(tapList, CardPredicates.CAN_TAP)
+        tapList = CardLists.filter(tapList, self.CREATURE_OR_TAP_ABILITY)
+
+        # use broader approach when the cost is a positive thing
+        if tapList.isEmpty() and ComputerUtil.activateForCost(sa, ai):
+            tapList = CardLists.getTargetableCards(ai.getOpponents().getCardsIn(ZoneType.Battlefield), sa)
+            tapList = CardLists.filter(tapList, self.CREATURE_OR_TAP_ABILITY)
+
+        # try to exclude things that will already be tapped due to something on stack or because something is
+        # already targeted in a parent or sub SA
+        if not sa.isTrigger() or mandatory:  # but if just confirming trigger no need to look for other targets and might still help anyway
+            toExclude = ComputerUtilAbility.getCardsTargetedWithApi(ai, tapList, sa, ApiType.Tap)
+            tapList.removeAll(toExclude)
+
+        if tapList.isEmpty():
+            return False
+
+        goodTargets = False
+        while sa.canAddMoreTarget():
+            choice = None
+
+            if tapList.isEmpty():
+                if not sa.isMinTargetChosen() or sa.isZeroTargets():
+                    if not mandatory:
+                        sa.resetTargets()
+                    return False
+                else:
+                    if not goodTargets and not ComputerUtil.shouldCastLessThanMax(ai, source):
+                        return False
+                    break
+
+            phase = game.getPhaseHandler()
+            opp = AiAttackController.choosePreferredDefenderPlayer(ai)
+            primeTarget = ComputerUtil.getKilledByTargeting(sa, tapList)
+            if primeTarget is not None:
+                choice = primeTarget
+                goodTargets = True
+            elif phase.isPlayerTurn(ai) and phase.getPhase().isBefore(PhaseType.COMBAT_DECLARE_BLOCKERS):
+                # Tap creatures possible blockers before combat during AI's turn.
+                if phase.getPhase().isAfter(PhaseType.COMBAT_DECLARE_ATTACKERS):
+                    # Combat has already started
+                    attackers = game.getCombat().getAttackers()
+                else:
+                    attackers = CardLists.filter(ai.getCreaturesInPlay(), lambda c: CombatUtil.canAttack(c, opp))
+                    attackers.remove(source)
+                findBlockers = CardPredicates.possibleBlockerForAtLeastOne(attackers)
+                creatureList = CardLists.filter(tapList, findBlockers)
+
+                # TODO check if own creature would be forced to attack and we want to keep it alive
+
+                if not attackers.isEmpty() and not creatureList.isEmpty():
+                    choice = ComputerUtilCard.getBestCreatureAI(creatureList)
+                elif sa.isTrigger() or ComputerUtil.castSpellInMain1(ai, sa):
+                    choice = ComputerUtilCard.getMostExpensivePermanentAI(tapList)
+            elif phase.isPlayerTurn(opp) and phase.getPhase().isBefore(PhaseType.COMBAT_DECLARE_ATTACKERS):
+                # Tap creatures possible blockers before combat during AI's turn.
+                if tapList.anyMatch(CardPredicates.CREATURES):
+                    creatureList = CardLists.filter(tapList, lambda c: c.isCreature() and CombatUtil.canAttack(c, opp))
+                    choice = ComputerUtilCard.getBestCreatureAI(creatureList)
+                else:  # no creatures available
+                    choice = ComputerUtilCard.getMostExpensivePermanentAI(tapList)
+            else:
+                choice = ComputerUtilCard.getMostExpensivePermanentAI(tapList)
+
+            if choice is None:  # can't find anything left
+                if not sa.isMinTargetChosen() or sa.isZeroTargets():
+                    if not mandatory:
+                        sa.resetTargets()
+                    return False
+                else:
+                    if not ComputerUtil.shouldCastLessThanMax(ai, source):
+                        return False
+                    break
+
+            tapList.remove(choice)
+            sa.getTargets().add(choice)
+
+        # Nothing was ever targeted, so we need to bail.
+        return sa.getTargets().size() != 0
+
+    def tapUnpreferredTargeting(self, ai: Player, sa: SpellAbility, mandatory: bool) -> bool:
+        source = sa.getHostCard()
+        game = ai.getGame()
+
+        list = CardLists.getTargetableCards(game.getCardsIn(ZoneType.Battlefield), sa)
+
+        # try to tap anything controlled by the computer
+        tapList = CardLists.filterControlledBy(list, ai.getOpponents())
+        if self.tapTargetList(ai, sa, tapList, mandatory):
+            return True
+
+        if sa.isMinTargetChosen():
+            return True
+
+        # filter by enchantments and planeswalkers, their tapped state (usually) doesn't matter.
+        tappablePermanents = ["Enchantment", "Planeswalker"]
+        tapList = CardLists.getValidCards(list, tappablePermanents, source.getController(), source, sa)
+
+        if self.tapTargetList(ai, sa, tapList, mandatory):
+            return True
+
+        # try to just tap already tapped things
+        tapList = CardLists.filter(list, CardPredicates.TAPPED)
+
+        if self.tapTargetList(ai, sa, tapList, mandatory):
+            return True
+
+        if sa.isMinTargetChosen():
+            return True
+
+        # just tap whatever we can
+        tapList = list
+
+        return self.tapTargetList(ai, sa, tapList, mandatory)
+
+    def doTriggerNoCost(self, ai: Player, sa: SpellAbility, mandatory: bool) -> AiAbilityDecision:
+        source = sa.getHostCard()
+
+        if not sa.usesTargeting():
+            if mandatory:
+                return AiAbilityDecision(50, AiPlayDecision.MandatoryPlay)
+
+            pDefined = AbilityUtils.getDefinedCards(sa.getHostCard(), sa.getParam("Defined"), sa)
+            # might be from ETBreplacement
+            if pDefined.isEmpty() or not pDefined.get(0).isInPlay() or (pDefined.get(0).isUntapped() and pDefined.get(0).getController() != ai):
+                return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+            return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+        else:
+            sa.resetTargets()
+            if self.tapPrefTargeting(ai, source, sa, mandatory):
+                return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+            elif mandatory:
+                # not enough preferred targets, but mandatory so keep going:
+                if self.tapUnpreferredTargeting(ai, sa, mandatory):
+                    return AiAbilityDecision(50, AiPlayDecision.MandatoryPlay)
+                return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+        return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+    def chkDrawback(self, ai: Player, sa: SpellAbility) -> AiAbilityDecision:
+        source = sa.getHostCard()
+
+        if sa.hasParam("TargetingPlayer") and sa.getActivatingPlayer().equals(ai) and not sa.isTrigger():
+            # canPlayAI (sa activated by ai)
+            targetingPlayer = AbilityUtils.getDefinedPlayers(source, sa.getParam("TargetingPlayer"), sa).get(0)
+            sa.setTargetingPlayer(targetingPlayer)
+            if CardLists.getTargetableCards(ai.getGame().getCardsIn(sa.getTargetRestrictions().getZone()), sa).isEmpty():
+                return AiAbilityDecision(0, AiPlayDecision.TargetingFailed)
+            return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+        randomReturn = True
+
+        if sa.usesTargeting():
+            # target section, maybe pull this out?
+            sa.resetTargets()
+            if not self.tapPrefTargeting(ai, source, sa, False):
+                return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+        return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+```

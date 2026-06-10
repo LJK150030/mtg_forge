@@ -35,6 +35,12 @@ classDiagram
 **Extends:**
 - [[forge.util.storage.StorageReaderBase|StorageReaderBase]]
 
+## Design Description
+
+Treats each line of a text file as the serialized form of one named object, providing a file-based concrete layer of the storage-reader hierarchy. Extending `StorageReaderBase<T>`, it implements `readAll()` to iterate a file's lines via `FileUtil`, skipping blanks and lines that fail `lineContainsObject` (by default, comment lines beginning with `#`), and delegating the actual parsing of each surviving line to the abstract `read(line, idx)` hook that subclasses must supply.
+
+The class keeps the file-handling and key-management concerns generic while leaving format-specific deserialization to subclasses, a Template Method arrangement. Object keys come from a caller-supplied `keySelector` function, and duplicate keys are tolerated but reported on standard error; `alertInvalidLine` offers subclasses a uniform way to report malformed input. Convenience constructors accept either a pathname or a `File`, decoupling clients from how the location is expressed.
+
 ## Source
 `forge-core/src/main/java/forge/util/storage/StorageReaderFile.java`
 
@@ -137,4 +143,73 @@ public abstract class StorageReaderFile<T> extends StorageReaderBase<T> {
         System.err.println();
     }
 }
+```
+
+## Python
+`forge/util/storage/StorageReaderFile.py`
+
+```python
+from forge.util.storage.StorageReaderBase import StorageReaderBase
+from forge.util.FileUtil import FileUtil
+
+import os
+import sys
+from typing import Callable, Optional
+
+
+class StorageReaderFile(StorageReaderBase):
+    """This class treats every line of a given file as a source for a named object.
+
+    @param <T> the generic type
+    """
+
+    def __init__(self, pathname_or_file, keySelector0: Callable[[object], str]):
+        if isinstance(pathname_or_file, str):
+            file0 = pathname_or_file
+        else:
+            file0 = pathname_or_file
+        super().__init__(keySelector0)
+        self.file = file0
+
+    def getFullPath(self) -> str:
+        return self.file
+
+    def readAll(self) -> dict:
+        result = self.createMap()
+
+        idx = 0
+        for line in FileUtil.readFile(self.file):
+            line = line.strip()
+            if not line:
+                continue  # ignore blank or whitespace lines
+
+            if not self.lineContainsObject(line):
+                continue
+
+            item = self.read(line, idx)
+            if item is None:
+                continue
+
+            idx += 1
+            newKey = self.keySelector(item)
+            if newKey in result:
+                sys.stderr.write("StorageReaderFile: Overwriting an object with key " + newKey + "\n")
+            result[newKey] = item
+
+        return result
+
+    def read(self, line: str, idx: int):
+        raise NotImplementedError
+
+    def lineContainsObject(self, line: str) -> bool:
+        return bool(line) and not line.strip().startswith("#")
+
+    def getItemKey(self, item) -> str:
+        return self.keySelector(item)
+
+    def alertInvalidLine(self, line: str, message: str) -> None:
+        sys.stderr.write(message + "\n")
+        sys.stderr.write(line + "\n")
+        sys.stderr.write(self.file + "\n")
+        sys.stderr.write("\n")
 ```

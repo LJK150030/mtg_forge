@@ -37,6 +37,10 @@ classDiagram
 - [[forge.game.card.Card|Card]]
 - [[forge.game.spellability.SpellAbility|SpellAbility]]
 
+## Design Description
+
+TriggerManaExpend is a concrete trigger that fires when a player expends a specific amount of mana, extending the abstract Trigger base class and conforming to its event-detection contract. Its responsibility is narrow: in performTest it validates the triggering player against the optional "Player" restriction and confirms that the actual mana expended equals the configured "Amount", firing only on an exact match. It collaborates with AbilityKey to read typed runtime parameters (Player, Amount) from the run-parameter map, with Card as its host, and with SpellAbility to record the triggering objects via setTriggeringObjectsFrom and to render a human-readable stack description. The design reflects Forge's data-driven trigger pattern, where parameters parsed from card script strings (mapParams) drive uniform, declarative condition checking across many trigger subtypes.
+
 ## Source
 `forge-game/src/main/java/forge/game/trigger/TriggerManaExpend.java`
 
@@ -103,4 +107,35 @@ public class TriggerManaExpend extends Trigger {
         return sa.getTriggeringObject(AbilityKey.Player) + " expended " + sa.getTriggeringObject(AbilityKey.Amount) + " mana";
     }
 }
+```
+
+## Python
+`forge/game/trigger/TriggerManaExpend.py`
+
+```python
+from forge.game.trigger.Trigger import Trigger
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.spellability.SpellAbility import SpellAbility
+
+from typing import Map
+
+
+class TriggerManaExpend(Trigger):
+    def __init__(self, params: dict[str, str], host: Card, intrinsic: bool):
+        super().__init__(params, host, intrinsic)
+
+    def performTest(self, runParams: dict[AbilityKey, object]) -> bool:
+        if not self.matchesValidParam("Player", runParams.get(AbilityKey.Player)):
+            return False
+
+        targetAmount = int(self.mapParams.get("Amount"))
+        actualAmount = runParams.get(AbilityKey.Amount)
+        return targetAmount == actualAmount
+
+    def setTriggeringObjects(self, sa: SpellAbility, runParams: dict[AbilityKey, object]) -> None:
+        sa.setTriggeringObjectsFrom(runParams, AbilityKey.Amount, AbilityKey.Player)
+
+    def getImportantStackObjects(self, sa: SpellAbility) -> str:
+        return str(sa.getTriggeringObject(AbilityKey.Player)) + " expended " + str(sa.getTriggeringObject(AbilityKey.Amount)) + " mana"
 ```

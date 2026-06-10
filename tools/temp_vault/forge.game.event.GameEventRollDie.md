@@ -33,7 +33,7 @@ classDiagram
 
 ## Design Description
 
-GameEventRollDie is an immutable, parameterless record signaling that a die has been rolled within the game. As one of many concrete event types implementing the `GameEvent` interface, it carries no state of its own—its existence is the notification. It participates in a visitor-pattern dispatch: its `visit` method accepts a generic `IGameEventVisitor<T>` and routes back through `visitor.visit(this)`, letting observers handle this specific event type without the event itself knowing how it will be processed. Using a record makes the design intent explicit: this is a lightweight, value-based message in the engine's event system, decoupling the producers of die-roll events from the subscribers that react to them.
+GameEventRollDie is an immutable, parameterless record signaling that a die has been rolled within the game. As one of many concrete event types implementing the `GameEvent` interface, it carries no state of its ownâ€”its existence is the notification. It participates in a visitor-pattern dispatch: its `visit` method accepts a generic `IGameEventVisitor<T>` and routes back through `visitor.visit(this)`, letting observers handle this specific event type without the event itself knowing how it will be processed. Using a record makes the design intent explicit: this is a lightweight, value-based message in the engine's event system, decoupling the producers of die-roll events from the subscribers that react to them.
 
 ## Source
 `forge-game/src/main/java/forge/game/event/GameEventRollDie.java`
@@ -48,4 +48,11 @@ public record GameEventRollDie() implements GameEvent {
         return visitor.visit(this);
     }
 }
+```
+
+## Python
+`forge/game/event/GameEventRollDie.py`
+
+```python
+package GameEventRollDie
 ```

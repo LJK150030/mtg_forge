@@ -37,6 +37,12 @@ classDiagram
 - [[forge.game.card.Card|Card]]
 - [[forge.game.spellability.SpellAbility|SpellAbility]]
 
+## Design Description
+
+TriggerForetell is a concrete trigger that fires in response to a card being foretold, extending the abstract `Trigger` base class within Forge's event-driven triggered-ability system. It overrides the framework's template-method hooksâ€”`performTest` to gate the trigger on its `ValidPlayer` restriction and an optional `OnlyFirst` constraint (matching only when the foretell count is one), `setTriggeringObjects` to expose the foretelling player to the resulting ability, and `getImportantStackObjects` to render a localized player label for the stack UI.
+
+Its collaborations are narrow and characteristic of the trigger hierarchy: it reads run parameters keyed by `AbilityKey`, is constructed with parameter maps bound to a host `Card`, and populates a `SpellAbility` with triggering objects. The design intent is a thin, declarative trigger whose behavior is driven entirely by string parameters interpreted against the inherited base-class machinery, keeping per-trigger logic minimal.
+
 ## Source
 `forge-game/src/main/java/forge/game/trigger/TriggerForetell.java`
 
@@ -115,4 +121,40 @@ public class TriggerForetell extends Trigger {
     }
 
 }
+```
+
+## Python
+`forge/game/trigger/TriggerForetell.py`
+
+```python
+from forge.game.trigger.Trigger import Trigger
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Localizer import Localizer
+
+
+class TriggerForetell(Trigger):
+
+    def __init__(self, params: dict[str, str], host: Card, intrinsic: bool):
+        super().__init__(params, host, intrinsic)
+
+    def getImportantStackObjects(self, sa: SpellAbility) -> str:
+        sb = []
+        sb.append(Localizer.getInstance().getMessage("lblPlayer"))
+        sb.append(": ")
+        sb.append(str(sa.getTriggeringObject(AbilityKey.Player)))
+        return "".join(sb)
+
+    def setTriggeringObjects(self, sa: SpellAbility, runParams: dict[AbilityKey, object]) -> None:
+        sa.setTriggeringObjectsFrom(runParams, AbilityKey.Player)
+
+    def performTest(self, runParams: dict[AbilityKey, object]) -> bool:
+        if not self.matchesValidParam("ValidPlayer", runParams.get(AbilityKey.Player)):
+            return False
+
+        if self.hasParam("OnlyFirst"):
+            if int(runParams.get(AbilityKey.Num)) != 1:
+                return False
+        return True
 ```

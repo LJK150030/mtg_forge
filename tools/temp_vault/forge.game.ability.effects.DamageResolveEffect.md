@@ -40,7 +40,7 @@ classDiagram
 
 The DamageResolveEffect is a terminal resolution handler within Forge's spell-ability effect framework, extending SpellAbilityEffect to apply previously accumulated damage when an ability resolves. Rather than computing damage itself, it acts as a commit step: it retrieves the SpellAbility's pre-populated CardDamageMap, companion prevention map, and GameEntityCounterTable, then delegates to the game's action layer to deal the batched damage in a single pass before triggering state-based death checks via replaceDying.
 
-Its design reflects a deliberate separation of concerns—damage is gathered elsewhere and only finalized here—so the class defensively returns early when no damage map is present (e.g., a missing damage source). The empty getStackDescription override signals that this internal resolution effect contributes no player-facing stack text, marking it as a behind-the-scenes mechanism rather than a directly described game action.
+Its design reflects a deliberate separation of concernsâ€”damage is gathered elsewhere and only finalized hereâ€”so the class defensively returns early when no damage map is present (e.g., a missing damage source). The empty getStackDescription override signals that this internal resolution effect contributes no player-facing stack text, marking it as a behind-the-scenes mechanism rather than a directly described game action.
 
 ## Source
 `forge-game/src/main/java/forge/game/ability/effects/DamageResolveEffect.java`
@@ -87,4 +87,43 @@ public class DamageResolveEffect extends SpellAbilityEffect {
     }
 
 }
+```
+
+## Python
+`forge/game/ability/effects/DamageResolveEffect.py`
+
+```python
+from forge.game.GameEntityCounterTable import GameEntityCounterTable
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.CardDamageMap import CardDamageMap
+from forge.game.spellability.SpellAbility import SpellAbility
+
+
+class DamageResolveEffect(SpellAbilityEffect):
+
+    def __init__(self):
+        # TODO Auto-generated constructor stub
+        pass
+
+    #
+    # (non-Javadoc)
+    # @see forge.game.ability.SpellAbilityEffect#resolve(forge.game.spellability.SpellAbility)
+    #
+    def resolve(self, sa: SpellAbility) -> None:
+        damageMap = sa.getDamageMap()
+        if damageMap is None:
+            # this can happen if damagesource was missing
+            return
+        preventMap = sa.getPreventMap()
+        counterTable = sa.getCounterTable()
+
+        sa.getHostCard().getGame().getAction().dealDamage(False, damageMap, preventMap, counterTable, sa)
+
+        self.replaceDying(sa)
+
+    # (non-Javadoc)
+    # @see forge.game.ability.SpellAbilityEffect#getStackDescription(forge.game.spellability.SpellAbility)
+    #
+    def getStackDescription(self, sa: SpellAbility) -> str:
+        return ""
 ```

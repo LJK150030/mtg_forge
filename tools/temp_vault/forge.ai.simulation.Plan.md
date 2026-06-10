@@ -61,7 +61,7 @@ classDiagram
 
 The `Plan` class records the complete, ordered sequence of decisions an AI player commits to during game-state simulation, paired with the projected `Score` it expects to reach. It stores an immutable `List<Decision>` plus the `startPhase`, while mutable cursors (`nextDecisionIndex`, `nextChoice`, `selectedDecision`) track playback position so a plan computed against a simulated game can later be replayed decision-by-decision against the live game. Accessors like `getFinalScore` and `getStartPhase` expose metadata, while `hasNextDecision`, `selectNextDecision`, `getSelectedDecisionNextChoice`, and `advanceNextChoice` drive sequential execution.
 
-Its design intent lives in two nested static types. `Decision` is an immutable record of one choice—spell ability, X-mana, targets, card choices, or modes—chained backward via `prevDecision`, with overloaded constructors specializing each variant. `SpellAbilityRef` solves cross-instance referencing: because a `SpellAbility` cannot be shared between distinct simulated games, it stores a positional index plus a stringified signature and re-resolves the ability in a fresh list only when both count and signature match, guarding against state divergence.
+Its design intent lives in two nested static types. `Decision` is an immutable record of one choiceâ€”spell ability, X-mana, targets, card choices, or modesâ€”chained backward via `prevDecision`, with overloaded constructors specializing each variant. `SpellAbilityRef` solves cross-instance referencing: because a `SpellAbility` cannot be shared between distinct simulated games, it stores a positional index plus a stringified signature and re-resolves the ability in a fresh list only when both count and signature match, guarding against state divergence.
 
 ## Source
 `forge-ai/src/main/java/forge/ai/simulation/Plan.java`
@@ -237,4 +237,124 @@ public class Plan {
         }
     }
 }
+```
+
+## Python
+`forge/ai/simulation/Plan.py`
+
+```python
+from forge.ai.simulation.GameStateEvaluator.Score import Score
+from forge.ai.simulation.MultiTargetSelector import MultiTargetSelector
+from forge.ai.simulation.MultiTargetSelector.Targets import Targets
+from forge.ai.simulation.SpellAbilityPicker import SpellAbilityPicker
+from forge.game.card.Card import Card
+from forge.game.phase.PhaseType import PhaseType
+from forge.game.spellability.SpellAbility import SpellAbility
+
+
+class Plan:
+    def __init__(self, decisions: list, finalScore: Score):
+        self.decisions = decisions
+        self.finalScore = finalScore
+        self.nextDecisionIndex = 0
+        self.nextChoice = 0
+        self.selectedDecision = None
+        self.startPhase = None
+
+    def getFinalScore(self) -> Score:
+        return self.finalScore
+
+    def getStartPhase(self) -> PhaseType:
+        return self.startPhase
+
+    def getDecisions(self) -> list:
+        return self.decisions
+
+    def hasNextDecision(self) -> bool:
+        return self.nextDecisionIndex < len(self.decisions)
+
+    def selectNextDecision(self) -> "Plan.Decision":
+        self.selectedDecision = self.decisions[self.nextDecisionIndex]
+        self.nextDecisionIndex += 1
+        self.nextChoice = 0
+        return self.selectedDecision
+
+    def getSelectedDecision(self) -> "Plan.Decision":
+        return self.selectedDecision
+
+    def getSelectedDecisionNextChoice(self) -> str:
+        if self.selectedDecision.choices is not None and self.nextChoice < len(self.selectedDecision.choices):
+            return self.selectedDecision.choices[self.nextChoice]
+        return None
+
+    def advanceNextChoice(self) -> None:
+        self.nextChoice += 1
+
+    def getNextDecisionIndex(self) -> int:
+        return self.nextDecisionIndex
+
+    class SpellAbilityRef:
+        def __init__(self, saList: list, saIndex: int):
+            self.saIndex = saIndex
+            self.saCount = len(saList)
+            sa = saList[saIndex]
+            self.saStr = str(sa)
+            self.saHumanStr = SpellAbilityPicker.abilityToString(sa, False)
+
+        def findReferencedAbility(self, availableSAs: list) -> SpellAbility:
+            if len(availableSAs) != self.saCount:
+                return None
+            sa = availableSAs[self.saIndex]
+            return sa if str(sa) == self.saStr else None
+
+        def toString(self, showHostCard: bool) -> str:
+            return self.saHumanStr if showHostCard else self.saStr
+
+        def __str__(self) -> str:
+            return self.toString(False)
+
+    class Decision:
+        def __init__(self, initialScore: Score, prevDecision: "Plan.Decision", arg, modesStr: str = None):
+            self.initialScore = initialScore
+            self.prevDecision = prevDecision
+
+            self.saRef = None
+            self.xMana = None
+            self.targets = None
+            self.choices = None
+            self.modes = None
+            self.modesStr = None  # for human pretty-print consumption only
+
+            if isinstance(arg, Plan.SpellAbilityRef):
+                self.saRef = arg
+            elif isinstance(arg, Targets):
+                self.targets = arg
+            elif isinstance(arg, Card):
+                self.choices = []
+                self.choices.append(arg.getName())
+            else:
+                self.modes = arg
+                self.modesStr = modesStr
+
+        def toString(self, showHostCard: bool) -> str:
+            sb = []
+            if not showHostCard:
+                sb.append("[initScore=" + str(self.initialScore) + " ")
+            if self.modesStr is not None:
+                sb.append(self.modesStr)
+            else:
+                sa = self.saRef.toString(showHostCard)
+                if self.xMana is not None:
+                    sa = sa.replace("(X=0)", "(X=" + str(self.xMana) + ")")
+                sb.append(sa)
+            if self.targets is not None:
+                sb.append(" (targets: " + str(self.targets) + ")")
+            if self.choices is not None:
+                sb.append(" (chosen: " + ", ".join(self.choices) + ")")
+            if not showHostCard:
+                sb.append("]")
+            return "".join(sb)
+
+        def __str__(self) -> str:
+            return self.toString(False)
 ```

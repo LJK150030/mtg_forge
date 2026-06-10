@@ -37,6 +37,12 @@ classDiagram
 - [[forge.game.card.Card|Card]]
 - [[forge.game.spellability.SpellAbility|SpellAbility]]
 
+## Design Description
+
+TriggerClashed is a concrete trigger that fires in response to a clash event in Magic: the Gathering, encapsulating the condition-matching logic for "when a player clashes." As a subclass of `Trigger`, it plugs into Forge's event-driven triggered-ability framework, overriding `performTest` to validate run-time parametersâ€”checking the clashing `Player` against a `ValidPlayer` filter and optionally matching a `Won` outcomeâ€”using `AbilityKey`-keyed run parameters. It is constructed from a parameter map, a host `Card`, and an intrinsic flag, mirroring its siblings in the trigger hierarchy.
+
+The design intent is deliberately minimal: `setTriggeringObjects` exposes no triggered variables and `getImportantStackObjects` returns an empty string, signalling that a clash trigger carries no contextual data downstream to its `SpellAbility`. This keeps the class a thin, declarative predicate, delegating all shared lifecycle and parsing behavior to the `Trigger` base class.
+
 ## Source
 `forge-game/src/main/java/forge/game/trigger/TriggerClashed.java`
 
@@ -120,4 +126,45 @@ public class TriggerClashed extends Trigger {
         return "";
     }
 }
+```
+
+## Python
+`forge/game/trigger/TriggerClashed.py`
+
+```python
+from typing import Map
+
+from forge.game.trigger.Trigger import Trigger
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.spellability.SpellAbility import SpellAbility
+
+
+class TriggerClashed(Trigger):
+    """
+    Trigger_Clashed class.
+
+    @author Forge
+    @version $Id$
+    """
+
+    def __init__(self, params: dict[str, str], host: Card, intrinsic: bool):
+        super().__init__(params, host, intrinsic)
+
+    def performTest(self, runParams: dict[AbilityKey, object]) -> bool:
+        if not self.matchesValidParam("ValidPlayer", runParams.get(AbilityKey.Player)):
+            return False
+
+        if self.hasParam("Won"):
+            if self.getParam("Won") != runParams.get(AbilityKey.Won):
+                return False
+
+        return True
+
+    def setTriggeringObjects(self, sa: SpellAbility, runParams: dict[AbilityKey, object]) -> None:
+        # No triggered-variables for you :(
+        pass
+
+    def getImportantStackObjects(self, sa: SpellAbility) -> str:
+        return ""
 ```

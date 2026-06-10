@@ -47,7 +47,7 @@ classDiagram
 
 ## Design Description
 
-GameLog is a serializable, in-memory record of events that occur during a single game of Magic: the Gathering. It maintains an ordered list of `GameLogEntry` objects, each tagged with a `GameLogEntryType` denoting its severity or category. Callers append entries by type and message, and retrieve them—always in reverse-chronological order—filtered by an inclusive level threshold, an exact level, an explicit set of types, or a `GameLogVerbosity` preset that maps to a set of included types.
+GameLog is a serializable, in-memory record of events that occur during a single game of Magic: the Gathering. It maintains an ordered list of `GameLogEntry` objects, each tagged with a `GameLogEntryType` denoting its severity or category. Callers append entries by type and message, and retrieve themâ€”always in reverse-chronological orderâ€”filtered by an inclusive level threshold, an exact level, an explicit set of types, or a `GameLogVerbosity` preset that maps to a set of included types.
 
 By extending `Observable`, GameLog notifies registered observers (typically UI components) whenever an entry is added, decoupling log production from presentation. It owns a transient `GameLogFormatter`, exposed via `getEventVisitor()`, that acts as a visitor translating game events into log entries; marking the formatter transient keeps it out of serialization, since it can be reconstructed. This design centralizes game-event recording while leaving rendering and verbosity choices to consumers.
 
@@ -164,4 +164,73 @@ public class GameLog extends Observable implements Serializable {
         return formatter;
     }
 }
+```
+
+## Python
+`forge/game/GameLog.py`
+
+```python
+from forge.game.GameLogEntry import GameLogEntry
+from forge.game.GameLogEntryType import GameLogEntryType
+from forge.game.GameLogFormatter import GameLogFormatter
+from forge.game.GameLogVerbosity import GameLogVerbosity
+
+from java.io.Serializable import Serializable
+from java.util.Observable import Observable
+
+
+class GameLog(Observable, Serializable):
+    serialVersionUID = 6465283802022948827
+
+    # Logging level:
+    # 0 - Turn
+    # 2 - Stack items
+    # 3 - Poison Counters
+    # 4 - Mana abilities
+    # 6 - All Phase information
+
+    def __init__(self):
+        super().__init__()
+        self.log: list[GameLogEntry] = []
+        self.formatter = GameLogFormatter(self)
+
+    def add(self, type: GameLogEntryType, message: str) -> None:
+        self._add(GameLogEntry(type, message))
+
+    def _add(self, entry: GameLogEntry) -> None:
+        self.log.append(entry)
+        self.setChanged()
+        self.notifyObservers()
+
+    def getLogEntries(self, logLevel: GameLogEntryType) -> list[GameLogEntry]:  # null to fetch all
+        result: list[GameLogEntry] = []
+
+        for i in range(len(self.log) - 1, -1, -1):
+            le = self.log[i]
+            if logLevel is None or le.type().compareTo(logLevel) <= 0:
+                result.append(le)
+        return result
+
+    def getLogEntriesForVerbosity(self, verbosity: GameLogVerbosity) -> list[GameLogEntry]:
+        return self.getLogEntriesForTypes(verbosity.getIncludedTypes())
+
+    def getLogEntriesForTypes(self, types: set[GameLogEntryType]) -> list[GameLogEntry]:
+        result: list[GameLogEntry] = []
+        for i in range(len(self.log) - 1, -1, -1):
+            le = self.log[i]
+            if le.type() in types:
+                result.append(le)
+        return result
+
+    def getLogEntriesExact(self, logLevel: GameLogEntryType) -> list[GameLogEntry]:  # null to fetch all
+        result: list[GameLogEntry] = []
+
+        for i in range(len(self.log) - 1, -1, -1):
+            le = self.log[i]
+            if logLevel is None or le.type().compareTo(logLevel) == 0:
+                result.append(le)
+        return result
+
+    def getEventVisitor(self) -> GameLogFormatter:
+        return self.formatter
 ```

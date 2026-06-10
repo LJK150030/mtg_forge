@@ -36,12 +36,12 @@ classDiagram
 
 ## Design Description
 
-The CardStateVisitor is a private static helper that implements the `Visitor<Card>` interface to perform a linear search for a specific card within a traversable card collection. Constructed with a target card (stored in `old`), it inspects each visited `Card`, capturing a match in `found` and returning `false` to halt iteration once the target is located—an early-exit optimization that avoids scanning the remainder of the collection.
+The CardStateVisitor is a private static helper that implements the `Visitor<Card>` interface to perform a linear search for a specific card within a traversable card collection. Constructed with a target card (stored in `old`), it inspects each visited `Card`, capturing a match in `found` and returning `false` to halt iteration once the target is locatedâ€”an early-exit optimization that avoids scanning the remainder of the collection.
 
 Its narrow scope as a nested class reflects its role as an internal implementation detail of `Game`, decoupling traversal mechanics from the collection structure via the generic Visitor pattern. The `getFound` accessor returns the located card or a caller-supplied fallback, giving callers a null-safe way to resolve the search result.
 
 ## Source
-`forge-game/src/main/java/forge/game/Game.java` â€” declaration excerpt
+`forge-game/src/main/java/forge/game/Game.java` Ã¢â‚¬â€ declaration excerpt
 
 ```java
     private static class CardStateVisitor implements Visitor<Card> {
@@ -64,4 +64,27 @@ Its narrow scope as a nested class reflects its role as an internal implementati
             return found == null ? notFound : found;
         }
     }
+```
+
+## Python
+`forge/game/Game/CardStateVisitor.py`
+
+```python
+from forge.util.Visitor import Visitor
+from forge.game.card.Card import Card
+
+
+class CardStateVisitor(Visitor):
+    def __init__(self, card: Card):
+        self.found: Card = None
+        self.old: Card = None
+        self.old = card
+
+    def visit(self, object: Card) -> bool:
+        if object.equals(self.old):
+            self.found = object
+        return self.found is None
+
+    def getFound(self, notFound: Card) -> Card:
+        return notFound if self.found is None else self.found
 ```

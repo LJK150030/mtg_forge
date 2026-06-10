@@ -69,7 +69,7 @@ classDiagram
 
 GameStateEvaluator is the AI's static heuristic for scoring a game position from a given player's perspective, producing a `Score` that the simulation search uses to compare candidate lines of play. Its central method, `getScoreForGameState`, tallies cards in hand, life totals, mana-base quality, and per-card battlefield value, returning both a raw score and a "summon-sick" variant that discourages committing creatures before the second main phase. Before scoring, it optionally fast-forwards a `GameCopier` clone to combat damage so the evaluation reflects imminent combat outcomes.
 
-The class collaborates broadly across the game model â€” `Game`, `Player`, `Card`, mana abilities, and `AiDeckStatistics` â€” while delegating creature valuation to an inner `SimulationCreatureEvaluator` (a `CreatureEvaluator` subclass that hooks in debug tracing). Helpers like `evaluateLand` and `evalManaBase` encapsulate domain-specific scoring weights, and the nested `Score` and `CombatSimResult` value types keep results self-contained. Pervasive TODOs reveal deliberately approximate, single-opponent-oriented heuristics intended for later refinement.
+The class collaborates broadly across the game model Ã¢â‚¬â€ `Game`, `Player`, `Card`, mana abilities, and `AiDeckStatistics` Ã¢â‚¬â€ while delegating creature valuation to an inner `SimulationCreatureEvaluator` (a `CreatureEvaluator` subclass that hooks in debug tracing). Helpers like `evaluateLand` and `evalManaBase` encapsulate domain-specific scoring weights, and the nested `Score` and `CombatSimResult` value types keep results self-contained. Pervasive TODOs reveal deliberately approximate, single-opponent-oriented heuristics intended for later refinement.
 
 
 ## Source
@@ -391,4 +391,278 @@ public class GameStateEvaluator {
         }
     }
 }
+```
+
+## Python
+`forge/ai/simulation/GameStateEvaluator.py`
+
+```python
+from forge.ai.AiDeckStatistics import AiDeckStatistics
+from forge.ai.CreatureEvaluator import CreatureEvaluator
+from forge.card.mana.ManaAtom import ManaAtom
+from forge.game.Game import Game
+from forge.game.card.Card import Card
+from forge.game.card.CounterEnumType import CounterEnumType
+from forge.game.cost.CostSacrifice import CostSacrifice
+from forge.game.phase.PhaseType import PhaseType
+from forge.game.player.Player import Player
+from forge.game.spellability.AbilityManaPart import AbilityManaPart
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.staticability.StaticAbility import StaticAbility
+from forge.game.zone.ZoneType import ZoneType
+from forge.ai.simulation.GameCopier import GameCopier
+from forge.ai.simulation.GameSimulator import GameSimulator
+
+
+class GameStateEvaluator:
+    def __init__(self):
+        self.debugging = False
+        self.eval = GameStateEvaluator.SimulationCreatureEvaluator(self)
+
+    def setDebugging(self, debugging):
+        self.debugging = debugging
+
+    @staticmethod
+    def debugPrint(s):
+        GameSimulator.debugPrint(s)
+
+    class CombatSimResult:
+        def __init__(self):
+            self.copier = None
+            self.gameCopy = None
+
+    def simulateUpcomingCombatThisTurn(self, evalGame, aiPlayer):
+        phase = evalGame.getPhaseHandler().getPhase()
+        if phase.isAfter(PhaseType.COMBAT_DAMAGE) or evalGame.isGameOver():
+            return None
+        # If the current player has no creatures in play, there won't be any combat. This avoids
+        # an expensive game copy operation.
+        # Note: This is is safe to do because the simulation is based on the current game state,
+        # so there isn't a chance to play creatures in between.
+        if not evalGame.getPhaseHandler().getPlayerTurn().getCreaturesInPlay():
+            return None
+
+        copier = GameCopier(evalGame)
+        gameCopy = copier.makeCopy(None, aiPlayer)
+
+        gameCopy.getPhaseHandler().devAdvanceToPhase(
+            PhaseType.COMBAT_DAMAGE,
+            lambda: GameSimulator.resolveStack(gameCopy, aiPlayer.getWeakestOpponent()))
+        result = GameStateEvaluator.CombatSimResult()
+        result.copier = copier
+        result.gameCopy = gameCopy
+        return result
+
+    @staticmethod
+    def cardToString(c):
+        str = c.getName()
+        if c.isCreature():
+            str += " " + c.getNetPower() + "/" + c.getNetToughness()
+        return str
+
+    def getScoreForGameOver(self, game, aiPlayer):
+        if game.getOutcome().getWinningTeam() == aiPlayer.getTeam() or \
+                game.getOutcome().isWinner(aiPlayer.getRegisteredPlayer()):
+            return GameStateEvaluator.Score(2147483647)
+
+        return GameStateEvaluator.Score(-2147483648)
+
+    def getScoreForGameState(self, game, aiPlayer):
+        if game.isGameOver():
+            return self.getScoreForGameOver(game, aiPlayer)
+
+        result = self.simulateUpcomingCombatThisTurn(game, aiPlayer)
+        if result is not None:
+            aiPlayerCopy = result.copier.find(aiPlayer)
+            if result.gameCopy.isGameOver():
+                return self.getScoreForGameOver(result.gameCopy, aiPlayerCopy)
+            return self.getScoreForGameStateImpl(result.gameCopy, aiPlayerCopy)
+        return self.getScoreForGameStateImpl(game, aiPlayer)
+
+    def getScoreForGameStateImpl(self, game, aiPlayer):
+        score = 0
+        # TODO: more than 2 players
+        # TODO: try and reuse evaluateBoardPosition
+        myCards = 0
+        theirCards = 0
+        for c in game.getCardsIn(ZoneType.Hand):
+            if c.getController() == aiPlayer:
+                myCards += 1
+            else:
+                theirCards += 1
+        GameStateEvaluator.debugPrint("My cards in hand: " + str(myCards))
+        GameStateEvaluator.debugPrint("Their cards in hand: " + str(theirCards))
+        if not aiPlayer.isUnlimitedHandSize() and myCards > aiPlayer.getMaxHandSize():
+            # Count excess cards for less.
+            score += myCards - aiPlayer.getMaxHandSize()
+            myCards = aiPlayer.getMaxHandSize()
+        # TODO weight cards in hand more if opponent has discard or if we have looting or can bluff a trick
+        score += 5 * myCards - 4 * theirCards
+        GameStateEvaluator.debugPrint("  My life: " + str(aiPlayer.getLife()))
+        score += 2 * aiPlayer.getLife()
+        opponentIndex = 1
+        opponentLife = 0
+        for opponent in aiPlayer.getOpponents():
+            GameStateEvaluator.debugPrint("  Opponent " + str(opponentIndex) + " life: -" + str(opponent.getLife()))
+            opponentLife += opponent.getLife()
+            opponentIndex += 1
+        score -= 2 * opponentLife // (len(game.getPlayers()) - 1)
+
+        # evaluate mana base quality
+        score += self.evalManaBase(game, aiPlayer, AiDeckStatistics.fromPlayer(aiPlayer))
+        # TODO deal with opponents. Do we want to use perfect information to evaluate their manabase?
+        # int opponentManaScore = 0;
+        # for (Player opponent : aiPlayer.getOpponents()) {
+        #     opponentManaScore += evalManaBase(game, opponent);
+        # }
+        # score -= opponentManaScore / (game.getPlayers().size() - 1);
+
+        # TODO evaluate holding mana open for counterspells
+
+        summonSickScore = score
+        gamePhase = game.getPhaseHandler().getPhase()
+        for c in game.getCardsIn(ZoneType.Battlefield):
+            value = self.evalCard(game, aiPlayer, c)
+            summonSickValue = value
+            # To make the AI hold-off on playing creatures before MAIN2 if they give no other benefits,
+            # keep track of the score while treating summon sick creatures as having a value of 0.
+            if gamePhase.isBefore(PhaseType.MAIN2) and c.isSick() and c.getController() == aiPlayer:
+                summonSickValue = 0
+            str_ = GameStateEvaluator.cardToString(c)
+            if c.getController() == aiPlayer:
+                GameStateEvaluator.debugPrint("  Battlefield: " + str_ + " = " + str(value))
+                score += value
+                summonSickScore += summonSickValue
+            else:
+                GameStateEvaluator.debugPrint("  Battlefield: " + str_ + " = -" + str(value))
+                score -= value
+                summonSickScore -= summonSickValue
+            nonAbilityText = c.getNonAbilityText()
+            if nonAbilityText:
+                GameStateEvaluator.debugPrint("    " + nonAbilityText.replace("CARDNAME", c.getName()))
+
+        GameStateEvaluator.debugPrint("Score = " + str(score))
+        return GameStateEvaluator.Score(score, summonSickScore)
+
+    def evalManaBase(self, game, player, statistics):
+        # TODO should these be fixed quantities or should they be linear out of like 1000/(desired - total)?
+        value = 0
+        # get the colors of mana we can produce and the maximum number of pips
+        max_total = 0
+        # this logic taken from ManaCost.getColorShardCounts()
+        counts = [0] * 6  # in WUBRGC order
+
+        for c in player.getCardsIn(ZoneType.Battlefield):
+            max_produced = 0
+            for m in c.getManaAbilities():
+                m.setActivatingPlayer(c.getController())
+                mana_cost = m.getPayCosts().getTotalMana().getCMC()
+                max_produced = max(max_produced, m.amountOfManaGenerated(True) - mana_cost)
+                for mp in m.getAllManaParts():
+                    for part in mp.mana(m).split(" "):
+                        # TODO handle any
+                        index = ManaAtom.getIndexFromName(part)
+                        if index != -1:
+                            counts[index] += 1
+            max_total += max_produced
+
+        # Compare against the maximums in the deck and in the hand
+        # TODO check number of castable cards in hand
+        for i in range(len(counts)):
+            # for each color pip, add 100
+            value += min(counts[i], statistics.maxPips[i]) * 100
+        # value for being able to cast all the cards in your deck
+        value += min(max_total, statistics.maxCost) * 100
+
+        # excess mana is valued less than getting enough to use everything
+        value += max(0, max_total - statistics.maxCost) * 5
+
+        return value
+
+    def evalCard(self, game, aiPlayer, c):
+        # TODO: These should be based on other considerations - e.g. in relation to opponents state.
+        if c.isCreature():
+            return self.eval.evaluateCreature(c)
+        elif c.isLand():
+            return GameStateEvaluator.evaluateLand(c)
+        elif c.isEnchantingCard():
+            # TODO: Should provide value in whatever it's enchanting?
+            # Else the computer would think that casting a Lifelink enchantment
+            # on something that already has lifelink is a net win.
+            return 0
+        else:
+            # TODO treat cards like Captive Audience negative
+            # e.g. a 5 CMC permanent results in 200, whereas a 5/5 creature is ~225
+            value = 50 + 30 * c.getCMC()
+            if c.isPlaneswalker():
+                value += 2 * c.getCounters(CounterEnumType.LOYALTY)
+            return value
+
+    @staticmethod
+    def evaluateLand(c):
+        value = 3
+        # for each mana color a land generates for free, increase the value by one
+        # for each mana a land can produce, add one hundred.
+        max_produced = 0
+        colors_produced = set()
+        for m in c.getManaAbilities():
+            m.setActivatingPlayer(c.getController())
+            mana_cost = m.getPayCosts().getTotalMana().getCMC()
+            max_produced = max(max_produced, m.amountOfManaGenerated(True) - mana_cost)
+            for mp in m.getAllManaParts():
+                colors_produced.update(mp.mana(m).split(" "))
+        value += 100 * max_produced
+        size = max(len(colors_produced), 5 if "Any" in colors_produced else 0)
+        value += size * 3
+
+        # add a value for each activated ability that the land has that's not an activated ability.
+        # The value should be more than the value of having a card in hand, so if a land has an
+        # activated ability but not a mana ability, it will still be played.
+        for m in c.getNonManaAbilities():
+            if m.isLandAbility():
+                # Land Ability has no extra Score
+                continue
+            if not m.getPayCosts().hasTapCost():
+                # probably a manland, rate it higher than a rainbow land
+                value += 25
+            elif m.getPayCosts().hasSpecificCostType(CostSacrifice):
+                # Sacrifice ability, so not repeatable. Less good than a utility land that gets you ahead
+                value += 10
+            else:
+                # Repeatable utility land, probably gets you ahead on board over time.
+                # big value, probably more than a manland
+                value += 50
+
+        # Add a value for each static ability that the land has
+        for s in c.getStaticAbilities():
+            # More than the value of having a card in hand. See comment above
+            value += 6
+
+        return value
+
+    class SimulationCreatureEvaluator(CreatureEvaluator):
+        def __init__(self, outer):
+            super().__init__()
+            self.outer = outer
+
+        def addValue(self, value, text):
+            if self.outer.debugging and value != 0:
+                GameSimulator.debugPrint(str(value) + " via " + text)
+            return super().addValue(value, text)
+
+    class Score:
+        def __init__(self, value, summonSickValue=None):
+            self.value = value
+            if summonSickValue is None:
+                self.summonSickValue = value
+            else:
+                self.summonSickValue = summonSickValue
+
+        def equals(self, other):
+            if other is None:
+                return False
+            return self.value == other.value and self.summonSickValue == other.summonSickValue
+
+        def __str__(self):
+            return str(self.value) + (" (ss " + str(self.summonSickValue) + ")" if self.summonSickValue != self.value else "")
 ```

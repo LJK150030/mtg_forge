@@ -39,6 +39,12 @@ classDiagram
 - [[forge.game.card.Card|Card]]
 - [[forge.game.spellability.SpellAbility|SpellAbility]]
 
+## Design Description
+
+Trigger ChaosEnsues fires when the chaos ability of the host card resolves, modeling the planar die's "chaos ensues" event in the Planechase format. As a concrete subclass of `Trigger`, it overrides the trigger lifecycle hooks: `performTest` validates the run-time parameters, accepting the event only when the triggering player matches the `ValidPlayer` restriction and any `Affected` game object (or collection thereof) is the host card itself.
+
+The class collaborates with `AbilityKey` to key into the run-parameter map, `GameObject`/`Card` for identity comparison against the host, and `SpellAbility` for binding triggering objects. `setTriggeringObjects` forwards only the triggering `Player` onto the ability, while `getImportantStackObjects` returns an empty string, signalling the trigger contributes no distinguishing stack description. The design follows Forge's data-driven trigger pattern, where behavior is parameterized through the constructor's string map rather than hard-coded logic.
+
 ## Source
 `forge-game/src/main/java/forge/game/trigger/TriggerChaosEnsues.java`
 
@@ -106,4 +112,44 @@ public class TriggerChaosEnsues extends Trigger {
         return "";
     }
 }
+```
+
+## Python
+`forge/game/trigger/TriggerChaosEnsues.py`
+
+```python
+from forge.game.GameObject import GameObject
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.trigger.Trigger import Trigger
+
+from typing import Any
+
+
+class TriggerChaosEnsues(Trigger):
+
+    def __init__(self, params: dict[str, str], host: Card, intrinsic: bool):
+        super().__init__(params, host, intrinsic)
+
+    def performTest(self, runParams: dict[AbilityKey, Any]) -> bool:
+        if not self.matchesValidParam("ValidPlayer", runParams.get(AbilityKey.Player)):
+            return False
+        if AbilityKey.Affected in runParams:
+            o = runParams.get(AbilityKey.Affected)
+            if isinstance(o, GameObject):
+                c = o
+                if not c.equals(self.getHostCard()):
+                    return False
+            elif hasattr(o, "__iter__"):
+                for o2 in o:
+                    if not o2.equals(self.getHostCard()):
+                        return False
+        return True
+
+    def setTriggeringObjects(self, sa: SpellAbility, runParams: dict[AbilityKey, Any]) -> None:
+        sa.setTriggeringObjectsFrom(runParams, AbilityKey.Player)
+
+    def getImportantStackObjects(self, sa: SpellAbility) -> str:
+        return ""
 ```

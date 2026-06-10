@@ -94,7 +94,7 @@ public class AirbendEffect extends SpellAbilityEffect {
         if (Iterables.size(tgts) > 1) {
             sb.append(" (Exile them. While each one is exiled, its owner may cast it for {2} rather than its mana cost.)");
         } else {
-            sb.append(" (Exile it. While itÃ¢â‚¬â„¢s exiled, its owner may cast it for {2} rather than its mana cost.)");
+            sb.append(" (Exile it. While itÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢s exiled, its owner may cast it for {2} rather than its mana cost.)");
         }
 
         return sb.toString();
@@ -169,4 +169,101 @@ public class AirbendEffect extends SpellAbilityEffect {
     }
 
 }
+```
+
+## Python
+`forge/game/ability/effects/AirbendEffect.py`
+
+```python
+from forge.game.Game import Game
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardZoneTable import CardZoneTable
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.spellability.SpellAbilityStackInstance import SpellAbilityStackInstance
+from forge.game.trigger.TriggerType import TriggerType
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.Lang import Lang
+
+
+class AirbendEffect(SpellAbilityEffect):
+
+    def getStackDescription(self, sa: SpellAbility) -> str:
+        sb = ["Airbend "]
+
+        if sa.usesTargeting():
+            tgts = self.getCardsfromTargets(sa)
+        else:  # otherwise add self to list and go from there
+            tgts = sa.knownDetermineDefined(sa.getParam("Defined"))
+
+        sb.append(sa.getParamOrDefault("DefinedDesc", Lang.joinHomogenous(tgts)))
+        sb.append(".")
+        if len(list(tgts)) > 1:
+            sb.append(" (Exile them. While each one is exiled, its owner may cast it for {2} rather than its mana cost.)")
+        else:
+            sb.append(" (Exile it. While it??????????????????s exiled, its owner may cast it for {2} rather than its mana cost.)")
+
+        return "".join(sb)
+
+    def resolve(self, sa: SpellAbility) -> None:
+        hostCard = sa.getHostCard()
+        game = hostCard.getGame()
+        pl = sa.getActivatingPlayer()
+
+        moveParams: dict[AbilityKey, object] = AbilityKey.newMap()
+        zoneMovements = AbilityKey.addCardZoneTableParams(moveParams, sa)
+        moved = CardCollection()
+
+        for c in self.getCardsfromTargets(sa):
+            gameCard = game.getCardState(c, None)
+            # gameCard is LKI in that case, the card is not in game anymore
+            # or the timestamp did change
+            # this should check Self too
+            if gameCard is None or not c.equalsWithGameTimestamp(gameCard) or gameCard.isPhasedOut():
+                continue
+            self.handleExiledWith(gameCard, sa)
+
+            si = None
+            if gameCard.isInZone(ZoneType.Stack):
+                stackSA = game.getStack().getSpellMatchingHost(gameCard)
+                si = game.getStack().getInstanceMatchingSpellAbilityID(stackSA)
+
+            movedCard = game.getAction().exile(gameCard, sa, moveParams)
+            if movedCard is None or not movedCard.isInZone(ZoneType.Exile):
+                continue
+
+            if si is not None:
+                # GameAction.changeZone should really take care of cleaning up SASI when a card from the stack is removed.
+                game.getStack().remove(si)
+
+            exiled = zoneMovements.filterCards(None, [ZoneType.Exile], None, None, None)
+            exiled.removeIf(Card.isToken)
+            exiled.removeAll(moved)
+            if exiled.isEmpty():
+                continue
+            moved.addAll(exiled)
+
+            # Effect to cast for 2 from exile
+            eff = self.createEffect(sa, movedCard.getOwner(), "Airbend " + str(movedCard), hostCard.getImageKey())
+            eff.addRemembered(exiled)
+
+            sbPlay = []
+            sbPlay.append("Mode$ Continuous | MayPlay$ True | MayPlayAltManaCost$ 2 | EffectZone$ Command | Affected$ Card.IsRemembered+nonLand")
+            sbPlay.append(" | AffectedZone$ Exile | Description$ You may cast the card.")
+            eff.addStaticAbility("".join(sbPlay))
+
+            self.addForgetOnMovedTrigger(eff, "Exile")
+            self.addForgetOnCastTrigger(eff, "Card.IsRemembered")
+
+            game.getAction().moveToCommand(eff, sa)
+
+        zoneMovements.triggerChangesZoneAll(game, sa)
+        self.handleExiledWith(zoneMovements.allCards(), sa)
+
+        # CR 701.65b
+        if not zoneMovements.isEmpty():
+            pl.triggerElementalBend(TriggerType.Airbend)
 ```

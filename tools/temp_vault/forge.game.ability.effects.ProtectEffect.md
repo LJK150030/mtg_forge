@@ -52,7 +52,7 @@ classDiagram
 
 ProtectEffect is a concrete resolver in Forge's ability-effects framework that implements Magic: The Gathering's "protection from" ability. Extending SpellAbilityEffect, it overrides getStackDescription to render human-readable rules text and resolve to apply the grant, and exposes a static getProtectionList helper that parses the ability's "Gains"/"Choices" parameters into protection types, expanding shorthands such as "AnyColor" and "CardType".
 
-During resolution it derives the protection set from a player choice, the host's chosen colors, or a defined card's colors, converts each into the appropriate keyword, and applies it to every valid target Card plus any Radiance spread—skipping cards not in play, phased out, or failing the LKI game-state/timestamp check. A shared timestamp lets it register an until-end-of-turn GameCommand to remove non-permanent protections, while firing GameEventCardStatsChanged keeps game state and UI synchronized.
+During resolution it derives the protection set from a player choice, the host's chosen colors, or a defined card's colors, converts each into the appropriate keyword, and applies it to every valid target Card plus any Radiance spreadâ€”skipping cards not in play, phased out, or failing the LKI game-state/timestamp check. A shared timestamp lets it register an until-end-of-turn GameCommand to remove non-permanent protections, while firing GameEventCardStatsChanged keeps game state and UI synchronized.
 
 ## Source
 `forge-game/src/main/java/forge/game/ability/effects/ProtectEffect.java`
@@ -262,4 +262,182 @@ public class ProtectEffect extends SpellAbilityEffect {
     }
 
 }
+```
+
+## Python
+`forge/game/ability/effects/ProtectEffect.py`
+
+```python
+package forge.game.ability.effects
+
+from typing import List
+
+from forge.GameCommand import GameCommand
+from forge.card.CardType import CardType
+from forge.card.MagicColor import MagicColor
+from forge.game.Game import Game
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardUtil import CardUtil
+from forge.game.event.GameEventCardStatsChanged import GameEventCardStatsChanged
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Lang import Lang
+from forge.util.TextUtil import TextUtil
+
+
+class ProtectEffect(SpellAbilityEffect):
+
+    # (non-Javadoc)
+    # @see forge.card.abilityfactory.SpellEffect#getStackDescription(java.util.Map, forge.card.spellability.SpellAbility)
+    def getStackDescription(self, sa: SpellAbility) -> str:
+        gains = self.getProtectionList(sa)
+        choose = sa.hasParam("Choices")
+        joiner = "or" if choose else "and"
+
+        sb = []
+
+        tgtCards = self.getTargetCards(sa)
+
+        if tgtCards:
+            it = iter(tgtCards)
+            try:
+                tgtC = next(it)
+                hasNext = True
+            except StopIteration:
+                hasNext = False
+            while hasNext:
+                if tgtC.isFaceDown():
+                    sb.append("Morph")
+                else:
+                    sb.append(str(tgtC))
+
+                try:
+                    tgtC = next(it)
+                    sb.append(", ")
+                except StopIteration:
+                    hasNext = False
+
+            if sa.hasParam("Radiance") and sa.usesTargeting():
+                sb.append(" and each other ")
+                sb.append(sa.getParam("ValidTgts"))
+                sb.append(" that shares a color with ")
+                if len(tgtCards) > 1:
+                    sb.append("them")
+                else:
+                    sb.append("it")
+
+            sb.append(" gain")
+            if len(tgtCards) == 1:
+                sb.append("s")
+            sb.append(" protection from ")
+
+            if choose:
+                sb.append("your choice of ")
+
+            for i in range(len(gains)):
+                if i != 0:
+                    sb.append(", ")
+
+                if i == (len(gains) - 1):
+                    sb.append(joiner)
+                    sb.append(" ")
+
+                sb.append(gains[i])
+
+            if "Permanent" != sa.getParam("Duration"):
+                sb.append(" until end of turn")
+
+            sb.append(".")
+
+        return "".join(sb)
+
+    def resolve(self, sa: SpellAbility) -> None:
+        host = sa.getHostCard()
+        game = sa.getActivatingPlayer().getGame()
+
+        isChoice = "Choice" in sa.getParam("Gains")
+        choices = self.getProtectionList(sa)
+        gains: List[str] = []
+        tgtCards = self.getTargetCards(sa)
+
+        if isChoice and choices:
+            choser = sa.getActivatingPlayer()
+            if sa.hasParam("Choser") and sa.getParam("Choser") == "Controller" and tgtCards:
+                choser = tgtCards[0].getController()
+            choice = choser.getController().chooseProtectionType(sa, choices)
+            if choice is None:
+                return
+            gains.append(choice)
+            game.getAction().notifyOfValue(sa, choser, Lang.joinHomogenous(gains), choser)
+        elif sa.getParam("Gains") == "ChosenColor":
+            for color in host.getChosenColors():
+                gains.append(color.lower())
+        elif sa.getParam("Gains").startswith("Defined"):
+            def_ = AbilityUtils.getDefinedCards(host, sa.getParam("Gains")[8:], sa)
+            for color in def_.get(0).getColor():
+                gains.append(color.getName())
+        else:
+            gains.extend(choices)
+
+        gainsKWList: List[str] = []
+        for type in gains:
+            if CardType.isACardType(type):
+                gainsKWList.append("Protection:" + type)
+            else:
+                gainsKWList.append(TextUtil.concatWithSpace("Protection from", type))
+
+        tgtCards.extend(CardUtil.getRadiance(sa))
+
+        timestamp = game.getNextTimestamp()
+
+        for tgtC in tgtCards:
+            # only pump things in play
+            if not tgtC.isInPlay():
+                continue
+            if tgtC.isPhasedOut():
+                continue
+            # do Game Check there in case of LKI
+            gameCard = game.getCardState(tgtC, None)
+            if gameCard is None or not tgtC.equalsWithGameTimestamp(gameCard):
+                continue
+
+            gameCard.addChangedCardKeywords(gainsKWList, None, False, timestamp, None)
+            game.fireEvent(GameEventCardStatsChanged(gameCard))
+
+            if "Permanent" != sa.getParam("Duration"):
+                # If not Permanent, remove protection at EOT
+                class untilEOT(GameCommand):
+                    serialVersionUID = 7682700789217703789
+
+                    def run(self):
+                        if gameCard.isInPlay():
+                            gameCard.removeChangedCardKeywords(timestamp, 0, True)
+                            game.fireEvent(GameEventCardStatsChanged(gameCard))
+
+                self.addUntilCommand(sa, untilEOT())
+
+    @staticmethod
+    def getProtectionList(sa: SpellAbility) -> List[str]:
+        gains: List[str] = []
+
+        gainStr = sa.getParam("Gains")
+        if gainStr == "Choice":
+            choices = sa.getParam("Choices")
+
+            # Replace AnyColor with the 5 colors
+            if "AnyColor" in choices:
+                gains.extend(MagicColor.Constant.ONLY_COLORS)
+                import re
+                choices = re.sub("AnyColor,?", "", choices)
+            elif "CardType" in choices:
+                choices = ",".join(CardType.getAllCardTypes())
+            # Add any remaining choices
+            if len(choices) > 0:
+                gains.extend(choices.split(","))
+        else:
+            gains.extend(gainStr.split(","))
+        return gains
 ```

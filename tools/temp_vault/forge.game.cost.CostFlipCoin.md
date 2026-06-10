@@ -133,3 +133,53 @@ public class CostFlipCoin extends CostPart {
     }
 }
 ```
+
+## Python
+`forge/game/cost/CostFlipCoin.py`
+
+```python
+from forge.game.ability.effects.FlipCoinEffect import FlipCoinEffect
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+
+from forge.game.cost.CostPart import CostPart
+from forge.game.cost.ICostVisitor import ICostVisitor
+from forge.game.cost.PaymentDecision import PaymentDecision
+from forge.game.cost.Cost import Cost
+
+
+class CostFlipCoin(CostPart):
+    """
+    This is for the "FlipCoin" Cost
+    """
+
+    serialVersionUID = 1
+
+    def __init__(self, amount: str):
+        """
+        Instantiates a new cost FlipCoin.
+
+        :param amount: the amount
+        """
+        self.setAmount(amount)
+
+    def canPay(self, ability: SpellAbility, payer: Player, effect: bool) -> bool:
+        return True
+
+    def paymentOrder(self) -> int:
+        # In a world where costs are fully undoable, determining random information should be done last.
+        return 22
+
+    def toString(self) -> str:
+        return Cost.convertAmountTypeToWords(self.convertAmount(), self.getAmount(), "Coin")
+
+    def payAsDecided(self, payer: Player, pd: PaymentDecision, sa: SpellAbility, effect: bool) -> bool:
+        FlipCoinEffect.flipCoins(payer, sa, pd.c)
+        return True
+
+    def isReusable(self) -> bool:
+        return True
+
+    def accept(self, visitor: ICostVisitor):
+        return visitor.visit(self)
+```

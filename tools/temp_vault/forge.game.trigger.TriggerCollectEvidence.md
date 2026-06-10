@@ -37,6 +37,10 @@ classDiagram
 - [[forge.game.card.Card|Card]]
 - [[forge.game.spellability.SpellAbility|SpellAbility]]
 
+## Design Description
+
+Forge MTG's "Collect Evidence" trigger fires in response to a player performing the collect-evidence action, modeling the namesake mechanic from the trading card game. As a concrete subclass of `Trigger`, it plugs into the engine's event-driven trigger framework by overriding the three template hooks the base class defines: `performTest` gates firing on the optional `ValidPlayer` restriction, `setTriggeringObjects` exposes the acting player to the resulting ability via the `AbilityKey.Player` key, and `getImportantStackObjects` produces a localized, human-readable summary for the stack. It collaborates with `Card` and the `params` map at construction to configure the trigger declaratively, and with `SpellAbility` and the `AbilityKey`-keyed run-parameter map at runtime. The design intent is uniformity: it carries no state of its own, deferring all shared behavior to `Trigger` and keeping the player-centric matching logic minimal and data-driven.
+
 ## Source
 `forge-game/src/main/java/forge/game/trigger/TriggerCollectEvidence.java`
 
@@ -78,4 +82,37 @@ public class TriggerCollectEvidence extends Trigger {
     }
 
 }
+```
+
+## Python
+`forge/game/trigger/TriggerCollectEvidence.py`
+
+```python
+from forge.game.trigger.Trigger import Trigger
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Localizer import Localizer
+
+
+class TriggerCollectEvidence(Trigger):
+
+    def __init__(self, params: dict[str, str], host: Card, intrinsic: bool):
+        super().__init__(params, host, intrinsic)
+
+    def performTest(self, runParams: dict[AbilityKey, object]) -> bool:
+        if not self.matchesValidParam("ValidPlayer", runParams.get(AbilityKey.Player)):
+            return False
+
+        return True
+
+    def setTriggeringObjects(self, sa: SpellAbility, runParams: dict[AbilityKey, object]) -> None:
+        sa.setTriggeringObjectsFrom(runParams, AbilityKey.Player)
+
+    def getImportantStackObjects(self, sa: SpellAbility) -> str:
+        sb = []
+        sb.append(Localizer.getInstance().getMessage("lblPlayer"))
+        sb.append(": ")
+        sb.append(str(sa.getTriggeringObject(AbilityKey.Player)))
+        return "".join(sb)
 ```

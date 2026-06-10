@@ -39,6 +39,10 @@ classDiagram
 - [[forge.game.card.CardCollection|CardCollection]]
 - [[forge.game.spellability.SpellAbility|SpellAbility]]
 
+## Design Description
+
+TriggerMilledAll is a concrete trigger that fires when a group of cards is milled together, recognizing the game event and packaging its details for the triggered ability to consume. Extending `Trigger`, it overrides `performTest` to gate firing on an optional `ValidCard` filter, and `setTriggeringObjects` to expose the matching cards and their count via `AbilityKey.Cards` and `AbilityKey.Amount` on the `SpellAbility`. It collaborates with `CardCollection` and `CardLists` to filter the milled set against the host card's controller and perspective, and overrides `getImportantStackObjects` to surface a localized amount for stack display. The design follows Forge's data-driven trigger pattern: behavior is parameterized by the script-supplied params map rather than hard-coded, keeping the class a thin, reusable adapter between raw game events and ability resolution.
+
 ## Source
 `forge-game/src/main/java/forge/game/trigger/TriggerMilledAll.java`
 
@@ -109,4 +113,49 @@ public class TriggerMilledAll extends Trigger {
         return sb.toString();
     }
 }
+```
+
+## Python
+`forge/game/trigger/TriggerMilledAll.py`
+
+```python
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardLists import CardLists
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Localizer import Localizer
+from forge.game.trigger.Trigger import Trigger
+
+
+class TriggerMilledAll(Trigger):
+    """
+    TriggerMilledAll class.
+    """
+
+    def __init__(self, params: dict[str, str], host: Card, intrinsic: bool):
+        super().__init__(params, host, intrinsic)
+
+    def performTest(self, runParams: dict[AbilityKey, object]) -> bool:
+        if not self.matchesValidParam("ValidCard", runParams.get(AbilityKey.Cards)):
+            return False
+
+        return True
+
+    def setTriggeringObjects(self, sa: SpellAbility, runParams: dict[AbilityKey, object]) -> None:
+        cards = runParams.get(AbilityKey.Cards)
+
+        if self.hasParam("ValidCard"):
+            cards = CardLists.getValidCards(cards, self.getParam("ValidCard"), self.getHostCard().getController(),
+                    self.getHostCard(), self)
+
+        sa.setTriggeringObject(AbilityKey.Cards, cards)
+        sa.setTriggeringObject(AbilityKey.Amount, cards.size())
+
+    def getImportantStackObjects(self, sa: SpellAbility) -> str:
+        sb = []
+        sb.append(Localizer.getInstance().getMessage("lblAmount"))
+        sb.append(": ")
+        sb.append(str(sa.getTriggeringObject(AbilityKey.Amount)))
+        return "".join(sb)
 ```

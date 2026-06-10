@@ -38,9 +38,9 @@ classDiagram
 
 ## Design Description
 
-`GameEventCardRegenerated` is an immutable event record signaling that one or more cards have been regenerated during play. As a `GameEvent`, it participates in Forge's event-dispatch system: gameplay logic publishes it to notify observers—UI, logging, and AI—of the state change, decoupling the cause of regeneration from its consumers. It carries only a `Collection<CardView>`, the view-layer projection of the affected cards rather than live `Card` model objects, keeping the event lightweight and safe to hand to presentation code.
+`GameEventCardRegenerated` is an immutable event record signaling that one or more cards have been regenerated during play. As a `GameEvent`, it participates in Forge's event-dispatch system: gameplay logic publishes it to notify observersâ€”UI, logging, and AIâ€”of the state change, decoupling the cause of regeneration from its consumers. It carries only a `Collection<CardView>`, the view-layer projection of the affected cards rather than live `Card` model objects, keeping the event lightweight and safe to hand to presentation code.
 
-The record implements `visit` via the visitor pattern, dispatching to the type-specific overload on an `IGameEventVisitor<T>` so handlers can process events without instanceof checks. A convenience constructor accepts a single live `Card`, wrapping it through `CardView.get` into a singleton collection—a deliberate adaptation from the model side to the view-oriented event payload.
+The record implements `visit` via the visitor pattern, dispatching to the type-specific overload on an `IGameEventVisitor<T>` so handlers can process events without instanceof checks. A convenience constructor accepts a single live `Card`, wrapping it through `CardView.get` into a singleton collectionâ€”a deliberate adaptation from the model side to the view-oriented event payload.
 
 ## Source
 `forge-game/src/main/java/forge/game/event/GameEventCardRegenerated.java`
@@ -65,4 +65,26 @@ public record GameEventCardRegenerated(Collection<CardView> cards) implements Ga
         return visitor.visit(this);
     }
 }
+```
+
+## Python
+`forge/game/event/GameEventCardRegenerated.py`
+
+```python
+package forge.game.event;
+
+from forge.game.card.Card import Card
+from forge.game.card.CardView import CardView
+from forge.game.event.GameEvent import GameEvent
+from forge.game.event.IGameEventVisitor import IGameEventVisitor
+
+from typing import Collection
+
+
+class GameEventCardRegenerated(GameEvent):
+    def __init__(self, affected: Card):
+        self.cards: Collection[CardView] = [CardView.get(affected)]
+
+    def visit(self, visitor: IGameEventVisitor):
+        return visitor.visit(self)
 ```

@@ -43,7 +43,7 @@ classDiagram
 
 ## Design Description
 
-`DeckSerializer` is a stateless utility class that handles persistence of `Deck` objects to and from Forge's text-based deck file format. It centralizes both directions of the conversion: `writeDeck`/`serializeDeck` emit a deck as a list of bracketed sections—a `[metadata]` header followed by one section per non-empty `DeckSection`/`CardPool` pair—while `fromFile`/`fromSections` parse that layout back into a `Deck`.
+`DeckSerializer` is a stateless utility class that handles persistence of `Deck` objects to and from Forge's text-based deck file format. It centralizes both directions of the conversion: `writeDeck`/`serializeDeck` emit a deck as a list of bracketed sectionsâ€”a `[metadata]` header followed by one section per non-empty `DeckSection`/`CardPool` pairâ€”while `fromFile`/`fromSections` parse that layout back into a `Deck`.
 
 Implemented entirely with static methods and no instance state, it forms a focused boundary between the in-memory `Deck` model and on-disk storage, delegating low-level I/O and tokenizing to `FileUtil`, `FileSection`, and `TextUtil`. It collaborates with `DeckFileHeader` to read and write deck metadata (name, comment, tags, AI hints, draft notes, key cards), and uses `FileSectionManual` as a fallback to reconstruct a header from a legacy `general` layout. Notably, card sections are restored lazily via `setDeferredSections`, deferring the cost of materializing each `CardPool` until it is actually needed.
 
@@ -163,4 +163,102 @@ public class DeckSerializer {
         return d;
     }
 }
+```
+
+## Python
+`forge/deck/io/DeckSerializer.py`
+
+```python
+from forge.deck.CardPool import CardPool
+from forge.deck.Deck import Deck
+from forge.deck.DeckSection import DeckSection
+from forge.deck.io.DeckFileHeader import DeckFileHeader
+from forge.util.FileSection import FileSection
+from forge.util.FileSectionManual import FileSectionManual
+from forge.util.FileUtil import FileUtil
+from forge.util.TextUtil import TextUtil
+
+
+class DeckSerializer:
+
+    @staticmethod
+    def writeDeck(d, f):
+        FileUtil.writeFile(f, DeckSerializer.serializeDeck(d))
+
+    @staticmethod
+    def readDeckMetadata(map):
+        if map is None:
+            return None
+        metadata = map.get("metadata")
+        if metadata is not None:
+            return DeckFileHeader(FileSection.parse(metadata, FileSection.EQUALS_KV_SEPARATOR))
+        general = map.get("general")
+        if general is not None:
+            fs = FileSectionManual()
+            fs.put(DeckFileHeader.NAME, " ".join(map.get("")))
+            fs.put(DeckFileHeader.DECK_TYPE, " ".join(general))
+            return DeckFileHeader(fs)
+
+        return None
+
+    @staticmethod
+    def serializeDeck(d):
+        out = []
+        out.append(TextUtil.enclosedBracket("metadata"))
+
+        out.append(TextUtil.concatNoSpace(DeckFileHeader.NAME, "=", d.getName().replace("\n", "")))
+        # these are optional
+        if d.getComment() is not None:
+            out.append(TextUtil.concatNoSpace(DeckFileHeader.COMMENT, "=", d.getComment().replace("\n", "")))
+        if d.getTags():
+            out.append(TextUtil.concatNoSpace(DeckFileHeader.TAGS, "=", DeckFileHeader.TAGS_SEPARATOR.join(d.getTags())))
+        if d.getAiHints():
+            out.append(TextUtil.concatNoSpace(DeckFileHeader.AI_HINTS, "=", " | ".join(d.getAiHints())))
+        if d.getDraftNotes():
+            sb = DeckSerializer.serializeDraftNotes(d.getDraftNotes())
+            out.append(TextUtil.concatNoSpace(DeckFileHeader.DRAFT_NOTES, "=", sb))
+        if d.getKeyCards():
+            out.append(TextUtil.concatNoSpace(DeckFileHeader.KEY_CARDS, "=", ";".join(d.getKeyCards())))
+
+        for s in d:
+            if s.getValue().isEmpty():
+                continue
+            out.append(TextUtil.enclosedBracket(str(s.getKey())))
+            out.append(s.getValue().toCardList(System.lineSeparator()))
+        return out
+
+    @staticmethod
+    def serializeDraftNotes(draftNotes):
+        sb = []
+        for key in draftNotes.keys():
+            if len(sb) > 0:
+                sb.append(" | ")
+
+            sb.append(key)
+            sb.append(":")
+            sb.append(draftNotes.get(key))
+        return "".join(sb)
+
+    @staticmethod
+    def fromFile(deckFile):
+        return DeckSerializer.fromSections(FileSection.parseSections(FileUtil.readFile(deckFile)))
+
+    @staticmethod
+    def fromSections(sections):
+        if sections is None or not sections:
+            return None
+
+        dh = DeckSerializer.readDeckMetadata(sections)
+        if dh is None:
+            return None
+
+        d = Deck(dh.getName())
+        d.setComment(dh.getComment())
+        d.setAiHints(dh.getAiHints())
+        d.getTags().addAll(dh.getTags())
+        d.setDraftNotes(dh.getDraftNotes())
+        for keyCard in dh.getKeyCards():
+            d.addKeyCard(keyCard)
+        d.setDeferredSections(sections)
+        return d
 ```

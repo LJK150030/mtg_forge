@@ -37,6 +37,12 @@ classDiagram
 - [[forge.game.card.Card|Card]]
 - [[forge.game.spellability.SpellAbility|SpellAbility]]
 
+## Design Description
+
+Trigger that fires when a permanent is transformed, evaluated for the controlling card's relevant trigger conditions. As a concrete subclass of `Trigger`, it specializes the engine's generic trigger machinery for the "transformed" event, overriding the standard hooks rather than introducing new public API.
+
+`performTest` gates firing on the optional `ValidCard` restriction matched against the transformed `Card` supplied in the run parameters, while `setTriggeringObjects` binds that `Card` into the resolving `SpellAbility` via `AbilityKey.Card`. `getImportantStackObjects` produces a localized, stack-facing label for the triggering card, using `Localizer` to keep presentation translatable. The class collaborates with `AbilityKey` as the typed key into the run-parameter map, keeping it consistent with Forge's data-driven trigger framework.
+
 ## Source
 `forge-game/src/main/java/forge/game/trigger/TriggerTransformed.java`
 
@@ -109,4 +115,38 @@ public class TriggerTransformed extends Trigger {
     }
 
 }
+```
+
+## Python
+`forge/game/trigger/TriggerTransformed.py`
+
+```python
+from forge.game.trigger.Trigger import Trigger
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Localizer import Localizer
+
+
+# TODO: Write javadoc for this type.
+class TriggerTransformed(Trigger):
+
+    def __init__(self, params: dict[str, str], host: Card, intrinsic: bool):
+        super().__init__(params, host, intrinsic)
+
+    def performTest(self, runParams: dict[AbilityKey, object]) -> bool:
+        if not self.matchesValidParam("ValidCard", runParams.get(AbilityKey.Card)):
+            return False
+
+        return True
+
+    def setTriggeringObjects(self, sa: SpellAbility, runParams: dict[AbilityKey, object]) -> None:
+        sa.setTriggeringObjectsFrom(runParams, AbilityKey.Card)
+
+    def getImportantStackObjects(self, sa: SpellAbility) -> str:
+        sb = []
+        sb.append(Localizer.getInstance().getMessage("lblTransformed"))
+        sb.append(": ")
+        sb.append(str(sa.getTriggeringObject(AbilityKey.Card)))
+        return "".join(sb)
 ```

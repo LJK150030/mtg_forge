@@ -41,7 +41,7 @@ classDiagram
 
 AlwaysPlayAi is a minimal AI decision strategy in Forge's ability-AI layer that unconditionally favors playing its associated spell or ability. Extending the abstract `SpellAbilityAi` base, it overrides just two of the framework's decision hooks: `canPlay` returns an `AiAbilityDecision` with maximum confidence (100) and a `WillPlay` verdict, and `confirmAction` returns `true` for every confirmation mode, message, or parameter map. It touches `Player`, `SpellAbility`, and `PlayerActionConfirmMode` purely as method inputs and keeps no internal state.
 
-The design intent is a reusable, stateless "always say yes" policy that ability factories can attach to effects the AI should never decline—typically strictly beneficial or mandatory abilities. By hard-coding affirmative answers, it acts as a trivial default that delegates all remaining timing, targeting, and resolution logic to the surrounding `SpellAbilityAi` machinery rather than implementing any evaluation of its own.
+The design intent is a reusable, stateless "always say yes" policy that ability factories can attach to effects the AI should never declineâ€”typically strictly beneficial or mandatory abilities. By hard-coding affirmative answers, it acts as a trivial default that delegates all remaining timing, targeting, and resolution logic to the surrounding `SpellAbilityAi` machinery rather than implementing any evaluation of its own.
 
 ## Source
 `forge-ai/src/main/java/forge/ai/ability/AlwaysPlayAi.java`
@@ -72,4 +72,28 @@ public class AlwaysPlayAi extends SpellAbilityAi {
         return true;
     }
 }
+```
+
+## Python
+`forge/ai/ability/AlwaysPlayAi.py`
+
+```python
+from forge.ai.SpellAbilityAi import SpellAbilityAi
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.game.player.Player import Player
+from forge.game.player.PlayerActionConfirmMode import PlayerActionConfirmMode
+from forge.game.spellability.SpellAbility import SpellAbility
+
+from typing import Map
+
+
+class AlwaysPlayAi(SpellAbilityAi):
+    # (non-Javadoc)
+    # @see forge.card.abilityfactory.SpellAiLogic#canPlayAI(forge.game.player.Player, java.util.Map, forge.card.spellability.SpellAbility)
+    def canPlay(self, aiPlayer: Player, sa: SpellAbility) -> AiAbilityDecision:
+        return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+    def confirmAction(self, player: Player, sa: SpellAbility, mode: PlayerActionConfirmMode, message: str, params: dict[str, object]) -> bool:
+        return True
 ```

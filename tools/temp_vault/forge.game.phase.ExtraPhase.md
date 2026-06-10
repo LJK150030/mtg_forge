@@ -34,6 +34,12 @@ classDiagram
 - [[forge.game.phase.PhaseType|PhaseType]]
 - [[forge.game.trigger.Trigger|Trigger]]
 
+## Design Description
+
+Forge's `ExtraPhase` is a small mutable value object that models an additional, dynamically inserted game phase. It pairs an immutable `PhaseType` (the kind of phase being added) with a mutable, lazily populated collection of delayed `Trigger`s that should fire during that phase. Its responsibility is purely to carry this association: it exposes the phase via `getPhase()`, accepts triggers through `addTrigger()`, and surfaces them via `getDelayedTriggers()`.
+
+It is a standalone class with no supertype, collaborating only with `PhaseType` and `Trigger` from sibling packages. The `final` phase field signals that the phase identity is fixed at construction, while the trigger list is wrapped in `Collections.synchronizedList`, indicating an intent to tolerate concurrent access as triggers accumulate across the game engine.
+
 ## Source
 `forge-game/src/main/java/forge/game/phase/ExtraPhase.java`
 
@@ -67,4 +73,27 @@ public class ExtraPhase {
     }
 
 }
+```
+
+## Python
+`forge/game/phase/ExtraPhase.py`
+
+```python
+from forge.game.phase.PhaseType import PhaseType
+from forge.game.trigger.Trigger import Trigger
+
+
+class ExtraPhase:
+    def __init__(self, phase: PhaseType):
+        self.phase = phase
+        self.delTrig: list[Trigger] = []
+
+    def getPhase(self) -> PhaseType:
+        return self.phase
+
+    def addTrigger(self, deltrigger: Trigger) -> None:
+        self.delTrig.append(deltrigger)
+
+    def getDelayedTriggers(self) -> list[Trigger]:
+        return self.delTrig
 ```

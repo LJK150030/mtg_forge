@@ -110,7 +110,7 @@ classDiagram
 
 ## Design Description
 
-`ManaCostShard` is a `forge-core` enumeration representing one atomic symbol within a Magic mana cost — a pure color, hybrid, Phyrexian, "2/color", colorless-or-color, snow, generic, or X mark. Each constant encodes its meaning as a bitmask of `ManaAtom` flags, from which the constructor precomputes converted mana cost, a color-weighted comparison cost (`cmpc`) for ordering, and cached string and image-key forms. It offers predicate accessors (`isWhite`, `isPhyrexian`, `isMonoColor`, `canBePaidWithManaOfColor`) and factory methods `valueOf` (by atom mask) and `parseNonGeneric` (by symbol text) to rebuild shards from data.
+`ManaCostShard` is a `forge-core` enumeration representing one atomic symbol within a Magic mana cost â€” a pure color, hybrid, Phyrexian, "2/color", colorless-or-color, snow, generic, or X mark. Each constant encodes its meaning as a bitmask of `ManaAtom` flags, from which the constructor precomputes converted mana cost, a color-weighted comparison cost (`cmpc`) for ordering, and cached string and image-key forms. It offers predicate accessors (`isWhite`, `isPhyrexian`, `isMonoColor`, `canBePaidWithManaOfColor`) and factory methods `valueOf` (by atom mask) and `parseNonGeneric` (by symbol text) to rebuild shards from data.
 
 As a self-contained value type it collaborates only with `ColorSet`, deriving a color mask from its bits via `getColor`. The intentional declaration order (least-payable shards first) and the deliberately "magic" weights in `getCmpCost` signal that the enum is designed to drive consistent cost sorting and payment resolution throughout the engine's mana system.
 
@@ -454,4 +454,282 @@ public enum ManaCostShard {
         return this.shard;
     }
 }
+```
+
+## Python
+`forge/card/mana/ManaCostShard.py`
+
+```python
+from enum import Enum
+
+from forge.card.ColorSet import ColorSet
+from forge.card.mana.ManaAtom import ManaAtom
+from forge.util.BinaryUtil import BinaryUtil
+
+
+class ManaCostShard(Enum):
+    # declaration order matters! Place the shards that offer least ways to be paid for first
+
+    # Pure colors
+    WHITE = (ManaAtom.WHITE, "W")
+    BLUE = (ManaAtom.BLUE, "U")
+    BLACK = (ManaAtom.BLACK, "B")
+    RED = (ManaAtom.RED, "R")
+    GREEN = (ManaAtom.GREEN, "G")
+    COLORLESS = (ManaAtom.COLORLESS, "C")
+
+    # Hybrid
+    WU = (ManaAtom.WHITE | ManaAtom.BLUE, "W/U")
+    WB = (ManaAtom.WHITE | ManaAtom.BLACK, "W/B")
+    UB = (ManaAtom.BLUE | ManaAtom.BLACK, "U/B")
+    UR = (ManaAtom.BLUE | ManaAtom.RED, "U/R")
+    BR = (ManaAtom.BLACK | ManaAtom.RED, "B/R")
+    BG = (ManaAtom.BLACK | ManaAtom.GREEN, "B/G")
+    RW = (ManaAtom.RED | ManaAtom.WHITE, "R/W")
+    RG = (ManaAtom.RED | ManaAtom.GREEN, "R/G")
+    GW = (ManaAtom.GREEN | ManaAtom.WHITE, "G/W")
+    GU = (ManaAtom.GREEN | ManaAtom.BLUE, "G/U")
+
+    # Or 2 generic
+    W2 = (ManaAtom.WHITE | ManaAtom.OR_2_GENERIC, "2/W")
+    U2 = (ManaAtom.BLUE | ManaAtom.OR_2_GENERIC, "2/U")
+    B2 = (ManaAtom.BLACK | ManaAtom.OR_2_GENERIC, "2/B")
+    R2 = (ManaAtom.RED | ManaAtom.OR_2_GENERIC, "2/R")
+    G2 = (ManaAtom.GREEN | ManaAtom.OR_2_GENERIC, "2/G")
+
+    # Or Colorless
+    CW = (ManaAtom.WHITE | ManaAtom.COLORLESS, "C/W")
+    CU = (ManaAtom.BLUE | ManaAtom.COLORLESS, "C/U")
+    CB = (ManaAtom.BLACK | ManaAtom.COLORLESS, "C/B")
+    CR = (ManaAtom.RED | ManaAtom.COLORLESS, "C/R")
+    CG = (ManaAtom.GREEN | ManaAtom.COLORLESS, "C/G")
+
+    # Snow and colorless
+    S = (ManaAtom.IS_SNOW, "S")
+    GENERIC = (ManaAtom.GENERIC, "1")
+
+    # Phyrexian
+    WP = (ManaAtom.WHITE | ManaAtom.OR_2_LIFE, "W/P")
+    UP = (ManaAtom.BLUE | ManaAtom.OR_2_LIFE, "U/P")
+    BP = (ManaAtom.BLACK | ManaAtom.OR_2_LIFE, "B/P")
+    RP = (ManaAtom.RED | ManaAtom.OR_2_LIFE, "R/P")
+    GP = (ManaAtom.GREEN | ManaAtom.OR_2_LIFE, "G/P")
+    BGP = (ManaAtom.BLACK | ManaAtom.GREEN | ManaAtom.OR_2_LIFE, "B/G/P")
+    BRP = (ManaAtom.BLACK | ManaAtom.RED | ManaAtom.OR_2_LIFE, "B/R/P")
+    GUP = (ManaAtom.GREEN | ManaAtom.BLUE | ManaAtom.OR_2_LIFE, "G/U/P")
+    GWP = (ManaAtom.GREEN | ManaAtom.WHITE | ManaAtom.OR_2_LIFE, "G/W/P")
+    RGP = (ManaAtom.RED | ManaAtom.GREEN | ManaAtom.OR_2_LIFE, "R/G/P")
+    RWP = (ManaAtom.RED | ManaAtom.WHITE | ManaAtom.OR_2_LIFE, "R/W/P")
+    UBP = (ManaAtom.BLUE | ManaAtom.BLACK | ManaAtom.OR_2_LIFE, "U/B/P")
+    URP = (ManaAtom.BLUE | ManaAtom.RED | ManaAtom.OR_2_LIFE, "U/R/P")
+    WBP = (ManaAtom.WHITE | ManaAtom.BLACK | ManaAtom.OR_2_LIFE, "W/B/P")
+    WUP = (ManaAtom.WHITE | ManaAtom.BLUE | ManaAtom.OR_2_LIFE, "W/U/P")
+
+    X = (ManaAtom.IS_X, "X")
+
+    # Colored only X, each color can be used to pay for this only once (for Emblazoned Golem)
+    COLORED_X = (ManaAtom.WHITE | ManaAtom.BLUE | ManaAtom.BLACK | ManaAtom.RED | ManaAtom.GREEN | ManaAtom.IS_X, "1")
+
+    def __init__(self, value, sValue):
+        self.shard = value
+        self.cmc = self.getCMC()
+        self.cmpc = self.getCmpCost()
+        self.stringValue = "{" + sValue + "}"
+        self.shortStringValue = sValue
+        self.imageKey = sValue.replace("/", "")
+
+    def getCMC(self):
+        if 0 != (self.shard & ManaAtom.IS_X):
+            return 0
+        if 0 != (self.shard & ManaAtom.OR_2_GENERIC):
+            return 2
+        return 1
+
+    def getCmpCost(self):
+        """
+        Returns Mana cost, adjusted slightly to make colored mana parts more
+        significant. Should only be used for comparison purposes; using this
+        method allows the sort: 2 < X 2 < 1 U < U U < UR U < X U U < X X U U
+
+        @return The converted cost + 0.0005* the number of colored mana in the
+                cost + 0.00001 * the number of X's in the cost
+        """
+        if 0 != (self.shard & ManaAtom.IS_X):
+            return 0.0001
+        cost = 2 if 0 != (self.shard & ManaAtom.OR_2_GENERIC) else 1
+        # yes, these numbers are magic, slightly-magic
+        if 0 != (self.shard & ManaAtom.WHITE):
+            cost += 0.0005
+        if 0 != (self.shard & ManaAtom.BLUE):
+            cost += 0.0020
+        if 0 != (self.shard & ManaAtom.BLACK):
+            cost += 0.0080
+        if 0 != (self.shard & ManaAtom.RED):
+            cost += 0.0320
+        if 0 != (self.shard & ManaAtom.GREEN):
+            cost += 0.1280
+        if 0 != (self.shard & ManaAtom.OR_2_LIFE):
+            cost += 0.00003
+        return cost
+
+    def getColorMask(self):
+        """
+        Gets the color mask.
+
+        @return the color mask
+        """
+        return self.shard & ManaCostShard.COLORS_SUPERPOSITION
+
+    def getColor(self):
+        return ColorSet.fromMask(self.getColorMask())
+
+    @staticmethod
+    def valueOf(atoms):
+        """
+        Value of.
+
+        @param atoms the atoms
+        @return the card mana cost shard
+        """
+        if atoms == 0:
+            return ManaCostShard.GENERIC
+        for element in ManaCostShard:
+            if element.shard == atoms:
+                return element
+        return None  # will consider anything else plain colorless;
+
+        # raise RuntimeError("Not found: mana shard with profile = %x" % atoms)
+
+    @staticmethod
+    def parseNonGeneric(unparsed):
+        atoms = 0
+        for iChar in range(len(unparsed)):
+            c = unparsed[iChar]
+            if c == 'W':
+                atoms |= ManaAtom.WHITE
+            elif c == 'U':
+                atoms |= ManaAtom.BLUE
+            elif c == 'B':
+                atoms |= ManaAtom.BLACK
+            elif c == 'R':
+                atoms |= ManaAtom.RED
+            elif c == 'G':
+                atoms |= ManaAtom.GREEN
+            elif c == 'P':
+                atoms |= ManaAtom.OR_2_LIFE
+            elif c == 'S':
+                atoms |= ManaAtom.IS_SNOW
+            elif c == 'X':
+                atoms |= ManaAtom.IS_X
+            elif c == 'C':
+                atoms |= ManaAtom.COLORLESS
+            elif c == '2':
+                atoms |= ManaAtom.OR_2_GENERIC
+            else:
+                if '0' <= c <= '9':
+                    atoms |= ManaAtom.GENERIC
+        # for cases when unparsed equals '2' or unparsed is like '12' or '20'
+        if atoms == ManaAtom.OR_2_GENERIC or atoms == (ManaAtom.OR_2_GENERIC | ManaAtom.GENERIC):
+            atoms = ManaAtom.GENERIC
+        return ManaCostShard.valueOf(atoms)
+
+    def toString(self):
+        """
+        @return the string representation of this shard - e.g. "{W}" "{2/U}" "{G/P}"
+        """
+        return self.stringValue
+
+    def __str__(self):
+        return self.stringValue
+
+    def toShortString(self):
+        """
+        @return The string representation of this shard without brackets - e.g. "W" "2/U" "G/P"
+        """
+        return self.shortStringValue
+
+    def getCmc(self):
+        """
+        Gets the cmc.
+
+        @return the cmc
+        """
+        return self.cmc
+
+    def getCmpc(self):
+        """
+        Gets the cmpc.
+
+        @return the cmpc
+        """
+        return self.cmpc
+
+    def getImageKey(self):
+        """
+        Gets the image key.
+
+        @return the imageKey
+        """
+        return self.imageKey
+
+    def isWhite(self):
+        return self.isOfKind(ManaAtom.WHITE)
+
+    def isBlue(self):
+        return self.isOfKind(ManaAtom.BLUE)
+
+    def isBlack(self):
+        return self.isOfKind(ManaAtom.BLACK)
+
+    def isRed(self):
+        return self.isOfKind(ManaAtom.RED)
+
+    def isGreen(self):
+        return self.isOfKind(ManaAtom.GREEN)
+
+    def isPhyrexian(self):
+        """
+        TODO: Write javadoc for this method.
+        @return
+        """
+        return self.isOfKind(ManaAtom.OR_2_LIFE)
+
+    def isSnow(self):
+        """
+        TODO: Write javadoc for this method.
+        @return
+        """
+        return self.isOfKind(ManaAtom.IS_SNOW)
+
+    def isMonoColor(self):
+        return BinaryUtil.bitCount(self.shard & ManaCostShard.COLORS_SUPERPOSITION) == 1
+
+    def isMultiColor(self):
+        return BinaryUtil.bitCount(self.shard & ManaCostShard.COLORS_SUPERPOSITION) == 2
+
+    def isColorless(self):
+        return self.isOfKind(ManaAtom.COLORLESS)
+
+    def isGeneric(self):
+        return self.isOfKind(ManaAtom.GENERIC) or self.isOfKind(ManaAtom.IS_X) or self.isSnow() or self.isOr2Generic()
+
+    def isOr2Generic(self):
+        return self.isOfKind(ManaAtom.OR_2_GENERIC)
+
+    def isColor(self, colorCode):
+        return (colorCode & self.shard) > 0
+
+    def canBePaidWithManaOfColor(self, colorCode):
+        return self.isOr2Generic() or \
+            ((ManaCostShard.COLORS_SUPERPOSITION | ManaAtom.COLORLESS) & self.shard) == 0 or \
+            self.isColor(colorCode)
+
+    def isOfKind(self, atom):
+        return (self.shard & atom) != 0
+
+    def getShard(self):
+        return self.shard
+
+
+ManaCostShard.COLORS_SUPERPOSITION = ManaAtom.WHITE | ManaAtom.BLUE | ManaAtom.BLACK | ManaAtom.RED | ManaAtom.GREEN
 ```

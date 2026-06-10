@@ -48,7 +48,7 @@ classDiagram
 
 ## Design Description
 
-The ScryAi class encapsulates the artificial-intelligence decision logic for the Scry ability, letting the computer player judge whether and when to reorder the top of its library. Extending SpellAbilityAi, it overrides the framework's evaluation hooks—API-level reasoning, AI-logic dispatch, phase restrictions, drawback checks, and forced-trigger resolution—each returning an AiAbilityDecision the engine consumes.
+The ScryAi class encapsulates the artificial-intelligence decision logic for the Scry ability, letting the computer player judge whether and when to reorder the top of its library. Extending SpellAbilityAi, it overrides the framework's evaluation hooksâ€”API-level reasoning, AI-logic dispatch, phase restrictions, drawback checks, and forced-trigger resolutionâ€”each returning an AiAbilityDecision the engine consumes.
 
 Collaborating with Player, SpellAbility, PhaseHandler, and Card, it encodes deliberate timing intent: scrying is preferred at sorcery speed in Main 1 or at an opponent's end-of-turn to avoid mana-locking and to precede a draw, with random chance weighting and special cases like Brain in a Jar and "BestOpportunity" logic that defers scrying when stronger plays remain. Targeting favors the AI and its allies, falling back to opponents only when the effect is mandatory.
 
@@ -252,4 +252,161 @@ public class ScryAi extends SpellAbilityAi {
         return true;
     }
 }
+```
+
+## Python
+`forge/ai/ability/ScryAi.py`
+
+```python
+from forge.ai.SpellAbilityAi import SpellAbilityAi
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.ai.ComputerUtilCost import ComputerUtilCost
+from forge.ai.ComputerUtilMana import ComputerUtilMana
+from forge.ai.SpecialCardAi import SpecialCardAi
+from forge.game.ability.ApiType import ApiType
+from forge.game.card.Card import Card
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CardPredicates import CardPredicates
+from forge.game.phase.PhaseHandler import PhaseHandler
+from forge.game.phase.PhaseType import PhaseType
+from forge.game.player.Player import Player
+from forge.game.player.PlayerActionConfirmMode import PlayerActionConfirmMode
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.MyRandom import MyRandom
+
+from typing import Map
+
+
+class ScryAi(SpellAbilityAi):
+
+    # (non-Javadoc)
+    # @see forge.card.abilityfactory.SpellAiLogic#doTriggerAINoCost(forge.game.player.Player, java.util.Map, forge.card.spellability.SpellAbility, boolean)
+    def doTriggerNoCost(self, ai: Player, sa: SpellAbility, mandatory: bool) -> AiAbilityDecision:
+        if sa.usesTargeting():
+            # ability is targeted
+            sa.resetTargets()
+
+            if sa.canTarget(ai):
+                sa.getTargets().add(ai)
+            else:
+                for p in ai.getAllies():
+                    if sa.canTarget(p):
+                        sa.getTargets().add(p)
+                        break
+                if mandatory and not sa.isTargetNumberValid():
+                    for p in ai.getOpponents():
+                        if sa.canTarget(p):
+                            sa.getTargets().add(p)
+                            break
+
+            if "X" == sa.getParam("ScryNum") and sa.getSVar("X") == "Count$xPaid":
+                xPay = ComputerUtilCost.setMaxXValue(sa, ai, sa.isTrigger())
+                if xPay == 0:
+                    return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+                sa.getRootAbility().setXManaCostPaid(xPay)
+
+            if mandatory:
+                return AiAbilityDecision(50, AiPlayDecision.MandatoryPlay)
+
+            if sa.isTargetNumberValid():
+                return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+            return AiAbilityDecision(0, AiPlayDecision.TargetingFailed)
+
+        return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+    # scryTargetAI()
+
+    def chkDrawback(self, ai: Player, sa: SpellAbility) -> AiAbilityDecision:
+        return self.doTriggerNoCost(ai, sa, False)
+
+    # Checks if the AI will play a SpellAbility based on its phase restrictions
+    def checkPhaseRestrictions(self, ai: Player, sa: SpellAbility, ph: PhaseHandler) -> bool:
+        logic = sa.getParamOrDefault("AILogic", "")
+
+        # For Brain in a Jar, avoid competing against the other ability in the opponent's EOT.
+        if "BrainJar" == logic:
+            return ph.getPhase().isAfter(PhaseType.MAIN2)
+
+        # if the Scry ability requires tapping and has a mana cost, it's best done at the end of opponent's turn
+        # and right before the beginning of AI's turn, if possible, to avoid mana locking the AI and also to
+        # try to scry right before drawing a card. Also, avoid tapping creatures in the AI's turn, if possible,
+        # even if there's no mana cost.
+        if (sa.getPayCosts().hasTapCost()
+                and (sa.getPayCosts().hasManaCost() or sa.getHostCard().isCreature())
+                and not self.isSorcerySpeed(sa, ai)):
+            return ph.getNextTurn() == ai and ph.is_(PhaseType.END_OF_TURN)
+
+        # AI logic to scry in Main 1 if there is no better option, otherwise scry at opponent's EOT
+        # (e.g. Glimmer of Genius)
+        if "BestOpportunity" == logic:
+            return self.doBestOpportunityLogic(ai, sa, ph)
+
+        # in the playerturn Scry should only be done in Main1 or in upkeep if able
+        if ph.isPlayerTurn(ai):
+            if self.isSorcerySpeed(sa, ai):
+                return ph.is_(PhaseType.MAIN1) or sa.isPwAbility()
+            else:
+                return ph.is_(PhaseType.UPKEEP)
+        return True
+
+    def doBestOpportunityLogic(self, ai: Player, sa: SpellAbility, ph: PhaseHandler) -> bool:
+        # Check to see if there are any cards in hand that may be worth casting
+        hasSomethingElse = False
+        for c in CardLists.filter(ai.getCardsIn(ZoneType.Hand), CardPredicates.NON_LANDS):
+            for ab in c.getAllSpellAbilities():
+                if (ab.getPayCosts().hasManaCost()
+                        and ComputerUtilMana.hasEnoughManaSourcesToCast(ab, ai)):
+                    # TODO: currently looks for non-Scry cards, can most certainly be made smarter.
+                    if ab.getApi() != ApiType.Scry:
+                        hasSomethingElse = True
+                        break
+
+        return ((not hasSomethingElse and ph.getPlayerTurn() == ai and ph.getPhase().isAfter(PhaseType.DRAW))
+                or (ph.getNextTurn() == ai and ph.is_(PhaseType.END_OF_TURN)))
+
+    # Checks if the AI will play a SpellAbility with the specified AiLogic
+    def checkAiLogic(self, ai: Player, sa: SpellAbility, aiLogic: str) -> bool:
+        if "BrainJar" == aiLogic:
+            return SpecialCardAi.BrainInAJar.consider(ai, sa)
+        elif "MultipleChoice" == aiLogic:
+            return SpecialCardAi.MultipleChoice.consider(ai, sa)
+        return super().checkAiLogic(ai, sa, aiLogic)
+
+    def checkApiLogic(self, ai: Player, sa: SpellAbility) -> AiAbilityDecision:
+        # does Scry make sense with no Library cards?
+        if ai.getCardsIn(ZoneType.Library).isEmpty():
+            return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+        chance = .4  # 40 percent chance of milling with instant speed stuff
+        if self.isSorcerySpeed(sa, ai):
+            chance = .667  # 66.7% chance for sorcery speed (since it will never activate EOT)
+        randomReturn = MyRandom.getRandom().nextFloat() <= chance
+
+        if self.playReusable(ai, sa):
+            randomReturn = True
+
+        if sa.usesTargeting():
+            sa.resetTargets()
+            if sa.canTarget(ai):
+                sa.getTargets().add(ai)
+            else:
+                for p in ai.getAllies():
+                    if sa.canTarget(p):
+                        sa.getTargets().add(p)
+                        break
+            randomReturn = sa.isTargetNumberValid()
+
+        if "X" == sa.getParam("ScryNum") and sa.getSVar("X") == "Count$xPaid":
+            xPay = ComputerUtilCost.setMaxXValue(sa, ai, sa.isTrigger())
+            if xPay == 0:
+                return AiAbilityDecision(0, AiPlayDecision.CantAffordX)
+            sa.getRootAbility().setXManaCostPaid(xPay)
+
+        if randomReturn:
+            return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+        return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+    def confirmAction(self, player: Player, sa: SpellAbility, mode: PlayerActionConfirmMode, message: str, params: Map[str, object]) -> bool:
+        return True
 ```

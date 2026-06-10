@@ -39,7 +39,7 @@ classDiagram
 
 ## Design Description
 
-`GameEventPlayerLivesChanged` is an immutable record that signals a change to a player's life total, capturing the affected player along with the previous and new life values. As a concrete implementation of the `GameEvent` interface, it participates in the engine's event system, exposing a `visit` method that dispatches to an `IGameEventVisitor` via the visitor pattern—decoupling event production from the varied consumers (UI, logging, AI) that react to it. To insulate observers from the mutable game model, the canonical constructor stores a lightweight `PlayerView` rather than the live `Player`; a convenience constructor accepts a `Player` and converts it through `PlayerView.get`. The overridden `toString` produces a human-readable summary (e.g., "Alice's lives changed: 3 -> 2") using `Lang` and `TextUtil` for localized, consistent formatting.
+`GameEventPlayerLivesChanged` is an immutable record that signals a change to a player's life total, capturing the affected player along with the previous and new life values. As a concrete implementation of the `GameEvent` interface, it participates in the engine's event system, exposing a `visit` method that dispatches to an `IGameEventVisitor` via the visitor patternâ€”decoupling event production from the varied consumers (UI, logging, AI) that react to it. To insulate observers from the mutable game model, the canonical constructor stores a lightweight `PlayerView` rather than the live `Player`; a convenience constructor accepts a `Player` and converts it through `PlayerView.get`. The overridden `toString` produces a human-readable summary (e.g., "Alice's lives changed: 3 -> 2") using `Lang` and `TextUtil` for localized, consistent formatting.
 
 ## Source
 `forge-game/src/main/java/forge/game/event/GameEventPlayerLivesChanged.java`
@@ -68,4 +68,36 @@ public record GameEventPlayerLivesChanged(PlayerView player, int oldLives, int n
         return TextUtil.concatWithSpace(Lang.getInstance().getPossesive(player.getName()),"lives changed:",  String.valueOf(oldLives),"->", String.valueOf(newLives));
     }
 }
+```
+
+## Python
+`forge/game/event/GameEventPlayerLivesChanged.py`
+
+```python
+from forge.game.player.Player import Player
+from forge.game.player.PlayerView import PlayerView
+from forge.util.Lang import Lang
+from forge.util.TextUtil import TextUtil
+from forge.game.event.GameEvent import GameEvent
+from forge.game.event.IGameEventVisitor import IGameEventVisitor
+
+
+class GameEventPlayerLivesChanged(GameEvent):
+
+    def __init__(self, player, oldLives: int, newLives: int):
+        if isinstance(player, Player):
+            self.player = PlayerView.get(player)
+        else:
+            self.player = player
+        self.oldLives = oldLives
+        self.newLives = newLives
+
+    def visit(self, visitor: IGameEventVisitor):
+        return visitor.visit(self)
+
+    def __str__(self) -> str:
+        return TextUtil.concatWithSpace(Lang.getInstance().getPossesive(self.player.getName()), "lives changed:", str(self.oldLives), "->", str(self.newLives))
+
+    def toString(self) -> str:
+        return self.__str__()
 ```

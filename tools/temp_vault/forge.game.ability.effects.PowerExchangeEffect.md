@@ -143,3 +143,82 @@ public class PowerExchangeEffect extends SpellAbilityEffect {
 
 }
 ```
+
+## Python
+`forge/game/ability/effects/PowerExchangeEffect.py`
+
+```python
+from forge.GameCommand import GameCommand
+from forge.game.Game import Game
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.card.perpetual.PerpetualNewPT import PerpetualNewPT
+from forge.game.event.GameEventCardStatsChanged import GameEventCardStatsChanged
+from forge.game.spellability.SpellAbility import SpellAbility
+
+
+class PowerExchangeEffect(SpellAbilityEffect):
+    # (non-Javadoc)
+    # @see forge.card.abilityfactory.AbilityFactoryAlterLife.SpellEffect#getStackDescription(java.util.Map, forge.card.spellability.SpellAbility)
+    def getStackDescription(self, sa: SpellAbility) -> str:
+        sb = []
+        tgtCards = self.getTargetCards(sa)
+
+        if len(tgtCards) == 1:
+            sb.append(str(sa.getHostCard()))
+            sb.append(" exchanges power with ")
+            sb.append(str(tgtCards[0]))
+        elif len(tgtCards) > 1:
+            sb.append(str(tgtCards[0]))
+            sb.append(" exchanges power with ")
+            sb.append(str(tgtCards[1]))
+        sb.append(".")
+        return "".join(sb)
+
+    # (non-Javadoc)
+    # @see forge.card.abilityfactory.AbilityFactoryAlterLife.SpellEffect#resolve(java.util.Map, forge.card.spellability.SpellAbility)
+    def resolve(self, sa: SpellAbility) -> None:
+        perpetual = "Perpetual" == sa.getParam("Duration")
+        source = sa.getHostCard()
+        game = source.getGame()
+
+        tgtCards = self.getTargetCards(sa)
+
+        if len(tgtCards) == 1:
+            c1 = source
+            c2 = tgtCards[0]
+        else:
+            c1 = tgtCards[0]
+            c2 = tgtCards[1]
+        if not c1.isInPlay() or not c2.isInPlay():
+            return
+        basePower = sa.hasParam("BasePower")
+        power1 = c1.getCurrentPower() if basePower else c1.getNetPower()
+        power2 = c2.getCurrentPower() if basePower else c2.getNetPower()
+
+        timestamp = game.getNextTimestamp()
+
+        if perpetual:
+            c1.addPerpetual(PerpetualNewPT(timestamp, power2, None))
+            c2.addPerpetual(PerpetualNewPT(timestamp, power1, None))
+        c1.addNewPT(power2, None, timestamp, 0)
+        c2.addNewPT(power1, None, timestamp, 0)
+
+        game.fireEvent(GameEventCardStatsChanged(c1))
+        game.fireEvent(GameEventCardStatsChanged(c2))
+
+        if "Permanent" != sa.getParam("Duration") and not perpetual:
+            # If not Permanent, remove Pumped at EOT
+            class _UntilEOT(GameCommand):
+                serialVersionUID = -4890579038956651232
+
+                def run(self):
+                    c1.removeNewPT(timestamp, 0)
+                    c2.removeNewPT(timestamp, 0)
+                    game.fireEvent(GameEventCardStatsChanged(c1))
+                    game.fireEvent(GameEventCardStatsChanged(c2))
+
+            untilEOT = _UntilEOT()
+
+            self.addUntilCommand(sa, untilEOT)
+```

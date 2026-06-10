@@ -39,7 +39,7 @@ classDiagram
 
 ## Design Description
 
-GameEventShuffle is an immutable event record signaling that a player has shuffled their library. As a `GameEvent` implementation, it participates in the engine's visitor-based event-dispatch mechanism: its `visit` method double-dispatches to an `IGameEventVisitor`, letting observers (UI, AI, logging) react without the event itself knowing their concrete types. The record's single component is a `PlayerView`—a lightweight, view-layer snapshot of the player—rather than the live `Player`; a convenience constructor accepts a `Player` and converts it via `PlayerView.get`, decoupling event consumers from mutable game state. The overridden `toString` builds a human-readable message (e.g. "Alice shuffles their library") using `Lang` and `TextUtil` for grammatically correct, localizable phrasing.
+GameEventShuffle is an immutable event record signaling that a player has shuffled their library. As a `GameEvent` implementation, it participates in the engine's visitor-based event-dispatch mechanism: its `visit` method double-dispatches to an `IGameEventVisitor`, letting observers (UI, AI, logging) react without the event itself knowing their concrete types. The record's single component is a `PlayerView`â€”a lightweight, view-layer snapshot of the playerâ€”rather than the live `Player`; a convenience constructor accepts a `Player` and converts it via `PlayerView.get`, decoupling event consumers from mutable game state. The overridden `toString` builds a human-readable message (e.g. "Alice shuffles their library") using `Lang` and `TextUtil` for grammatically correct, localizable phrasing.
 
 ## Source
 `forge-game/src/main/java/forge/game/event/GameEventShuffle.java`
@@ -71,4 +71,33 @@ public record GameEventShuffle(PlayerView player) implements GameEvent {
         return TextUtil.concatWithSpace(player.toString(), Lang.joinVerb(player.getName(), "shuffle"), "their library");
     }
 }
+```
+
+## Python
+`forge/game/event/GameEventShuffle.py`
+
+```python
+from forge.game.player.Player import Player
+from forge.game.player.PlayerView import PlayerView
+from forge.util.Lang import Lang
+from forge.util.TextUtil import TextUtil
+from forge.game.event.GameEvent import GameEvent
+from forge.game.event.IGameEventVisitor import IGameEventVisitor
+
+
+class GameEventShuffle(GameEvent):
+    def __init__(self, player):
+        if isinstance(player, Player):
+            self.player = PlayerView.get(player)
+        else:
+            self.player = player
+
+    def visit(self, visitor):
+        return visitor.visit(self)
+
+    def __str__(self):
+        return TextUtil.concatWithSpace(str(self.player), Lang.joinVerb(self.player.getName(), "shuffle"), "their library")
+
+    def toString(self):
+        return self.__str__()
 ```

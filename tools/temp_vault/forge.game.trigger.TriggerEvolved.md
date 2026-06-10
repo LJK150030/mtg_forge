@@ -37,6 +37,12 @@ classDiagram
 - [[forge.game.card.Card|Card]]
 - [[forge.game.spellability.SpellAbility|SpellAbility]]
 
+## Design Description
+
+Evolve trigger that fires when a creature with the Evolve keyword sees another creature enter under its controller's control. As a concrete subclass of `Trigger`, it specializes the abstract trigger contract for this one event: `performTest` gates firing by checking the entering `Card` against the trigger's `ValidCard` restriction via the inherited `matchesValidParam` helper, while `setTriggeringObjects` exposes that card to the resulting `SpellAbility` under the `AbilityKey.Card` slot.
+
+The class collaborates with `AbilityKey` to key triggering data, `Card` as the host and tested object, and `SpellAbility` as the fired ability. Its design follows the engine's lightweight trigger patternâ€”a parameter map plus host card drive behavior, keeping the subclass minimal and delegating construction to the superclass. `getImportantStackObjects` overrides default reporting to produce a localized, human-readable stack description, reflecting attention to internationalization through `Localizer`.
+
 ## Source
 `forge-game/src/main/java/forge/game/trigger/TriggerEvolved.java`
 
@@ -115,4 +121,36 @@ public class TriggerEvolved extends Trigger {
         return sb.toString();
     }
 }
+```
+
+## Python
+`forge/game/trigger/TriggerEvolved.py`
+
+```python
+from forge.game.trigger.Trigger import Trigger
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Localizer import Localizer
+
+
+class TriggerEvolved(Trigger):
+
+    def __init__(self, params: dict[str, str], host: Card, intrinsic: bool):
+        super().__init__(params, host, intrinsic)
+
+    def performTest(self, runParams: dict[AbilityKey, object]) -> bool:
+        if not self.matchesValidParam("ValidCard", runParams.get(AbilityKey.Card)):
+            return False
+        return True
+
+    def setTriggeringObjects(self, sa: SpellAbility, runParams: dict[AbilityKey, object]) -> None:
+        sa.setTriggeringObjectsFrom(runParams, AbilityKey.Card)
+
+    def getImportantStackObjects(self, sa: SpellAbility) -> str:
+        sb = []
+        sb.append(Localizer.getInstance().getMessage("lblEvolved"))
+        sb.append(": ")
+        sb.append(str(sa.getTriggeringObject(AbilityKey.Card)))
+        return "".join(sb)
 ```

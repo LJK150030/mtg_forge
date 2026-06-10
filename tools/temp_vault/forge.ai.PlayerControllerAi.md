@@ -274,7 +274,7 @@ classDiagram
 
 PlayerControllerAi is the AI implementation of the abstract PlayerController, answering every decision the game engine asks of a computer opponent: targeting, combat, mana payment, mulligans, sideboarding, scry/surveil ordering, voting, and the full range of card-effect choices. Constructed from a Game, Player, and LobbyPlayer, it creates and owns an AiController ("brains") and acts mainly as an adapter, translating each PlayerController override into calls on that controller or on stateless helpers like ComputerUtil, ComputerUtilCard, ComputerUtilMana, and the SpellApiToAi converters that dispatch per-effect logic.
 
-Notable design intent shows in its conservative, heuristic-driven defaults—declining payment assistance, returning the first valid target, randomizing dice choices—and numerous TODO placeholders marking unimplemented decisions. sideboard() is deliberately written to preserve total deck contents so the AI cannot cheat, reflecting a recurring concern that automated choices stay within the rules.
+Notable design intent shows in its conservative, heuristic-driven defaultsâ€”declining payment assistance, returning the first valid target, randomizing dice choicesâ€”and numerous TODO placeholders marking unimplemented decisions. sideboard() is deliberately written to preserve total deck contents so the AI cannot cheat, reflecting a recurring concern that automated choices stay within the rules.
 
 ## Source
 `forge-ai/src/main/java/forge/ai/PlayerControllerAi.java`
@@ -1935,4 +1935,1266 @@ public class PlayerControllerAi extends PlayerController {
         return choices;
     }
 }
+```
+
+## Python
+`forge/ai/PlayerControllerAi.py`
+
+```python
+package forge.ai
+
+from forge.LobbyPlayer import LobbyPlayer
+from forge.ai.AiAttackController import AiAttackController
+from forge.ai.AiController import AiController
+from forge.ai.AiCostDecision import AiCostDecision
+from forge.ai.ability.ProtectAi import ProtectAi
+from forge.ai.ComputerUtil import ComputerUtil
+from forge.ai.ComputerUtilCard import ComputerUtilCard
+from forge.ai.ComputerUtilMana import ComputerUtilMana
+from forge.ai.ComputerUtilCombat import ComputerUtilCombat
+from forge.ai.ComputerUtilCost import ComputerUtilCost
+from forge.ai.AiProps import AiProps
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.ai.AiCardMemory import AiCardMemory
+from forge.ai.AiBlockController import AiBlockController
+from forge.ai.SpellApiToAi import SpellApiToAi
+from forge.ai.SpecialCardAi import SpecialCardAi
+from forge.ai.CostEnlist import CostEnlist
+from forge.card.CardStateName import CardStateName
+from forge.card.ColorSet import ColorSet
+from forge.card.ICardFace import ICardFace
+from forge.card.MagicColor import MagicColor
+from forge.card.MagicColor.Color import Color
+from forge.card.mana.ManaCost import ManaCost
+from forge.card.mana.ManaCostShard import ManaCostShard
+from forge.deck.Deck import Deck
+from forge.deck.DeckSection import DeckSection
+from forge.game.Game import Game
+from forge.game.GameEntity import GameEntity
+from forge.game.GameObject import GameObject
+from forge.game.GameOutcome import GameOutcome
+from forge.game.GameType import GameType
+from forge.game.PlanarDice import PlanarDice
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.ability.ApiType import ApiType
+from forge.game.ability.effects.CharmEffect import CharmEffect
+from forge.game.ability.effects.RollDiceEffect import RollDiceEffect
+from forge.game.ability.effects.RollDiceEffect.DieRollResult import DieRollResult
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.card.CardState import CardState
+from forge.game.card.CardView import CardView
+from forge.game.card.CounterType import CounterType
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CardPredicates import CardPredicates
+from forge.game.combat.Combat import Combat
+from forge.game.cost.Cost import Cost
+from forge.game.cost.CostDecisionMakerBase import CostDecisionMakerBase
+from forge.game.cost.CostPart import CostPart
+from forge.game.cost.CostPartMana import CostPartMana
+from forge.game.cost.CostPartWithList import CostPartWithList
+from forge.game.cost.CostPayment import CostPayment
+from forge.game.keyword.Keyword import Keyword
+from forge.game.keyword.KeywordInterface import KeywordInterface
+from forge.game.mana.Mana import Mana
+from forge.game.mana.ManaConversionMatrix import ManaConversionMatrix
+from forge.game.mana.ManaCostBeingPaid import ManaCostBeingPaid
+from forge.game.phase.PhaseHandler import PhaseHandler
+from forge.game.phase.PhaseType import PhaseType
+from forge.game.player.DelayedReveal import DelayedReveal
+from forge.game.player.Player import Player
+from forge.game.player.PlayerActionConfirmMode import PlayerActionConfirmMode
+from forge.game.player.PlayerController import PlayerController
+from forge.game.player.PlayerController.BinaryChoiceType import BinaryChoiceType
+from forge.game.player.PlayerView import PlayerView
+from forge.game.replacement.ReplacementEffect import ReplacementEffect
+from forge.game.spellability.AbilitySub import AbilitySub
+from forge.game.spellability.OptionalCostValue import OptionalCostValue
+from forge.game.spellability.Spell import Spell
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.spellability.SpellAbilityStackInstance import SpellAbilityStackInstance
+from forge.game.spellability.TargetChoices import TargetChoices
+from forge.game.staticability.StaticAbility import StaticAbility
+from forge.game.trigger.Trigger import Trigger
+from forge.game.trigger.TriggerType import TriggerType
+from forge.game.trigger.WrappedAbility import WrappedAbility
+from forge.game.zone.PlayerZone import PlayerZone
+from forge.game.zone.ZoneType import ZoneType
+from forge.item.PaperCard import PaperCard
+from forge.util.ITriggerEvent import ITriggerEvent
+from forge.util.MyRandom import MyRandom
+from forge.util.Aggregates import Aggregates
+from forge.util.IterableUtil import IterableUtil
+from forge.util.collect.FCollection import FCollection
+from forge.util.collect.FCollectionView import FCollectionView
+import sys
+
+
+class PlayerControllerAi(PlayerController):
+    def __init__(self, game, p, lp):
+        super().__init__(game, p, lp)
+
+        self.brains = AiController(p, game)
+        self.pilotsNonAggroDeck = False
+
+    def pilotsNonAggroDeck(self):
+        return self.pilotsNonAggroDeck
+
+    def setupAutoProfile(self, deck):
+        self.pilotsNonAggroDeck = "Control" in deck.getName() or deck.getAverageCMC() > 3
+
+    def setUseSimulation(self, value):
+        self.brains.setUseSimulation(value)
+
+    def getAbilityToPlay(self, hostCard, abilities, triggerEvent):
+        if not abilities:
+            return None
+        return abilities[0]
+
+    def getAi(self):
+        return self.brains
+
+    def isAI(self):
+        return True
+
+    def sideboard(self, deck, gameType, message):
+        if not self.brains.getGame().getRules().getAISideboardingEnabled() or not deck.has(DeckSection.Sideboard):
+            return None
+
+        sideboardPlan = {}
+        main = deck.get(DeckSection.Main).toFlatList()
+        sideboard = deck.get(DeckSection.Sideboard).toFlatList()
+
+        # Predefined sideboard plan from deck metadata (AI hints)
+        definedSideboardPlan = False
+        sideboardAiHint = deck.getAiHint("SideboardingPlan")
+        if sideboardAiHint:
+            for element in sideboardAiHint.split(";"):
+                cardPair = element.split("->")
+                src = None
+                tgt = None
+                for cMain in main:
+                    if cMain.getCardName().equals(cardPair[0].strip()):
+                        src = cMain
+                        break
+                for cSide in sideboard:
+                    if cSide.getCardName().equals(cardPair[1].strip()):
+                        tgt = cSide
+                        break
+                if src is not None and tgt is not None:
+                    sideboardPlan[src] = tgt
+            if sideboardPlan:
+                definedSideboardPlan = True
+
+        sbLimitedFormats = self.getAi().getBoolProperty(AiProps.SIDEBOARDING_IN_LIMITED_FORMATS)
+        sbSharedTypesOnly = self.getAi().getBoolProperty(AiProps.SIDEBOARDING_SHARED_TYPE_ONLY)
+        sbPlaneswalkerException = self.getAi().getBoolProperty(AiProps.SIDEBOARDING_PLANESWALKER_EQ_CREATURE)
+        sbChanceOnWin = self.getAi().getIntProperty(AiProps.SIDEBOARDING_CHANCE_ON_WIN)
+        sbChancePerCard = self.getAi().getIntProperty(AiProps.SIDEBOARDING_CHANCE_PER_CARD)
+
+        if not sbLimitedFormats and gameType.isCardPoolLimited():
+            return None
+
+        lastOutcome = self.brains.getGame().getMatch().getLastOutcome()
+        if lastOutcome.getWinningPlayer().getPlayer().equals(self.player.getLobbyPlayer()) \
+                and MyRandom.getRandom().nextInt(100) > sbChanceOnWin:
+            return None
+
+        # Devise a sideboarding plan
+        if not definedSideboardPlan:
+            processed = []
+            for cSide in sideboard:
+                if cSide in processed:
+                    continue
+                elif cSide.getRules().getAiHints().getRemAIDecks():
+                    continue  # don't sideboard in anything that we don't know how to play
+                elif cSide.getRules().getType().isLand():
+                    continue  # don't know how to sideboard lands efficiently yet
+
+                for cMain in main:
+                    if cMain in processed:
+                        continue
+                    elif cMain.getName().equals(cSide.getName()):
+                        continue
+                    elif cMain.getRules().getType().isLand():
+                        continue  # don't know how to sideboard lands efficiently yet
+
+                    if sbSharedTypesOnly:
+                        if not cMain.getRules().getType().sharesCardTypeWith(cSide.getRules().getType()):
+                            continue  # Only equivalent types allowed
+                    else:
+                        if (cMain.getRules().getType().isCreature() and not cSide.getRules().getType().isCreature()) \
+                                or (cSide.getRules().getType().isCreature()) and not cMain.getRules().getType().isCreature():
+                            if not (sbPlaneswalkerException and (cMain.getRules().getType().isPlaneswalker() or cSide.getRules().getType().isPlaneswalker())):
+                                continue  # Creature exception: only trade a creature for another creature unless planeswalkers are allowed as a replacement
+
+                    if not Card.fromPaperCard(cMain, self.player).getManaAbilities().isEmpty():
+                        processed.append(cMain)
+                        continue  # Mana Ability exception: Don't sideboard out cards that produce mana, can screw up the mana base
+
+                    # Try not to screw up the mana curve or color distribution too much
+                    if cSide.getRules().getColor().hasNoColorsExcept(cMain.getRules().getColor()) \
+                            and cMain.getRules().getManaCost().getCMC() == cSide.getRules().getManaCost().getCMC():
+                        sideboardPlan[cMain] = cSide
+                        processed.append(cSide)
+                        processed.append(cMain)
+                        break
+
+        # Make changes according to the sideboarding plan suggested above
+        for ent_key, ent_value in list(sideboardPlan.items()):
+            if not definedSideboardPlan and MyRandom.getRandom().nextInt(100) < sbChancePerCard:
+                continue
+            inMain = sum(1 for pc in main if pc.getCardName().equals(ent_key.getName()))
+            inSide = sum(1 for pc in sideboard if pc.getCardName().equals(ent_value.getName()))
+            while True:
+                c1 = inMain > 0
+                inMain -= 1
+                if not c1:
+                    break
+                c2 = inSide > 0
+                inSide -= 1
+                if not c2:
+                    break
+                sideboard.remove(ent_value)
+                sideboard.append(ent_key)
+                main.append(ent_value)
+                main.remove(ent_key)
+
+        # Return the new Main. It's important to make sure that the overall content of the deck (Main+Sideboard)
+        # does not change above, or the AI may cheat (sneak some cards in or remove them from the deck altogether).
+        return main
+
+    def assignCombatDamage(self, attacker, blockers, remaining, damageDealt, defender, overrideOrder):
+        return ComputerUtilCombat.distributeAIDamage(self.player, attacker, blockers, remaining, damageDealt, defender, overrideOrder)
+
+    def divideShield(self, effectSource, affected, shieldAmount):
+        # TODO: AI currently can't use this so this is not implemented.
+        return {}
+
+    def specifyManaCombo(self, sa, colorSet, manaAmount, different):
+        result = {}
+        for i in range(manaAmount):
+            chosen = self.chooseColor("", sa, colorSet)
+            result[chosen] = result.get(chosen, 0) + 1
+            if different:
+                colorSet = ColorSet.fromMask(colorSet.getColor() - chosen)
+        return result
+
+    def announceRequirements(self, ability, min, max, announce):
+        # For now, these "announcements" are made within the AI classes of the appropriate SA effects
+        if ability.getApi() is not None:
+            api = ability.getApi()
+            if api == ApiType.ChooseNumber:
+                payingPlayer = ability.getActivatingPlayer()
+                logic = ability.getParamOrDefault("AILogic", "")
+                anyController = logic.equals("MaxForAnyController")
+
+                if logic.startswith("PowerLeakMaxMana.") and ability.getHostCard().isEnchantingCard():
+                    # For cards like Power Leak, the payer will be the owner of the enchanted card
+                    # TODO: is there any way to generalize this and avoid a special exclusion?
+                    payingPlayer = ability.getHostCard().getEnchantingCard().getController()
+
+                number = ComputerUtilMana.determineLeftoverMana(ability, self.player, False)
+
+                if logic.startswith("MaxMana.") or logic.startswith("PowerLeakMaxMana."):
+                    parsed = int(logic[logic.find(".") + 1:])
+                    number = number if number < parsed else parsed
+
+                return 0 if payingPlayer.isOpponentOf(self.player) and not anyController else number
+            elif api == ApiType.BidLife:
+                return 0
+            else:
+                return None
+        return None  # return incorrect value to indicate that
+
+    def choosePermanentsToSacrifice(self, sa, min, max, validTargets, message):
+        return ComputerUtil.choosePermanentsToSacrifice(self.player, validTargets, max, sa, False, min == 0)
+
+    def choosePermanentsToDestroy(self, sa, min, max, validTargets, message):
+        return ComputerUtil.choosePermanentsToSacrifice(self.player, validTargets, max, sa, True, min == 0)
+
+    def chooseCardsForEffect(self, sourceList, sa, title, min, max, isOptional, params):
+        return self.brains.chooseCardsForEffect(sourceList, sa, min, max, isOptional, params)
+
+    def chooseContraptionsToCrank(self, contraptions):
+        def _crank(c):
+            crankTrigger = IterableUtil.find(c.getTriggers(), lambda t: t.getMode() == TriggerType.CrankContraption)
+            return self.confirmTrigger(WrappedAbility(crankTrigger, crankTrigger.getOverridingAbility(), self.player))
+        return CardLists.filter(contraptions, _crank)
+
+    def helpPayForAssistSpell(self, cost, sa, max, requested):
+        toPay = self.getAi().attemptToAssist(sa, max, requested)
+
+        if toPay == 0:
+            return True
+        else:
+            manaCost = ManaCost.get(toPay)
+            assistCost = ManaCostBeingPaid(manaCost)
+            if ComputerUtilMana.canPayManaCost(assistCost, sa, self.player, False):
+                ComputerUtilMana.payManaCost(assistCost, sa, self.player, False)
+                cost.decreaseGenericMana(toPay)
+                return True
+        return True
+
+    def choosePlayerToAssistPayment(self, optionList, sa, title, max):
+        #        if (optionList.size() == 1) {
+        #            return null;
+        #        }
+        # return optionList.getFirst();
+
+        # AI is dumb and will request assistance even if they can't afford with assistance.
+        # For now, just never try to use Assist.
+
+        # Ideally, it would do something like
+        # Verify we actually want to play this. Including: "Would play with assistance" and "would play without assistance"
+        # Find an ally/player that might be helpful to pay for an effect
+        # If no one seems likely, just return null
+        # If player fails to assist, don't try to request assistance until next turn
+        # If player fails to assist, maybe still cast it anyway?
+
+        return None
+
+    def chooseSingleEntityForEffect(self, optionList, delayedReveal, sa, title, isOptional, targetedPlayer, params):
+        if delayedReveal is not None:
+            self.reveal(delayedReveal)
+        return SpellApiToAi.Converter.get(sa).chooseSingleEntity(self.player, sa, optionList, isOptional, targetedPlayer, params)
+
+    def chooseEntitiesForEffect(self, optionList, min, max, delayedReveal, sa, title, targetedPlayer, params):
+        if delayedReveal is not None:
+            self.reveal(delayedReveal)
+        remaining = FCollection(optionList)
+        selecteds = []
+        while True:
+            selected = self.chooseSingleEntityForEffect(remaining, None, sa, title, len(selecteds) >= min, targetedPlayer, params)
+            if selected is not None:
+                remaining.remove(selected)
+                selecteds.append(selected)
+            if not (selected is not None and len(selecteds) < max):
+                break
+        return selecteds
+
+    def chooseSpellAbilitiesForEffect(self, spells, sa, title, num, params):
+        remaining = list(spells)
+        selecteds = []
+        while True:
+            selected = self.chooseSingleSpellForEffect(remaining, sa, title, params)
+            if selected is not None:
+                remaining.remove(selected)
+                selecteds.append(selected)
+            if not (selected is not None and len(selecteds) < num):
+                break
+        return selecteds
+
+    def chooseSingleSpellForEffect(self, spells, sa, title, params):
+        return SpellApiToAi.Converter.get(sa).chooseSingleSpellAbility(self.player, sa, spells, params)
+
+    def confirmAction(self, sa, mode, message, options, cardToShow, params):
+        return self.getAi().confirmAction(sa, mode, message, params)
+
+    def confirmBidAction(self, sa, mode, string, bid, winner):
+        return self.getAi().confirmBidAction(sa, mode, string, bid, winner)
+
+    def confirmStaticApplication(self, hostCard, mode, message, logic):
+        return self.getAi().confirmStaticApplication(hostCard, logic)
+
+    def confirmTrigger(self, wrapper):
+        sa = wrapper.getWrappedAbility()
+        # final Trigger regtrig = wrapper.getTrigger();
+        if wrapper.isMandatory():
+            return True
+        # Store/replace target choices more properly to get this SA cleared.
+        tc = None
+        subtc = None
+        storeChoices = sa.usesTargeting()
+        sub = sa.getSubAbility()
+        storeSubChoices = sub is not None and sub.usesTargeting()
+        ret = True
+
+        if storeChoices:
+            tc = sa.getTargets()
+            sa.resetTargets()
+        if storeSubChoices:
+            subtc = sub.getTargets()
+            sub.resetTargets()
+        # There is no way this doTrigger here will have the same target as stored above
+        # So it's possible it's making a different decision here than will actually happen
+        if not self.brains.doTrigger(sa, False):
+            ret = False
+        if storeChoices:
+            sa.resetTargets()
+            sa.setTargets(tc)
+        if storeSubChoices:
+            sub.resetTargets()
+            sub.setTargets(subtc)
+
+        return ret
+
+    def confirmPayment(self, costPart, prompt, sa):
+        return self.brains.confirmPayment(costPart)  # AI is expected to know what it is paying for at the moment (otherwise add another parameter to this method)
+
+    def confirmReplacementEffect(self, replacementEffect, effectSA, affected, question):
+        host = replacementEffect.getHostCard()
+        if host.hasAlternateState():
+            host = host.getGame().getCardState(host)
+        return self.brains.aiShouldRun(replacementEffect, effectSA, host, affected)
+
+    def exertAttackers(self, attackers):
+        return AiAttackController.exertAttackers(attackers, self.brains.getAttackAggression())
+
+    def enlistAttackers(self, attackers):
+        cards = CostEnlist.getCardsForEnlisting(self.brains.getPlayer())
+        cards = CardLists.filter(cards, CardPredicates.hasGreaterPowerThan(0))
+        chosenAttackers = CardCollection(attackers)
+        ComputerUtilCard.sortByEvaluateCreature(chosenAttackers)
+
+        # do not enlist more than available payment choices (currently ignores multiple instances of Enlist, but can that even happen?)
+        if len(attackers) > cards.size():
+            chosenAttackers = chosenAttackers.subList(0, cards.size())
+        # TODO check if not needed as defender
+        return chosenAttackers
+
+    def orderBlockers(self, attacker, blockers):
+        return AiBlockController.orderBlockers(attacker, blockers)
+
+    def orderBlocker(self, attacker, blocker, oldBlockers):
+        return AiBlockController.orderBlocker(attacker, blocker, oldBlockers)
+
+    def orderAttackers(self, blocker, attackers):
+        return AiBlockController.orderAttackers(blocker, attackers)
+
+    def reveal(self, cards, zone, owner, messagePrefix, addSuffix):
+        for c in cards:
+            AiCardMemory.rememberCard(self.player, c, AiCardMemory.MemorySet.REVEALED_CARDS)
+
+    def reveal(self, cards, zone, owner, messagePrefix, addSuffix):
+        for cv in cards:
+            AiCardMemory.rememberCard(self.player, self.player.getGame().findByView(cv), AiCardMemory.MemorySet.REVEALED_CARDS)
+
+    def arrangeForScry(self, topN):
+        toBottom = CardCollection()
+        toTop = CardCollection()
+
+        for c in topN:
+            if ComputerUtil.scryWillMoveCardToBottomOfLibrary(self.player, c):
+                toBottom.add(c)
+            else:
+                toTop.add(c)
+
+        # put the rest on top in random order
+        CardLists.shuffle(toTop)
+        return (toTop, toBottom)
+
+    def arrangeForSurveil(self, topN):
+        toGraveyard = CardCollection()
+        toTop = CardCollection()
+
+        # TODO: Currently this logic uses the same routine as Scry. Possibly differentiate this and implement
+        # a specific logic for Surveil (e.g. maybe to interact better with Reanimator strategies etc.).
+        if self.getPlayer().getCardsIn(ZoneType.Library).size() <= self.getAi().getIntProperty(AiProps.SURVEIL_NUM_CARDS_IN_LIBRARY_TO_BAIL):
+            toTop.addAll(topN)
+        else:
+            for c in topN:
+                if ComputerUtil.scryWillMoveCardToBottomOfLibrary(self.player, c):
+                    toGraveyard.add(c)
+                else:
+                    toTop.add(c)
+
+        CardLists.shuffle(toTop)
+        return (toTop, toGraveyard)
+
+    def willPutCardOnTop(self, c):
+        # This is used for Clash. Currently uses Scry logic to determine whether the card should be put on top.
+        # Note that the AI does not know what will happen next (another clash or that would become his topdeck)
+
+        return not ComputerUtil.scryWillMoveCardToBottomOfLibrary(self.player, c)
+
+    def orderMoveToZoneList(self, cards, destinationZone, source):
+        # TODO Add more logic for AI ordering here
+
+        if cards.isEmpty():
+            return cards
+
+        if destinationZone == ZoneType.Graveyard:
+            # In presence of Volrath's Shapeshifter in deck, try to place the best creature on top of the graveyard
+            if self.getGame().getCardsInGame().anyMatch(lambda card:
+                    # need a custom predicate here since Volrath's Shapeshifter may have a different name OTB
+                    card.getOriginalState(CardStateName.Original).getName().equals("Volrath's Shapeshifter")):
+                bestValue = 0
+                bestCreature = None
+                for c in cards:
+                    curValue = ComputerUtilCard.evaluateCreature(c)
+                    if c.isCreature() and curValue > bestValue:
+                        bestValue = curValue
+                        bestCreature = c
+
+                if bestCreature is not None:
+                    reordered = CardCollection()
+                    for c in cards:
+                        if not c.equals(bestCreature):
+                            reordered.add(c)
+                    reordered.add(bestCreature)
+                    return reordered
+        elif destinationZone == ZoneType.Library:
+            # Ponder and similar cards
+            p = cards.getFirst().getController()  # whose library are we reordering?
+            reordered = CardCollection()
+
+            # Try to use the Scry logic to figure out what should be closer to the top and what should be closer to the bottom
+            topLands = CardCollection()
+            topNonLands = CardCollection()
+            bottom = CardCollection()
+            for c in cards:
+                if ComputerUtil.scryWillMoveCardToBottomOfLibrary(p, c):
+                    bottom.add(c)
+                else:
+                    if c.isLand():
+                        topLands.add(c)
+                    else:
+                        topNonLands.add(c)
+
+            landsOTB = CardLists.count(p.getCardsIn(ZoneType.Battlefield), CardPredicates.LANDS_PRODUCING_MANA)
+
+            if not p.isOpponentOf(self.player):
+                if landsOTB <= 2:
+                    # too few lands, add all the lands from the "top" category first
+                    reordered.addAll(topLands)
+                    topLands.clear()
+                else:
+                    # we would have scried a land to top, so add one land from the "top" category if it's available there, but not more
+                    if not topLands.isEmpty():
+                        first = topLands.getFirst()
+                        reordered.add(first)
+                        topLands.remove(first)
+                # add everything that was deemed playable
+                reordered.addAll(topNonLands)
+                # then all the land extras that may be there
+                reordered.addAll(topLands)
+                # and then everything else that was deemed unplayable and thus scriable to the bottom
+                reordered.addAll(bottom)
+            else:
+                # try to screw the opponent up as much as possible by placing the uncastables first
+                reordered.addAll(bottom)
+                if landsOTB <= 5:
+                    reordered.addAll(topNonLands)
+                    reordered.addAll(topLands)
+                else:
+                    reordered.addAll(topLands)
+                    reordered.addAll(topNonLands)
+
+            if source is None or not source.hasParam("LibraryPosition") \
+                    or AbilityUtils.calculateAmount(source.getHostCard(), source.getParam("LibraryPosition"), source) >= 0:
+                # Cards going to the top of a deck are returned in reverse order.
+                reordered = CardCollection(reversed(list(reordered)))
+
+            assert reordered.size() == cards.size()
+
+            return reordered
+
+        # Default: return with the same order as was passed into this method
+        return cards
+
+    def chooseCardsToDiscardFrom(self, p, sa, validCards, min, max, visibleToChooser):
+        if p == self.player:
+            return self.brains.getCardsToDiscard(min, max, validCards, sa)
+
+        isTargetFriendly = not p.isOpponentOf(self.player)
+
+        return ComputerUtil.getCardsToDiscardFromFriend(self.player, p, sa, validCards, min, max) if isTargetFriendly \
+            else ComputerUtil.getCardsToDiscardFromOpponent(self.player, p, sa, validCards, min, max)
+
+    def playSpellAbilityNoStack(self, effectSA, canSetupTargets):
+        if canSetupTargets:
+            self.brains.doTrigger(effectSA, True)  # first parameter does not matter, since return value won't be used
+        ComputerUtil.playNoStack(self.player, effectSA, self.getGame(), True)
+
+    def chooseCardsToDelve(self, genericAmount, grave):
+        return self.getAi().chooseCardsToDelve(genericAmount, grave)
+
+    def chooseCardsToDiscardUnlessType(self, num, hand, uTypes, sa):
+        cardsOfType = list(IterableUtil.filter(hand, CardPredicates.restriction(uTypes, sa.getActivatingPlayer(), sa.getHostCard(), sa)))
+        if cardsOfType:
+            toDiscard = Aggregates.itemWithMin(cardsOfType, lambda c: c.getCMC())
+            return CardCollection(toDiscard)
+        return self.getAi().getCardsToDiscard(num, None, sa)
+
+    def chooseManaFromPool(self, manaChoices):
+        return manaChoices[0]  # no brains used
+
+    def chooseSomeType(self, kindOfType, sa, validTypes, isOptional):
+        chosen = ComputerUtil.chooseSomeType(self.player, kindOfType, sa, validTypes)
+        if (not chosen or not chosen.strip()) and len(validTypes) > 0:
+            chosen = next(iter(validTypes))
+            print("AI has no idea how to choose " + kindOfType + ", defaulting to arbitrary element: " + chosen, file=sys.stderr)
+        return chosen
+
+    def vote(self, sa, prompt, options, votes, forPlayer, optional):
+        return ComputerUtil.vote(self.player, options, sa, votes, forPlayer)
+
+    def chooseSector(self, assignee, ai, sectors):
+        return Aggregates.random(sectors)
+
+    def chooseSprocket(self, assignee, sprockets):
+        nextSprocket = (self.player.getCrankCounter() % 3) + 1
+        if nextSprocket in sprockets:
+            return nextSprocket
+        elif ((nextSprocket % 3) + 1) in sprockets:
+            return (nextSprocket % 3) + 1
+        return next(iter(sprockets), 0)
+
+    def choosePDRollToIgnore(self, rolls):
+        # TODO create AI logic for this
+        return Aggregates.random(rolls)
+
+    def chooseRollToIgnore(self, rolls):
+        # TODO create AI logic for this
+        return Aggregates.random(rolls)
+
+    def chooseDiceToReroll(self, rolls):
+        # TODO create AI logic for this
+        return []
+
+    def chooseRollToModify(self, rolls):
+        # TODO create AI logic for this
+        return Aggregates.random(rolls)
+
+    def chooseRollToSwap(self, rolls):
+        # TODO create AI logic for this
+        return Aggregates.random(rolls)
+
+    def chooseRollSwapValue(self, swapChoices, currentResult, power, toughness):
+        # TODO create AI logic for this
+        return Aggregates.random(swapChoices)
+
+    def mulliganKeepHand(self, firstPlayer, cardsToReturn):
+        return not ComputerUtil.wantMulligan(self.player, cardsToReturn)
+
+    def tuckCardsViaMulligan(self, hand, cardsToReturn):
+        # TODO This is better than it was before, but still suboptimal (but fast).
+        # Maybe score a bunch of hands based on projected hand size and return the "duds"
+        numLandsDesired = (self.player.getStartingHandSize() - cardsToReturn) // 2
+
+        toReturn = CardCollection()
+        for i in range(cardsToReturn):
+            hand.removeAll(toReturn)
+
+            landsInHand = CardLists.filter(hand, CardPredicates.LANDS)
+            numLandsInHand = landsInHand.size() - CardLists.count(toReturn, CardPredicates.LANDS)
+
+            # If we're flooding with lands, get rid of the worst land we have
+            if numLandsInHand > 0 and numLandsInHand > numLandsDesired:
+                producingLands = CardLists.filter(landsInHand, CardPredicates.LANDS_PRODUCING_MANA)
+                nonProducingLands = CardLists.filter(landsInHand, CardPredicates.LANDS_PRODUCING_MANA.negate())
+                worstLand = ComputerUtilCard.getWorstLand(producingLands) if nonProducingLands.isEmpty() \
+                    else ComputerUtilCard.getWorstLand(nonProducingLands)
+                toReturn.add(worstLand)
+                continue
+
+            # See if we'd scry something to the bottom in this situation. If we want to, probably get rid of it.
+            scryBottom = CardCollection()
+            for c in hand:
+                # Lands are evaluated separately above, factoring in the number of cards to be returned to the library
+                if not c.isLand() and not toReturn.contains(c) and not self.willPutCardOnTop(c):
+                    scryBottom.add(c)
+            if not scryBottom.isEmpty():
+                CardLists.sortByCmcDesc(scryBottom)
+                toReturn.add(scryBottom.getFirst())  # assume the max CMC one is worse since we're not guaranteed to have lands for it
+                continue
+
+            # If we don't want to scry anything to the bottom, remove the worst card that we have in order to satisfy the requirement
+            toReturn.add(ComputerUtilCard.getWorstAI(hand))
+
+        return CardCollection.getView(toReturn)
+
+    def declareAttackers(self, attacker, combat):
+        self.brains.declareAttackers(attacker, combat)
+
+    def declareBlockers(self, defender, combat):
+        self.brains.declareBlockersFor(defender, combat)
+
+    def chooseSpellAbilityToPlay(self):
+        return self.brains.chooseSpellAbilityToPlay()
+
+    def playChosenSpellAbility(self, sa):
+        if sa.isLandAbility():
+            if sa.canPlay():
+                sa.resolve()
+        else:
+            ComputerUtil.handlePlayingSpellAbility(self.player, sa, self.getDeferredTargetingPlayerRunnable(sa))
+        return True
+
+    def getDeferredTargetingPlayerRunnable(self, sa):
+        """If any ability in the SA chain has a TargetingPlayer,
+        defers the human choice from canPlayAI (worker thread with possibly low timeout)
+        to handlePlayingSpellAbility (game thread, no timeout)."""
+        root = sa
+        while sa is not None:
+            if sa.hasParam("TargetingPlayer") and sa.getTargetingPlayer() is not None:
+                def _runnable():
+                    cur = root
+                    while cur is not None:
+                        if cur.hasParam("TargetingPlayer") and cur.getTargetingPlayer() is not None:
+                            cur.clearTargets()
+                            cur.getTargetingPlayer().getController().chooseTargetsFor(cur)
+                            # there's a chance a target gets selected that makes the cost unaffordable
+                            if not ComputerUtilCost.canPayCost(root, root.getActivatingPlayer(), False):
+                                cur.resetTargets()
+                                root.setSkip(True)
+                                return
+                        cur = cur.getSubAbility()
+                return _runnable
+            sa = sa.getSubAbility()
+        return None
+
+    def chooseCardsToDiscardToMaximumHandSize(self, numDiscard):
+        return self.brains.getCardsToDiscard(numDiscard, None, None)
+
+    def chooseCardsToRevealFromHand(self, min, max, valid):
+        numCardsToReveal = min(max, valid.size())
+        return CardCollection.EMPTY if numCardsToReveal == 0 else valid.subList(0, numCardsToReveal)
+
+    def chooseStartingPlayer(self, isFirstGame):
+        return self.player  # AI is brave :)
+
+    def chooseStartingHand(self, zones):
+        # Rate all the hands using the AI's hand evaluation function
+        bestScore = -2147483648
+        bestZone = None
+        for zone in zones:
+            score = ComputerUtil.scoreHand(zone.getCards(), self.player, 0)
+            if score > bestScore:
+                bestScore = score
+                bestZone = zone
+
+        return bestZone
+
+    def chooseSaToActivateFromOpeningHand(self, usableFromOpeningHand):
+        return self.brains.chooseSaToActivateFromOpeningHand(usableFromOpeningHand)
+
+    def chooseNumber(self, sa, title, min, max):
+        return self.brains.chooseNumber(sa, title, min, max)
+
+    def chooseNumber(self, sa, string, min, max, params):
+        return SpellApiToAi.Converter.get(sa).chooseNumber(self.player, sa, min, max, params)
+
+    def chooseNumber(self, sa, title, options, relatedPlayer):
+        return self.brains.chooseNumber(sa, title, options, relatedPlayer)
+
+    def chooseFlipResult(self, sa, flipper, call):
+        if call:
+            # Win if possible
+            return True
+        # heads or tails, AI doesn't know which is better now
+        return MyRandom.getRandom().nextBoolean()
+
+    def chooseTarget(self, saSrc, allTargets):
+        # TODO Teach AI how to determine the most damaging subability when retargeting a spell
+        # with multiple targets (Arc Lightning, Cone of Flame, etc.) with Spellskite
+        # (currently simply always returns the first valid target ability)
+        return allTargets[0]
+
+    def notifyOfValue(self, saSource, realtedTarget, value):
+        # AI should take into consideration creature types, numbers and other information (mostly choices) arriving through this channel
+        pass
+
+    def chooseBinary(self, sa, question, kindOfChoice, defaultVal):
+        if kindOfChoice == BinaryChoiceType.TapOrUntap:
+            return True
+        elif kindOfChoice == BinaryChoiceType.UntapOrLeaveTapped:
+            source = sa.getHostCard()
+            if source is not None and source.hasSVar("AIUntapPreference"):
+                pref = source.getSVar("AIUntapPreference")
+                if pref == "Always":
+                    return True
+                elif pref == "Never":
+                    return False
+                elif pref == "NothingRemembered":
+                    if not source.hasRemembered():
+                        return True
+                    else:
+                        rem = source.getFirstRemembered()
+                        if not rem.isInPlay():
+                            return True
+                elif pref == "BetterTgtThanRemembered":
+                    if source.hasGainControlTarget():
+                        rem = source.getGainControlTargets().get(0)
+                        #  avoid pumping opponent creature
+                        if not rem.isInPlay() or rem.getController().isOpponentOf(source.getController()):
+                            return True
+                        for c in source.getController().getCreaturesInPlay():
+                            if c != rem and ComputerUtilCard.evaluateCreature(c) > ComputerUtilCard.evaluateCreature(rem) + 30:
+                                return True
+                        return False
+            return defaultVal is not None and defaultVal
+        elif kindOfChoice == BinaryChoiceType.LeftOrRight:
+            return self.brains.chooseDirection(sa)
+        elif kindOfChoice == BinaryChoiceType.OddsOrEvens:
+            return self.brains.chooseEvenOdd(sa)
+        elif kindOfChoice == BinaryChoiceType.HeadsOrTails:
+            # this is the result if AI gets to choose after
+            return True
+        else:
+            return MyRandom.getRandom().nextBoolean()
+
+    def chooseBinary(self, sa, question, kindOfChoice, params):
+        return SpellApiToAi.Converter.get(sa).chooseBinary(kindOfChoice, sa, params)
+
+    def chooseModeForAbility(self, sa, possible, min, num, allowRepeat):
+        result = self.brains.chooseModeForAbility(sa, possible, min, num, allowRepeat)
+        if result is not None:
+            return result
+        # Called when CharmEffect resolves for the AI to select its choices.
+        # The list of chosen options (sa.getChosenList()) should be set by
+        # CharmAi.canPlayAi() for cast spells while CharmAi.doTrigger() deals
+        # with triggers. The logic in CharmAi should only be called once to
+        # account for probabilistic choices that may result in different
+        # results in subsequent calls.
+        if sa.getChosenList() is None:
+            self.getAi().doTrigger(sa, True)
+        return sa.getChosenList()
+
+    def chooseColorAllowColorless(self, message, card, colors):
+        c = ComputerUtilCard.getMostProminentColor(self.player.getCardsIn(ZoneType.Hand))
+        chosenColorMask = MagicColor.fromName(c)
+        if (colors.getColor() & chosenColorMask) != 0:
+            return chosenColorMask
+        return next(iter(colors), MagicColor.Color.COLORLESS).getColorMask()
+
+    def chooseColor(self, message, sa, colors):
+        if colors.countColors() < 2:
+            return next(iter(colors), MagicColor.Color.WHITE).getColorMask()
+        # You may switch on sa.getApi() here and use sa.getParam("AILogic")
+        hand = self.player.getCardsIn(ZoneType.Hand)
+        if sa.getApi() == ApiType.Mana:
+            hand = CardCollection.combine(hand, self.player.getCardsIn(ZoneType.Stack))
+        c = ComputerUtilCard.getMostProminentColor(hand)
+        chosenColorMask = MagicColor.fromName(c)
+
+        if (colors.getColor() & chosenColorMask) != 0:
+            return chosenColorMask
+        return next(iter(colors), MagicColor.Color.WHITE).getColorMask()
+
+    def chooseColors(self, message, sa, min, max, options):
+        return ColorSet.fromNames(ComputerUtilCard.chooseColor(sa, min, max, [c.getName() for c in options]))
+
+    def chooseCounterType(self, options, sa, prompt, params):
+        # short cut if there is no options to choose
+        if len(options) <= 1:
+            return next(iter(options), None)
+        return SpellApiToAi.Converter.get(sa).chooseCounterType(options, sa, params)
+
+    def chooseKeywordForPump(self, options, sa, prompt, tgtCard):
+        if len(options) <= 1:
+            return next(iter(options), None)
+        possible = []
+        oppUntappedCreatures = CardLists.filter(self.player.getOpponents().getCreaturesInPlay(), CardPredicates.UNTAPPED)
+        if tgtCard is not None:
+            for kw in options:
+                if tgtCard.hasKeyword(kw):
+                    continue
+                elif "Indestructible" == kw:
+                    if oppUntappedCreatures.isEmpty():
+                        continue  # no threats on battlefield - removal still a concern perhaps?
+                    else:
+                        possible.clear()
+                        possible.append(kw)  # prefer Indestructible above all else
+                        break
+                elif "Flying" == kw:
+                    if oppUntappedCreatures.isEmpty():
+                        continue  # no need for evasion
+                    else:
+                        flyingGood = True
+                        for c in oppUntappedCreatures:
+                            if c.hasKeyword(Keyword.FLYING) or c.hasKeyword(Keyword.REACH):
+                                flyingGood = False
+                                break
+                        if flyingGood:
+                            possible.clear()
+                            possible.append(kw)  # flying is great when no one else has it
+                            break
+                        # even if opp has flying or reach, flying might still be useful so we won't skip it
+                elif kw.startswith("Protection from "):
+                    # currently, keyword choice lists only include color protection
+                    fromWhat = kw[16:]
+                    found = False
+                    for color in MagicColor.Constant.ONLY_COLORS:
+                        if color.equalsIgnoreCase(fromWhat):
+                            known = self.player.getOpponents().getCardsIn(ZoneType.Battlefield)
+                            for c in known:
+                                if c.associatedWithColor(color):
+                                    found = True
+                                    break
+                    if not found:
+                        continue
+                possible.append(kw)
+        if possible:
+            return Aggregates.random(possible)
+
+        return Aggregates.random(options)  # if worst comes to worst, at least do something
+
+    def chooseSingleReplacementEffect(self, possibleReplacers):
+        return self.brains.chooseSingleReplacementEffect(possibleReplacers)
+
+    def chooseSingleStaticAbility(self, possibleStatics):
+        # only matters in corner cases
+        return next(iter(possibleStatics), None)
+
+    def chooseProtectionType(self, sa, choices):
+        choice = choices[0]
+        hostsa = None  # for Protect sub-ability
+        if self.getGame().stack.size() > 1:
+            for si in self.getGame().getStack():
+                spell = si.getSpellAbility()
+                if sa != spell and sa.getHostCard() != spell.getHostCard():
+                    s = ProtectAi.toProtectFrom(spell.getHostCard(), sa)
+                    if s is not None:
+                        return s
+                    break
+        combat = self.getGame().getCombat()
+        if combat is not None:
+            if self.getGame().stack.size() == 1:
+                topstack = self.getGame().stack.peekAbility()
+                if topstack.getSubAbility() == sa:
+                    hostsa = topstack
+            toSave = sa.getTargetCard() if hostsa is None else hostsa.getTargetCard()
+            threats = None
+            if toSave is not None:
+                if combat.isBlocked(toSave):
+                    threats = combat.getBlockers(toSave)
+                if combat.isBlocking(toSave):
+                    threats = combat.getAttackersBlockedBy(toSave)
+            if threats is not None and not threats.isEmpty():
+                ComputerUtilCard.sortByEvaluateCreature(threats)
+                s = ProtectAi.toProtectFrom(threats.get(0), sa)
+                if s is not None:
+                    return s
+        ph = self.getGame().getPhaseHandler()
+        if ph.getPlayerTurn() == sa.getActivatingPlayer() and ph.getPhase() == PhaseType.MAIN1 and sa.getTargetCard() is not None:
+            aiAtk = AiAttackController(sa.getActivatingPlayer(), sa.getTargetCard())
+            s = aiAtk.toProtectAttacker(sa)
+            if s is not None:
+                return s
+        logic = sa.getParam("AILogic")
+        if logic is None or logic.equals("MostProminentHumanCreatures"):
+            list = self.player.getOpponents().getCreaturesInPlay()
+            if list.isEmpty():
+                list = CardLists.filterControlledBy(self.getGame().getCardsInGame(), self.player.getOpponents())
+            if not list.isEmpty():
+                choice = ComputerUtilCard.getMostProminentColor(list)
+        return choice
+
+    def payManaCost(self, toPay, costPartMana, sa, prompt, matrix, effect):
+        return ComputerUtilMana.payManaCost(Cost(toPay, effect), self.player, sa, effect)
+
+    def payCombatCost(self, c, cost, sa, prompt):
+        if ComputerUtil.playNoStack(c.getController(), sa, self.getGame(), True):
+            return True
+        return False
+
+    def chooseCardsForCost(self, optionList, sa, cpl, amount, isOptional, prompt):
+        assert False
+        # Untested placeholder. The AI does not currently pay like this.
+        return cpl.accept(AiCostDecision(self.player, sa, True)).cards
+
+    def applyManaToCost(self, toPay, ability, prompt, matrix, effect):
+        assert False
+        # Untested placeholder. The AI does not currently pay like this.
+        return ComputerUtilMana.payManaCost(toPay, ability, self.player, effect)
+
+    def getCostDecisionMaker(self, player, ability, effect, prompt):
+        return AiCostDecision(player, ability, effect)
+
+    def payCostToPreventEffect(self, cost, sa, alreadyPaid, allPayers):
+        if SpellApiToAi.Converter.get(sa).willPayUnlessCost(self.player, sa, cost, alreadyPaid, allPayers):
+            if not ComputerUtilCost.canPayCost(cost, sa, self.player, True):
+                return False
+
+            pay = CostPayment(cost, sa)
+            return pay.payComputerCosts(AiCostDecision(self.player, sa, True))
+        return False
+
+    def payCostDuringRoll(self, cost, sa):
+        # TODO logic for AI to pay rerolls and modification costs
+        return False
+
+    def orderSimultaneousSa(self, activePlayerSAs):
+        return self.getAi().orderPlaySa(activePlayerSAs)
+
+    def orderAndPlaySimultaneousSa(self, activePlayerSAs):
+        for sa in self.orderSimultaneousSa(activePlayerSAs):
+            if sa.isTrigger() and not sa.isCopied():
+                if self.prepareSingleSa(sa.getHostCard(), sa, True):
+                    ComputerUtil.playStack(sa, self.player, self.getGame())
+            else:
+                if sa.isCopied():
+                    if sa.isSpell():
+                        if not sa.getHostCard().isInZone(ZoneType.Stack):
+                            sa.setHostCard(self.getGame().getAction().moveToStack(sa.getHostCard(), sa))
+                        else:
+                            self.getGame().getStackZone().add(sa.getHostCard())
+
+                    if sa.isMayChooseNewTargets():
+                        tc = sa.getTargets()
+                        if not sa.setupTargets():
+                            # if AI can't choose targets need to keep old one even if illegal
+                            sa.setTargets(tc)
+                        # FIXME: the new implementation (below) requires implementing setupNewTargets in the AI controller, among other possible changes, otherwise breaks AI
+                        # sa.setupNewTargets(player);
+                # need finally add the new spell to the stack
+                self.getGame().getStack().add(sa)
+
+    def prepareSingleSa(self, host, sa, isMandatory):
+        if sa.getApi() == ApiType.Charm:
+            if not CharmEffect.makeChoices(sa):
+                return False
+            if not sa.hasParam("Random"):
+                return True
+            sa = sa.getSubAbility()
+        if sa.hasParam("TargetingPlayer"):
+            targetingPlayer = AbilityUtils.getDefinedPlayers(host, sa.getParam("TargetingPlayer"), sa).get(0)
+            sa.setTargetingPlayer(targetingPlayer)
+            return targetingPlayer.getController().chooseTargetsFor(sa)
+        return self.brains.doTrigger(sa, isMandatory)
+
+    def playTrigger(self, host, wrapperAbility, isMandatory):
+        if self.prepareSingleSa(host, wrapperAbility, isMandatory):
+            return ComputerUtil.playNoStack(wrapperAbility.getActivatingPlayer(), wrapperAbility, self.getGame(), True)
+        return False
+
+    def playSaFromPlayEffect(self, tgtSA):
+        optional = not tgtSA.getPayCosts().isMandatory()
+        noManaCost = tgtSA.hasParam("WithoutManaCost")
+        if isinstance(tgtSA, Spell):  # Isn't it ALWAYS a spell?
+            spell = tgtSA
+            # TODO if mandatory AI is only forced to use mana when it's already in the pool
+            if self.brains.canPlayFromEffectAI(spell, not optional, noManaCost) == AiPlayDecision.WillPlay or not optional:
+                return ComputerUtil.playStack(tgtSA, self.player, self.getGame())
+            return False  # didn't play spell
+        return True
+
+    def chooseTargetsFor(self, currentAbility):
+        return self.brains.doTrigger(currentAbility, True)
+
+    def chooseNewTargetsFor(self, ability, filter, optional):
+        # AI currently can't do this. But when it can it will need to be based on Ability API
+        return None
+
+    def chooseCardsPile(self, sa, pile1, pile2, faceUp):
+        if faceUp.equals("True"):
+            # AI will choose the first pile if it is larger or the same
+            # TODO Improve this to be slightly more random to not be so predictable
+            return pile1.size() >= pile2.size()
+        elif faceUp.equals("One"):
+            # Probably want to see if the face up pile has anything "worth it", then potentially take face down pile
+            return pile1.size() >= pile2.size()
+        else:
+            allCreatures = IterableUtil.all(list(pile1) + list(pile2), CardPredicates.CREATURES)
+            cmc1 = ComputerUtilCard.evaluateCreatureList(pile1) if allCreatures else ComputerUtilCard.evaluatePermanentList(pile1)
+            cmc2 = ComputerUtilCard.evaluateCreatureList(pile2) if allCreatures else ComputerUtilCard.evaluatePermanentList(pile2)
+
+            # for now, this assumes that the outcome will be bad
+            # TODO: This should really have a ChooseLogic param to
+            # figure this out
+            return ("Worst".equals(sa.getParam("AILogic"))) != (cmc1 >= cmc2)
+
+    def revealAnte(self, message, removedAnteCards):
+        # Ai won't understand that anyway
+        pass
+
+    def revealAISkipCards(self, message, deckCards):
+        # Ai won't understand that anyway
+        pass
+
+    def revealUnsupported(self, unsupported):
+        # Ai won't understand that anyway
+        pass
+
+    def complainCardsCantPlayWell(self, myDeck):
+        # TODO check if profile detection set to Auto
+        self.setupAutoProfile(myDeck)
+
+        return self.brains.complainCardsCantPlayWell(myDeck)
+
+    def cheatShuffle(self, list):
+        return self.brains.cheatShuffle(list)
+
+    def chooseCardsYouWonToAddToDeck(self, losses):
+        # TODO AI takes all by default
+        return losses
+
+    def chooseCardsForConvokeOrImprovise(self, sa, manaCost, untappedCards, artifacts, creatures, maxReduction):
+        ai = sa.getActivatingPlayer()
+        ph = ai.getGame().getPhaseHandler()
+        # Filter out mana sources that will interfere with payManaCost()
+        untapped = CardLists.filter(untappedCards, lambda c: c.getManaAbilities().isEmpty())
+
+        # Filter out creatures if AI hasn't attacked yet
+        if ph.isPlayerTurn(ai) and ph.getPhase().isBefore(PhaseType.COMBAT_DECLARE_ATTACKERS):
+            if not creatures:
+                untapped = CardLists.filter(untapped, lambda c: not c.isCreature())
+            else:
+                # TODO AI needs to learn how to use Convoke or Waterbend
+                return {}
+
+        if (ph.isPlayerTurn(ai) and ph.getPhase().isAfter(PhaseType.COMBAT_BEGIN)) or \
+                (not ph.isPlayerTurn(ai) and ph.getPhase().isBefore(PhaseType.COMBAT_DECLARE_BLOCKERS)):
+            # Do not convoke potential blockers until after opponent's attack
+            blockers = ComputerUtil.protectRecursion(sa, lambda: ComputerUtilCard.getLikelyBlockers(ai, None), CardCollection.EMPTY)
+            untapped.removeAll(blockers)
+            # Add threatened creatures
+            if not ai.getGame().getStack().isEmpty() and not blockers.isEmpty():
+                objects = ComputerUtil.predictThreatenedObjects(ai, None)
+                for c in blockers:
+                    if c in objects and (creatures or c.isArtifact()):
+                        untapped.add(c)
+                    if maxReduction is not None and untapped.size() >= maxReduction:
+                        break
+        return ComputerUtilMana.getConvokeOrImproviseFromList(manaCost, untapped, artifacts, creatures)
+
+    def chooseCardName(self, sa, faces, message):
+        return SpellApiToAi.Converter.get(sa).chooseCardName(self.player, sa, faces)
+
+    def chooseCardName(self, sa, cpp, valid, message):
+        if sa.hasParam("AILogic"):
+            aiLibrary = self.player.getCardsIn(ZoneType.Library)
+            oppLibrary = self.player.getStrongestOpponent().getCardsIn(ZoneType.Library)
+            source = sa.getHostCard()
+            logic = sa.getParam("AILogic")
+
+            # Filter for valid options only
+            if valid != "":
+                aiLibrary = CardLists.getValidCards(aiLibrary, valid, source.getController(), source, sa)
+                oppLibrary = CardLists.getValidCards(oppLibrary, valid, source.getController(), source, sa)
+
+            if source is not None and source.getState(CardStateName.Original).hasKeyword(Keyword.HIDDEN_AGENDA):
+                # If any Conspiracies are present, try not to choose the same name twice
+                # (otherwise the AI will spam the same name)
+                for consp in self.player.getCardsIn(ZoneType.Command):
+                    if consp.getState(CardStateName.Original).hasKeyword(Keyword.HIDDEN_AGENDA):
+                        chosenName = consp.getNamedCard()
+                        if chosenName != "":
+                            aiLibrary = CardLists.filter(aiLibrary, CardPredicates.nameNotEquals(chosenName))
+
+            name = ""
+            if logic.equals("MostProminentInComputerDeck"):
+                name = ComputerUtilCard.getMostProminentCardName(aiLibrary)
+            elif logic.equals("MostProminentInHumanDeck"):
+                name = ComputerUtilCard.getMostProminentCardName(oppLibrary)
+            elif logic.equals("MostProminentCreatureInComputerDeck"):
+                cards = CardLists.getValidCards(aiLibrary, "Creature", self.player, sa.getHostCard(), sa)
+                name = ComputerUtilCard.getMostProminentCardName(cards)
+            elif logic.equals("BestCreatureInComputerDeck"):
+                bestCreature = ComputerUtilCard.getBestCreatureAI(aiLibrary)
+                name = bestCreature.getName() if bestCreature is not None else ""
+            elif logic.equals("RandomInComputerDeck"):
+                name = "" if aiLibrary.isEmpty() else Aggregates.random(aiLibrary).getName()
+            elif logic.equals("MostProminentSpellInComputerDeck"):
+                cards = CardLists.getValidCards(aiLibrary, "Card.Instant,Card.Sorcery", self.player, sa.getHostCard(), sa)
+                name = ComputerUtilCard.getMostProminentCardName(cards)
+            elif logic.equals("CursedScroll"):
+                name = SpecialCardAi.CursedScroll.chooseCard(self.player, sa)
+            elif logic.equals("PithingNeedle") or logic.equals("PhyrexianRevoker") or logic.equals("SorcerousSpyglass"):
+                name = SpecialCardAi.PithingNeedle.chooseCard(self.player, sa)
+
+            if name and name.strip():
+                return name
+        else:
+            list = CardLists.filterControlledBy(self.getGame().getCardsInGame(), self.player.getOpponents())
+            list = CardLists.filter(list, CardPredicates.NON_LANDS)
+            if not list.isEmpty():
+                return list.get(0).getName()
+        return "Morphling"
+
+    def chooseSingleCardForZoneChange(self, destination, origin, sa, fetchList, delayedReveal, selectPrompt, isOptional, decider):
+        if delayedReveal is not None:
+            self.reveal(delayedReveal)
+        return self.brains.chooseCardToHiddenOriginChangeZone(destination, origin, sa, fetchList, self.player, decider)
+
+    def chooseCardsForZoneChange(self, destination, origin, sa, fetchList, min, max, delayedReveal, selectPrompt, decider):
+        # this isn't used
+        return None
+
+    def resetAtEndOfTurn(self):
+        # TODO - if card memory is ever used to remember something for longer than a turn, make sure it's not reset here.
+        self.getAi().getCardMemory().clearAllRemembered()
+
+    def autoPassCancel(self):
+        # Do nothing
+        pass
+
+    def awaitNextInput(self):
+        # Do nothing
+        pass
+
+    def cancelAwaitNextInput(self):
+        # Do nothing
+        pass
+
+    def chooseSingleCardFace(self, sa, faces, message):
+        return SpellApiToAi.Converter.get(sa).chooseCardFace(self.player, sa, faces)
+
+    def chooseSingleCardFace(self, sa, message, cpp, name):
+        raise NotImplementedError("Should not be called for AI")  # or implement it if you know how
+
+    def chooseSingleCardState(self, sa, states, message, params):
+        return SpellApiToAi.Converter.get(sa).chooseCardState(self.player, sa, states, params)
+
+    def chooseCardsForSplice(self, sa, cards):
+        # sort from best to worst
+        CardLists.sortByCmcDesc(cards)
+
+        result = []
+
+        oldSA = sa
+        # TODO maybe add some more Logic into it
+        for c in cards:
+            newSA = oldSA.copy()
+            AbilityUtils.addSpliceEffect(newSA, c)
+            # check if AI still wants or can play the card with spliced effect
+            if AiPlayDecision.WillPlay == self.getAi().canPlayFromEffectAI(newSA, False, False):
+                oldSA = newSA
+                result.append(c)
+        return result
+
+    def chooseOptionalCosts(self, chosen, optionalCostValues):
+        return SpellApiToAi.Converter.get(chosen).chooseOptionalCosts(self.player, chosen, optionalCostValues)
+
+    def chooseNumberForKeywordCost(self, sa, cost, keyword, prompt, max):
+        # TODO: improve the logic depending on the keyword and the playability of the cost-modified SA (enough targets present etc.)
+        if keyword.getKeyword() == Keyword.CASUALTY \
+                and "true".equalsIgnoreCase(sa.getHostCard().getSVar("AINoCasualtyPayment")):
+            # TODO: Grisly Sigil - currently will be misplayed if Casualty is paid (the cost is always paid, targeting is wrong).
+            return 0
+
+        chosenAmount = 0
+
+        costSoFar = sa.getPayCosts().copy()
+
+        for i in range(max):
+            costSoFar.add(cost)
+            fullCostSa = sa.copyWithDefinedCost(costSoFar)
+            if ComputerUtilCost.canPayCost(fullCostSa, self.player, sa.isTrigger()):
+                chosenAmount += 1
+            else:
+                break
+
+        return chosenAmount
+
+    def chooseNumberForCostReduction(self, sa, min, max):
+        return max
+
+    def orderCosts(self, costs):
+        return costs
+
+    def chooseCardsForEffectMultiple(self, validMap, sa, title, isOptional):
+        choices = CardCollection()
+
+        for mapKey in validMap.keySet():
+            cc = validMap.get(mapKey)
+            cc.removeAll(choices)
+            chosen = ComputerUtilCard.getBestAI(cc)
+            if chosen is not None:
+                choices.add(chosen)
+
+        return choices
 ```

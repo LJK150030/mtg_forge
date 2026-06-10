@@ -39,7 +39,7 @@ classDiagram
 
 ## Design Description
 
-GameEventCombatEnded is an immutable record that signals the conclusion of a combat phase within Forge's game-event system. It carries the attackers and blockers involved in the just-ended combat as lists of `CardView` objects—presentation-layer snapshots rather than live `Card` instances—so that event consumers receive decoupled, view-safe data.
+GameEventCombatEnded is an immutable record that signals the conclusion of a combat phase within Forge's game-event system. It carries the attackers and blockers involved in the just-ended combat as lists of `CardView` objectsâ€”presentation-layer snapshots rather than live `Card` instancesâ€”so that event consumers receive decoupled, view-safe data.
 
 As an implementation of the `GameEvent` interface, it participates in the visitor-based dispatch pattern: its `visit` method forwards to the appropriate `IGameEventVisitor` overload, letting observers handle the event without type-checking. The static `fromCards` factory adapts live `Card` lists into `CardView` lists, centralizing the model-to-view conversion (and tolerating null inputs) at the event's construction boundary. A descriptive `toString` aids logging and debugging.
 
@@ -78,3 +78,41 @@ public record GameEventCombatEnded(List<CardView> attackers, List<CardView> bloc
     }
 }
 ```
+
+## Python
+`forge/game/event/GameEventCombatEnded.py`
+
+````python
+The user requested output only. Here is the Python port:
+
+```python
+from typing import List, TypeVar
+
+from forge.game.card.Card import Card
+from forge.game.card.CardView import CardView
+from forge.game.event.GameEvent import GameEvent
+from forge.game.event.IGameEventVisitor import IGameEventVisitor
+
+T = TypeVar("T")
+
+
+class GameEventCombatEnded(GameEvent):
+    def __init__(self, attackers: List[CardView], blockers: List[CardView]):
+        self.attackers = attackers
+        self.blockers = blockers
+
+    @staticmethod
+    def fromCards(attackers: List[Card], blockers: List[Card]) -> "GameEventCombatEnded":
+        return GameEventCombatEnded(
+            None if attackers is None else [CardView.get(c) for c in attackers],
+            None if blockers is None else [CardView.get(c) for c in blockers],
+        )
+
+    def visit(self, visitor: IGameEventVisitor[T]) -> T:
+        return visitor.visit(self)
+
+    # (non-Javadoc)
+    # @see java.lang.Object#toString()
+    def __str__(self) -> str:
+        return "Combat ended. Attackers: " + str(self.attackers) + " Blockers: " + str(self.blockers)
+````

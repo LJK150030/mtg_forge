@@ -130,3 +130,72 @@ public class LifeExchangeEffect extends SpellAbilityEffect {
     }
 }
 ```
+
+## Python
+`forge/game/ability/effects/LifeExchangeEffect.py`
+
+```python
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.trigger.TriggerType import TriggerType
+
+
+class LifeExchangeEffect(SpellAbilityEffect):
+
+    # (non-Javadoc)
+    # @see forge.card.abilityfactory.AbilityFactoryAlterLife.SpellEffect#getStackDescription(java.util.Map, forge.card.spellability.SpellAbility)
+    def getStackDescription(self, sa: SpellAbility) -> str:
+        sb = []
+        activatingPlayer = sa.getActivatingPlayer()
+        tgtPlayers = self.getTargetPlayers(sa)
+
+        if len(tgtPlayers) == 1:
+            sb.append(str(activatingPlayer))
+            sb.append(" exchanges life totals with ")
+            sb.append(str(tgtPlayers[0]))
+        elif len(tgtPlayers) > 1:
+            sb.append(str(tgtPlayers[0]))
+            sb.append(" exchanges life totals with ")
+            sb.append(str(tgtPlayers[1]))
+        sb.append(".")
+        return "".join(sb)
+
+    # (non-Javadoc)
+    # @see forge.card.abilityfactory.AbilityFactoryAlterLife.SpellEffect#resolve(java.util.Map, forge.card.spellability.SpellAbility)
+    def resolve(self, sa: SpellAbility) -> None:
+        source = sa.getHostCard()
+
+        tgtPlayers = self.getTargetPlayers(sa)
+
+        if len(tgtPlayers) == 1:
+            p1 = sa.getActivatingPlayer()
+            p2 = tgtPlayers[0]
+        else:
+            p1 = tgtPlayers[0]
+            p2 = tgtPlayers[1]
+
+        life1 = p1.getLife()
+        life2 = p2.getLife()
+        diff = abs(life1 - life2)
+
+        if life2 > life1:
+            # swap players
+            tmp = p2
+            p2 = p1
+            p1 = tmp
+        if diff > 0 and p1.canLoseLife() and p2.canGainLife():
+            lost = p1.loseLife(diff, False, False)
+            p2.gainLife(diff, source, sa)
+            if lost > 0:
+                lossMap = {}
+                lossMap[p1] = lost
+                runParams = AbilityKey.mapFromPIMap(lossMap)
+                source.getGame().getTriggerHandler().runTrigger(TriggerType.LifeLostAll, runParams, False)
+                if sa.hasParam("RememberOwnLoss") and p1 == sa.getActivatingPlayer():
+                    source.addRemembered(lost)
+        if sa.hasParam("RememberDifference"):
+            source.addRemembered(p1.getLife() - p2.getLife())
+```

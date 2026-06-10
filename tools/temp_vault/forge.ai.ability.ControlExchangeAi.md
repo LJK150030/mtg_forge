@@ -47,7 +47,7 @@ classDiagram
 
 ## Design Description
 
-ControlExchangeAi supplies the AI decision-making logic for control-exchange abilities (such as Magic's "swap control" effects), determining whether and how the computer player should target cards when resolving or casting them. As a concrete subclass of SpellAbilityAi, it overrides the framework's hooks—checkApiLogic for normal play, doTriggerNoCost for triggered use, and chkDrawback for sub-abilities—each returning an AiAbilityDecision that pairs a confidence score with a play verdict.
+ControlExchangeAi supplies the AI decision-making logic for control-exchange abilities (such as Magic's "swap control" effects), determining whether and how the computer player should target cards when resolving or casting them. As a concrete subclass of SpellAbilityAi, it overrides the framework's hooksâ€”checkApiLogic for normal play, doTriggerNoCost for triggered use, and chkDrawback for sub-abilitiesâ€”each returning an AiAbilityDecision that pairs a confidence score with a play verdict.
 
 Its core intent is value-driven targeting: it filters battlefield cards through the SpellAbility's TargetRestrictions, evaluates candidates via ComputerUtilCard, and seeks the opponent's best card while giving away its own worst, only committing when the gain clears a margin (e.g. creature-evaluation or CMC thresholds). It branches on AILogic parameters ("PowerStruggle", "TrigTwoTargets") to delegate specialized two-target handling, and respects mandatory triggers by playing even unfavorable exchanges. Collaborators like Card, CardCollection, and Player are used transiently to build and assess these candidate lists.
 
@@ -214,4 +214,143 @@ public class ControlExchangeAi extends SpellAbilityAi {
         return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
     }
 }
+```
+
+## Python
+`forge/ai/ability/ControlExchangeAi.py`
+
+```python
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.ai.ComputerUtilCard import ComputerUtilCard
+from forge.ai.SpecialCardAi import SpecialCardAi
+from forge.ai.SpellAbilityAi import SpellAbilityAi
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.card.CardLists import CardLists
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.spellability.TargetRestrictions import TargetRestrictions
+from forge.game.zone.ZoneType import ZoneType
+from com.google.common.collect import Lists
+
+
+class ControlExchangeAi(SpellAbilityAi):
+
+    # (non-Javadoc)
+    # @see forge.card.abilityfactory.SpellAiLogic#canPlayAI(forge.game.player.Player, java.util.Map, forge.card.spellability.SpellAbility)
+    def checkApiLogic(self, ai: Player, sa: SpellAbility) -> AiAbilityDecision:
+        object1 = None
+        object2 = None
+        tgt = sa.getTargetRestrictions()
+        sa.resetTargets()
+
+        list = CardLists.getValidCards(ai.getOpponents().getCardsIn(ZoneType.Battlefield), tgt.getValidTgts(), ai, sa.getHostCard(), sa)
+        # AI won't try to grab cards that are filtered out of AI decks on purpose
+        list = CardLists.filter(list, lambda c: not ComputerUtilCard.isCardRemAIDeck(c) and c.canBeTargetedBy(sa))
+        object1 = ComputerUtilCard.getBestAI(list)
+        if sa.hasParam("Defined"):
+            object2 = AbilityUtils.getDefinedCards(sa.getHostCard(), sa.getParam("Defined"), sa).get(0)
+        elif sa.getMinTargets() > 1:
+            list2 = ai.getCardsIn(ZoneType.Battlefield)
+            list2 = CardLists.getValidCards(list2, tgt.getValidTgts(), ai, sa.getHostCard(), sa)
+            object2 = ComputerUtilCard.getWorstAI(list2)
+            sa.getTargets().add(object2)
+        if object1 is None or object2 is None:
+            return AiAbilityDecision(0, AiPlayDecision.TargetingFailed)
+        if ComputerUtilCard.evaluateCreature(object1) > ComputerUtilCard.evaluateCreature(object2) + 40:
+            sa.getTargets().add(object1)
+            return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+        return AiAbilityDecision(0, AiPlayDecision.TargetingFailed)
+
+    def doTriggerNoCost(self, aiPlayer: Player, sa: SpellAbility, mandatory: bool) -> AiAbilityDecision:
+        if not sa.usesTargeting():
+            if mandatory:
+                return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+        elif mandatory:
+            decision = self.chkDrawback(aiPlayer, sa)
+            if sa.isTargetNumberValid():
+                return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+            return decision
+        else:
+            return self.canPlay(aiPlayer, sa)
+        return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+    def chkDrawback(self, aiPlayer: Player, sa: SpellAbility) -> AiAbilityDecision:
+        if not sa.usesTargeting():
+            return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+        tgt = sa.getTargetRestrictions()
+
+        if "PowerStruggle" == sa.getParam("AILogic"):
+            return SpecialCardAi.PowerStruggle.considerSecondTarget(aiPlayer, sa)
+
+        # for TrigTwoTargets logic, only get the opponents' cards for the first target
+        unfilteredList = aiPlayer.getOpponents().getCardsIn(ZoneType.Battlefield) \
+            if "TrigTwoTargets" == sa.getParam("AILogic") \
+            else aiPlayer.getGame().getCardsIn(ZoneType.Battlefield)
+
+        list = CardLists.getValidCards(unfilteredList, tgt.getValidTgts(), aiPlayer, sa.getHostCard(), sa)
+
+        # only select the cards that can be targeted
+        list = CardLists.getTargetableCards(list, sa)
+
+        if list.isEmpty():
+            return AiAbilityDecision(0, AiPlayDecision.TargetingFailed)
+
+        best = ComputerUtilCard.getBestAI(list)
+
+        # add best Target:
+        # do it here already even if we don't want to play this as it might be for targeting a trigger
+        sa.getTargets().add(best)
+
+        # if Param has Defined, check if the best Target is better than the Defined
+        if sa.hasParam("Defined") and (not sa.isTrigger() or sa.getRootAbility().isOptionalTrigger()):
+            object = AbilityUtils.getDefinedCards(sa.getHostCard(), sa.getParam("Defined"), sa).get(0)
+            # TODO add evaluate Land if able
+            realBest = ComputerUtilCard.getBestAI(Lists.newArrayList(best, object))
+
+            # Defined card is better than this one, try to avoid trade
+            if not best.equals(realBest):
+                return AiAbilityDecision(0, AiPlayDecision.TargetingFailed)
+
+        # second target needed (the AI's own worst)
+        if "TrigTwoTargets" == sa.getParam("AILogic"):
+            return self.doTrigTwoTargetsLogic(aiPlayer, sa, best)
+
+        return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+    def doTrigTwoTargetsLogic(self, ai: Player, sa: SpellAbility, bestFirstTgt: Card) -> AiAbilityDecision:
+        tgt = sa.getTargetRestrictions()
+        creatureThreshold = 100  # TODO: make this configurable from the AI profile
+        nonCreatureThreshold = 2
+
+        list = CardLists.getValidCards(ai.getCardsIn(ZoneType.Battlefield), tgt.getValidTgts(), ai, sa.getHostCard(), sa)
+
+        # only select the cards that can be targeted
+        list = CardLists.getTargetableCards(list, sa)
+
+        if list.isEmpty():
+            return AiAbilityDecision(0, AiPlayDecision.TargetingFailed)
+
+        aiWorst = ComputerUtilCard.getWorstAI(list)
+        if aiWorst is None:
+            return AiAbilityDecision(0, AiPlayDecision.TargetingFailed)
+
+        if aiWorst != bestFirstTgt:
+            if bestFirstTgt.isCreature() and aiWorst.isCreature():
+                if (ComputerUtilCard.evaluateCreature(bestFirstTgt) > ComputerUtilCard.evaluateCreature(aiWorst) + creatureThreshold) or sa.isMandatory():
+                    sa.getTargets().add(aiWorst)
+                    return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+            else:
+                # TODO: compare non-creatures by CMC - can be improved, at least shouldn't give control of things like the Power Nine
+                if (bestFirstTgt.getCMC() > aiWorst.getCMC() + nonCreatureThreshold) or sa.isMandatory():
+                    sa.getTargets().add(aiWorst)
+                    return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+        sa.clearTargets()
+        return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
 ```

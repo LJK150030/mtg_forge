@@ -37,7 +37,7 @@ classDiagram
 As a static nested class it exists purely as data: it exposes `size()` to report how many sub-selections it bundles and overrides `toString()` to render its members as a comma-separated list for logging and diagnostics. It holds no targeting logic of its own, delegating that to the `PossibleTargetSelector.Targets` instances it collaborates with; the surrounding `MultiTargetSelector` is responsible for populating and evaluating these combinations. This deliberate separation keeps the structure a simple, immutable-by-convention container that the simulation can enumerate and compare cheaply.
 
 ## Source
-`forge-ai/src/main/java/forge/ai/simulation/MultiTargetSelector.java` â€” declaration excerpt
+`forge-ai/src/main/java/forge/ai/simulation/MultiTargetSelector.java` Ã¢â‚¬â€ declaration excerpt
 
 ```java
     public static class Targets {
@@ -59,4 +59,27 @@ As a static nested class it exists purely as data: it exposes `size()` to report
             return sb.toString();
         }
     }
+```
+
+## Python
+`forge/ai/simulation/MultiTargetSelector/Targets.py`
+
+```python
+from forge.ai.simulation.PossibleTargetSelector import PossibleTargetSelector
+
+
+class Targets:
+    def __init__(self):
+        self.targets: list[PossibleTargetSelector.Targets] = None
+
+    def size(self) -> int:
+        return len(self.targets)
+
+    def __str__(self) -> str:
+        sb = []
+        for tgt in self.targets:
+            if len(sb) != 0:
+                sb.append(", ")
+            sb.append(str(tgt))
+        return "".join(sb)
 ```

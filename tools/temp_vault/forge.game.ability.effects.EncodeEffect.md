@@ -132,3 +132,74 @@ public class EncodeEffect extends SpellAbilityEffect {
 
 }
 ```
+
+## Python
+`forge/game/ability/effects/EncodeEffect.py`
+
+```python
+from forge.game.Game import Game
+from forge.game.GameLogEntryType import GameLogEntryType
+from forge.game.event.GameEventAddLog import GameEventAddLog
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.card.CardZoneTable import CardZoneTable
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Localizer import Localizer
+
+
+class EncodeEffect(SpellAbilityEffect):
+    def getStackDescription(self, sa: SpellAbility) -> str:
+        if sa.getHostCard().isToken():
+            return ""
+
+        sb = []
+
+        sb.append(str(sa.getActivatingPlayer()))
+        sb.append(" chooses a card to encode with Cipher.")
+
+        return "".join(sb)
+
+    def resolve(self, sa: SpellAbility) -> None:
+        host = sa.getHostCard()
+        activator = sa.getActivatingPlayer()
+        game = activator.getGame()
+
+        if host.isToken():
+            return
+
+        choices = host.getController().getCreaturesInPlay()
+
+        # if no creatures on battlefield, cannot encoded
+        if choices.isEmpty():
+            return
+
+        # Handle choice of whether or not to encoded
+        if not activator.getController().confirmAction(sa, None, Localizer.getInstance().getMessage("lblDoYouWantExileCardAndEncodeOntoYouCreature", host.getTranslatedName()), None):
+            return
+
+        moveParams = AbilityKey.newMap()
+        zoneMovements = AbilityKey.addCardZoneTableParams(moveParams, sa)
+
+        moved = game.getAction().exile(host, sa, moveParams)
+
+        zoneMovements.triggerChangesZoneAll(game, sa)
+
+        choice = activator.getController().chooseSingleEntityForEffect(choices, sa, Localizer.getInstance().getMessage("lblChooseACreatureYouControlToEncode") + " ", False, None)
+
+        if choice is None:
+            return
+
+        codeLog = []
+        codeLog.append("Encoding ")
+        codeLog.append(str(host))
+        codeLog.append(" to ")
+        codeLog.append(str(choice))
+        game.fireEvent(GameEventAddLog(GameLogEntryType.STACK_RESOLVE, "".join(codeLog)))
+
+        # store hostcard in encoded array
+        choice.addEncodedCard(moved)
+        moved.setEncodingCard(choice)
+```

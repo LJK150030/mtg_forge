@@ -37,6 +37,12 @@ classDiagram
 - [[forge.game.card.Card|Card]]
 - [[forge.game.spellability.SpellAbility|SpellAbility]]
 
+## Design Description
+
+TriggerExplores is a concrete trigger that fires when a creature explores, extending the abstract `Trigger` base class to model the "explores" event within Forge's data-driven triggered-ability framework. It implements `performTest` to filter qualifying events through the `ValidCard` and `ValidExplored` restrictions, `setTriggeringObjects` to bind the exploring creature (as `Explorer`) and any explored card into the firing `SpellAbility`, and `getImportantStackObjects` to produce a localized, human-readable summary of those objects.
+
+Collaborating chiefly with `AbilityKey` for typed run-parameter lookups, `Card` as the trigger host, and `SpellAbility` as the resolving ability, the class keeps event-specific logic minimal and delegates shared mechanics to its supertype. Its reliance on parameter maps and `matchesValidParam` reflects Forge's design intent of declaring trigger behavior through card-script parameters rather than hard-coded rules, while `Localizer` keeps presentation text translatable.
+
 ## Source
 `forge-game/src/main/java/forge/game/trigger/TriggerExplores.java`
 
@@ -125,4 +131,51 @@ public class TriggerExplores extends Trigger {
         return sb.toString();
     }
 }
+```
+
+## Python
+`forge/game/trigger/TriggerExplores.py`
+
+```python
+package forge.game.trigger;
+
+from typing import Any
+
+from forge.game.trigger.Trigger import Trigger
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Localizer import Localizer
+
+
+class TriggerExplores(Trigger):
+
+    def __init__(self, params: dict[str, str], host: Card, intrinsic: bool):
+        super().__init__(params, host, intrinsic)
+
+    def performTest(self, runParams: dict[AbilityKey, Any]) -> bool:
+        if not self.matchesValidParam("ValidCard", runParams.get(AbilityKey.Card)):
+            return False
+
+        if not self.matchesValidParam("ValidExplored", runParams.get(AbilityKey.Explored)):
+            return False
+
+        return True
+
+    def setTriggeringObjects(self, sa: SpellAbility, runParams: dict[AbilityKey, Any]) -> None:
+        sa.setTriggeringObject(AbilityKey.Explorer, runParams.get(AbilityKey.Card))
+        if AbilityKey.Explored in runParams:
+            sa.setTriggeringObjectsFrom(runParams, AbilityKey.Explored)
+
+    def getImportantStackObjects(self, sa: SpellAbility) -> str:
+        sb = []
+        sb.append(Localizer.getInstance().getMessage("lblExplorer"))
+        sb.append(": ")
+        sb.append(str(sa.getTriggeringObject(AbilityKey.Explorer)))
+        if sa.hasTriggeringObject(AbilityKey.Explored):
+            sb.append(", ")
+            sb.append(Localizer.getInstance().getMessage("lblExplored"))
+            sb.append(": ")
+            sb.append(str(sa.getTriggeringObject(AbilityKey.Explored)))
+        return "".join(sb)
 ```

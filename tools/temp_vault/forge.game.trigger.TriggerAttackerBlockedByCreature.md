@@ -37,6 +37,10 @@ classDiagram
 - [[forge.game.card.Card|Card]]
 - [[forge.game.spellability.SpellAbility|SpellAbility]]
 
+## Design Description
+
+TriggerAttackerBlockedByCreature is a concrete combat trigger that fires whenever an attacking creature is blocked, raising one instance per blocking creature. As a subclass of Trigger, it specializes the base trigger framework by implementing the standard hooks: performTest gates activation, setTriggeringObjects exposes the relevant cards, and getImportantStackObjects produces a human-readable summary. Its filtering logic reads the attacker and blocker Cards from the AbilityKey-keyed runParams map and honors optional ValidCard and ValidBlocker parameters, including the special "LessPowerThanBlocker"/"LessPowerThanAttacker" comparisons alongside generic valid-expression matching. It collaborates with SpellAbility to bind the triggering Attacker and Blocker objects and with Localizer for localized labels. The design follows Forge's data-driven trigger pattern, where card-defined string parameters configure behavior rather than bespoke per-card code.
+
 ## Source
 `forge-game/src/main/java/forge/game/trigger/TriggerAttackerBlockedByCreature.java`
 
@@ -141,4 +145,67 @@ public class TriggerAttackerBlockedByCreature extends Trigger {
         return sb.toString();
     }
 }
+```
+
+## Python
+`forge/game/trigger/TriggerAttackerBlockedByCreature.py`
+
+```python
+from typing import Optional
+
+from forge.game.trigger.Trigger import Trigger
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Localizer import Localizer
+
+
+class TriggerAttackerBlockedByCreature(Trigger):
+    """
+    Trigger_AttackerBlocked class. Should trigger once for each blocking creature.
+
+    @author Forge
+    @version $Id: TriggerAttackerBlocked.java 24769 2014-02-09 13:56:04Z Hellfish $
+    """
+
+    def __init__(self, params: dict[str, str], host: Card, intrinsic: bool):
+        super().__init__(params, host, intrinsic)
+
+    def performTest(self, runParams: dict[AbilityKey, object]) -> bool:
+        a = runParams.get(AbilityKey.Attacker)
+        b = runParams.get(AbilityKey.Blocker)
+
+        attacker = a
+        blocker = b
+        if self.hasParam("ValidCard"):
+            validCard = self.getParam("ValidCard")
+            if validCard == "LessPowerThanBlocker":
+                if attacker.getNetPower() >= blocker.getNetPower():
+                    return False
+            elif not self.matchesValid(attacker, validCard.split(",")):
+                return False
+
+        if self.hasParam("ValidBlocker"):
+            validBlocker = self.getParam("ValidBlocker")
+            if validBlocker == "LessPowerThanAttacker":
+                if blocker.getNetPower() >= attacker.getNetPower():
+                    return False
+            elif not self.matchesValid(blocker, validBlocker.split(",")):
+                return False
+
+        return True
+
+    def setTriggeringObjects(self, sa: SpellAbility, runParams: dict[AbilityKey, object]) -> None:
+        sa.setTriggeringObjectsFrom(runParams, AbilityKey.Attacker, AbilityKey.Blocker)
+
+    def getImportantStackObjects(self, sa: SpellAbility) -> str:
+        sb = []
+        sb.append(Localizer.getInstance().getMessage("lblAttacker"))
+        sb.append(": ")
+        sb.append(str(sa.getTriggeringObject(AbilityKey.Attacker)))
+        sb.append(", ")
+        sb.append(Localizer.getInstance().getMessage("lblBlocker"))
+        sb.append(": ")
+        sb.append(str(sa.getTriggeringObject(AbilityKey.Blocker)))
+        return "".join(sb)
 ```

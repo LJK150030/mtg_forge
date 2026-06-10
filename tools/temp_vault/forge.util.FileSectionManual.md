@@ -27,6 +27,12 @@ classDiagram
 **Extends:**
 - [[forge.util.FileSection|FileSection]]
 
+## Design Description
+
+FileSectionManual is a thin specialization of FileSection that exposes a manually populated key/value section rather than one parsed from a file. Its single responsibility is to provide a public `put(String, String)` method that writes directly into the inherited `lines` map, allowing callers to construct section contents programmatically.
+
+By extending FileSection, it inherits all of the parent's lookup and type-conversion accessors while overriding nothing, so consumers can treat a hand-built instance identically to a file-loaded one. The design intent is convenience and reuse: rather than duplicating FileSection's parsing-and-retrieval machinery, it simply opens write access to the underlying line store, making it useful for tests or for assembling configuration sections in memory before they are read back through the standard FileSection interface.
+
 ## Source
 `forge-core/src/main/java/forge/util/FileSectionManual.java`
 
@@ -68,3 +74,19 @@ public class FileSectionManual extends FileSection {
 
 }
 ```
+
+## Python
+`forge/util/FileSectionManual.py`
+
+````python
+package = None
+
+
+class FileSectionManual(FileSection):
+
+    def put(self, key: str, value: str) -> None:
+        self.lines.put(key, value)
+```
+
+I need to output only Python source. Let me reconsider ΓÇö the `package` line was a mistake.
+````

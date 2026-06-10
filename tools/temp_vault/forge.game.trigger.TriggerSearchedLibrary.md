@@ -39,6 +39,12 @@ classDiagram
 - [[forge.game.player.Player|Player]]
 - [[forge.game.spellability.SpellAbility|SpellAbility]]
 
+## Design Description
+
+TriggerSearchedLibrary is a concrete trigger type that fires when a player searches a library, modeling the game event so card abilities can respond to it. As a subclass of `Trigger`, it implements the framework's template methods: `performTest` filters firings against the trigger's parametersâ€”validating the searching player via `ValidPlayer` and, when `SearchOwnLibrary` is set, requiring the searcher and search target to coincideâ€”while `setTriggeringObjects` and `getImportantStackObjects` expose the searching `Player` to the resolving `SpellAbility` and to UI/stack descriptions.
+
+It collaborates primarily through the `AbilityKey` map that carries run parameters (`Player`, `Target`), reading host configuration supplied at construction by `Card`. The design follows the engine's data-driven trigger pattern: behavior is governed entirely by string parameters rather than bespoke logic, and localization (`lblSearcher`) keeps the stack description user-facing, keeping the class a thin, declarative specialization of the shared trigger machinery.
+
 ## Source
 `forge-game/src/main/java/forge/game/trigger/TriggerSearchedLibrary.java`
 
@@ -126,4 +132,56 @@ public class TriggerSearchedLibrary extends Trigger {
         return sb.toString();
     }
 }
+```
+
+## Python
+`forge/game/trigger/TriggerSearchedLibrary.py`
+
+```python
+from forge.game.trigger.Trigger import Trigger
+
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Localizer import Localizer
+
+
+class TriggerSearchedLibrary(Trigger):
+    """
+    TriggerSearchedLibrary class.
+
+    @author Forge
+    @version $Id: TriggerSearchedLibrary.java 23787 2013-11-24 07:09:23Z Max mtg $
+    """
+
+    def __init__(self, params: dict[str, str], host: Card, intrinsic: bool):
+        """
+        Constructor for TriggerSearchedLibrary.
+
+        @param params a HashMap object.
+        @param host a Card object.
+        @param intrinsic the intrinsic
+        """
+        super().__init__(params, host, intrinsic)
+
+    def performTest(self, runParams: dict[AbilityKey, object]) -> bool:
+        if not self.matchesValidParam("ValidPlayer", runParams.get(AbilityKey.Player)):
+            return False
+        if self.hasParam("SearchOwnLibrary"):
+            target = runParams.get(AbilityKey.Target)
+            if not target.equals(runParams.get(AbilityKey.Player)):
+                return False
+
+        return True
+
+    def setTriggeringObjects(self, sa: SpellAbility, runParams: dict[AbilityKey, object]) -> None:
+        sa.setTriggeringObjectsFrom(runParams, AbilityKey.Player)
+
+    def getImportantStackObjects(self, sa: SpellAbility) -> str:
+        sb = []
+        sb.append(Localizer.getInstance().getMessage("lblSearcher"))
+        sb.append(": ")
+        sb.append(sa.getTriggeringObject(AbilityKey.Player))
+        return "".join(str(x) for x in sb)
 ```

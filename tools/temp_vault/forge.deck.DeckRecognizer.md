@@ -156,9 +156,9 @@ classDiagram
 
 ## Design Description
 
-DeckRecognizer is the deck-import parser for the forge-core module: it transforms raw, heterogeneously-formatted decklist text (MTGArena, XMage, MTGGoldfish, TappedOut, Deckstats, and `.dec` exports) into an ordered `List<Token>` that the import editor and controller consume. Its central responsibility is line-by-line classification — `parseCardList`/`recognizeLine` first normalize each line (stripping links, smart quotes, markdown, split-card slashes, Commander annotations) and then try an ordered battery of precompiled regex patterns to recognize card requests, deck-section and deck-name markers, and formatting placeholders (card type, rarity, CMC, mana colour), falling back to comment or unknown-text tokens.
+DeckRecognizer is the deck-import parser for the forge-core module: it transforms raw, heterogeneously-formatted decklist text (MTGArena, XMage, MTGGoldfish, TappedOut, Deckstats, and `.dec` exports) into an ordered `List<Token>` that the import editor and controller consume. Its central responsibility is line-by-line classification â€” `parseCardList`/`recognizeLine` first normalize each line (stripping links, smart quotes, markdown, split-card slashes, Commander annotations) and then try an ordered battery of precompiled regex patterns to recognize card requests, deck-section and deck-name markers, and formatting placeholders (card type, rarity, CMC, mana colour), falling back to comment or unknown-text tokens.
 
-Card requests are resolved against `StaticData`/`CardDb` into a concrete `PaperCard` and `CardEdition`, then validated and labelled through its nested `Token`, `TokenType`, `LimitedCardType`, and `TokenKey` types, which encapsulate parse results and serializable keys. It collaborates with domain types like `DeckSection`, `DeckFormat`, and `MagicColor`. Notable design intent is its configurable, setter-driven validation pipeline — release-date, allowed-set, banned/restricted, deck-format, and art-preference constraints — and deliberate, defensive accommodation of malformed real-world exports.
+Card requests are resolved against `StaticData`/`CardDb` into a concrete `PaperCard` and `CardEdition`, then validated and labelled through its nested `Token`, `TokenType`, `LimitedCardType`, and `TokenKey` types, which encapsulate parse results and serializable keys. It collaborates with domain types like `DeckSection`, `DeckFormat`, and `MagicColor`. Notable design intent is its configurable, setter-driven validation pipeline â€” release-date, allowed-set, banned/restricted, deck-format, and art-preference constraints â€” and deliberate, defensive accommodation of malformed real-world exports.
 
 ## Source
 `forge-core/src/main/java/forge/deck/DeckRecognizer.java`
@@ -599,7 +599,7 @@ public class DeckRecognizer {
     public static final String REGRP_CARD = "cardname";
     public static final String REGRP_CARDNO = "count";
 
-    public static final String REX_CARD_NAME = String.format("(\\[)?(?<%s>[a-zA-Z0-9ÃƒÂ -ÃƒÂ¿Ãƒâ‚¬-Ã…Â¸&',\\.:!\\+\\\"\\/\\-\\s]+)(\\])?", REGRP_CARD);
+    public static final String REX_CARD_NAME = String.format("(\\[)?(?<%s>[a-zA-Z0-9ÃƒÆ’Ã‚Â -ÃƒÆ’Ã‚Â¿ÃƒÆ’Ã¢â€šÂ¬-Ãƒâ€¦Ã‚Â¸&',\\.:!\\+\\\"\\/\\-\\s]+)(\\])?", REGRP_CARD);
     public static final String REX_SET_CODE = String.format("(?<%s>[a-zA-Z0-9_]{2,7})", REGRP_SET);
     public static final String REX_COLL_NUMBER = String.format("(?<%s>\\*?[0-9A-Z]+(?:\\S[0-9A-Z]*)?)", REGRP_COLLNR);
     public static final String REX_CARD_COUNT = String.format("(?<%s>[\\d]{1,2})(?<mult>x)?", REGRP_CARDNO);
@@ -1232,4 +1232,913 @@ public class DeckRecognizer {
 
     public void forceImportBannedAndRestrictedCards() { this.includeBannedAndRestricted = true; }
 }
+```
+
+## Python
+`forge/deck/DeckRecognizer.py`
+
+```python
+from forge.StaticData import StaticData
+from forge.card.CardDb import CardDb
+from forge.card.CardDb.CardArtPreference import CardArtPreference
+from forge.card.CardEdition import CardEdition
+from forge.card.CardType import CardType
+from forge.card.CardType.CoreType import CoreType
+from forge.card.ColorSet import ColorSet
+from forge.card.MagicColor import MagicColor
+from forge.card.MagicColor.Color import Color
+from forge.deck.DeckFormat import DeckFormat
+from forge.deck.DeckSection import DeckSection
+from forge.item.IPaperCard import IPaperCard
+from forge.item.PaperCard import PaperCard
+from forge.util.Localizer import Localizer
+
+import enum
+import re
+import datetime
+
+
+class TokenType(enum.Enum):
+    # Card Token Types
+    LEGAL_CARD = enum.auto()
+    LIMITED_CARD = enum.auto()
+    CARD_FROM_NOT_ALLOWED_SET = enum.auto()
+    CARD_FROM_INVALID_SET = enum.auto()
+    # Valid card request, but can't be imported because the player does not have enough copies.
+    # Should be replaced with a different printing if possible.
+    CARD_NOT_IN_INVENTORY = enum.auto()
+    # Valid card request for a card that isn't in the player's inventory, but new copies can be acquired freely.
+    # Usually used for basic lands. Should be supplied to the import controller by the editor.
+    FREE_CARD_NOT_IN_INVENTORY = enum.auto()
+    # Warning messages
+    WARNING_MESSAGE = enum.auto()
+    UNKNOWN_CARD = enum.auto()
+    UNSUPPORTED_CARD = enum.auto()
+    UNSUPPORTED_DECK_SECTION = enum.auto()
+    # No Token
+    UNKNOWN_TEXT = enum.auto()
+    COMMENT = enum.auto()
+    # Placeholders
+    DECK_NAME = enum.auto()
+    DECK_SECTION_NAME = enum.auto()
+    CARD_TYPE = enum.auto()
+    CARD_RARITY = enum.auto()
+    CARD_CMC = enum.auto()
+    MANA_COLOUR = enum.auto()
+
+
+TokenType.CARD_TOKEN_TYPES = frozenset({
+    TokenType.LEGAL_CARD, TokenType.LIMITED_CARD, TokenType.CARD_FROM_NOT_ALLOWED_SET,
+    TokenType.CARD_FROM_INVALID_SET, TokenType.CARD_NOT_IN_INVENTORY, TokenType.FREE_CARD_NOT_IN_INVENTORY})
+TokenType.IN_DECK_TOKEN_TYPES = frozenset({
+    TokenType.LEGAL_CARD, TokenType.LIMITED_CARD, TokenType.DECK_NAME, TokenType.FREE_CARD_NOT_IN_INVENTORY})
+TokenType.CARD_PLACEHOLDER_TOKEN_TYPES = frozenset({
+    TokenType.CARD_TYPE, TokenType.CARD_RARITY, TokenType.CARD_CMC, TokenType.MANA_COLOUR})
+
+
+class LimitedCardType(enum.Enum):
+    BANNED = enum.auto()
+    RESTRICTED = enum.auto()
+
+
+class Token:
+    def __init__(self, type1, count=0, message=None):
+        # Mirrors the public Token(type, count, message) and Token(type, message) constructors.
+        if isinstance(count, str) and message is None:
+            message = count
+            count = 0
+        if message is None:
+            message = ""
+        self.number = count
+        self.type = type1
+        self.text = message
+        self.limitedCardType = None
+        self.card = None
+        self.tokenSection = None
+        self.cardRequestHasSetCode = True
+
+    @classmethod
+    def _newCard(cls, type1, count, tokenCard, cardRequestHasSetCode):
+        token = cls(type1, count, "")
+        token.card = tokenCard
+        token.tokenSection = None
+        token.limitedCardType = None
+        token.cardRequestHasSetCode = cardRequestHasSetCode
+        return token
+
+    @classmethod
+    def _newCardSection(cls, type1, count, tokenCard, section, cardRequestHasSetCode):
+        token = cls._newCard(type1, count, tokenCard, cardRequestHasSetCode)
+        token.tokenSection = section
+        token.limitedCardType = None
+        return token
+
+    @classmethod
+    def _newCardSectionLimited(cls, type1, count, tokenCard, section, limitedCardType1, cardRequestHasSetCode):
+        token = cls._newCard(type1, count, tokenCard, cardRequestHasSetCode)
+        token.tokenSection = section
+        token.limitedCardType = limitedCardType1
+        return token
+
+    @staticmethod
+    def LegalCard(card, count, section, cardRequestHasSetCode):
+        return Token._newCardSection(TokenType.LEGAL_CARD, count, card, section, cardRequestHasSetCode)
+
+    @staticmethod
+    def LimitedCard(card, count, section, limitedType, cardRequestHasSetCode):
+        return Token._newCardSectionLimited(TokenType.LIMITED_CARD, count, card, section, limitedType, cardRequestHasSetCode)
+
+    @staticmethod
+    def NotAllowedCard(card, count, cardRequestHasSetCode):
+        return Token._newCard(TokenType.CARD_FROM_NOT_ALLOWED_SET, count, card, cardRequestHasSetCode)
+
+    @staticmethod
+    def CardInInvalidSet(card, count, cardRequestHasSetCode):
+        return Token._newCard(TokenType.CARD_FROM_INVALID_SET, count, card, cardRequestHasSetCode)
+
+    @staticmethod
+    def NotInInventoryFree(card, count, section):
+        return Token._newCardSection(TokenType.FREE_CARD_NOT_IN_INVENTORY, count, card, section, True)
+
+    # WARNING MESSAGES
+    # ================
+    @staticmethod
+    def UnknownCard(cardName, setCode, count):
+        ttext = cardName if (setCode is None or setCode == "") else "%s [%s]" % (cardName, setCode)
+        return Token(TokenType.UNKNOWN_CARD, count, ttext)
+
+    @staticmethod
+    def UnsupportedCard(cardName, setCode, count):
+        ttext = cardName if (setCode is None or setCode == "") else "%s [%s]" % (cardName, setCode)
+        return Token(TokenType.UNSUPPORTED_CARD, count, ttext)
+
+    @staticmethod
+    def WarningMessage(msg):
+        return Token(TokenType.WARNING_MESSAGE, msg)
+
+    @staticmethod
+    def NotInInventory(card, count, section):
+        return Token._newCardSection(TokenType.CARD_NOT_IN_INVENTORY, count, card, section, False)
+
+    # =================================
+    # DECK SECTIONS
+    # =================================
+    @staticmethod
+    def _UnsupportedDeckSection(sectionName):
+        return Token(TokenType.UNSUPPORTED_DECK_SECTION, sectionName)
+
+    @staticmethod
+    def DeckSection(sectionName0, allowedDeckSections):
+        sectionName = sectionName0.lower().strip()
+        matchedSection = None
+        if sectionName == "side" or "sideboard" in sectionName or sectionName == "sb":
+            matchedSection = DeckSection.Sideboard
+        elif sectionName == "main" or "card" in sectionName \
+                or sectionName == "mainboard" or sectionName == "deck":
+            matchedSection = DeckSection.Main
+        elif sectionName == "avatar":
+            matchedSection = DeckSection.Avatar
+        elif sectionName == "commander":
+            matchedSection = DeckSection.Commander
+        elif sectionName == "schemes":
+            matchedSection = DeckSection.Schemes
+        elif sectionName == "conspiracy":
+            matchedSection = DeckSection.Conspiracy
+        elif sectionName == "planes":
+            matchedSection = DeckSection.Planes
+        elif sectionName == "attractions":
+            matchedSection = DeckSection.Attractions
+        elif sectionName == "contraptions":
+            matchedSection = DeckSection.Contraptions
+
+        if matchedSection is None:  # no match found
+            return None
+
+        if allowedDeckSections is not None and matchedSection not in allowedDeckSections:
+            return Token._UnsupportedDeckSection(sectionName0)
+        return Token(TokenType.DECK_SECTION_NAME, matchedSection.name)
+
+    def getText(self):
+        if self.isCardToken():
+            return "%s [%s] #%s" % (self.card.getName(), self.card.getEdition(), self.card.getCollectorNumber())
+        return self.text
+
+    def getCard(self):
+        return self.card
+
+    def getType(self):
+        return self.type
+
+    def getQuantity(self):
+        return self.number
+
+    def cardRequestHasNoCode(self):
+        return not self.cardRequestHasSetCode
+
+    def getTokenSection(self):
+        return self.tokenSection
+
+    def resetTokenSection(self, referenceDeckSection):
+        self.tokenSection = referenceDeckSection if referenceDeckSection is not None else DeckSection.Main
+
+    def replaceTokenCard(self, replacementCard):
+        if not self.isCardToken():
+            return
+        self.card = replacementCard
+
+    def getLimitedCardType(self):
+        return self.limitedCardType
+
+    def isCardToken(self):
+        return self.type in TokenType.CARD_TOKEN_TYPES
+
+    def isTokenForDeck(self):
+        return self.type in TokenType.IN_DECK_TOKEN_TYPES
+
+    def isCardTokenForDeck(self):
+        return self.isCardToken() and self.isTokenForDeck()
+
+    def isCardPlaceholder(self):
+        return self.type in TokenType.CARD_PLACEHOLDER_TOKEN_TYPES
+
+    def isDeckSection(self):
+        return self.type == TokenType.DECK_SECTION_NAME
+
+    def getKey(self):
+        return Token.TokenKey.fromToken(self)
+
+    class TokenKey:
+        KEYSEP = "|"
+
+        def __init__(self):
+            self.cardName = None
+            self.setCode = None
+            self.collectorNumber = None
+            self.deckSection = None
+            self.tokenType = None
+            self.limitedType = None
+
+        @staticmethod
+        def fromToken(token):
+            if not token.isCardToken():
+                return None
+            key = Token.TokenKey()
+            key.cardName = CardDb.CardRequest.compose(token.card.getName(), token.getCard().isFoil())
+            key.setCode = token.card.getEdition()
+            key.collectorNumber = token.card.getCollectorNumber()
+            key.tokenType = token.getType()
+            if token.tokenSection is not None:
+                key.deckSection = token.tokenSection
+            if token.limitedCardType is not None:
+                key.limitedType = token.limitedCardType
+            return key
+
+        def toString(self):
+            keyString = []
+            keyString.append("%s%s%s%s%s" % (self.cardName, self.KEYSEP, self.setCode, self.KEYSEP, self.collectorNumber))
+            if self.deckSection is not None:
+                keyString.append("%sD%s" % (self.KEYSEP, self.deckSection.name))
+            keyString.append("%sT%s" % (self.KEYSEP, self.tokenType.name))
+            if self.limitedType is not None:
+                keyString.append("%sL%s" % (self.KEYSEP, self.limitedType.name))
+            return "".join(keyString)
+
+        def __str__(self):
+            return self.toString()
+
+        @staticmethod
+        def fromString(keyString):
+            keyInfo = [part for part in keyString.split(Token.TokenKey.KEYSEP) if part != ""]
+            if len(keyInfo) < 4:
+                return None
+
+            tokenKey = Token.TokenKey()
+            tokenKey.cardName = keyInfo[0]
+            tokenKey.setCode = keyInfo[1]
+            tokenKey.collectorNumber = keyInfo[2]
+            nxtInfoIdx = 3
+            if keyInfo[nxtInfoIdx].startswith("D"):
+                tokenKey.deckSection = DeckSection[keyInfo[nxtInfoIdx][1:]]
+                nxtInfoIdx += 1
+            tokenType = TokenType[keyInfo[nxtInfoIdx][1:]]
+            tokenKey.tokenType = tokenType
+            if tokenType == TokenType.LIMITED_CARD:
+                tokenKey.limitedType = LimitedCardType[keyInfo[nxtInfoIdx + 1][1:]]
+            return tokenKey
+
+
+class DeckRecognizer:
+    _MISSING = object()
+
+    # Utility Constants
+    SEARCH_SINGLE_SLASH = re.compile(r"(?<=[^/])\s*/\s*(?=[^/])")
+    DOUBLE_SLASH = "//"
+    LINE_COMMENT_DELIMITER_OR_MD_HEADER = "#"
+    ASTERISK = "* "  # Note the blank space after asterisk!
+
+    # Core Matching Patterns
+    REGRP_DECKNAME = "deckName"
+    REX_DECK_NAME = r"^(\/\/\s*)?(?P<pre>(deck|name(\s)?))(\:|=)\s*(?P<%s>([a-zA-Z0-9',\/\-\s\)\]\(\[\#]+))\s*(.*)$" % REGRP_DECKNAME
+    DECK_NAME_PATTERN = re.compile(REX_DECK_NAME, re.IGNORECASE)
+
+    REGRP_TOKEN = "token"
+    REGRP_COLR1 = "colr1"
+    REGRP_COLR2 = "colr2"
+    REGRP_MANA = "mana"
+    REX_NOCARD = r"^(?P<pre>[^a-zA-Z]*)\s*(?P<title>(\w+[:]\s*))?(?P<%s>[a-zA-Z]+)(?P<post>[^a-zA-Z]*)?$" % REGRP_TOKEN
+    REX_CMC = r"^(?P<pre>[^a-zA-Z]*)\s*(?P<%s>(C(M)?C(\s)?\d{1,2}))(?P<post>[^\d]*)?$" % REGRP_TOKEN
+    REX_RARITY = r"^(?P<pre>[^a-zA-Z]*)\s*(?P<%s>((un)?common|(mythic)?\s*(rare)?|land|special))(?P<post>[^a-zA-Z]*)?$" % REGRP_TOKEN
+    MANA_SYMBOLS = "w|u|b|r|g|c|m|wu|ub|br|rg|gw|wb|ur|bg|rw|gu"
+    REX_MANA_SYMBOLS = r"\{(?P<%s>(%s))\}" % (REGRP_MANA, MANA_SYMBOLS)
+    REX_MANA_COLOURS = r"(\{(%s)\})|(white|blue|black|red|green|colo(u)?rless|multicolo(u)?r)" % MANA_SYMBOLS
+    REX_MANA = r"^(?P<pre>[^a-zA-Z]*)\s*(?P<%s>(%s))((\s|-|\|)(?P<%s>(%s)))?(?P<post>[^a-zA-Z]*)?$" % (
+        REGRP_COLR1, REX_MANA_COLOURS, REGRP_COLR2, REX_MANA_COLOURS)
+    NONCARD_PATTERN = re.compile(REX_NOCARD, re.IGNORECASE)
+    CMC_PATTERN = re.compile(REX_CMC, re.IGNORECASE)
+    CARD_RARITY_PATTERN = re.compile(REX_RARITY, re.IGNORECASE)
+    MANA_PATTERN = re.compile(REX_MANA, re.IGNORECASE)
+    MANA_SYMBOL_PATTERN = re.compile(REX_MANA_SYMBOLS, re.IGNORECASE)
+
+    REGRP_SET = "setcode"
+    REGRP_COLLNR = "collnr"
+    REGRP_CARD = "cardname"
+    REGRP_CARDNO = "count"
+
+    REX_CARD_NAME = r'''(\[)?(?P<%s>[a-zA-Z0-9├Ç-├û├ÿ-├╢├╕-├┐─Ç-┼┐╞Ç-╔Å&',\.:!\+"\/\-\s]+)(\])?''' % REGRP_CARD
+    REX_SET_CODE = r"(?P<%s>[a-zA-Z0-9_]{2,7})" % REGRP_SET
+    REX_COLL_NUMBER = r"(?P<%s>\*?[0-9A-Z]+(?:\S[0-9A-Z]*)?)" % REGRP_COLLNR
+    REX_CARD_COUNT = r"(?P<%s>[\d]{1,2})(?P<mult>x)?" % REGRP_CARDNO
+    # EXTRA
+    REGRP_FOIL_GFISH = "foil"
+    REX_FOIL_MTGGOLDFISH = r"(?P<%s>\(F\))?" % REGRP_FOIL_GFISH
+    # XMage Sideboard indicator - pushed a bit further with deck section indication
+    REGRP_DECK_SEC_XMAGE_STYLE = "decsec"
+    REX_DECKSEC_XMAGE = r"(?P<%s>(MB|SB|CM))" % REGRP_DECK_SEC_XMAGE_STYLE
+
+    # 1. Card-Set Request (Amount?, CardName, Set)
+    REX_CARD_SET_REQUEST = r"(%s\s*:\s*)?(%s\s)?\s*%s\s*(\s|\||\(|\[|\{)\s?%s(\s|\)|\]|\})?\s*%s" % (
+        REX_DECKSEC_XMAGE, REX_CARD_COUNT, REX_CARD_NAME, REX_SET_CODE, REX_FOIL_MTGGOLDFISH)
+    CARD_SET_PATTERN = re.compile(REX_CARD_SET_REQUEST)
+    # 2. Set-Card Request (Amount?, Set, CardName)
+    REX_SET_CARD_REQUEST = r"(%s\s*:\s*)?(%s\s)?\s*(\(|\[|\{)?%s(\s+|\)|\]|\}|\|)\s*%s\s*%s\s*" % (
+        REX_DECKSEC_XMAGE, REX_CARD_COUNT, REX_SET_CODE, REX_CARD_NAME, REX_FOIL_MTGGOLDFISH)
+    SET_CARD_PATTERN = re.compile(REX_SET_CARD_REQUEST)
+    # 3. Full-Request (Amount?, CardName, Set, Collector Number|Art Index) - MTGArena Format
+    REX_FULL_REQUEST_CARD_SET = r"(%s\s*:\s*)?(%s\s)?\s*%s\s*(\||\(|\[|\{|\s)%s(\s|\)|\]|\})?(\s+|\|\s*)%s\s*%s\s*" % (
+        REX_DECKSEC_XMAGE, REX_CARD_COUNT, REX_CARD_NAME, REX_SET_CODE, REX_COLL_NUMBER, REX_FOIL_MTGGOLDFISH)
+    CARD_SET_COLLNO_PATTERN = re.compile(REX_FULL_REQUEST_CARD_SET)
+    # 4. Full-Request (Amount?, Set, CardName, Collector Number|Art Index) - Alternative for flexibility
+    REX_FULL_REQUEST_SET_CARD = r"^(%s\s*:\s*)?(%s\s)?\s*(\(|\[|\{)?%s(\s+|\)|\]|\}|\|)\s*%s(\s+|\|\s*)%s\s*%s$" % (
+        REX_DECKSEC_XMAGE, REX_CARD_COUNT, REX_SET_CODE, REX_CARD_NAME, REX_COLL_NUMBER, REX_FOIL_MTGGOLDFISH)
+    SET_CARD_COLLNO_PATTERN = re.compile(REX_FULL_REQUEST_SET_CARD)
+    # 5. (MTGGoldfish mostly) (Amount?, Card Name, <Collector Number>, Set)
+    REX_FULL_REQUEST_CARD_COLLNO_SET = r"^(%s\s*:\s*)?(%s\s)?\s*%s\s+(\<%s\>)\s*(\(|\[|\{)?%s(\s+|\)|\]|\}|\|)\s*%s$" % (
+        REX_DECKSEC_XMAGE, REX_CARD_COUNT, REX_CARD_NAME, REX_COLL_NUMBER, REX_SET_CODE, REX_FOIL_MTGGOLDFISH)
+    CARD_COLLNO_SET_PATTERN = re.compile(REX_FULL_REQUEST_CARD_COLLNO_SET)
+    # 6. XMage format (Amount?, [Set:Collector Number] Card Name)
+    REX_FULL_REQUEST_XMAGE = r"^(%s\s*:\s*)?(%s\s)?\s*(\[)?%s:%s(\])\s+%s\s*%s$" % (
+        REX_DECKSEC_XMAGE, REX_CARD_COUNT, REX_SET_CODE, REX_COLL_NUMBER, REX_CARD_NAME, REX_FOIL_MTGGOLDFISH)
+    SET_COLLNO_CARD_XMAGE_PATTERN = re.compile(REX_FULL_REQUEST_XMAGE)
+    # 7. Card-Only Request (Amount?)
+    REX_CARDONLY = r"(%s\s*:\s*)?(%s\s)?\s*%s\s*%s" % (
+        REX_DECKSEC_XMAGE, REX_CARD_COUNT, REX_CARD_NAME, REX_FOIL_MTGGOLDFISH)
+    CARD_ONLY_PATTERN = re.compile(REX_CARDONLY)
+
+    DECK_SECTION_NAMES = [
+        "side", "sideboard", "sb",
+        "main", "card", "mainboard",
+        "avatar", "commander", "schemes",
+        "conspiracy", "planes", "deck", "dungeon",
+        "attractions", "contraptions"]
+
+    @staticmethod
+    def allCardTypes():
+        cardTypesList = []
+        # CoreTypesNames
+        coreTypes = list(CoreType)
+        for coreType in coreTypes:
+            cardTypesList.append(coreType.name.lower())
+        # Manual Additions:
+        # NOTE: "sorceries" is also included as it can be found in exported deck, even if it's incorrect.
+        # Example: https://deckstats.net/decks/70852/556925-artifacts/en - see Issue 1010
+        cardTypesList.append("sorceries")  # Sorcery is the only name with different plural form
+        cardTypesList.append("aura")  # in case.
+        cardTypesList.append("mana")  # "Mana" (see Issue 1010)
+        cardTypesList.append("spell")
+        cardTypesList.append("other spell")
+        cardTypesList.append("planeswalker")
+        return cardTypesList
+
+    def __init__(self):
+        # These parameters are controlled only via setter methods
+        self.releaseDateConstraint = None
+        self.allowedSetCodes = None
+        self.gameFormatBannedCards = None
+        self.gameFormatRestrictedCards = None
+        self.allowedDeckSections = None
+        self.includeBannedAndRestricted = False
+        self.deckFormat = None
+        self.artPreference = StaticData.instance().getCardArtPreference()  # init as default
+
+    def parseCardList(self, cardList: list[str]) -> list[Token]:
+        tokens = []
+        referenceDeckSectionInParsing = None  # default
+
+        for line in cardList:
+            token = self.recognizeLine(line, referenceDeckSectionInParsing)
+            if token is None:
+                continue
+
+            tokenType = token.getType()
+            if (not token.isTokenForDeck() and (tokenType != TokenType.DECK_SECTION_NAME)) or \
+                    (tokenType == TokenType.LIMITED_CARD and not self.includeBannedAndRestricted):
+                # Just bluntly add the token to the list and proceed.
+                tokens.append(token)
+                continue
+
+            if token.getType() == TokenType.DECK_NAME:
+                tokens.insert(0, token)  # always add deck name top of the decklist
+                continue
+
+            if token.getType() == TokenType.DECK_SECTION_NAME:
+                referenceDeckSectionInParsing = DeckSection[token.getText()]
+                tokens.append(token)
+                continue
+
+            # OK so now the token is either a Legal card or a limited card that has been marked for inclusion
+            tokenSection = token.getTokenSection()
+            tokenCard = token.getCard()
+
+            if self.isAllowed(tokenSection):
+                if tokenSection != referenceDeckSectionInParsing:
+                    sectionToken = Token.DeckSection(tokenSection.name, self.allowedDeckSections)
+                    # just check that last token is stack is a card placeholder.
+                    # In that case, add the new section token before the placeholder
+                    if len(tokens) > 0 and tokens[len(tokens) - 1].isCardPlaceholder():
+                        tokens.insert(len(tokens) - 1, sectionToken)
+                    else:
+                        tokens.append(sectionToken)
+                    referenceDeckSectionInParsing = tokenSection
+                tokens.append(token)
+                continue
+            # So Section and Token have now been already validated in recogniseLine
+            # Therefore, if the Token Section is not allowed in current Editor/Game Format,
+            # the card would not be supported either.
+            unsupportedCard = Token.UnsupportedCard(tokenCard.getName(), tokenCard.getEdition(),
+                                                    token.getQuantity())
+            tokens.append(unsupportedCard)
+        return tokens
+
+    def isAllowed(self, tokenSection) -> bool:
+        return self.allowedDeckSections is None or tokenSection in self.allowedDeckSections
+
+    def recognizeLine(self, rawLine: str, referenceSection):
+        if rawLine is None:
+            return None
+        if rawLine.strip() == "":
+            return None
+
+        smartQuote = chr(8217)
+        refLine = rawLine.strip().replace(smartQuote, "'")
+        # Remove any link (e.g. Markdown Export format from TappedOut)
+        refLine = DeckRecognizer.purgeAllLinks(refLine)
+
+        if refLine.startswith(DeckRecognizer.LINE_COMMENT_DELIMITER_OR_MD_HEADER):
+            line = refLine.replace(DeckRecognizer.LINE_COMMENT_DELIMITER_OR_MD_HEADER, "")
+        else:
+            line = refLine.strip()  # Remove any trailing formatting
+
+        # Some websites export split card names with a single slash. Replace with double slash.
+        # Final fantasy cards like Summon: Choco/Mog should be omitted to be recognized. TODO: fix maybe for future cards
+        if "Summon:" not in line:
+            line = DeckRecognizer.SEARCH_SINGLE_SLASH.sub(" // ", line, count=1)
+        if line.startswith(DeckRecognizer.ASTERISK):  # Markdown lists (tappedout md export)
+            line = line[2:]
+
+        # == Patches to Corner Cases
+        # FIX Commander in Deckstats export
+        if line.endswith("#!Commander"):
+            line = line.replace("#!Commander", "")
+            line = "CM:%s" % line.strip()
+        # Conspiracy section in .dec files - force to make it recognise as a placeholder
+        elif line.strip() == "[Conspiracy]":
+            line = "/ %s" % line
+
+        result = self.recogniseCardToken(line, referenceSection)
+        if result is None:
+            result = self.recogniseNonCardToken(line)
+        if result is not None:
+            return result
+        if refLine.startswith(DeckRecognizer.DOUBLE_SLASH) or \
+                refLine.startswith(DeckRecognizer.LINE_COMMENT_DELIMITER_OR_MD_HEADER):
+            return Token(TokenType.COMMENT, 0, refLine)
+        return Token(TokenType.UNKNOWN_TEXT, 0, refLine)
+
+    @staticmethod
+    def purgeAllLinks(line: str) -> str:
+        urlPattern = r"(?P<protocol>((https|ftp|file|http):))(?P<sep>((//|\\)+))(?P<url>([\w\d:#@%/;$~_?+-=\\.&]*))"
+        p = re.compile(urlPattern, re.IGNORECASE)
+        m = p.finditer(line)
+
+        for match in m:
+            line = re.sub(match.group(0), "", line).strip()
+        if line.endswith("()"):
+            return line[0:len(line) - 2]
+        return line
+
+    def recogniseCardToken(self, text: str, currentDeckSection):
+        line = text.strip()
+        unknownCardToken = None
+        data = StaticData.instance()
+        cardMatchers = self.getRegExMatchers(line)
+        for matcher in cardMatchers:
+            cardName = self.getRexGroup(matcher, DeckRecognizer.REGRP_CARD)
+            if cardName is None:
+                continue
+            cardName = cardName.strip()
+            # Avoid hit the DB - check whether cardName is contained in the DB
+            if not data.isMTGCard(cardName):
+                # check the case for double-sided cards
+                cardName = self.checkDoubleSidedCard(cardName)
+            ccount = self.getRexGroup(matcher, DeckRecognizer.REGRP_CARDNO)
+            setCode = self.getRexGroup(matcher, DeckRecognizer.REGRP_SET)
+            collNo = self.getRexGroup(matcher, DeckRecognizer.REGRP_COLLNR)
+            foilGr = self.getRexGroup(matcher, DeckRecognizer.REGRP_FOIL_GFISH)
+            deckSecFromCardLine = self.getRexGroup(matcher, DeckRecognizer.REGRP_DECK_SEC_XMAGE_STYLE)
+            isFoil = foilGr is not None
+            cardCount = int(ccount) if ccount is not None else 1
+
+            if cardName is None:
+                if ccount is not None:
+                    # setting cardCount to zero as the text is the whole line
+                    unknownCardToken = Token.UnknownCard(text, None, 0)
+                continue
+
+            # if any, it will be tried to convert specific collector number to art index (useful for lands).
+            collectorNumber = collNo if collNo is not None else IPaperCard.NO_COLLECTOR_NUMBER
+            try:
+                artIndex = int(collectorNumber)
+            except ValueError:
+                artIndex = IPaperCard.NO_ART_INDEX
+            if setCode is not None:
+                # Ok Now we're sure the cardName is correct. Now check for setCode
+                edition = StaticData.instance().getEditions().get(setCode)
+                if edition is None:
+                    # set the case for unknown card (in case) and continue to the next for any better matching
+                    unknownCardToken = Token.UnknownCard(cardName, setCode, cardCount)
+                    continue
+
+                # we now name is ok, set is ok - we just need to be sure about collector number (if any)
+                # and if that card can be actually found in the requested set.
+                # IOW: we should account for wrong request, e.g. Counterspell|FEM - just doesn't exist!
+                pc = data.getCardFromSet(cardName, edition, collectorNumber, artIndex, isFoil)
+                if pc is not None:
+                    # ok so the card has been found - let's see if there's any restriction on the set
+                    return self.checkAndSetCardToken(pc, edition, cardCount, deckSecFromCardLine,
+                                                      currentDeckSection, True)
+                # UNKNOWN card as in the Counterspell|FEM case
+                unknownCardToken = Token.UnknownCard(cardName, setCode, cardCount)
+                continue
+            # ok so we can simply ignore everything but card name - as set code does not exist
+            # At this stage, we know the card name exists in the DB so a Card MUST be found
+            # unless it is illegal for current format or invalid with selected date.
+            pc = None
+            if self.hasGameFormatConstraints():
+                pc = data.getCardFromSupportedEditions(cardName, isFoil, self.artPreference,
+                                                       self.allowedSetCodes,
+                                                       self.releaseDateConstraint)
+            if pc is None:
+                pc = data.getCardFromSupportedEditions(cardName, isFoil, self.artPreference, None,
+                                                       self.releaseDateConstraint)
+
+            if pc is not None:
+                edition = StaticData.instance().getCardEdition(pc.getEdition())
+                return self.checkAndSetCardToken(pc, edition, cardCount, deckSecFromCardLine,
+                                                 currentDeckSection, False)
+        return unknownCardToken  # either null or unknown card
+
+    def checkDoubleSidedCard(self, cardName: str):
+        if "//" not in cardName:
+            return None
+        cardRequest = cardName.strip()
+        sides = cardRequest.split("//")
+        if len(sides) != 2:
+            return None
+        leftSide = sides[0].strip()
+        rightSide = sides[1].strip()
+        data = StaticData.instance()
+        if data.isMTGCard(leftSide):
+            return leftSide
+        if data.isMTGCard(rightSide):
+            return rightSide
+        return None
+
+    def checkAndSetCardToken(self, pc, edition, cardCount, deckSecFromCardLine, referenceSection,
+                             cardRequestHasSetCode):
+        # Note: Always Check Allowed Set First to avoid accidentally importing invalid cards
+        # e.g. Banned Cards from not-allowed sets!
+        if self.IsIllegalInFormat(edition.getCode()):
+            # Mark as illegal card
+            return Token.NotAllowedCard(pc, cardCount, cardRequestHasSetCode)
+
+        if self.isNotCompliantWithReleaseDateRestrictions(edition):
+            return Token.CardInInvalidSet(pc, cardCount, cardRequestHasSetCode)
+
+        tokenSection = self.getTokenSection(deckSecFromCardLine, referenceSection, pc)
+        if self.isBannedInFormat(pc):
+            return Token.LimitedCard(pc, cardCount, tokenSection, LimitedCardType.BANNED, cardRequestHasSetCode)
+
+        if self.isRestrictedInFormat(pc, cardCount):
+            return Token.LimitedCard(pc, cardCount, tokenSection, LimitedCardType.RESTRICTED, cardRequestHasSetCode)
+
+        return Token.LegalCard(pc, cardCount, tokenSection, cardRequestHasSetCode)
+
+    # This would save tons of time in parsing Input + would also allow to return UnsupportedCardTokens beforehand
+    def getTokenSection(self, deckSec, currentDeckSection, card):
+        if deckSec is not None:
+            key = deckSec.upper().strip()
+            if key == "MB":
+                cardSection = DeckSection.Main
+            elif key == "SB":
+                cardSection = DeckSection.Sideboard
+            elif key == "CM":
+                cardSection = DeckSection.Commander
+            else:
+                cardSection = DeckSection.matchingSection(card)
+            if cardSection.validate(card):
+                return cardSection
+        if currentDeckSection is not None:
+            if currentDeckSection.validate(card):
+                return currentDeckSection
+            return DeckSection.matchingSection(card)
+        # When there is no reference section yet, there maybe cases in which the matched section
+        # is not supported, but other possibilities exist (e.g. Commander card in Constructed
+        # could potentially go in Main)
+        matchedSection = DeckSection.matchingSection(card)
+        # If it's a commander candidate, put it there.
+        if matchedSection == DeckSection.Main and self.isAllowed(DeckSection.Commander) and DeckSection.Commander.validate(card):
+            return DeckSection.Commander
+        if self.isAllowed(matchedSection):
+            return matchedSection
+        # if matched section is not allowed, try to match the card to main.
+        # if that won't work, return matched section as this will potentially be an unsupported card!
+        return DeckSection.Main if DeckSection.Main.validate(card) else matchedSection
+
+    def hasGameFormatConstraints(self) -> bool:
+        return (self.allowedSetCodes is not None and len(self.allowedSetCodes) > 0) or \
+               (self.gameFormatBannedCards is not None and len(self.gameFormatBannedCards) > 0) or \
+               (self.gameFormatRestrictedCards is not None and len(self.gameFormatRestrictedCards) > 0)
+
+    def getRexGroup(self, matcher, groupName):
+        try:
+            rexGroup = matcher.group(groupName)
+        except (IndexError, re.error):
+            rexGroup = None
+        return rexGroup
+
+    def isBannedInFormat(self, pc) -> bool:
+        return (self.gameFormatBannedCards is not None and pc.getName() in self.gameFormatBannedCards) or \
+               (self.deckFormat is not None and not self.deckFormat.isLegalCard(pc))
+
+    def isRestrictedInFormat(self, pc, cardCount) -> bool:
+        return self.gameFormatRestrictedCards is not None and \
+            (pc.getName() in self.gameFormatRestrictedCards and cardCount > 1)
+
+    def IsIllegalInFormat(self, setCode) -> bool:
+        return self.allowedSetCodes is not None and setCode not in self.allowedSetCodes
+
+    def isNotCompliantWithReleaseDateRestrictions(self, edition) -> bool:
+        return self.releaseDateConstraint is not None and edition.getDate() >= self.releaseDateConstraint
+
+    def getRegExMatchers(self, line: str):
+        matchers = []
+        patternsWithCollNumber = [
+            DeckRecognizer.CARD_SET_COLLNO_PATTERN,
+            DeckRecognizer.SET_CARD_COLLNO_PATTERN,
+            DeckRecognizer.CARD_COLLNO_SET_PATTERN,
+            DeckRecognizer.SET_COLLNO_CARD_XMAGE_PATTERN,
+        ]
+        for pattern in patternsWithCollNumber:
+            matcher = pattern.fullmatch(line)
+            if matcher is not None and self.getRexGroup(matcher, DeckRecognizer.REGRP_SET) is not None and \
+                    self.getRexGroup(matcher, DeckRecognizer.REGRP_COLLNR) is not None:
+                matchers.append(matcher)
+        OtherPatterns = [  # Order counts
+            DeckRecognizer.CARD_SET_PATTERN,
+            DeckRecognizer.SET_CARD_PATTERN,
+            DeckRecognizer.CARD_ONLY_PATTERN,
+        ]
+        for pattern in OtherPatterns:
+            matcher = pattern.fullmatch(line)
+            if matcher is not None:
+                matchers.append(matcher)
+        return matchers
+
+    def recogniseNonCardToken(self, text: str):
+        if DeckRecognizer.isDeckSectionName(text):
+            tokenText = DeckRecognizer.nonCardTokenMatch(text)
+            return Token.DeckSection(tokenText, self.allowedDeckSections)
+        if DeckRecognizer.isCardCMC(text):
+            tokenText = self.getCardCMCMatch(text)
+            return Token(TokenType.CARD_CMC, tokenText)
+        if DeckRecognizer.isCardRarity(text):
+            tokenText = DeckRecognizer.cardRarityTokenMatch(text)
+            if tokenText is not None and tokenText.strip() != "":
+                return Token(TokenType.CARD_RARITY, tokenText)
+            return None
+        if DeckRecognizer.isCardType(text):
+            tokenText = DeckRecognizer.nonCardTokenMatch(text)
+            return Token(TokenType.CARD_TYPE, tokenText)
+        if DeckRecognizer.isManaToken(text):
+            tokenText = DeckRecognizer.getManaTokenMatch(text)
+            return Token(TokenType.MANA_COLOUR, tokenText)
+        if DeckRecognizer.isDeckName(text):
+            deckName = DeckRecognizer.deckNameMatch(text)
+            return Token(TokenType.DECK_NAME, deckName.strip())
+        return None
+
+    # -----------------------------------------------------------------------------
+    # Note: Card types, CMC, and Rarity Tokens are **only** used for style formatting
+    # in the Import Editor. This won't affect the import process in any way.
+    # The use of these tokens has been borrowed by Deckstats.net format export.
+    # -----------------------------------------------------------------------------
+    @staticmethod
+    def isCardType(lineAsIs: str) -> bool:
+        nonCardToken = DeckRecognizer.nonCardTokenMatch(lineAsIs)
+        if nonCardToken is None:
+            return False
+        lowered = nonCardToken.lower()
+        return any(lowered.startswith(cardType) for cardType in DeckRecognizer.CARD_TYPES)
+
+    @staticmethod
+    def isCardRarity(lineAsIs: str) -> bool:
+        return DeckRecognizer.cardRarityTokenMatch(lineAsIs) is not None
+
+    @staticmethod
+    def isCardCMC(lineAsIs: str) -> bool:
+        return DeckRecognizer.cardCMCTokenMatch(lineAsIs) is not None
+
+    @staticmethod
+    def isManaToken(lineAsIs: str) -> bool:
+        return DeckRecognizer.manaTokenMatch(lineAsIs) is not None
+
+    @staticmethod
+    def isDeckSectionName(lineAsIs: str) -> bool:
+        nonCardToken = DeckRecognizer.nonCardTokenMatch(lineAsIs)
+        if nonCardToken is None:
+            return False
+        return any(nonCardToken.lower() == name.lower() for name in DeckRecognizer.DECK_SECTION_NAMES)
+
+    @staticmethod
+    def nonCardTokenMatch(lineAsIs: str):
+        if lineAsIs is None:
+            return None
+        line = lineAsIs.strip()
+        noncardMatcher = DeckRecognizer.NONCARD_PATTERN.fullmatch(line)
+        if noncardMatcher is None:
+            return None
+        return noncardMatcher.group(DeckRecognizer.REGRP_TOKEN)
+
+    @staticmethod
+    def cardRarityTokenMatch(lineAsIs: str):
+        if lineAsIs is None:
+            return None
+        line = lineAsIs.strip()
+        cardRarityMatcher = DeckRecognizer.CARD_RARITY_PATTERN.fullmatch(line)
+        if cardRarityMatcher is None:
+            return None
+        return cardRarityMatcher.group(DeckRecognizer.REGRP_TOKEN)
+
+    @staticmethod
+    def cardCMCTokenMatch(lineAsIs: str):
+        if lineAsIs is None:
+            return None
+        line = lineAsIs.strip()
+        cardCMCmatcher = DeckRecognizer.CMC_PATTERN.fullmatch(line)
+        if cardCMCmatcher is None:
+            return None
+        return cardCMCmatcher.group(DeckRecognizer.REGRP_TOKEN)
+
+    def getCardCMCMatch(self, lineAsIs: str) -> str:
+        tokenMatch = DeckRecognizer.cardCMCTokenMatch(lineAsIs)
+        tokenMatch = tokenMatch.upper()
+        if "CC" in tokenMatch:
+            tokenMatch = tokenMatch.replace("CC", "").strip()
+        else:
+            tokenMatch = tokenMatch.replace("CMC", "").strip()
+        return "CMC: %s" % tokenMatch
+
+    @staticmethod
+    def manaTokenMatch(lineAsIs: str):
+        if lineAsIs is None:
+            return None
+        line = lineAsIs.strip()
+        manaMatcher = DeckRecognizer.MANA_PATTERN.fullmatch(line)
+        if manaMatcher is None:
+            return None
+        firstMana = manaMatcher.group(DeckRecognizer.REGRP_COLR1)
+        secondMana = manaMatcher.group(DeckRecognizer.REGRP_COLR2)
+        firstMana = DeckRecognizer.matchAnyManaSymbolIn(firstMana)
+        secondMana = DeckRecognizer.matchAnyManaSymbolIn(secondMana)
+        return (firstMana, secondMana)
+
+    @staticmethod
+    def matchAnyManaSymbolIn(manaToken: str):
+        if manaToken is None:
+            return None
+        matchManaSymbol = DeckRecognizer.MANA_SYMBOL_PATTERN.fullmatch(manaToken)
+        if matchManaSymbol is not None:
+            return matchManaSymbol.group(DeckRecognizer.REGRP_MANA)
+        return manaToken
+
+    @staticmethod
+    def getManaTokenMatch(lineAsIs: str) -> str:
+        matchedMana = DeckRecognizer.manaTokenMatch(lineAsIs)
+        color1name = matchedMana[0]
+        color2name = matchedMana[1]
+
+        if len(color1name) == 2:  # the only case possible for this to happen is two colour codes
+            magicColor = DeckRecognizer.getMagicColor(color1name[0:1])
+            magicColor2 = DeckRecognizer.getMagicColor(color1name[1:])
+            return DeckRecognizer.getMagicColourLabel(magicColor, magicColor2)
+        magicColor = DeckRecognizer.getMagicColor(color1name)
+        if color2name is None:
+            return DeckRecognizer.getMagicColourLabel(magicColor)
+        magicColor2 = DeckRecognizer.getMagicColor(color2name)
+        if magicColor2 == magicColor:
+            return DeckRecognizer.getMagicColourLabel(magicColor)
+        return DeckRecognizer.getMagicColourLabel(magicColor, magicColor2)
+
+    @staticmethod
+    def getMagicColourLabel(magicColor1, magicColor2=_MISSING):
+        if magicColor2 is DeckRecognizer._MISSING:
+            magicColor = magicColor1
+            if magicColor is None:  # Multicolour
+                return "%s {W}{U}{B}{R}{G}" % Localizer.getInstance().getMessage("lblMulticolor")
+            return "%s %s" % (magicColor.getTranslatedName(), magicColor.getSymbol())
+        if magicColor2 is None or magicColor2 == Color.COLORLESS or magicColor1 == Color.COLORLESS:
+            return "%s // %s" % (DeckRecognizer.getMagicColourLabel(magicColor1),
+                                 DeckRecognizer.getMagicColourLabel(magicColor2))
+        localisedName1 = magicColor1.getTranslatedName()
+        localisedName2 = magicColor2.getTranslatedName()
+        return "%s/%s {%s}" % (localisedName1, localisedName2, ColorSet.fromEnums(magicColor1, magicColor2))
+
+    @staticmethod
+    def getMagicColor(colorName: str):
+        if colorName.lower().startswith("multi") or colorName.lower() == "m":
+            return None  # will be handled separately
+        return Color.fromName(colorName.lower())
+
+    @staticmethod
+    def isDeckName(lineAsIs: str) -> bool:
+        if lineAsIs is None:
+            return False
+        line = lineAsIs.strip()
+        deckNameMatcher = DeckRecognizer.DECK_NAME_PATTERN.fullmatch(line)
+        return deckNameMatcher is not None
+
+    @staticmethod
+    def deckNameMatch(text: str) -> str:
+        if text is None:
+            return ""
+        line = text.strip()
+        deckNamePattern = DeckRecognizer.DECK_NAME_PATTERN.fullmatch(line)
+        if deckNamePattern is not None:
+            return deckNamePattern.group(DeckRecognizer.REGRP_DECKNAME)  # Deck name is at match 7
+        return ""
+
+    def setDateConstraint(self, year: int, month: int) -> None:
+        self.releaseDateConstraint = datetime.date(year, month + 1, 1)
+
+    def setGameFormatConstraint(self, allowedSetCodes: list[str], bannedCards: list[str],
+                                restrictedCards: list[str]) -> None:
+        if allowedSetCodes is not None and len(allowedSetCodes) > 0:
+            self.allowedSetCodes = allowedSetCodes
+        else:
+            self.allowedSetCodes = None
+
+        if bannedCards is not None and len(bannedCards) > 0:
+            self.gameFormatBannedCards = bannedCards
+        else:
+            self.gameFormatBannedCards = None
+
+        if restrictedCards is not None and len(restrictedCards) > 0:
+            self.gameFormatRestrictedCards = restrictedCards
+        else:
+            self.gameFormatRestrictedCards = None
+
+    def setDeckFormatConstraint(self, deckFormat0) -> None:
+        self.deckFormat = deckFormat0
+
+    def setArtPreference(self, artPref) -> None:
+        self.artPreference = artPref
+
+    def setAllowedDeckSections(self, deckSections: list) -> None:
+        self.allowedDeckSections = deckSections
+
+    def forceImportBannedAndRestrictedCards(self) -> None:
+        self.includeBannedAndRestricted = True
+
+
+DeckRecognizer.CARD_TYPES = DeckRecognizer.allCardTypes()
 ```

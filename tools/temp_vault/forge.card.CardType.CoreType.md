@@ -61,10 +61,10 @@ classDiagram
 
 `CoreType` is an enumeration that models the fundamental card types in Magic: The Gathering's rules engine, naming each canonical type (Creature, Instant, Land, etc.) and pairing it with intrinsic metadata: whether it denotes a permanent, its pluralized form, and a localization label key. By implementing `ITranslatable`, each constant exposes both its raw and translated display name, integrating the type system with Forge's localization layer.
 
-The enum is designed as a lightweight, immutable value catalog: constructor-supplied final fields, a static name-to-constant lookup map, and a precomputed `spellTypes` set support fast validation and classification without instantiation. Its `toGamePieceType()` method bridges to `GamePieceType`, mapping each core type to the game-piece category it typically produces—while the documentation candidly notes this coarse mapping ignores subtype-derived pieces. The result is a central, authoritative reference that other card-handling code consults rather than reimplementing type semantics.
+The enum is designed as a lightweight, immutable value catalog: constructor-supplied final fields, a static name-to-constant lookup map, and a precomputed `spellTypes` set support fast validation and classification without instantiation. Its `toGamePieceType()` method bridges to `GamePieceType`, mapping each core type to the game-piece category it typically producesâ€”while the documentation candidly notes this coarse mapping ignores subtype-derived pieces. The result is a central, authoritative reference that other card-handling code consults rather than reimplementing type semantics.
 
 ## Source
-`forge-core/src/main/java/forge/card/CardType.java` â€” declaration excerpt
+`forge-core/src/main/java/forge/card/CardType.java` Ã¢â‚¬â€ declaration excerpt
 
 ```java
     public enum CoreType implements ITranslatable {
@@ -131,4 +131,69 @@ The enum is designed as a lightweight, immutable value catalog: constructor-supp
             return Localizer.getInstance().getMessage(label);
         }
     }
+```
+
+## Python
+`forge/card/CardType/CoreType.py`
+
+```python
+from enum import Enum
+
+from forge.util.ITranslatable import ITranslatable
+from forge.util.Localizer import Localizer
+from forge.card.GamePieceType import GamePieceType
+
+
+class CoreType(ITranslatable, Enum):
+    Kindred = (False, "kindreds", "lblKindred")  # always printed first
+    Artifact = (True, "artifacts", "lblArtifact")
+    Battle = (True, "battles", "lblBattle")
+    Conspiracy = (False, "conspiracies", "lblConspiracy")
+    Enchantment = (True, "enchantments", "lblEnchantment")
+    Creature = (True, "creatures", "lblCreature")
+    Dungeon = (False, "dungeons", "lblDungeon")
+    Instant = (False, "instants", "lblInstant")
+    Land = (True, "lands", "lblLand")
+    Phenomenon = (False, "phenomenons", "lblPhenomenon")
+    Plane = (False, "planes", "lblPlane")
+    Planeswalker = (True, "planeswalkers", "lblPlaneswalker")
+    Scheme = (False, "schemes", "lblScheme")
+    Sorcery = (False, "sorceries", "lblSorcery")
+    Vanguard = (False, "vanguards", "lblVanguard")
+
+    def __init__(self, permanent: bool, plural: str, label: str):
+        self.isPermanent = permanent
+        self.pluralName = plural
+        self.label = label
+
+    @staticmethod
+    def getEnum(name: str) -> "CoreType":
+        return stringToCoreType.get(name)
+
+    @staticmethod
+    def isValidEnum(name: str) -> bool:
+        return name in stringToCoreType
+
+    def toGamePieceType(self) -> GamePieceType:
+        if self in (CoreType.Plane, CoreType.Phenomenon):
+            return GamePieceType.PLANAR
+        elif self is CoreType.Scheme:
+            return GamePieceType.SCHEME
+        elif self is CoreType.Dungeon:
+            return GamePieceType.DUNGEON
+        elif self is CoreType.Vanguard:
+            return GamePieceType.AVATAR
+        else:
+            return GamePieceType.CARD
+
+    def getName(self) -> str:
+        return self.name
+
+    def getTranslatedName(self) -> str:
+        return Localizer.getInstance().getMessage(self.label)
+
+
+stringToCoreType: dict[str, CoreType] = {ct.name: ct for ct in CoreType}
+allCoreTypeNames: set[str] = set(stringToCoreType.keys())
+spellTypes: set[CoreType] = frozenset({CoreType.Instant, CoreType.Sorcery})
 ```

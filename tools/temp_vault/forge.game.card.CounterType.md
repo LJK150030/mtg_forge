@@ -47,9 +47,9 @@ classDiagram
 
 ## Design Description
 
-Counts the cards a player controls and tracks design intent—wait, no. Let me write the SDD.
+Counts the cards a player controls and tracks design intentâ€”wait, no. Let me write the SDD.
 
-`CounterType` is the central abstraction for the various kinds of counters that can be placed on cards (and players) in the Forge game engine. As an interface it defines the contract every counter must satisfy—its name, display name, RGB color, AI valuation category, and translation keys—while supplying sensible defaults (white color, `Positive` AI category, name-based display) so that concrete implementations need only override what differs. Static factory methods `getType` and `getValues` act as a façade over the three concrete families—`CounterEnumType` (standard game counters), `CounterKeywordType` (keyword counters), and `CounterCustomType` (user-defined)—resolving a name to the correct implementation and aggregating all instances.
+`CounterType` is the central abstraction for the various kinds of counters that can be placed on cards (and players) in the Forge game engine. As an interface it defines the contract every counter must satisfyâ€”its name, display name, RGB color, AI valuation category, and translation keysâ€”while supplying sensible defaults (white color, `Positive` AI category, name-based display) so that concrete implementations need only override what differs. Static factory methods `getType` and `getValues` act as a faÃ§ade over the three concrete familiesâ€”`CounterEnumType` (standard game counters), `CounterKeywordType` (keyword counters), and `CounterCustomType` (user-defined)â€”resolving a name to the correct implementation and aggregating all instances.
 
 By extending `Serializable` it allows counters to persist with game state, and by extending `ITranslatable` it integrates with Forge's localization framework, collaborating with `CounterAiCategory` and `CounterEnumType` to support AI decision-making and type queries.
 
@@ -128,4 +128,67 @@ public interface CounterType extends Serializable, ITranslatable {
         return toString();
     }
 }
+```
+
+## Python
+`forge/game/card/CounterType.py`
+
+```python
+from forge.util.ITranslatable import ITranslatable
+from forge.game.card.CounterAiCategory import CounterAiCategory
+from forge.game.card.CounterEnumType import CounterEnumType
+from forge.game.card.CounterKeywordType import CounterKeywordType
+from forge.game.card.CounterCustomType import CounterCustomType
+
+
+class CounterType(ITranslatable):
+
+    @staticmethod
+    def getType(name: str) -> "CounterType":
+        if "Any".lower() == name.lower():
+            return None
+        if CounterKeywordType.isKeywordCounter(name):
+            return CounterKeywordType.get(name)
+        try:
+            return CounterEnumType.getType(name)
+        except ValueError:
+            return CounterCustomType.get(name)
+
+    @staticmethod
+    def getValues() -> list["CounterType"]:
+        result: list["CounterType"] = []
+        result.extend(list(CounterEnumType.values()))
+        result.extend(CounterKeywordType.getValues())
+        result.extend(CounterCustomType.getValues())
+        return result
+
+    def getName(self) -> str:
+        raise NotImplementedError
+
+    def getCounterOnCardDisplayName(self) -> str:
+        return self.getName()
+
+    def is_(self, eType: CounterEnumType) -> bool:
+        return False
+
+    def isKeywordCounter(self) -> bool:
+        return False
+
+    def getRed(self) -> int:
+        return 255
+
+    def getGreen(self) -> int:
+        return 255
+
+    def getBlue(self) -> int:
+        return 255
+
+    def getAiCategory(self) -> CounterAiCategory:
+        return CounterAiCategory.Positive
+
+    def getTranslationKey(self) -> str:
+        return self.__str__()
+
+    def getUntranslatedName(self) -> str:
+        return self.__str__()
 ```

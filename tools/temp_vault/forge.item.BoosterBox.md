@@ -41,6 +41,12 @@ classDiagram
 - [[forge.item.BoosterBox.Template|Template]]
 - [[forge.item.SealedTemplate|SealedTemplate]]
 
+## Design Description
+
+BoosterBox represents a sealed Magic product â€” a full box of booster packs for a given card edition â€” within Forge's item model. It extends BoxedProduct, specializing that base to compute its contents from the edition's configured booster-box count, and overrides the standard item hooks (`getDescription`, `getItemType`, `getTotalCards`, `getImageKey`, and `clone`) to report box-specific values. The static `fromSet` factory builds an instance directly from a CardEdition, returning null when the edition defines no box, keeping construction guarded and edition-driven.
+
+Design intent centers on the nested `Template` (a SealedTemplate subclass) that holds the booster count and produces a human-readable contents string, decoupling product metadata from the box itself. Card totals combine the inherited per-booster count with expected extras, and image keys are derived from the edition code, integrating the box cleanly into Forge's image and sealed-product infrastructure.
+
 ## Source
 `forge-core/src/main/java/forge/item/BoosterBox.java`
 
@@ -148,4 +154,71 @@ public class BoosterBox extends BoxedProduct {
         return ImageKeys.BOOSTERBOX_PREFIX + getEdition();
     }
 }
+```
+
+## Python
+`forge/item/BoosterBox.py`
+
+```python
+from forge.ImageKeys import ImageKeys
+from forge.StaticData import StaticData
+from forge.card.CardEdition import CardEdition
+from forge.item.BoxedProduct import BoxedProduct
+from forge.item.SealedTemplate import SealedTemplate
+
+
+class BoosterBox(BoxedProduct):
+
+    @staticmethod
+    def fromSet(edition):
+        if edition.getBoosterBoxCount() <= 0:
+            return None
+        d = BoosterBox.Template(edition)
+        return BoosterBox(edition.getName(), d, d.cntBoosters)
+
+    def __init__(self, name0, fpData0, boosterCount):
+        super().__init__(name0, StaticData.instance().getBoosters().get(fpData0.getEdition()), boosterCount)
+        self.fpData = fpData0
+
+    def getDescription(self):
+        return str(self.fpData) + str(self.contents)
+
+    def getItemType(self):
+        return "Booster Box"
+
+    def clone(self):
+        return BoosterBox(self.name, self.fpData, self.fpData.cntBoosters)
+
+    def getTotalCards(self):
+        return super().getTotalCards() * self.fpData.getCntBoosters() + self.fpData.getNumberOfCardsExpected()
+
+    class Template(SealedTemplate):
+        def getCntBoosters(self):
+            return self.cntBoosters
+
+        def __init__(self, edition):
+            super().__init__(edition.getCode(), [])
+            self.cntBoosters = edition.getBoosterBoxCount()
+
+        def __str__(self):
+            if 0 >= self.cntBoosters:
+                return "no cards"
+
+            s = []
+            for p in self.slots:
+                s.append(str(p.getRight()) + " " + p.getLeft() + ", ")
+            result = "".join(s)
+            # trim the last comma and space
+            if len(result) > 0:
+                result = result[:len(result) - 2]
+
+            if 0 < self.cntBoosters:
+                if len(result) > 0:
+                    result += " and "
+
+                result += str(self.cntBoosters) + " booster packs "
+            return result
+
+    def getImageKey(self, altState):
+        return ImageKeys.BOOSTERBOX_PREFIX + self.getEdition()
 ```

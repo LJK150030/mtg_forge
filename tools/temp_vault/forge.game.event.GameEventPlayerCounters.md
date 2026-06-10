@@ -75,3 +75,33 @@ public record GameEventPlayerCounters(PlayerView receiver, CounterType type, int
     }
 }
 ```
+
+## Python
+`forge/game/event/GameEventPlayerCounters.py`
+
+```python
+from forge.game.event.GameEvent import GameEvent
+from forge.game.card.CounterType import CounterType
+from forge.game.event.IGameEventVisitor import IGameEventVisitor
+from forge.game.player.Player import Player
+from forge.game.player.PlayerView import PlayerView
+
+
+class GameEventPlayerCounters(GameEvent):
+
+    def __init__(self, receiver, type, oldValue, amount):
+        if isinstance(receiver, Player):
+            receiver = PlayerView.get(receiver)
+        self.receiver = receiver
+        self.type = type
+        self.oldValue = oldValue
+        self.amount = amount
+
+    def visit(self, visitor):
+        return visitor.visit(self)
+
+    # (non-Javadoc)
+    # @see java.lang.Object#toString()
+    def __str__(self):
+        return "" + str(self.receiver) + " got " + str(self.oldValue) + " plus " + str(self.amount) + " " + str(self.type)
+```

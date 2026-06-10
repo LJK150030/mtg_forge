@@ -90,3 +90,48 @@ public class IntensifyEffect extends SpellAbilityEffect {
     }
 }
 ```
+
+## Python
+`forge/game/ability/effects/IntensifyEffect.py`
+
+```python
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.card.Card import Card
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.card.CardLists import CardLists
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Lang import Lang
+
+
+class IntensifyEffect(SpellAbilityEffect):
+    def getStackDescription(self, sa: SpellAbility) -> str:
+        sb = []
+        these = sa.getParam("DefinedDesc") if sa.hasParam("DefinedDesc") else \
+            Lang.joinHomogenous(self.getDefinedCardsOrTargeted(sa))
+        amount = AbilityUtils.calculateAmount(sa.getHostCard(),
+                sa.getParamOrDefault("Amount", "1"), sa)
+
+        sb.append(str(sa.getActivatingPlayer()))
+        sb.append(" perpetually increases the intensity of ")
+        sb.append(str(these))
+        sb.append(" by ")
+        sb.append(str(amount))
+        sb.append(".")
+
+        return "".join(sb)
+
+    def resolve(self, sa: SpellAbility) -> None:
+        host = sa.getHostCard()
+        amount = AbilityUtils.calculateAmount(sa.getHostCard(),
+                sa.getParamOrDefault("Amount", "1"), sa)
+
+        if sa.hasParam("AllDefined"):
+            toIntensify = CardLists.getValidCards(host.getGame().getCardsInGame(), sa.getParam("AllDefined"),
+                        sa.getActivatingPlayer(), host, sa)
+        else:
+            toIntensify = self.getDefinedCardsOrTargeted(sa)
+
+        for tgtC in toIntensify:
+            tgtC.addIntensity(amount)
+```

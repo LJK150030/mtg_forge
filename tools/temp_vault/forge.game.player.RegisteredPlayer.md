@@ -98,6 +98,12 @@ classDiagram
 - [[forge.item.IPaperCard|IPaperCard]]
 - [[forge.item.PaperCard|PaperCard]]
 
+## Design Description
+
+RegisteredPlayer is a mutable configuration holder that captures everything needed to seat one player in a game before it begins: the player's deck, identity (`LobbyPlayer`), team assignment, starting life and hand size, and any variant-specific resources such as commanders, schemes, planes, conspiracies, vanguard avatars, attractions, and contraptions. As a plain data class with no supertype, it acts as a bridge between the deck-building/lobby layer and the game engine, collaborating chiefly with `Deck`, `CardPool`, `LobbyPlayer`, and the `PaperCard`/`IPaperCard` item types.
+
+Its design intent centers on safe, variant-aware construction. The original deck is held immutably and always copied into a working `currentDeck` via `restoreDeck()`, protecting shared game resources from mutation. Static factories (`forCommander`, `forVariants`) encode MTG rulesâ€”adjusting life totals and assigning resources per `GameType`â€”keeping format-specific setup logic in one place, while null-collection getters defensively return a shared empty list and fluent setters aid chained configuration.
+
 ## Source
 `forge-game/src/main/java/forge/game/player/RegisteredPlayer.java`
 
@@ -354,4 +360,224 @@ public class RegisteredPlayer {
         randomFoil = useRandomFoil;
     }
 }
+```
+
+## Python
+`forge/game/player/RegisteredPlayer.py`
+
+```python
+from forge.LobbyPlayer import LobbyPlayer
+from forge.deck.CardPool import CardPool
+from forge.deck.Deck import Deck
+from forge.deck.DeckSection import DeckSection
+from forge.game.GameType import GameType
+from forge.item.IPaperCard import IPaperCard
+from forge.item.PaperCard import PaperCard
+
+import itertools
+
+
+class RegisteredPlayer:
+    EmptyList = []
+
+    def __init__(self, deck0: Deck):
+        self.originalDeck = deck0  # never return or modify this instance (it's a reference to game resources)
+        self.currentDeck = None
+
+        self.player = None
+
+        self.startingLife = 20
+        self.startingHand = 7
+        self.manaShards = 0
+        self.extraCardsOnBattlefield = None
+        self.extraCardsInCommandZone = None
+        self.schemes = None
+        self.planes = None
+        self.conspiracies = None
+        self.attractions = None
+        self.contraptions = None
+        self.commanders = []
+        self.vanguardAvatars = None
+        self.planeswalker = None
+        self.teamNumber = -1  # members of teams with negative id will play FFA.
+        self.id = None
+        self.randomFoil = False
+        self.enableETBCountersEffect = False
+
+        self.restoreDeck()
+
+    def getId(self) -> int:
+        return self.id
+
+    def setId(self, id0: int) -> None:
+        self.id = id0
+
+    def getDeck(self) -> Deck:
+        return self.currentDeck
+
+    def getStartingLife(self) -> int:
+        return self.startingLife
+
+    def setStartingLife(self, startingLife: int) -> None:
+        self.startingLife = startingLife
+
+    def getManaShards(self) -> int:
+        return self.manaShards
+
+    def setManaShards(self, manaShards: int) -> None:
+        self.manaShards = manaShards
+
+    def hasEnableETBCountersEffect(self) -> bool:
+        return self.enableETBCountersEffect
+
+    def setEnableETBCountersEffect(self, value: bool) -> None:
+        self.enableETBCountersEffect = value
+
+    def getCardsOnBattlefield(self):
+        return RegisteredPlayer.EmptyList if self.extraCardsOnBattlefield is None else self.extraCardsOnBattlefield
+
+    def getExtraCardsInCommandZone(self):
+        return RegisteredPlayer.EmptyList if self.extraCardsInCommandZone is None else self.extraCardsInCommandZone
+
+    def addExtraCardsOnBattlefield(self, extraCardsonTable) -> None:
+        if self.extraCardsOnBattlefield is None:
+            self.extraCardsOnBattlefield = extraCardsonTable
+        else:
+            self.extraCardsOnBattlefield = itertools.chain(self.extraCardsOnBattlefield, extraCardsonTable)
+
+    def addExtraCardsInCommandZone(self, extraCardsInCommandZone) -> None:
+        if self.extraCardsInCommandZone is None:
+            self.extraCardsInCommandZone = extraCardsInCommandZone
+        else:
+            self.extraCardsInCommandZone = itertools.chain(self.extraCardsInCommandZone, extraCardsInCommandZone)
+
+    def getStartingHand(self) -> int:
+        return self.startingHand
+
+    def setStartingHand(self, startingHand0: int) -> None:
+        self.startingHand = startingHand0
+
+    def getSchemes(self):
+        return RegisteredPlayer.EmptyList if self.schemes is None else self.schemes
+
+    def getPlanes(self):
+        return RegisteredPlayer.EmptyList if self.planes is None else self.planes
+
+    def setPlanes(self, planes0) -> None:
+        self.planes = planes0
+
+    def getConspiracies(self):
+        return RegisteredPlayer.EmptyList if self.conspiracies is None else self.conspiracies
+
+    def assignConspiracies(self) -> None:
+        if self.currentDeck.has(DeckSection.Conspiracy):
+            self.conspiracies = self.currentDeck.get(DeckSection.Conspiracy).toFlatList()
+
+    def getTeamNumber(self) -> int:
+        return self.teamNumber
+
+    def setTeamNumber(self, teamNumber0: int) -> None:
+        self.teamNumber = teamNumber0
+
+    @staticmethod
+    def forCommander(deck: Deck) -> "RegisteredPlayer":
+        start = RegisteredPlayer(deck)
+        start.commanders = deck.getCommanders()
+        start.setStartingLife(40)
+        return start
+
+    @staticmethod
+    def forVariants(playerCount: int,
+                    appliedVariants, deck: Deck,                       # General vars
+                    schemes, playerIsArchenemy: bool,                  # Archenemy specific vars
+                    planes, vanguardAvatar: CardPool) -> "RegisteredPlayer":  # Planechase and Vanguard
+
+        start = RegisteredPlayer(deck)
+        if GameType.Archenemy in appliedVariants and playerIsArchenemy:
+            start.setStartingLife(40)  # 904.5: The Archenemy has 40 life.
+            start.schemes = schemes
+        if GameType.ArchenemyRumble in appliedVariants:
+            start.setStartingLife(40)
+            start.schemes = schemes
+        if GameType.Commander in appliedVariants:
+            start.commanders = deck.getCommanders()
+            start.setStartingLife(start.getStartingLife() + 20)  # 903.7: ...each player sets his or her life total to 40
+                                                                 # Modified for layering of variants to life +20
+        if GameType.Oathbreaker in appliedVariants:
+            start.commanders = deck.getCommanders()
+        if GameType.TinyLeaders in appliedVariants:
+            start.commanders = deck.getCommanders()
+            start.setStartingLife(start.getStartingLife() + 5)
+        if GameType.Brawl in appliedVariants:
+            start.commanders = deck.getCommanders()
+            start.setStartingLife(start.getStartingLife() + 10)
+        if GameType.Planechase in appliedVariants:
+            start.planes = planes
+        if (GameType.Vanguard in appliedVariants or GameType.MomirBasic in appliedVariants
+                or GameType.MoJhoSto in appliedVariants):  # fix the crash, if somehow the avatar is null, get it directly from the deck
+            start.setVanguardAvatars(deck.get(DeckSection.Avatar).toFlatList() if vanguardAvatar is None else vanguardAvatar.toFlatList())
+        return start
+
+    def getPlayer(self) -> LobbyPlayer:
+        return self.player
+
+    def setPlayer(self, player0: LobbyPlayer) -> "RegisteredPlayer":
+        self.player = player0
+        return self
+
+    def getCommanders(self) -> list[PaperCard]:
+        return self.commanders
+
+    def assignCommander(self) -> None:
+        self.commanders = self.currentDeck.getCommanders()
+
+    def getVanguardAvatars(self) -> list[PaperCard]:
+        return self.vanguardAvatars
+
+    def assignVanguardAvatar(self) -> None:
+        section = self.currentDeck.get(DeckSection.Avatar)
+        self.setVanguardAvatars(None if section is None else section.toFlatList())
+
+    def setVanguardAvatars(self, vanguardAvatars0: list[PaperCard]) -> None:
+        self.vanguardAvatars = vanguardAvatars0
+        if self.vanguardAvatars is None:
+            return
+        for avatar in self.vanguardAvatars:
+            self.setStartingLife(self.getStartingLife() + avatar.getRules().getLife())
+            self.setStartingHand(self.getStartingHand() + avatar.getRules().getHand())
+
+    def getPlaneswalker(self) -> PaperCard:
+        return self.planeswalker
+
+    def setPlaneswalker(self, planeswalker0: PaperCard) -> None:
+        self.planeswalker = planeswalker0
+        if self.planeswalker is not None:
+            self.currentDeck.getMain().remove(self.planeswalker)  # ensure planeswalker removed from main deck
+
+    def getAttractions(self):
+        return self.attractions
+
+    def assignAttractions(self) -> None:
+        self.attractions = (self.currentDeck.get(DeckSection.Attractions).toFlatList()
+                            if self.currentDeck.has(DeckSection.Attractions)
+                            else RegisteredPlayer.EmptyList)
+
+    def getContraptions(self):
+        return self.contraptions
+
+    def assignContraptions(self) -> None:
+        self.contraptions = (self.currentDeck.get(DeckSection.Contraptions).toFlatList()
+                             if self.currentDeck.has(DeckSection.Contraptions)
+                             else RegisteredPlayer.EmptyList)
+
+    def restoreDeck(self) -> None:
+        self.currentDeck = self.originalDeck.copyTo(self.originalDeck.getName())
+        self.assignAttractions()
+        self.assignContraptions()
+
+    def useRandomFoil(self) -> bool:
+        return self.randomFoil
+
+    def setRandomFoil(self, useRandomFoil: bool) -> None:
+        self.randomFoil = useRandomFoil
 ```

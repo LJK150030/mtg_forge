@@ -48,7 +48,7 @@ classDiagram
 
 CountersMultiplyEffect implements the resolution logic for counter-doubling abilities (e.g., Doubling Season), extending the abstract SpellAbilityEffect base class that standardizes how spell and ability outcomes are described and applied. It overrides `getStackDescription` to build a human-readable summary and `resolve` to perform the mutation, while a private `getCounterType` helper interprets the optional `CounterType` parameter, returning null to mean "every kind of counter."
 
-Its responsibility is to multiply existing counters on each targeted GameEntity by a configurable `Multiplier` (default 2). It queries the Game to refresh card state—skipping last-known-information cards whose game timestamp no longer matches, so stale targets are ignored—and batches all additions through a GameEntityCounterTable. This table-based design centralizes the counter changes and applies replacement effects atomically, ensuring concurrent triggers resolve correctly rather than card-by-card.
+Its responsibility is to multiply existing counters on each targeted GameEntity by a configurable `Multiplier` (default 2). It queries the Game to refresh card stateâ€”skipping last-known-information cards whose game timestamp no longer matches, so stale targets are ignoredâ€”and batches all additions through a GameEntityCounterTable. This table-based design centralizes the counter changes and applies replacement effects atomically, ensuring concurrent triggers resolve correctly rather than card-by-card.
 
 ## Source
 `forge-game/src/main/java/forge/game/ability/effects/CountersMultiplyEffect.java`
@@ -137,4 +137,76 @@ public class CountersMultiplyEffect extends SpellAbilityEffect {
         return null;
     }
 }
+```
+
+## Python
+`forge/game/ability/effects/CountersMultiplyEffect.py`
+
+```python
+from forge.game.Game import Game
+from forge.game.GameEntity import GameEntity
+from forge.game.GameEntityCounterTable import GameEntityCounterTable
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.card.CounterType import CounterType
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Lang import Lang
+
+
+class CountersMultiplyEffect(SpellAbilityEffect):
+
+    def getStackDescription(self, sa: SpellAbility) -> str:
+        sb = []
+        counterType = self.getCounterType(sa)
+
+        sb.append("Double the number of ")
+
+        if counterType is not None:
+            sb.append(counterType.getName())
+            sb.append(" counters")
+        else:
+            sb.append("each kind of counter")
+        sb.append(" on ")
+
+        sb.append(Lang.joinHomogenous(self.getTargetEntities(sa)))
+
+        sb.append(".")
+
+        return "".join(sb)
+
+    def resolve(self, sa: SpellAbility) -> None:
+        host = sa.getHostCard()
+        game = host.getGame()
+        player = sa.getActivatingPlayer()
+
+        counterType = self.getCounterType(sa)
+        n = int(sa.getParamOrDefault("Multiplier", "2")) - 1
+
+        table = GameEntityCounterTable()
+        for ge in self.getTargetEntities(sa):
+            if isinstance(ge, Card):
+                gameCard = game.getCardState(ge, None)
+                # gameCard is LKI in that case, the card is not in game anymore
+                # or the timestamp did change
+                # this should check Self too
+                if gameCard is None or not ge.equalsWithGameTimestamp(gameCard):
+                    continue
+                ge = gameCard
+
+            if counterType is not None:
+                ge.addCounter(counterType, ge.getCounters(counterType) * n, player, table)
+            else:
+                for e in ge.getCounters().items():
+                    ge.addCounter(e[0], e[1] * n, player, table)
+        table.replaceCounterEffect(game, sa)
+
+    def getCounterType(self, sa: SpellAbility) -> CounterType:
+        if sa.hasParam("CounterType"):
+            try:
+                return CounterType.getType(sa.getParam("CounterType"))
+            except Exception:
+                print("Counter type doesn't match, nor does an SVar exist with the type name.")
+                return None
+        return None
 ```

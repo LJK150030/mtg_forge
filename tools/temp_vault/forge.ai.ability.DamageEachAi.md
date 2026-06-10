@@ -40,7 +40,7 @@ classDiagram
 
 ## Design Description
 
-DamageEachAi supplies the AI decision logic for "deal damage to each" spell and ability effects, extending DamageAiBase to inherit shared damage-evaluation helpers such as `shouldTgtP`. As a casting-logic class, it implements the standard AI hooks—`canPlay`, `chkDrawback`, and `doTriggerNoCost`—each returning an AiAbilityDecision that pairs a confidence score with an AiPlayDecision verdict the engine consumes when choosing whether to cast.
+DamageEachAi supplies the AI decision logic for "deal damage to each" spell and ability effects, extending DamageAiBase to inherit shared damage-evaluation helpers such as `shouldTgtP`. As a casting-logic class, it implements the standard AI hooksâ€”`canPlay`, `chkDrawback`, and `doTriggerNoCost`â€”each returning an AiAbilityDecision that pairs a confidence score with an AiPlayDecision verdict the engine consumes when choosing whether to cast.
 
 Its core strategy collaborates with Player and PlayerCollection to filter targetable opponents and select the weakest by life, committing that target only when the opponent can actually lose life; otherwise it falls back to the inherited targeting heuristic for a computed damage amount. The design also accommodates special-case routing (e.g., delegating to SpecialCardAi for Sarkhan the Mad's ultimate) and treats mandatory triggers as unconditional plays, reflecting Forge's convention of separating optional evaluation from forced resolution.
 
@@ -112,4 +112,58 @@ public class DamageEachAi extends DamageAiBase {
     }
 
 }
+```
+
+## Python
+`forge/ai/ability/DamageEachAi.py`
+
+```python
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.ai.SpecialCardAi import SpecialCardAi
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.player.Player import Player
+from forge.game.player.PlayerCollection import PlayerCollection
+from forge.game.player.PlayerPredicates import PlayerPredicates
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.ai.ability.DamageAiBase import DamageAiBase
+
+
+class DamageEachAi(DamageAiBase):
+
+    # (non-Javadoc)
+    # @see forge.card.abilityfactory.SpellAiLogic#canPlayAI(forge.game.player.Player, java.util.Map, forge.card.spellability.SpellAbility)
+    def canPlay(self, ai: Player, sa: SpellAbility) -> AiAbilityDecision:
+        logic = sa.getParam("AILogic")
+
+        targetableOpps = ai.getOpponents().filter(PlayerPredicates.isTargetableBy(sa))
+        weakestOpp = targetableOpps.min(PlayerPredicates.compareByLife())
+
+        if sa.usesTargeting() and weakestOpp is not None:
+            if "MadSarkhanUltimate" == logic and not SpecialCardAi.SarkhanTheMad.considerUltimate(ai, sa, weakestOpp):
+                return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+            sa.resetTargets()
+            if weakestOpp.canLoseLife() and not weakestOpp.cantLoseForZeroOrLessLife():
+                sa.getTargets().add(weakestOpp)
+                return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+        damage = sa.getParam("NumDmg")
+        iDmg = AbilityUtils.calculateAmount(sa.getHostCard(), damage, sa)
+
+        if self.shouldTgtP(ai, sa, iDmg, False):
+            return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+        return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+    def chkDrawback(self, aiPlayer: Player, sa: SpellAbility) -> AiAbilityDecision:
+        # check AI life before playing this drawback?
+        return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+    # (non-Javadoc)
+    # @see forge.card.abilityfactory.SpellAiLogic#doTriggerAINoCost(forge.game.player.Player, java.util.Map, forge.card.spellability.SpellAbility, boolean)
+    def doTriggerNoCost(self, ai: Player, sa: SpellAbility, mandatory: bool) -> AiAbilityDecision:
+        if mandatory:
+            return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+        return self.canPlay(ai, sa)
 ```

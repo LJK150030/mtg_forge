@@ -66,7 +66,7 @@ classDiagram
 
 ## Design Description
 
-`CostPartWithList` is an abstract specialization of `CostPart` for costs whose payment consumes a set of cards — sacrifice, exile, tap, discard, and the like. It maintains two parallel `CardCollection` lists, one capturing last-known-information copies of the cards as they were paid and one holding the resulting physical cards, exposing both as read-only `CardCollectionView`s so that the paid cards can be reported back to the owning `SpellAbility`'s hash (tagged intrinsic or not) for triggers and replacement effects.
+`CostPartWithList` is an abstract specialization of `CostPart` for costs whose payment consumes a set of cards â€” sacrifice, exile, tap, discard, and the like. It maintains two parallel `CardCollection` lists, one capturing last-known-information copies of the cards as they were paid and one holding the resulting physical cards, exposing both as read-only `CardCollectionView`s so that the paid cards can be reported back to the owning `SpellAbility`'s hash (tagged intrinsic or not) for triggers and replacement effects.
 
 The class centralizes the payment workflow: `payAsDecided` drives `executePayment` over a `PaymentDecision`'s cards, refreshing statics and last-state battlefield/graveyard tracking before delegating per-card work to the abstract `doPayment` hook, with an optional batched `doListPayment` path for costs payable at once. Subtype-specific concerns are left as overridable hooks (`handleBeforePayment`, `handleChangeZoneTrigger`, hash methods). Notably, the `CardZoneTable` is `transient` and rebuilt on deserialization, keeping non-serializable, server-only payment state out of the network graph.
 
@@ -260,4 +260,147 @@ public abstract class CostPartWithList extends CostPart {
     }
 
 }
+```
+
+## Python
+`forge/game/cost/CostPartWithList.py`
+
+```python
+from forge.game.cost.CostPart import CostPart
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.card.CardZoneTable import CardZoneTable
+from forge.game.card.CardCopyService import CardCopyService
+from forge.game.cost.PaymentDecision import PaymentDecision
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+
+
+class CostPartWithList(CostPart):
+    """The Class CostPartWithList."""
+
+    serialVersionUID = 1
+
+    def __init__(self, amount: str = None, type: str = None, description: str = None):
+        # The lists: one for LKI, one for the actual cards.
+        self.lkiList = CardCollection()
+        self.cardList = CardCollection()
+
+        self.intrinsic = True
+
+        # transient: only used server-side during cost payment, never needed by the client.
+        # CardZoneTable is not Serializable and must not enter the network serialization graph.
+        self.table = CardZoneTable()
+
+        if amount is not None or type is not None or description is not None:
+            super().__init__(amount, type, description)
+        else:
+            super().__init__()
+
+    def readObject(self, in_) -> None:
+        in_.defaultReadObject()
+        self.table = CardZoneTable()
+
+    def getLKIList(self) -> CardCollectionView:
+        return self.lkiList
+
+    # Set is here to avoid duplication because executePayment() adds card to list, while ai's decide payment does the same thing
+    def getCardList(self) -> CardCollectionView:
+        return self.cardList
+
+    def setIntrinsic(self, b: bool) -> None:
+        self.intrinsic = b
+
+    def resetLists(self) -> None:
+        """Reset list."""
+        self.lkiList.clear()
+        self.cardList.clear()
+        self.table.clear()
+
+    def reportPaidCardsTo(self, sa: SpellAbility) -> None:
+        """Adds the list to hash."""
+        if sa is None:
+            return
+        lkiPaymentMethod = self.getHashForLKIList()
+        for card in self.lkiList:
+            sa.addCostToHashList(card, lkiPaymentMethod, self.intrinsic)
+        cardPaymentMethod = self.getHashForCardList()
+        for card in self.cardList:
+            sa.addCostToHashList(card, cardPaymentMethod, self.intrinsic)
+
+    # public abstract List<Card> getValidCards();
+
+    def executePayment(self, payer: Player, ability: SpellAbility, targetCard, effect: bool):
+        if isinstance(targetCard, Card):
+            self.lkiList.add(CardCopyService.getLKICopy(targetCard))
+            newCard = self.doPayment(payer, ability, targetCard, effect)
+
+            # need to update the LKI info to ensure correct interaction with cards which may trigger on this
+            # (e.g. Necroskitter + a creature dying from a -1/-1 counter on a cost payment).
+            targetCard.getGame().updateLastStateForCard(targetCard)
+
+            if newCard is not None:
+                self.cardList.add(newCard)
+            return True
+
+        # always returns true, made this to inline with return
+        targetCards = targetCard
+        # need to refresh statics (e.g. sacrificing Omnath, Locus of Mana to Momentous Fall could end up with less toughness)
+        payer.getGame().getAction().checkStaticAbilities()
+        # costs are paid sequentially, so need to make sure no to miss any LTB from zone changing hosts of previous parts
+        payer.getGame().getTriggerHandler().collectTriggerForWaiting()
+        self.table.setLastStateBattlefield(payer.getGame().copyLastStateBattlefield())
+        self.table.setLastStateGraveyard(payer.getGame().copyLastStateGraveyard())
+
+        self.handleBeforePayment(payer, ability, targetCards)
+        # Used by reveal: without it when opponent would reveal hand, you'll get N message boxes
+        if self.canPayListAtOnce():
+            for c in targetCards:
+                self.lkiList.add(CardCopyService.getLKICopy(c))
+            self.cardList.addAll(self.doListPayment(payer, ability, targetCards, effect))
+        else:
+            for c in targetCards:
+                self.executePayment(payer, ability, c, effect)
+        self.handleChangeZoneTrigger(payer, ability, targetCards)
+        return True
+
+    def doPayment(self, payer: Player, ability: SpellAbility, targetCard: Card, effect: bool) -> Card:
+        """
+        Do a payment with a single card.
+        @param ability the SpellAbility to pay for.
+        @param targetCard the Card to pay with.
+        @return The physical card after the payment.
+        """
+        raise NotImplementedError
+
+    # Overload these two only together, set to true and perform payment on list
+    def canPayListAtOnce(self) -> bool:
+        return False
+
+    def doListPayment(self, payer: Player, ability: SpellAbility, targetCards: CardCollectionView, effect: bool) -> CardCollectionView:
+        return CardCollection.EMPTY
+
+    def getHashForLKIList(self) -> str:
+        """
+        TODO: Write javadoc for this method.
+        @return
+        """
+        raise NotImplementedError
+
+    def getHashForCardList(self) -> str:
+        raise NotImplementedError
+
+    def payAsDecided(self, payer: Player, decision: PaymentDecision, ability: SpellAbility, effect: bool) -> bool:
+        self.executePayment(payer, ability, decision.cards, effect)
+        self.reportPaidCardsTo(ability)
+        return True
+
+    def handleBeforePayment(self, payer: Player, ability: SpellAbility, targetCards: CardCollectionView) -> None:
+        pass
+
+    def handleChangeZoneTrigger(self, payer: Player, ability: SpellAbility, targetCards: CardCollectionView) -> None:
+        if self.table.isEmpty():
+            return
+        self.table.triggerChangesZoneAll(payer.getGame(), ability)
 ```

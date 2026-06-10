@@ -45,7 +45,7 @@ classDiagram
 
 ## Design Description
 
-AssembleContraptionAi provides the AI's decision logic for spell abilities that assemble Contraptions or open Attractions. Extending `SpellAbilityAi`, it overrides `checkApiLogic` and `chkDrawback` to judge whether such an ability is worth activating: it first confirms the relevant deck—Contraption or Attraction, selected by the `ApiType`—is non-empty, then validates any X-cost payment before delegating to the superclass.
+AssembleContraptionAi provides the AI's decision logic for spell abilities that assemble Contraptions or open Attractions. Extending `SpellAbilityAi`, it overrides `checkApiLogic` and `chkDrawback` to judge whether such an ability is worth activating: it first confirms the relevant deckâ€”Contraption or Attraction, selected by the `ApiType`â€”is non-empty, then validates any X-cost payment before delegating to the superclass.
 
 When the ability reassembles a `DefinedContraption`, `getGoodReassembleTarget` chooses among candidate `Card`s, preferring opponents' Contraptions or ones not on the next crank sprocket so reassembly isn't wasted on already-optimal placements. The class collaborates with `Player`, `SpellAbility`, and `CardCollectionView` to inspect game state, and reports results as `AiAbilityDecision`/`AiPlayDecision` values rather than booleans, conforming to the framework's richer decision protocol. The empty-deck guard is repeated in `chkDrawback` so the AI behaves sensibly when the ability appears as a drawback.
 
@@ -124,3 +124,69 @@ public class AssembleContraptionAi extends SpellAbilityAi {
     }
 }
 ```
+
+## Python
+`forge/ai/ability/AssembleContraptionAi.py`
+
+````python
+forge/ai/ability/AssembleContraptionAi.py:
+
+```python
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.ai.ComputerUtilCost import ComputerUtilCost
+from forge.ai.SpellAbilityAi import SpellAbilityAi
+from forge.game.GameEntity import GameEntity
+from forge.game.ability.ApiType import ApiType
+from forge.game.card.Card import Card
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+
+
+class AssembleContraptionAi(SpellAbilityAi):
+
+    @staticmethod
+    def getDeck(ai: Player, sa: SpellAbility) -> CardCollectionView:
+        return ai.getCardsIn(ZoneType.AttractionDeck if sa.getApi() == ApiType.OpenAttraction
+                             else ZoneType.ContraptionDeck)
+
+    def checkApiLogic(self, ai: Player, sa: SpellAbility) -> AiAbilityDecision:
+        deck = AssembleContraptionAi.getDeck(ai, sa)
+
+        if deck.isEmpty():
+            return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+        if "X" == sa.getParam("Amount") and sa.getSVar("X") == "Count$xPaid":
+            xPay = ComputerUtilCost.setMaxXValue(sa, ai, sa.isTrigger())
+            if xPay == 0:
+                return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+        if sa.hasParam("DefinedContraption") and sa.usesTargeting():
+            target = self.getGoodReassembleTarget(ai, sa)
+            if target is not None:
+                sa.getTargets().add(target)
+            else:
+                return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+        return super().checkApiLogic(ai, sa)
+
+    def getGoodReassembleTarget(self, ai: Player, sa: SpellAbility) -> Card:
+        targets: list[GameEntity] = sa.getTargetRestrictions().getAllCandidates(sa, True)
+        nextSprocket = (ai.getCrankCounter() % 3) + 1
+        for e in targets:
+            if not isinstance(e, Card):
+                continue
+            c = e
+            if c.getController().isOpponentOf(ai):
+                return c
+            if c.isContraption() and c.getSprocket() != nextSprocket:
+                return c
+        return None
+
+    def chkDrawback(self, aiPlayer: Player, sa: SpellAbility) -> AiAbilityDecision:
+        if AssembleContraptionAi.getDeck(aiPlayer, sa).isEmpty():
+            return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+        return super().chkDrawback(aiPlayer, sa)
+````

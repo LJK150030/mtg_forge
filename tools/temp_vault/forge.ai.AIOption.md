@@ -38,3 +38,16 @@ public enum AIOption {
     USE_SIMULATION
 }
 ```
+
+## Python
+`forge/ai/AIOption.py`
+
+```python
+package forge.ai
+
+from enum import Enum
+
+
+class AIOption(Enum):
+    USE_SIMULATION = "USE_SIMULATION"
+```

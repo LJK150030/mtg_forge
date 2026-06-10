@@ -36,6 +36,10 @@ classDiagram
 - [[forge.game.card.Card|Card]]
 - [[forge.game.spellability.SpellAbility|SpellAbility]]
 
+## Design Description
+
+ReplaceProliferate is a concrete replacement effect that intercepts proliferate events, deciding whether the engine should apply or replace a proliferate action affecting a player. Extending ReplacementEffect, it overrides `canReplace` to gate on the event's parametersâ€”rejecting non-positive counter counts and enforcing the optional `ValidPlayer` restriction via the inherited `matchesValidParam` helperâ€”and `setReplacingObjects` to publish the affected player and count back onto the triggering SpellAbility under standard AbilityKey slots. It collaborates with AbilityKey to read and write the typed run-parameter map, Card as its host, and SpellAbility as the effect's execution context. The design keeps the class a thin, data-driven specialization: behavior is parameterized through the constructor's `mapParams`, leaving matching and substitution logic to the base class.
+
 ## Source
 `forge-game/src/main/java/forge/game/replacement/ReplaceProliferate.java`
 
@@ -89,4 +93,40 @@ public class ReplaceProliferate extends ReplacementEffect {
     }
 
 }
+```
+
+## Python
+`forge/game/replacement/ReplaceProliferate.py`
+
+```python
+from typing import Map
+
+from forge.game.replacement.ReplacementEffect import ReplacementEffect
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.spellability.SpellAbility import SpellAbility
+
+
+# TODO: Write javadoc for this type.
+class ReplaceProliferate(ReplacementEffect):
+
+    def __init__(self, mapParams: dict[str, str], host: Card, intrinsic: bool):
+        """
+        :param mapParams: HashMap<String, String>
+        :param host: Card
+        """
+        super().__init__(mapParams, host, intrinsic)
+
+    def canReplace(self, runParams: dict[AbilityKey, object]) -> bool:
+        if int(runParams.get(AbilityKey.Num)) <= 0:
+            return False
+
+        if not self.matchesValidParam("ValidPlayer", runParams.get(AbilityKey.Affected)):
+            return False
+
+        return True
+
+    def setReplacingObjects(self, runParams: dict[AbilityKey, object], sa: SpellAbility) -> None:
+        sa.setReplacingObject(AbilityKey.Player, runParams.get(AbilityKey.Affected))
+        sa.setReplacingObject(AbilityKey.Num, runParams.get(AbilityKey.Num))
 ```

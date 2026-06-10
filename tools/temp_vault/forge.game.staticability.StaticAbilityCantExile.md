@@ -34,6 +34,12 @@ classDiagram
 - [[forge.game.spellability.SpellAbility|SpellAbility]]
 - [[forge.game.staticability.StaticAbility|StaticAbility]]
 
+## Design Description
+
+StaticAbilityCantExile is a stateless utility that resolves the "can't be exiled" replacement rule for the Forge game engine. Its static `cantExile` method scans every card in the zones that can host static abilities, filters those whose conditions match the `CantExile` mode, and delegates to `applyCantExileAbility` to test a specific ability against the target card, the triggering cause, and an `effect` flag; a single match short-circuits to forbid the exile. The helper performs the matching by validating the `ValidCard` and `ValidCause` parameters and honoring an optional `ForCost` qualifier.
+
+Rather than implementing an interface or extending a supertype, the class follows the package's convention of grouping a single static-ability rule into purely static methods. It collaborates with Card (its game and static abilities), StaticAbility (condition checks and parameter matching), Game and SpellAbility, keeping the exile-prevention logic centralized and side-effect free.
+
 ## Source
 `forge-game/src/main/java/forge/game/staticability/StaticAbilityCantExile.java`
 
@@ -78,4 +84,42 @@ public class StaticAbilityCantExile {
         return true;
     }
 }
+```
+
+## Python
+`forge/game/staticability/StaticAbilityCantExile.py`
+
+```python
+from forge.game.Game import Game
+from forge.game.card.Card import Card
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+from forge.game.staticability.StaticAbility import StaticAbility
+from forge.game.staticability.StaticAbilityMode import StaticAbilityMode
+
+
+class StaticAbilityCantExile:
+
+    @staticmethod
+    def cantExile(card: Card, cause: SpellAbility, effect: bool) -> bool:
+        game = card.getGame()
+        for ca in game.getCardsIn(ZoneType.STATIC_ABILITIES_SOURCE_ZONES):
+            for stAb in ca.getStaticAbilities():
+                if not stAb.checkConditions(StaticAbilityMode.CantExile):
+                    continue
+
+                if StaticAbilityCantExile.applyCantExileAbility(stAb, card, cause, effect):
+                    return True
+        return False
+
+    @staticmethod
+    def applyCantExileAbility(stAb: StaticAbility, card: Card, cause: SpellAbility, effect: bool) -> bool:
+        if not stAb.matchesValidParam("ValidCard", card):
+            return False
+        if stAb.hasParam("ForCost"):
+            if ("True".lower() == (stAb.getParam("ForCost") or "").lower()) == effect:
+                return False
+        if not stAb.matchesValidParam("ValidCause", cause):
+            return False
+        return True
 ```

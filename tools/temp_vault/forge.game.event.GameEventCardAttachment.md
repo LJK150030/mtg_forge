@@ -43,7 +43,7 @@ classDiagram
 
 ## Design Description
 
-A `record` in `forge.game.event`, `GameEventCardAttachment` is one concrete event in Forge's game-event hierarchy, signalling that a card—typically an Equipment or Aura—has been attached to, moved between, or detached from a game entity. It carries view-layer snapshots (`CardView`, `GameEntityView` for the old and new targets) rather than live model objects, decoupling event consumers from mutable game state.
+A `record` in `forge.game.event`, `GameEventCardAttachment` is one concrete event in Forge's game-event hierarchy, signalling that a cardâ€”typically an Equipment or Auraâ€”has been attached to, moved between, or detached from a game entity. It carries view-layer snapshots (`CardView`, `GameEntityView` for the old and new targets) rather than live model objects, decoupling event consumers from mutable game state.
 
 As an implementer of `GameEvent`, it participates in the visitor pattern: its `visit` method dispatches to the appropriate `IGameEventVisitor` overload, letting listeners handle event types without instanceof checks. A convenience constructor accepts the live `Card` and `GameEntity` model objects and converts them to views via the static `get` factories, so producers can fire the event without manual view conversion. The `toString` override yields a human-readable attach/detach/move message for logging and debugging.
 
@@ -77,4 +77,36 @@ public record GameEventCardAttachment(CardView equipment, GameEntityView oldEnti
         return newTarget == null ? "Detached " + equipment + " from " + oldEntity : "Attached " + equipment + (oldEntity == null ? "" : " from " + oldEntity) + " to " + newTarget;
     }
 }
+```
+
+## Python
+`forge/game/event/GameEventCardAttachment.py`
+
+```python
+from typing import TypeVar
+
+from forge.game.GameEntity import GameEntity
+from forge.game.GameEntityView import GameEntityView
+from forge.game.card.Card import Card
+from forge.game.card.CardView import CardView
+from forge.game.event.GameEvent import GameEvent
+from forge.game.event.IGameEventVisitor import IGameEventVisitor
+
+T = TypeVar("T")
+
+
+class GameEventCardAttachment(GameEvent):
+
+    def __init__(self, equipment: Card, oldEntity: GameEntity, newTarget: GameEntity):
+        self.equipment: CardView = CardView.get(equipment)
+        self.oldEntity: GameEntityView = GameEntityView.get(oldEntity)
+        self.newTarget: GameEntityView = GameEntityView.get(newTarget)
+
+    def visit(self, visitor: IGameEventVisitor[T]) -> T:
+        return visitor.visit(self)
+
+    # (non-Javadoc)
+    # @see java.lang.Object#toString()
+    def __str__(self) -> str:
+        return "Detached " + str(self.equipment) + " from " + str(self.oldEntity) if self.newTarget is None else "Attached " + str(self.equipment) + ("" if self.oldEntity is None else " from " + str(self.oldEntity)) + " to " + str(self.newTarget)
 ```

@@ -172,3 +172,99 @@ public abstract class CountersAi extends SpellAbilityAi {
 
 }
 ```
+
+## Python
+`forge/ai/ability/CountersAi.py`
+
+```python
+from forge.ai.ComputerUtilCard import ComputerUtilCard
+from forge.ai.SpellAbilityAi import SpellAbilityAi
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CardPredicates import CardPredicates
+from forge.game.card.CounterType import CounterType
+from forge.game.card.CounterEnumType import CounterEnumType
+from forge.game.keyword.Keyword import Keyword
+from forge.game.player.Player import Player
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.Aggregates import Aggregates
+
+from typing import List
+
+
+class CountersAi(SpellAbilityAi):
+    """
+    AbilityFactory_Counters class.
+
+    @author Forge
+    @version $Id$
+    """
+
+    @staticmethod
+    def chooseCursedTarget(list: CardCollectionView, type: str, amount: int, ai: Player) -> Card:
+        """
+        chooseCursedTarget.
+
+        @param list a CardCollectionView object.
+        @param type a String object.
+        @param amount a int.
+        @param ai a Player object.
+        @return a Card object.
+        """
+        choice: Card
+
+        # opponent can always order it so that he gets 0
+        if amount == 1 and ai.getOpponents().getCardsIn(ZoneType.Battlefield).anyMatch(CardPredicates.nameEquals("Vorinclex, Monstrous Raider")):
+            return None
+
+        if type == "M1M1":
+            # try to kill the best killable creature, or reduce the best one
+            # but try not to target a Undying Creature
+            killable: List[Card] = CardLists.getNotKeyword(CardLists.filterToughness(list, amount), Keyword.UNDYING)
+            if killable:
+                choice = ComputerUtilCard.getBestCreatureAI(killable)
+            else:
+                choice = ComputerUtilCard.getBestCreatureAI(list)
+        else:
+            # improve random choice here
+            choice = Aggregates.random(list)
+        return choice
+
+    @staticmethod
+    def chooseBoonTarget(list: CardCollectionView, type: str) -> Card:
+        """
+        chooseBoonTarget.
+
+        @param list a CardCollectionView object.
+        @param type a String object.
+        @return a Card object.
+        """
+        choice: Card
+        counterType = CounterType.getType(type)
+        if counterType is None:
+            return Aggregates.random(list)
+
+        if counterType.is_(CounterEnumType.P1P1):
+            # TODO look for modified
+            choice = ComputerUtilCard.getBestCreatureAI(list)
+
+            if choice is None:
+                # We'd only get here if list isn't empty, maybe we're trying to animate a land?
+                choice = ComputerUtilCard.getBestLandToAnimate(list)
+        elif counterType.is_(CounterEnumType.CHARGE):
+            boon: CardCollection = CardLists.filter(list, lambda c: c.getCounters(CounterEnumType.CHARGE) < c.getKeywordMagnitude(Keyword.STATION) or c.getOracleText().matches(r".*(for|number|emove) \w+ (?:charge )counter.*"))
+            choice = ComputerUtilCard.getMostExpensivePermanentAI(boon)
+        elif counterType.isKeywordCounter():
+            choice = ComputerUtilCard.getBestCreatureAI(CardLists.getNotKeyword(list, type))
+        else:
+            pref: CardCollectionView = CardLists.filter(list, lambda c: c.getCounters(counterType) == 0)
+            if type == "DIVINITY" or type == "SHIELD":
+                choice = ComputerUtilCard.getMostExpensivePermanentAI(CardLists.filter(pref, Card.canBeDestroyed))
+            elif not pref:
+                choice = Aggregates.random(list)
+            else:
+                choice = ComputerUtilCard.getMostExpensivePermanentAI(pref)
+        return choice
+```

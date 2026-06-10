@@ -163,3 +163,16 @@ public class ZoneExchangeEffect extends SpellAbilityEffect {
     }
 }
 ```
+
+## Python
+`forge/game/ability/effects/ZoneExchangeEffect.py`
+
+```python
+package: forge.game.ability.effects ΓåÆ module forge/game/ability/effects/ZoneExchangeEffect.py
+
+Let me produce the Python port.
+
+from typing import Map etc. Imports needed: Game, AbilityKey, AbilityUtils, SpellAbilityEffect, Card, CardCollection, CardLists, CardZoneTable, Player, SpellAbility, ZoneType, Localizer.
+
+Relationships list FQNs. AbilityUtils, CardLists, Localizer aren't in relationships but in Java imports. AbilityUtils: forge.game.ability.AbilityUtils, CardLists: forge.game.card.CardLists, Localizer: forge.util.Localizer.
+```

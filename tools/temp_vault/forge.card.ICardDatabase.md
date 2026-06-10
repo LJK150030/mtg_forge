@@ -87,7 +87,7 @@ classDiagram
 
 ## Design Description
 
-`ICardDatabase` defines Forge's abstract card-database contract, providing a uniform API for looking up and retrieving Magic cards (`PaperCard` instances) and their faces (`ICardFace`). It extends `Iterable<PaperCard>` so the full catalog can be traversed directly. Single-card lookup is offered through three deliberately distinct strategies: `getCard` resolves by raw attributes (name, edition, art index, collector number), `getCardFromSet` targets a known expansion, and `getCardFromEditions` selects among reprints via a `CardArtPreference` policy with optional release-date bounds—the path used when no edition is specified, as in deck imports.
+`ICardDatabase` defines Forge's abstract card-database contract, providing a uniform API for looking up and retrieving Magic cards (`PaperCard` instances) and their faces (`ICardFace`). It extends `Iterable<PaperCard>` so the full catalog can be traversed directly. Single-card lookup is offered through three deliberately distinct strategies: `getCard` resolves by raw attributes (name, edition, art index, collector number), `getCardFromSet` targets a known expansion, and `getCardFromEditions` selects among reprints via a `CardArtPreference` policy with optional release-date boundsâ€”the path used when no edition is specified, as in deck imports.
 
 Collaborating with `CardEdition`, `CardRarity`, and `CardArtPreference`, it also exposes bulk and stream-based retrieval, unique-by-name access, art-counting utilities, and reusable `Predicate<PaperCard>` factories for legality, rarity, and set membership. Pervasive `default` methods funnel the many overloads onto a small set of core abstract operations, keeping implementations minimal while preserving a broad, convenient surface.
 
@@ -246,4 +246,171 @@ public interface ICardDatabase extends Iterable<PaperCard> {
 
     CardArtPreference getCardArtPreference();
 }
+```
+
+## Python
+`forge/card/ICardDatabase.py`
+
+```python
+from abc import ABC, abstractmethod
+from collections.abc import Iterable
+from datetime import date as Date
+from typing import Callable, Collection, Iterator, Optional
+
+from forge.card.CardDb.CardArtPreference import CardArtPreference
+from forge.card.CardEdition import CardEdition
+from forge.card.CardRarity import CardRarity
+from forge.card.ICardFace import ICardFace
+from forge.item.IPaperCard import IPaperCard
+from forge.item.PaperCard import PaperCard
+
+
+class ICardDatabase(Iterable, ABC):
+    """
+    Magic Cards Database.
+    --------------------
+    This interface defines the general API for Database Access and Cards' Lookup.
+
+    Methods for single Card's lookup currently support three alternative strategies:
+    1. [getCard]: Card search based on a single card's attributes
+                  (i.e. name, edition, art, collectorNumber)
+
+    2. [getCardFromSet]: Card Lookup from a single Expansion set.
+                        Particularly useful in Deck Editors when a specific Set is specified.
+
+    3. [getCardFromEditions]: Card search considering a predefined `SetPreference` policy and/or a specified Date
+                              when no expansion is specified for a card.
+                              This method is particularly useful for Re-prints whenever no specific
+                              Expansion is specified (e.g. in Deck Import) and a decision should be made
+                              on which card to pick. This methods allows to adopt a SetPreference selection
+                              policy to make this decision.
+
+    The API also includes methods to fetch Collection of Card (i.e. PaperCard instances):
+    - all cards (no filter)
+    - all unique cards (by name)
+    - all prints of a single card
+    - all cards from a single Expansion Set
+    - all cards compliant with a filter condition (i.e. Predicate)
+
+    Finally, various utility methods are supported:
+    - Get the foil version of a Card (if Any)
+    - Get the Order Number of a Card in an Expansion Set
+    - Get the number of Print/Arts for a card in a Set (useful for those exp. having multiple arts)
+    """
+
+    # SINGLE CARD RETRIEVAL METHODS
+    # =============================
+    # 1. Card Lookup by attributes
+    @abstractmethod
+    def getCard(self, cardName: str, edition: str = None, artIndex: int = None,
+                collectorNumber: str = None, flags: dict[str, str] = None) -> PaperCard:
+        ...
+
+    # 2. Card Lookup from a single Expansion Set
+    @abstractmethod
+    def getCardFromSet(self, cardName: str, edition: CardEdition,
+                       artIndex: int = IPaperCard.NO_ART_INDEX,
+                       collectorNumber: str = IPaperCard.NO_COLLECTOR_NUMBER,
+                       isFoil: bool = False) -> PaperCard:
+        ...
+
+    # 3. Card lookup based on CardArtPreference Selection Policy
+    def getCardFromEditions(self, cardName: str, artPreference: CardArtPreference = None,
+                            artIndex: int = None,
+                            filter: Callable[[PaperCard], bool] = None) -> PaperCard:
+        if artPreference is None:
+            artPreference = self.getCardArtPreference()
+        if artIndex is None:
+            artIndex = IPaperCard.NO_ART_INDEX
+        raise NotImplementedError
+
+    # 4. Specialised Card Lookup on CardArtPreference Selection and Release Date
+    def getCardFromEditionsReleasedBefore(self, cardName: str, artPreference: CardArtPreference = None,
+                                          artIndex: int = None, releaseDate: Date = None,
+                                          filter: Callable[[PaperCard], bool] = None) -> PaperCard:
+        if artPreference is None:
+            artPreference = self.getCardArtPreference()
+        if artIndex is None:
+            artIndex = PaperCard.DEFAULT_ART_INDEX
+        raise NotImplementedError
+
+    def getCardFromEditionsReleasedAfter(self, cardName: str, artPreference: CardArtPreference = None,
+                                         artIndex: int = None, releaseDate: Date = None,
+                                         filter: Callable[[PaperCard], bool] = None) -> PaperCard:
+        if artPreference is None:
+            artPreference = self.getCardArtPreference()
+        if artIndex is None:
+            artIndex = PaperCard.DEFAULT_ART_INDEX
+        raise NotImplementedError
+
+    # CARDS COLLECTION RETRIEVAL METHODS
+    # ==================================
+    @abstractmethod
+    def getAllCards(self, cardName: str = None, predicate: Callable[[PaperCard], bool] = None,
+                    edition: CardEdition = None) -> Collection[PaperCard]:
+        ...
+
+    @abstractmethod
+    def getAllCardsNoAlt(self, rulesName: str,
+                         predicate: Callable[[PaperCard], bool]) -> Collection[PaperCard]:
+        ...
+
+    @abstractmethod
+    def getUniqueCards(self) -> Collection[PaperCard]:
+        ...
+
+    @abstractmethod
+    def getUniqueByName(self, cardName: str) -> PaperCard:
+        ...
+
+    @abstractmethod
+    def getUniqueByNameNoAlt(self, rulesName: str) -> PaperCard:
+        ...
+
+    @abstractmethod
+    def getAllFaces(self) -> Collection[ICardFace]:
+        ...
+
+    @abstractmethod
+    def getFaceByName(self, faceName: str) -> ICardFace:
+        ...
+
+    @abstractmethod
+    def streamAllCards(self) -> Iterator[PaperCard]:
+        ...
+
+    @abstractmethod
+    def streamUniqueCards(self) -> Iterator[PaperCard]:
+        ...
+
+    @abstractmethod
+    def streamAllFaces(self) -> Iterator[ICardFace]:
+        ...
+
+    # UTILITY METHODS
+    # ===============
+    @abstractmethod
+    def getMaxArtIndex(self, cardName: str) -> int:
+        ...
+
+    @abstractmethod
+    def getArtCount(self, cardName: str, edition: str) -> int:
+        ...
+
+    # Utility Predicates
+    @abstractmethod
+    def wasPrintedInSets(self, allowedSetCodes: Collection[str]) -> Callable[[PaperCard], bool]:
+        ...
+
+    @abstractmethod
+    def isLegal(self, allowedSetCodes: Collection[str]) -> Callable[[PaperCard], bool]:
+        ...
+
+    @abstractmethod
+    def wasPrintedAtRarity(self, rarity: CardRarity) -> Callable[[PaperCard], bool]:
+        ...
+
+    @abstractmethod
+    def getCardArtPreference(self) -> CardArtPreference:
+        ...
 ```

@@ -126,7 +126,7 @@ classDiagram
 
 CardPredicates is a final utility class that serves as a centralized factory for `Predicate<Card>` (and a few `Comparator<Card>`) instances used to filter and sort collections of cards throughout the game engine. It exposes a large set of stateless predicates, both as reusable constants for fixed conditions (TAPPED, CREATURES, LANDS, PLANESWALKERS) and as static factory methods that close over parameters to build dynamic tests (isController, isType, hasCounter, inZone, sharesColorWith).
 
-By delegating each test to methods on `Card` and collaborators such as `Player`, `CounterType`, `SpellAbility`, `ZoneType`, and `CombatUtil`, the class keeps query logic concise and composable while leaving domain behavior in the model types. Its private-by-convention design — a `final` class of only static members returning lambdas and method references — reflects the intent to provide a side-effect-free, declarative vocabulary for card queries that integrates cleanly with Java's functional `Predicate`/`Comparator` APIs and Forge's `FCollectionView` collections.
+By delegating each test to methods on `Card` and collaborators such as `Player`, `CounterType`, `SpellAbility`, `ZoneType`, and `CombatUtil`, the class keeps query logic concise and composable while leaving domain behavior in the model types. Its private-by-convention design â€” a `final` class of only static members returning lambdas and method references â€” reflects the intent to provide a side-effect-free, declarative vocabulary for card queries that integrates cleanly with Java's functional `Predicate`/`Comparator` APIs and Forge's `FCollectionView` collections.
 
 ## Source
 `forge-game/src/main/java/forge/game/card/CardPredicates.java`
@@ -454,4 +454,297 @@ public final class CardPredicates {
     public static final Predicate<Card> PLANESWALKERS = Card::isPlaneswalker;
     public static final Predicate<Card> BATTLES = Card::isBattle;
 }
+```
+
+## Python
+`forge/game/card/CardPredicates.py`
+
+```python
+from forge.game.CardTraitBase import CardTraitBase
+from forge.game.GameEntity import GameEntity
+from forge.game.combat.CombatUtil import CombatUtil
+from forge.game.keyword.Keyword import Keyword
+from forge.game.keyword.KeywordInterface import KeywordInterface
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.Zone import Zone
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.IterableUtil import IterableUtil
+from forge.util.PredicateString import PredicateString
+from forge.util.collect.FCollectionView import FCollectionView
+from forge.game.card.Card import Card
+from forge.game.card.CounterType import CounterType
+
+from typing import Callable, Iterable, List
+
+
+class CardPredicates:
+    """
+    Predicate<Card> interface.
+
+    @author Forge
+    @version $Id$
+    """
+
+    @staticmethod
+    def isController(p: Player) -> Callable[[Card], bool]:
+        return lambda c: c.getController().equals(p)
+
+    @staticmethod
+    def isControlledByAnyOf(pList: FCollectionView) -> Callable[[Card], bool]:
+        return lambda c: pList.contains(c.getController())
+
+    @staticmethod
+    def isOwner(p: Player) -> Callable[[Card], bool]:
+        return lambda c: p.equals(c.getOwner())
+
+    @staticmethod
+    def ownerLives() -> Callable[[Card], bool]:
+        return lambda c: c.getOwner().isInGame()
+
+    @staticmethod
+    def isType(cardType: str) -> Callable[[Card], bool]:
+        return lambda c: c.getType().hasStringType(cardType)
+
+    @staticmethod
+    def hasKeyword(keyword) -> Callable[[Card], bool]:
+        return lambda c: c.hasKeyword(keyword)
+
+    @staticmethod
+    def containsKeyword(keyword: str) -> Callable[[Card], bool]:
+        def predicate(c: Card) -> bool:
+            if IterableUtil.any(c.getHiddenExtrinsicKeywords(), PredicateString.contains(keyword)):
+                return True
+
+            for k in c.getKeywords():
+                if keyword in k.getOriginal():
+                    return True
+            return False
+        return predicate
+
+    @staticmethod
+    def isTargetableBy(source: SpellAbility) -> Callable[[Card], bool]:
+        return lambda c: source.canTarget(c)
+
+    @staticmethod
+    def nameEquals(name: str) -> Callable[[Card], bool]:
+        return lambda c: c.getName().equals(name)
+
+    @staticmethod
+    def nameNotEquals(name: str) -> Callable[[Card], bool]:
+        return lambda c: not c.getName().equals(name)
+
+    @staticmethod
+    def sharesNameWith(name: Card) -> Callable[[Card], bool]:
+        return lambda c: c.sharesNameWith(name)
+
+    @staticmethod
+    def sharesCMCWith(cmc: Card) -> Callable[[Card], bool]:
+        return lambda c: c.sharesCMCWith(cmc)
+
+    @staticmethod
+    def sharesColorWith(color: Card) -> Callable[[Card], bool]:
+        return lambda c: c.sharesColorWith(color)
+
+    @staticmethod
+    def sharesControllerWith(card: Card) -> Callable[[Card], bool]:
+        return lambda c: c.sharesControllerWith(card)
+
+    @staticmethod
+    def sharesCardTypeWith(card: Card) -> Callable[[Card], bool]:
+        return lambda c: c.sharesCardTypeWith(card)
+
+    @staticmethod
+    def sharesAllCardTypesWith(card: Card) -> Callable[[Card], bool]:
+        return lambda c: c.sharesAllCardTypesWith(card)
+
+    @staticmethod
+    def sharesCreatureTypeWith(card: Card) -> Callable[[Card], bool]:
+        return lambda c: c.sharesCreatureTypeWith(card)
+
+    @staticmethod
+    def sharesLandTypeWith(card: Card) -> Callable[[Card], bool]:
+        return lambda c: c.sharesLandTypeWith(card)
+
+    @staticmethod
+    def possibleBlockers(attacker: Card) -> Callable[[Card], bool]:
+        return lambda c: CombatUtil.canBlock(attacker, c)
+
+    @staticmethod
+    def possibleBlockerForAtLeastOne(attackers: Iterable[Card]) -> Callable[[Card], bool]:
+        return lambda c: c.isCreature() and CombatUtil.canBlockAtLeastOne(c, attackers)
+
+    @staticmethod
+    def restriction(restrictions, sourceController: Player, source: Card, spellAbility: CardTraitBase) -> Callable[[Card], bool]:
+        return lambda c: c is not None and c.isValid(restrictions, sourceController, source, spellAbility)
+
+    @staticmethod
+    def canBeSacrificedBy(sa: SpellAbility, effect: bool) -> Callable[[Card], bool]:
+        return lambda c: c.canBeSacrificedBy(sa, effect)
+
+    @staticmethod
+    def canExiledBy(sa: SpellAbility, effect: bool) -> Callable[[Card], bool]:
+        return lambda c: c.canExiledBy(sa, effect)
+
+    @staticmethod
+    def canBeAttached(aura: Card, sa: SpellAbility) -> Callable[[Card], bool]:
+        return lambda c: c.canBeAttached(aura, sa)
+
+    @staticmethod
+    def isColor(color: int) -> Callable[[Card], bool]:
+        return lambda c: c.getColor().hasAnyColor(color)
+    # getColor()
+
+    @staticmethod
+    def isExactlyColor(color: int) -> Callable[[Card], bool]:
+        return lambda c: c.getColor().hasExactlyColor(color)
+
+    @staticmethod
+    def isColorless() -> Callable[[Card], bool]:
+        return lambda c: c.getColor().isColorless()
+
+    @staticmethod
+    def isEquippedBy(name: str) -> Callable[[Card], bool]:
+        return lambda c: c.isEquippedBy(name)
+
+    @staticmethod
+    def isEnchantedBy(name: str) -> Callable[[Card], bool]:
+        return lambda c: c.isEnchantedBy(name)
+
+    @staticmethod
+    def hasCMC(cmc: int) -> Callable[[Card], bool]:
+        return lambda c: c.sharesCMCWith(cmc)
+
+    @staticmethod
+    def greaterCMC(cmc: int) -> Callable[[Card], bool]:
+        # do not check for Split card anymore
+        return lambda c: c.getCMC() >= cmc
+
+    @staticmethod
+    def lessCMC(cmc: int) -> Callable[[Card], bool]:
+        # do not check for Split card anymore
+        return lambda c: c.getCMC() <= cmc
+
+    @staticmethod
+    def evenCMC() -> Callable[[Card], bool]:
+        return lambda c: c.getCMC() % 2 == 0
+
+    @staticmethod
+    def oddCMC() -> Callable[[Card], bool]:
+        return lambda c: c.getCMC() % 2 == 1
+
+    @staticmethod
+    def hasCounters() -> Callable[[Card], bool]:
+        return lambda c: GameEntity.hasCounters(c)
+
+    @staticmethod
+    def hasCounter(type: CounterType, n: int = 1) -> Callable[[Card], bool]:
+        return lambda c: c.getCounters(type) >= n
+
+    @staticmethod
+    def hasLessCounter(type: CounterType, n: int) -> Callable[[Card], bool]:
+        def predicate(c: Card) -> bool:
+            x = c.getCounters(type)
+            return x > 0 and x <= n
+        return predicate
+
+    @staticmethod
+    def canReceiveCounters(counter: CounterType) -> Callable[[Card], bool]:
+        return lambda c: c.canReceiveCounters(counter)
+
+    @staticmethod
+    def hasGreaterPowerThan(minPower: int) -> Callable[[Card], bool]:
+        return lambda c: c.getNetPower() > minPower
+
+    @staticmethod
+    def compareByCounterType(type: CounterType) -> Callable[[Card, Card], int]:
+        def comparator(arg0: Card, arg1: Card) -> int:
+            x = arg0.getCounters(type)
+            y = arg1.getCounters(type)
+            return (x > y) - (x < y)
+        return comparator
+
+    @staticmethod
+    def hasSVar(name: str) -> Callable[[Card], bool]:
+        return lambda c: c.hasSVar(name)
+
+    @staticmethod
+    def isExiledWith(card: Card) -> Callable[[Card], bool]:
+        return lambda c: card.equals(c.getExiledWith())
+
+    @staticmethod
+    def compareByGameTimestamp() -> Callable[[Card, Card], int]:
+        def comparator(a: Card, b: Card) -> int:
+            x = a.getGameTimestamp()
+            y = b.getGameTimestamp()
+            return (x > y) - (x < y)
+        return comparator
+
+    @staticmethod
+    def inZone(zt) -> Callable[[Card], bool]:
+        if isinstance(zt, ZoneType):
+            def predicate(c: Card) -> bool:
+                z = c.getLastKnownZone()
+                return z is not None and z.is_(zt)
+            return predicate
+
+        def predicate(c: Card) -> bool:
+            z = c.getLastKnownZone()
+            if z is not None:
+                for t in zt:
+                    if z.is_(t):
+                        return True
+            return False
+        return predicate
+
+    @staticmethod
+    def isRemAIDeck() -> Callable[[Card], bool]:
+        return lambda c: c.getRules() is not None and c.getRules().getAiHints().getRemAIDecks()
+
+    @staticmethod
+    def castSA(predSA: Callable[[SpellAbility], bool]) -> Callable[[Card], bool]:
+        def predicate(c: Card) -> bool:
+            if c.getCastSA() is None:
+                return False
+            return predSA(c.getCastSA())
+        return predicate
+
+    @staticmethod
+    def phasedIn() -> Callable[[Card], bool]:
+        return lambda c: not c.isPhasedOut()
+
+    @staticmethod
+    def isAttractionWithLight(light: int) -> Callable[[Card], bool]:
+        return lambda c: c.isAttraction() and c.getAttractionLights().contains(light)
+
+    @staticmethod
+    def isContraptionOnSprocket(sprocket: int) -> Callable[[Card], bool]:
+        return lambda c: c.getSprocket() == sprocket and c.isContraption()
+
+    TAPPED: Callable[[Card], bool] = lambda c: c.isTapped()
+    UNTAPPED: Callable[[Card], bool] = lambda c: c.isUntapped()
+    CAN_TAP: Callable[[Card], bool] = lambda c: c.canTap()
+    CAN_CREW: Callable[[Card], bool] = lambda c: c.canCrew()
+    CREATURES: Callable[[Card], bool] = lambda c: c.isCreature()
+    NON_CREATURES: Callable[[Card], bool] = lambda c: not c.isCreature()
+    ENCHANTMENTS: Callable[[Card], bool] = lambda c: c.isEnchantment()
+    FORTIFICATION: Callable[[Card], bool] = lambda c: c.isFortification()
+    NON_TOKEN: Callable[[Card], bool] = lambda c: not (c.isToken() or c.isTokenCard())
+    TOKEN: Callable[[Card], bool] = lambda c: c.isToken() or c.isTokenCard()
+    # the isBasicLand() check here may be sufficient...
+    BASIC_LANDS: Callable[[Card], bool] = lambda c: c.isLand() and c.isBasicLand()
+    NONBASIC_LANDS: Callable[[Card], bool] = lambda c: c.isLand() and not c.isBasicLand()
+
+    ARTIFACTS: Callable[[Card], bool] = lambda c: c.isArtifact()
+    INSTANTS_AND_SORCERIES: Callable[[Card], bool] = lambda c: c.isInstantOrSorcery()
+
+    LANDS: Callable[[Card], bool] = lambda c: c.isLand()
+    NON_LANDS: Callable[[Card], bool] = lambda c: not c.isLand()
+    LANDS_PRODUCING_MANA: Callable[[Card], bool] = lambda c: c.isBasicLand() or (c.isLand() and not c.getManaAbilities().isEmpty())
+    PERMANENTS: Callable[[Card], bool] = lambda c: c.isPermanent()
+    NONLAND_PERMANENTS: Callable[[Card], bool] = lambda c: c.isPermanent() and not c.isLand()
+    hasFirstStrike: Callable[[Card], bool] = lambda c: c.isCreature() and (c.hasFirstStrike() or c.hasDoubleStrike())
+    hasSecondStrike: Callable[[Card], bool] = lambda c: c.isCreature() and (not c.hasFirstStrike() or c.hasDoubleStrike())
+    PLANESWALKERS: Callable[[Card], bool] = lambda c: c.isPlaneswalker()
+    BATTLES: Callable[[Card], bool] = lambda c: c.isBattle()
 ```

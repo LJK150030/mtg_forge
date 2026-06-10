@@ -50,7 +50,7 @@ classDiagram
 
 `GameEventAttackersDeclared` is an immutable event record signalling that a player has finalized the combat step of declaring attackers. As a `GameEvent` implementation, it captures the attacking `Player` and a `Multimap` associating each defending `GameEntity` with the `Card`s assaulting it, recording a complete snapshot of the attack assignment at the moment it occurs.
 
-Its central design intent is the separation between the engine's mutable game model and the view layer consumed by the UI and clients. The convenience constructor accepts raw `Player`, `GameEntity`, and `Card` objects, then eagerly converts them—via `convertMap`—into their lightweight `PlayerView`, `GameEntityView`, and `CardView` counterparts, so the event safely carries only immutable view data. It participates in the visitor pattern through `visit`, dispatching itself to an `IGameEventVisitor` for type-specific handling, and overrides `toString` for readable diagnostic logging.
+Its central design intent is the separation between the engine's mutable game model and the view layer consumed by the UI and clients. The convenience constructor accepts raw `Player`, `GameEntity`, and `Card` objects, then eagerly converts themâ€”via `convertMap`â€”into their lightweight `PlayerView`, `GameEntityView`, and `CardView` counterparts, so the event safely carries only immutable view data. It participates in the visitor pattern through `visit`, dispatching itself to an `IGameEventVisitor` for type-specific handling, and overrides `toString` for readable diagnostic logging.
 
 ## Source
 `forge-game/src/main/java/forge/game/event/GameEventAttackersDeclared.java`
@@ -100,4 +100,47 @@ public record GameEventAttackersDeclared(PlayerView player, Multimap<GameEntityV
         return "" + player + " declared attackers: " + attackersMap;
     }
 }
+```
+
+## Python
+`forge/game/event/GameEventAttackersDeclared.py`
+
+```python
+from forge.game.GameEntity import GameEntity
+from forge.game.GameEntityView import GameEntityView
+from forge.game.card.Card import Card
+from forge.game.card.CardView import CardView
+from forge.game.event.GameEvent import GameEvent
+from forge.game.event.IGameEventVisitor import IGameEventVisitor
+from forge.game.player.Player import Player
+from forge.game.player.PlayerView import PlayerView
+
+from com.google.common.collect.HashMultimap import HashMultimap
+from com.google.common.collect.Multimap import Multimap
+
+
+class GameEventAttackersDeclared(GameEvent):
+
+    def __init__(self, player, attackersMap):
+        # Convenience constructor: raw Player + Multimap<GameEntity, Card>.
+        # Eagerly convert to the immutable view representation.
+        self.player = PlayerView.get(player)
+        self.attackersMap = GameEventAttackersDeclared.convertMap(attackersMap)
+
+    @staticmethod
+    def convertMap(map):
+        result = HashMultimap.create()
+        for entry in map.entries():
+            result.put(GameEntityView.get(entry.getKey()), CardView.get(entry.getValue()))
+        return result
+
+    # (non-Javadoc)
+    # @see forge.game.event.GameEvent#visit(forge.game.event.IGameEventVisitor)
+    def visit(self, visitor):
+        return visitor.visit(self)
+
+    # (non-Javadoc)
+    # @see java.lang.Object#toString()
+    def __str__(self):
+        return "" + str(self.player) + " declared attackers: " + str(self.attackersMap)
 ```

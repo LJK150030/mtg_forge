@@ -37,6 +37,12 @@ classDiagram
 - [[forge.game.card.Card|Card]]
 - [[forge.game.spellability.SpellAbility|SpellAbility]]
 
+## Design Description
+
+TriggerUnattached is a concrete trigger that fires when one card becomes unattached from another, such as an Equipment or Aura leaving the permanent it was on. Extending the abstract `Trigger` base class, it specializes the template's hooks rather than defining new control flow: `performTest` gates the event by matching the `ValidObject` and `ValidAttachment` restrictions against the run parameters, `setTriggeringObjects` binds the detached object and its attachment source onto the resolving `SpellAbility`, and `getImportantStackObjects` produces a localized stack description.
+
+Its collaborators reflect this narrow role: `AbilityKey` keys the typed run-parameter map (`Object`, `AttachSource`), `Card` is the trigger's host, and `SpellAbility` carries the triggering context. The design intent is data-driven configurationâ€”behavior comes from the `params` map and `Valid*` filters supplied at constructionâ€”so the class stays a thin, declarative adapter over the shared trigger machinery.
+
 ## Source
 `forge-game/src/main/java/forge/game/trigger/TriggerUnattached.java`
 
@@ -121,4 +127,56 @@ public class TriggerUnattached extends Trigger {
     }
 
 }
+```
+
+## Python
+`forge/game/trigger/TriggerUnattached.py`
+
+```python
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Localizer import Localizer
+
+from forge.game.trigger.Trigger import Trigger
+
+
+class TriggerUnattached(Trigger):
+    """
+    Trigger_Unattach class.
+
+    @author Forge
+    """
+
+    def __init__(self, params: dict[str, str], host: Card, intrinsic: bool):
+        """
+        Constructor for Trigger_Unequip.
+
+        :param params: a dict object.
+        :param host: a Card object.
+        :param intrinsic: the intrinsic
+        """
+        super().__init__(params, host, intrinsic)
+
+    def performTest(self, runParams: dict[AbilityKey, object]) -> bool:
+        if not self.matchesValidParam("ValidObject", runParams.get(AbilityKey.Object)):
+            return False
+        if not self.matchesValidParam("ValidAttachment", runParams.get(AbilityKey.AttachSource)):
+            return False
+
+        return True
+
+    def setTriggeringObjects(self, sa: SpellAbility, runParams: dict[AbilityKey, object]) -> None:
+        sa.setTriggeringObjectsFrom(runParams, AbilityKey.Object, AbilityKey.AttachSource)
+
+    def getImportantStackObjects(self, sa: SpellAbility) -> str:
+        sb = []
+        sb.append(Localizer.getInstance().getMessage("lblObject"))
+        sb.append(": ")
+        sb.append(str(sa.getTriggeringObject(AbilityKey.Object)))
+        sb.append(", ")
+        sb.append(Localizer.getInstance().getMessage("lblAttachment"))
+        sb.append(": ")
+        sb.append(str(sa.getTriggeringObject(AbilityKey.AttachSource)))
+        return "".join(sb)
 ```

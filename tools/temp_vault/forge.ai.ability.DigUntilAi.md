@@ -42,7 +42,7 @@ classDiagram
 
 ## Design Description
 
-`DigUntilAi` supplies the AI decision logic for "dig until" spell abilities — effects that reveal cards from a library until a condition is met. As a concrete subclass of `SpellAbilityAi`, it overrides the framework's decision hooks: `checkApiLogic` weighs whether the AI should activate the ability, scaling its willingness by timing (instant vs. sorcery speed, opponent's end of turn) and guarding against self-milling decks like Hermit Druid, while also assigning targets and resolving an X mana cost; `doTriggerNoCost` handles forced/triggered resolution by selecting an appropriate player target; and `confirmAction` answers ability-specific prompts such as the Oath of Druids choice.
+`DigUntilAi` supplies the AI decision logic for "dig until" spell abilities â€” effects that reveal cards from a library until a condition is met. As a concrete subclass of `SpellAbilityAi`, it overrides the framework's decision hooks: `checkApiLogic` weighs whether the AI should activate the ability, scaling its willingness by timing (instant vs. sorcery speed, opponent's end of turn) and guarding against self-milling decks like Hermit Druid, while also assigning targets and resolving an X mana cost; `doTriggerNoCost` handles forced/triggered resolution by selecting an appropriate player target; and `confirmAction` answers ability-specific prompts such as the Oath of Druids choice.
 
 The class collaborates with `Player`, `SpellAbility`, and `Card` to inspect game state (library contents, phase, zones), and returns its verdicts as `AiAbilityDecision` values paired with `AiPlayDecision` codes. It holds no state, acting purely as a stateless strategy plugged into Forge's ability-handling framework, with card-specific behavior driven by the `AILogic` parameter rather than subclassing.
 
@@ -188,4 +188,120 @@ public class DigUntilAi extends SpellAbilityAi {
         return true;
     }
 }
+```
+
+## Python
+`forge/ai/ability/DigUntilAi.py`
+
+```python
+from forge.ai.SpellAbilityAi import SpellAbilityAi
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.ai.AiAttackController import AiAttackController
+from forge.ai.ComputerUtilCost import ComputerUtilCost
+from forge.game.card.Card import Card
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CardPredicates import CardPredicates
+from forge.game.phase.PhaseType import PhaseType
+from forge.game.player.Player import Player
+from forge.game.player.PlayerActionConfirmMode import PlayerActionConfirmMode
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+
+from typing import List, Map
+
+
+class DigUntilAi(SpellAbilityAi):
+
+    def checkApiLogic(self, ai: Player, sa: SpellAbility) -> AiAbilityDecision:
+        source = sa.getHostCard()
+        logic = sa.getParamOrDefault("AILogic", "")
+        chance = .4  # 40 percent chance with instant speed stuff
+        if self.isSorcerySpeed(sa, ai):
+            chance = .667  # 66.7% chance for sorcery speed (since it will
+                           # never activate EOT)
+        # if we don't use anything now, we wasted our opportunity.
+        if (ai.getGame().getPhaseHandler().is_(PhaseType.END_OF_TURN)) \
+                and (not ai.getGame().getPhaseHandler().isPlayerTurn(ai)):
+            chance = 1
+
+        libraryOwner = ai
+        opp = AiAttackController.choosePreferredDefenderPlayer(ai)
+
+        if "DontMillSelf" == logic:
+            # A card that digs for specific things and puts everything revealed before it into graveyard
+            # (e.g. Hermit Druid) - don't use it to mill itself and also make sure there's enough playable
+            # material in the library after using it several times.
+            # TODO: maybe this should happen for any DigUntil SA with RevealedDestination$ Graveyard?
+            if ai.getCardsIn(ZoneType.Library).size() < 20:
+                return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+            if "Land.Basic" == sa.getParam("Valid") \
+                    and ai.getZone(ZoneType.Hand).contains(CardPredicates.LANDS_PRODUCING_MANA):
+                # We already have a mana-producing land in hand, so bail
+                # until opponent's end of turn phase!
+                # But we still want more (and want to fill grave) if nothing better to do then
+                # This is important for Replenish/Living Death type decks
+                if not ai.getGame().getPhaseHandler().is_(PhaseType.END_OF_TURN) \
+                        and not ai.getGame().getPhaseHandler().isPlayerTurn(ai):
+                    return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+        if sa.usesTargeting():
+            sa.resetTargets()
+            if not sa.canTarget(opp):
+                return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+            sa.getTargets().add(opp)
+            libraryOwner = opp
+        else:
+            if sa.hasParam("Valid"):
+                valid = sa.getParam("Valid")
+                if CardLists.getValidCards(ai.getCardsIn(ZoneType.Library), valid, source.getController(), source, sa).isEmpty():
+                    return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+        num = sa.getParam("Amount")
+        if num is not None and num == "X" and sa.getSVar(num) == "Count$xPaid":
+            # Set PayX here to maximum value.
+            root = sa.getRootAbility()
+            if root.getXManaCostPaid() is None:
+                numCards = ComputerUtilCost.setMaxXValue(sa, ai, sa.isTrigger())
+                if numCards <= 0:
+                    return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+                root.setXManaCostPaid(numCards)
+
+        # return false if nothing to dig into
+        if libraryOwner.getCardsIn(ZoneType.Library).isEmpty():
+            return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+        return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+    def doTriggerNoCost(self, ai: Player, sa: SpellAbility, mandatory: bool) -> AiAbilityDecision:
+        if sa.usesTargeting():
+            sa.resetTargets()
+            if sa.isCurse():
+                for opp in ai.getOpponents():
+                    if sa.canTarget(opp):
+                        sa.getTargets().add(opp)
+                        break
+                if mandatory and sa.getTargets().isEmpty() and sa.canTarget(ai):
+                    sa.getTargets().add(ai)
+            else:
+                if sa.canTarget(ai):
+                    sa.getTargets().add(ai)
+
+        return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+    # (non-Javadoc)
+    # @see forge.card.ability.SpellAbilityAi#confirmAction(forge.card.spellability.SpellAbility, forge.game.player.PlayerActionConfirmMode, java.lang.String)
+    def confirmAction(self, player: Player, sa: SpellAbility, mode: PlayerActionConfirmMode, message: str, params: Map[str, object]) -> bool:
+        if sa.hasParam("AILogic"):
+            logic = sa.getParam("AILogic")
+            if "OathOfDruids" == logic:
+                creaturesInLibrary = \
+                    CardLists.filter(player.getCardsIn(ZoneType.Library), CardPredicates.CREATURES)
+                creaturesInBattlefield = player.getCreaturesInPlay()
+                # if there are at least 3 creatures in library,
+                # or none in play with one in library, oath
+                return creaturesInLibrary.size() > 2 \
+                    or (creaturesInBattlefield.size() == 0 and creaturesInLibrary.size() > 0)
+
+        return True
 ```

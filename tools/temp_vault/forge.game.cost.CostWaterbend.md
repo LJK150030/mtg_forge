@@ -59,3 +59,25 @@ public class CostWaterbend extends CostPartMana {
     }
 }
 ```
+
+## Python
+`forge/game/cost/CostWaterbend.py`
+
+````python
+The output:
+
+```python
+from forge.game.cost.CostPartMana import CostPartMana
+from forge.card.mana.ManaCost import ManaCost
+
+
+class CostWaterbend(CostPartMana):
+
+    def __init__(self, mana: str):
+        super().__init__(ManaCost(mana), None)
+
+        self.maxWaterbend = mana
+
+    def toString(self) -> str:
+        return "Waterbend " + self.getMana().toString()
+````

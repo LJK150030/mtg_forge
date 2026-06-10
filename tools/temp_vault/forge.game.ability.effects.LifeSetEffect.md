@@ -210,3 +210,131 @@ public class LifeSetEffect extends SpellAbilityEffect {
 
 }
 ```
+
+## Python
+`forge/game/ability/effects/LifeSetEffect.py`
+
+```python
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.player.Player import Player
+from forge.game.player.PlayerCollection import PlayerCollection
+from forge.game.player.PlayerController import PlayerController
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.trigger.TriggerType import TriggerType
+from forge.util.Lang import Lang
+from forge.util.Localizer import Localizer
+
+
+class LifeSetEffect(SpellAbilityEffect):
+
+    # (non-Javadoc)
+    # @see forge.card.abilityfactory.AbilityFactoryAlterLife.SpellEffect#resolve(java.util.Map, forge.card.spellability.SpellAbility)
+    def resolve(self, sa: SpellAbility) -> None:
+        source = sa.getHostCard()
+        redistribute = sa.hasParam("Redistribute")
+        lifeAmount = 0 if redistribute else AbilityUtils.calculateAmount(source, sa.getParam("LifeAmount"), sa)
+        lifetotals: list[int] = []
+        pc = sa.getActivatingPlayer().getController()
+
+        players = PlayerCollection()
+        if sa.hasParam("PlayerChoices"):
+            choices = AbilityUtils.getDefinedPlayers(source, sa.getParam("PlayerChoices"), sa)
+            n = 1
+            min = 1
+            if sa.hasParam("ChoiceAmount"):
+                if sa.getParam("ChoiceAmount") == "Any":
+                    n = choices.size()
+                    min = 0
+                else:
+                    n = AbilityUtils.calculateAmount(source, sa.getParam("ChoiceAmount"), sa)
+                    min = n
+            prompt = sa.getParam("ChoicePrompt") if sa.hasParam("ChoicePrompt") else \
+                Localizer.getInstance().getMessage("lblChoosePlayer")
+            chosen = pc.chooseEntitiesForEffect(choices, min, n, None, sa, prompt, None,
+                    None)
+            players.addAll(chosen)
+        else:
+            players = self.getTargetPlayers(sa)
+
+        if players.isEmpty():
+            return
+
+        if redistribute:
+            for p in players:
+                if not p.isInGame():
+                    continue
+                lifetotals.append(p.getLife())
+
+        lossMap: dict[Player, int] = {}
+        for p in players.threadSafeIterable():
+            if not p.isInGame():
+                continue
+            preLife = p.getLife()
+            if not redistribute:
+                p.setLife(lifeAmount, sa)
+            else:
+                validChoices = self.getDistribution(players, True, lifetotals)
+                life = pc.chooseNumber(sa, Localizer.getInstance().getMessage("lblLifeTotal") + ": " + str(p), validChoices, p)
+                p.setLife(life, sa)
+                lifetotals.remove(life)
+                players.remove(p)
+            diff = preLife - p.getLife()
+            if diff > 0:
+                lossMap[p] = diff
+        if lossMap:  # Run triggers if any player actually lost life
+            runParams = AbilityKey.mapFromPIMap(lossMap)
+            source.getGame().getTriggerHandler().runTrigger(TriggerType.LifeLostAll, runParams, False)
+
+    @staticmethod
+    def getDistribution(players: list[Player], top: bool, remainingChoices: list[int]) -> list[int]:
+        # distribution was successful
+        if not players:
+            # carry signal back
+            remainingChoices.append(1)
+            return remainingChoices
+        validChoices = list(remainingChoices)
+        for p in players:
+            for choice in remainingChoices:
+                # 119.7/8 illegal choice
+                if (p.getLife() < choice and not p.canGainLife()) or (p.getLife() > choice and not p.canLoseLife()):
+                    if top:
+                        validChoices.remove(choice)
+                    continue
+
+                # combination is valid, check next
+                nextPlayers = PlayerCollection(players)
+                nextPlayers.remove(p)
+                nextChoices = list(remainingChoices)
+                nextChoices.remove(choice)
+                nextChoices = LifeSetEffect.getDistribution(nextPlayers, False, nextChoices)
+                if not nextChoices:
+                    if top:
+                        # top of recursion stack
+                        validChoices.remove(choice)
+                elif not top:
+                    return nextChoices
+            if top:
+                # checking first player is enough
+                return validChoices
+        return []
+
+    # (non-Javadoc)
+    # @see forge.card.abilityfactory.AbilityFactoryAlterLife.SpellEffect#getStackDescription(java.util.Map, forge.card.spellability.SpellAbility)
+    def getStackDescription(self, sa: SpellAbility) -> str:
+        if sa.hasParam("Redistribute"):
+            if sa.hasParam("SpellDescription"):
+                return sa.getParam("SpellDescription")
+            else:
+                return "Please add StackDescription or SpellDescription for Redistribute in LifeSetEffect."
+        sb = []
+        amount = AbilityUtils.calculateAmount(sa.getHostCard(), sa.getParam("LifeAmount"), sa)
+
+        sb.append(Lang.joinHomogenous(self.getTargetPlayers(sa)))
+        sb.append(" life total becomes ")
+        sb.append(str(amount))
+        sb.append(".")
+        return "".join(sb)
+```

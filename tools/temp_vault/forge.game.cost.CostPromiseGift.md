@@ -102,3 +102,46 @@ public class CostPromiseGift extends CostPart {
     }
 }
 ```
+
+## Python
+`forge/game/cost/CostPromiseGift.py`
+
+```python
+from forge.game.cost.CostPart import CostPart
+from forge.game.cost.ICostVisitor import ICostVisitor
+from forge.game.cost.PaymentDecision import PaymentDecision
+from forge.game.player.Player import Player
+from forge.game.player.PlayerCollection import PlayerCollection
+from forge.game.spellability.SpellAbility import SpellAbility
+
+
+class CostPromiseGift(CostPart):
+    # Promise Gift is a very specific cost. A more generic version might be "Choose Player/Opponent"
+
+    def paymentOrder(self) -> int:
+        # Its just choosing a person
+        return -1
+
+    def canPay(self, ability: SpellAbility, payer: Player, effect: bool) -> bool:
+        # You can always promise a gift
+        return True
+
+    def accept(self, visitor: ICostVisitor):
+        return visitor.visit(self)
+
+    def toString(self) -> str:
+        # Extract the description from the SA
+
+        return "Gift something"
+
+    def payAsDecided(self, payer: Player, pd: PaymentDecision, sa: SpellAbility, effect: bool) -> bool:
+        if not pd.players:
+            sa.getHostCard().setPromisedGift(None)
+            return False
+
+        sa.getHostCard().setPromisedGift(pd.players[0])
+        return True
+
+    def getPotentialPlayers(self, payer: Player, ability: SpellAbility) -> PlayerCollection:
+        return payer.getOpponents()
+```

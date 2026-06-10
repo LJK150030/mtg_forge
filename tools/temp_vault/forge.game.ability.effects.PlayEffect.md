@@ -635,3 +635,478 @@ public class PlayEffect extends SpellAbilityEffect {
     }
 }
 ```
+
+## Python
+`forge/game/ability/effects/PlayEffect.py`
+
+```python
+from forge.card.CardDb import CardDb
+from forge.card.CardStateName import CardStateName
+from forge.game.Game import Game
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.card.CardZoneTable import CardZoneTable
+from forge.game.cost.Cost import Cost
+from forge.game.cost.CostDiscard import CostDiscard
+from forge.game.cost.CostPart import CostPart
+from forge.game.cost.CostReveal import CostReveal
+from forge.game.mana.ManaCostBeingPaid import ManaCostBeingPaid
+from forge.game.player.Player import Player
+from forge.game.replacement.ReplacementEffect import ReplacementEffect
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.Zone import Zone
+from forge.game.zone.ZoneType import ZoneType
+from forge.item.PaperCard import PaperCard
+
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+
+# Additional dependencies referenced by the Java source (non-FQN-listed but used)
+from forge.StaticData import StaticData
+from forge.card.GamePieceType import GamePieceType
+from forge.card.CardRulesPredicates import CardRulesPredicates
+from forge.item.PaperCardPredicates import PaperCardPredicates
+from forge.game.ability.AbilityFactory import AbilityFactory
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.card.CardFactoryUtil import CardFactoryUtil
+from forge.game.keyword.Keyword import Keyword
+from forge.game.replacement.ReplacementHandler import ReplacementHandler
+from forge.game.replacement.ReplacementLayer import ReplacementLayer
+from forge.game.spellability.AlternativeCost import AlternativeCost
+from forge.game.spellability.SpellAbilityPredicates import SpellAbilityPredicates
+from forge.util.Lang import Lang
+from forge.util.Localizer import Localizer
+from forge.util.IterableUtil import IterableUtil
+from forge.util.StreamUtil import StreamUtil
+from forge.util import StringUtils
+
+
+class PlayEffect(SpellAbilityEffect):
+    def getStackDescription(self, sa):
+        sb = []
+        sb.append(str(sa.getActivatingPlayer()))
+        sb.append(" ")
+
+        if sa.hasParam("ValidSA"):
+            sb.append("may cast " if sa.hasParam("Optional") else "cast ")
+        else:
+            sb.append("may play " if sa.hasParam("Optional") else "plays ")
+
+        tgtCards = self.getDefinedCardsOrTargeted(sa)
+
+        if sa.hasParam("Valid"):
+            sb.append("cards")
+        elif sa.hasParam("DefinedDesc"):
+            sb.append(sa.getParam("DefinedDesc"))
+        else:
+            sb.append(Lang.joinHomogenous(tgtCards))
+        if sa.hasParam("WithoutManaCost"):
+            sb.append(" without paying ")
+            sb.append("its" if len(tgtCards) == 1 else "their")
+            sb.append(" mana cost")
+        if sa.hasParam("IfDesc"):
+            sb.append(" ")
+            sb.append(sa.getParam("IfDesc"))
+        sb.append(".")
+        return "".join(sb)
+
+    def resolve(self, sa):
+        source = sa.getHostCard()
+        game = source.getGame()
+        optional = sa.hasParam("Optional")
+        remember = sa.hasParam("RememberPlayed")
+        imprint = sa.hasParam("ImprintPlayed")
+        forget = sa.hasParam("ForgetPlayed")
+        hasTotalCMCLimit = sa.hasParam("WithTotalCMC")
+        altCost = sa.hasParam("WithoutManaCost") or sa.hasParam("PlayCost")
+        altCostManaCost = "ManaCost" == sa.getParam("PlayCost")
+        totalCMCLimit = 2147483647
+        if sa.hasParam("Controller"):
+            controller = AbilityUtils.getDefinedPlayers(source, sa.getParam("Controller"), sa).get(0)
+        else:
+            controller = sa.getActivatingPlayer()
+
+        controlledByTimeStamp = -1
+        controlledByPlayer = None
+        if sa.hasParam("ControlledByPlayer"):
+            controlledByTimeStamp = game.getNextTimestamp()
+            controlledByPlayer = AbilityUtils.getDefinedPlayers(source, sa.getParam("ControlledByPlayer"), sa).get(0)
+
+        showCards = CardCollection()
+
+        if sa.hasParam("Valid"):
+            zones = ZoneType.listValueOf(sa.getParam("ValidZone")) if sa.hasParam("ValidZone") else [ZoneType.Hand]
+            tgtCards = CardCollection(AbilityUtils.filterListByType(game.getCardsIn(zones), sa.getParam("Valid"), sa))
+            if sa.hasParam("ShowCards"):
+                showCards = AbilityUtils.filterListByType(game.getCardsIn(zones), sa.getParam("ShowCards"), sa)
+        elif sa.hasParam("AnySupportedCard"):
+            valid = sa.getParam("AnySupportedCard")
+            cardDb = StaticData.instance().getCommonCards()
+            if valid.startswith("Names:"):
+                cards = (cardDb.getUniqueByName(name.replace(";", ","))
+                         for name in valid[6:].split(","))
+            elif valid.lower() == "sorcery":
+                cards = (cp for cp in cardDb.streamUniqueCards()
+                         if PaperCardPredicates.fromRules(CardRulesPredicates.IS_SORCERY)(cp))
+            elif valid.lower() == "instant":
+                cards = (cp for cp in cardDb.streamUniqueCards()
+                         if PaperCardPredicates.fromRules(CardRulesPredicates.IS_INSTANT)(cp))
+            else:
+                # Could just return a stream of all cards, but that should probably be a specific option rather than a fallback.
+                # Could also just leave it null but there's currently nothing else that can happen that case.
+                raise NotImplementedError("Unknown parameter for AnySupportedCard: " + valid)
+            if sa.hasParam("RandomCopied"):
+                choice = CardCollection()
+                num = sa.getParamOrDefault("RandomNum", "1")
+                nCopied = AbilityUtils.calculateAmount(source, num, sa)
+                for cp in StreamUtil.random(nCopied)(cards):
+                    possibleCard = Card.fromPaperCard(cp, sa.getActivatingPlayer())
+                    if sa.getActivatingPlayer().isAI() and possibleCard.getRules() is not None and possibleCard.getRules().getAiHints().getRemAIDecks():
+                        continue
+                    # Need to temporarily set the Owner so the Game is set
+                    possibleCard.setOwner(sa.getActivatingPlayer())
+                    choice.add(possibleCard)
+                if sa.hasParam("ChoiceNum"):
+                    import sys
+                    print("Offering random spells to copy: " + str(choice), file=sys.stderr)
+                    choicenum = AbilityUtils.calculateAmount(source, sa.getParam("ChoiceNum"), sa)
+                    tgtCards = CardCollection(
+                        controller.getController().chooseCardsForEffect(choice, sa,
+                            str(source) + " - " + Localizer.getInstance().getMessage("lblChooseUpTo") + " " + Lang.nounWithNumeral(choicenum, "card"), 0, choicenum, True, None
+                        )
+                    )
+                else:
+                    tgtCards = choice
+                import sys
+                print("Copying random spell(s): " + str(tgtCards), file=sys.stderr)
+            else:
+                return
+        elif sa.hasParam("CopyFromChosenName"):
+            name = source.getNamedCard()
+            if name.strip() == "":
+                name = controller.getNamedCard()
+                if name.strip() == "":
+                    return
+            card = Card.fromPaperCard(StaticData.instance().getCommonCards().getUniqueByName(name), controller)
+            # so it gets added to stack
+            card.setCopiedPermanent(card)
+            card.setGamePieceType(GamePieceType.TOKEN)
+            card.setZone(controller.getZone(ZoneType.None))
+            tgtCards = CardCollection(card)
+        else:
+            tgtCards = CardCollection()
+            # filter only cards that didn't change zones
+            for c in self.getTargetCards(sa):
+                gameCard = game.getCardState(c, None)
+                if c.equalsWithGameTimestamp(gameCard):
+                    tgtCards.add(gameCard)
+                elif sa.hasParam("ZoneRegardless"):
+                    tgtCards.add(c)
+
+        if tgtCards.isEmpty():
+            return
+
+        if sa.hasParam("ValidSA"):
+            valid = sa.getParam("ValidSA").split(",")
+            invalid = [c for c in tgtCards if not IterableUtil.any(AbilityUtils.getBasicSpellsFromPlayEffect(c, controller), SpellAbilityPredicates.isValid(valid, controller, source, sa))]
+            if invalid:
+                tgtCards.removeAll(invalid)
+            if tgtCards.isEmpty():
+                return
+
+        amount = 1
+        if sa.hasParam("Amount"):
+            if sa.getParam("Amount") == "All":
+                amount = tgtCards.size()
+            else:
+                amount = AbilityUtils.calculateAmount(source, sa.getParam("Amount"), sa)
+
+        if hasTotalCMCLimit:
+            totalCMCLimit = AbilityUtils.calculateAmount(source, sa.getParam("WithTotalCMC"), sa)
+
+        if controlledByPlayer is not None:
+            controller.addController(controlledByTimeStamp, controlledByPlayer)
+
+        singleOption = tgtCards.size() == 1 and amount == 1 and optional
+        params = {} if hasTotalCMCLimit else None
+
+        moveParams = AbilityKey.newMap()
+        moveParams[AbilityKey.LastStateBattlefield] = sa.getLastStateBattlefield()
+        moveParams[AbilityKey.LastStateGraveyard] = sa.getLastStateGraveyard()
+
+        while not tgtCards.isEmpty() and amount > 0 and totalCMCLimit >= 0:
+            if hasTotalCMCLimit:
+                # filter out cards with mana value greater than limit
+                valid = ["Spell.cmcLE" + str(totalCMCLimit)]
+                invalid = [c for c in tgtCards if not IterableUtil.any(AbilityUtils.getBasicSpellsFromPlayEffect(c, controller), SpellAbilityPredicates.isValid(valid, controller, c, sa))]
+                if invalid:
+                    tgtCards.removeAll(invalid)
+                if tgtCards.isEmpty():
+                    break
+                params["CMCLimit"] = totalCMCLimit
+
+            controller.getController().tempShowCards(showCards)
+            tgtCard = controller.getController().chooseSingleEntityForEffect(tgtCards, sa, Localizer.getInstance().getMessage("lblSelectCardToPlay"), not singleOption and optional, params)
+            controller.getController().endTempShowCards()
+            if tgtCard is None:
+                break
+
+            wasFaceDown = False
+            if tgtCard.isFaceDown():
+                tgtCard.forceTurnFaceUp()
+                wasFaceDown = True
+
+            if sa.hasParam("ShowCardToActivator"):
+                game.getAction().revealTo(tgtCard, controller)
+            prompt = "lblDoYouWantPlayCardTransformed" if sa.hasParam("CastTransformed") else "lblDoYouWantPlayCard"
+            if singleOption and not controller.getController().confirmAction(sa, None, Localizer.getInstance().getMessage(prompt, tgtCard.getTranslatedName()), tgtCard, None):
+                if wasFaceDown:
+                    tgtCard.turnFaceDownNoUpdate()
+                    tgtCard.updateStateForView()
+                break
+
+            if not sa.hasParam("AllowRepeats"):
+                tgtCards.remove(tgtCard)
+
+            if sa.hasParam("CopyCard"):
+                original = tgtCard
+                zone = tgtCard.getZone()
+                tgtCard = Card.fromPaperCard(tgtCard.getPaperCard(), controller)
+
+                tgtCard.setGamePieceType(GamePieceType.TOKEN)
+                tgtCard.setZone(zone)
+                # to fix the CMC
+                tgtCard.setCopiedPermanent(original)
+                if zone is not None:
+                    zone.add(tgtCard)
+
+            state = CardStateName.Original
+
+            if sa.hasParam("CastTransformed"):
+                if not tgtCard.changeToState(CardStateName.Backside):
+                    # Failed to transform. In the future, we might need to just remove this option and continue
+                    amount -= 1
+                    import sys
+                    print("CastTransformed failed for '" + str(tgtCard) + "'.", file=sys.stderr)
+                    continue
+                state = CardStateName.Backside
+
+            sas = AbilityUtils.getSpellsFromPlayEffect(tgtCard, controller, state, not altCost)
+            if sa.hasParam("ValidSA"):
+                valid = sa.getParam("ValidSA").split(",")
+                sas[:] = [sp for sp in sas if sp.isValid(valid, controller, source, sa)]
+
+            if altCostManaCost:
+                sas[:] = [sp for sp in sas if not sp.getPayCosts().getCostMana().getMana().isNoCost()]
+
+            if hasTotalCMCLimit:
+                sas[:] = [s for s in sas if not (s.getPayCosts().getTotalMana().getCMC() > totalCMCLimit)]
+
+            if not sas:
+                continue
+
+            if sa.hasParam("CastFaceDown"):
+                # For Illusionary Mask effect
+                tgtSA = CardFactoryUtil.abilityCastFaceDown(tgtCard.getCurrentState(), False, "Morph")
+                tgtSA.setCastFromPlayEffect(True)
+            else:
+                tgtSA = controller.getController().getAbilityToPlay(tgtCard, sas)
+
+            # in case player canceled from choice dialog
+            if tgtSA is None:
+                if wasFaceDown:
+                    tgtCard.turnFaceDownNoUpdate()
+                    tgtCard.updateStateForView()
+                continue
+
+            triggerList = CardZoneTable(game.getLastStateBattlefield(), game.getLastStateGraveyard())
+            originZone = tgtCard.getZone()
+
+            # lands will be played
+            if tgtSA.isLandAbility():
+                tgtSA.resolve()
+                amount -= 1
+                if remember:
+                    source.addRemembered(tgtCard)
+                if imprint:
+                    source.addImprintedCard(tgtCard)
+                # Forget only if playing was successful
+                if forget:
+                    source.removeRemembered(tgtCard)
+
+                currentZone = game.getCardState(tgtCard).getZone()
+                if not originZone.equals(currentZone):
+                    triggerList.put(originZone.getZoneType(), currentZone.getZoneType(), game.getCardState(tgtCard))
+                triggerList.triggerChangesZoneAll(game, sa)
+
+                continue
+
+            tgtCMC = tgtSA.getPayCosts().getTotalMana().getCMC()
+
+            # illegal action, cancel early
+            if altCost and tgtSA.costHasManaX() and tgtSA.getPayCosts().getCostMana().getXMin() > 0:
+                continue
+
+            if sa.hasParam("WithoutManaCost"):
+                tgtSA = tgtSA.copyWithNoManaCost()
+            elif sa.hasParam("PlayCost"):
+                cost = sa.getParam("PlayCost")
+                if altCostManaCost:
+                    abCost = Cost(tgtSA.getCardState().getManaCost(), False)
+                elif cost == "SuspendCost":
+                    abCost = IterableUtil.find(tgtCard.getNonManaAbilities(), lambda s: s.isKeyword(Keyword.SUSPEND)).getPayCosts()
+                else:
+                    if "ConvertedManaCost" in cost:
+                        costcmc = str(tgtCard.getCMC())
+                        cost = cost.replace("ConvertedManaCost", costcmc)
+                    abCost = Cost(cost, False)
+
+                tgtSA = tgtSA.copyWithManaCostReplaced(tgtSA.getActivatingPlayer(), abCost)
+            elif tgtSA.getPayCosts().hasManaCost() and tgtSA.getPayCosts().getCostMana().getMana().isNoCost():
+                # unpayable
+                continue
+
+            if not optional:
+                # 118.8c
+                for cost in tgtSA.getPayCosts().getCostParts():
+                    if (isinstance(cost, CostDiscard) or isinstance(cost, CostReveal)) \
+                            and cost.getType() != "Card" and cost.getType() != "Random":
+                        optional = True
+                        break
+                if not optional:
+                    # TODO this doesn't work yet for cases where one choice would still be payable, e.g. Lightning Axe
+                    tgtSA.getPayCosts().setMandatory(True)
+
+            if sa.hasParam("PlayReduceCost"):
+                # for Kefnet only can reduce colorless cost
+                reduce = sa.getParam("PlayReduceCost")
+                tgtSA.putParam("ReduceCost", reduce)
+                if not StringUtils.isNumeric(reduce):
+                    tgtSA.setSVar(reduce, sa.getSVar(reduce))
+            if sa.hasParam("PlayRaiseCost"):
+                raise_ = sa.getParam("PlayRaiseCost")
+                tgtSA.putParam("RaiseCost", raise_)
+
+            if sa.isKeyword(Keyword.MADNESS):
+                tgtSA.setAlternativeCost(AlternativeCost.Madness)
+
+            if sa.hasParam("CastTransformed"):
+                tgtSA.putParam("CastTransformed", "True")
+
+            if sa.hasParam("ManaConversion"):
+                tgtSA.putParam("ManaConversion", sa.getParam("ManaConversion"))
+
+            if tgtSA.usesTargeting() and not optional:
+                tgtSA.getTargetRestrictions().setMandatory(True)
+
+            if sa.hasParam("Named"):
+                tgtSA.setName(sa.getName())
+
+            # can't be done later
+            if sa.hasParam("ReplaceGraveyard"):
+                if not sa.hasParam("ReplaceGraveyardValid") \
+                        or tgtSA.isValid(sa.getParam("ReplaceGraveyardValid").split(","), controller, source, sa):
+                    PlayEffect.addReplaceGraveyardEffect(tgtCard, source, sa, tgtSA, sa.getParam("ReplaceGraveyard"))
+
+            # For Illusionary Mask effect
+            if sa.hasParam("ReplaceIlluMask"):
+                self.addIllusionaryMaskReplace(tgtCard, sa)
+
+            # Add controlled by player to target SA so when the spell is resolving, the controller would be changed again
+            if controlledByPlayer is not None:
+                tgtSA.setControlledByPlayer(controlledByTimeStamp, controlledByPlayer)
+                controller.pushPaidForSA(tgtSA)
+                tgtSA.setManaCostBeingPaid(ManaCostBeingPaid(tgtSA.getPayCosts().getCostMana().getManaCostFor(tgtSA)))
+
+            if controller.getController().playSaFromPlayEffect(tgtSA):
+                played = tgtSA.getHostCard()
+                if remember:
+                    source.addRemembered(played)
+                if imprint:
+                    source.addImprintedCard(played)
+                # Forgot only if playing was successful
+                if sa.hasParam("ForgetRemembered"):
+                    source.clearRemembered()
+                if forget:
+                    source.removeRemembered(tgtCard)
+
+                currentZone = game.getCardState(tgtCard).getZone()
+                if not currentZone.equals(originZone):
+                    # fix Garth One-Eye activated ability and the likes..
+                    triggerList.put(None if originZone is None else originZone.getZoneType(), currentZone.getZoneType(), game.getCardState(tgtCard))
+                triggerList.triggerChangesZoneAll(game, sa)
+
+            amount -= 1
+            totalCMCLimit -= tgtCMC
+
+        # Remove controlled by player if any
+        if controlledByPlayer is not None:
+            controller.removeController(controlledByTimeStamp)
+            controller.popPaidForSA()
+
+    @staticmethod
+    def addReplaceGraveyardEffect(c, hostCard, sa, tgtSA, zone):
+        game = hostCard.getGame()
+        controller = sa.getActivatingPlayer()
+        name = hostCard.getDisplayName() + "'s Effect"
+        image = hostCard.getImageKey()
+        eff = SpellAbilityEffect.createEffect(sa, controller, name, image)
+
+        eff.addRemembered(c)
+
+        repeffstr = "Event$ Moved | ValidCard$ Card.IsRemembered " + \
+            "| Origin$ Stack | Destination$ Graveyard " + \
+            "| Description$ If that card would be put into your graveyard this turn, exile it instead."
+        effect = "DB$ ChangeZone | Defined$ ReplacedCard | Origin$ Stack | Destination$ " + zone
+
+        re = ReplacementHandler.parseReplacement(repeffstr, eff, True)
+        re.setLayer(ReplacementLayer.Other)
+
+        re.setOverridingAbility(AbilityFactory.getAbility(effect, eff))
+        eff.addReplacementEffect(re)
+
+        SpellAbilityEffect.addExileOnMovedTrigger(eff, "Stack")
+
+        # Copy text changes
+        if sa.isIntrinsic():
+            eff.copyChangedTextFrom(hostCard)
+
+        game.getEndOfTurn().addUntil(lambda: game.getAction().exileEffect(eff))
+
+        tgtSA.addRollbackEffect(eff)
+
+        game.getAction().moveToCommand(eff, sa)
+
+    def addIllusionaryMaskReplace(self, c, sa):
+        hostCard = sa.getHostCard()
+        game = hostCard.getGame()
+        controller = sa.getActivatingPlayer()
+        name = str(hostCard) + "'s Effect"
+        image = hostCard.getImageKey()
+        eff = SpellAbilityEffect.createEffect(sa, controller, name, image)
+
+        eff.addRemembered(c)
+
+        repeffstrs = [
+            "Event$ AssignDealDamage | ValidCard$ Card.IsRemembered+faceDown "
+            "| Description$ If the creature that spell becomes as it resolves has not been turned face up"
+            " and would assign or deal damage, be dealt damage, or become tapped, instead it's turned face up"
+            " and assigns or deals damage, is dealt damage, or becomes tapped.",
+            "Event$ DealtDamage | ValidCard$ Card.IsRemembered+faceDown",
+            "Event$ Tap | ValidCard$ Card.IsRemembered+faceDown"
+        ]
+        effect = "DB$ SetState | Defined$ ReplacedCard | Mode$ TurnFaceUp"
+
+        for repStr in repeffstrs:
+            re = ReplacementHandler.parseReplacement(repStr, eff, True)
+            re.putParam("ReplacementResult", "Updated")
+            re.setLayer(ReplacementLayer.Other)
+            re.setOverridingAbility(AbilityFactory.getAbility(effect, eff))
+            eff.addReplacementEffect(re)
+
+        SpellAbilityEffect.addExileOnMovedTrigger(eff, "Battlefield")
+        SpellAbilityEffect.addExileOnCounteredTrigger(eff)
+
+        game.getAction().moveToCommand(eff, sa)
+```

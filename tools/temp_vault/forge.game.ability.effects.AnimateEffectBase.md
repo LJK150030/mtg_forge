@@ -78,7 +78,7 @@ classDiagram
 
 ## Design Description
 
-AnimateEffectBase is an abstract `SpellAbilityEffect` subclass that centralizes the shared logic for "animate" effects—those that mutate a `Card`'s defining characteristics such as power/toughness, types, colors, keywords, and granted abilities, triggers, replacement effects, and static abilities. Concrete effects (e.g. animating a land into a creature) inherit this base and drive it entirely through `SpellAbility` parameters plus a timestamp that scopes each change.
+AnimateEffectBase is an abstract `SpellAbilityEffect` subclass that centralizes the shared logic for "animate" effectsâ€”those that mutate a `Card`'s defining characteristics such as power/toughness, types, colors, keywords, and granted abilities, triggers, replacement effects, and static abilities. Concrete effects (e.g. animating a land into a creature) inherit this base and drive it entirely through `SpellAbility` parameters plus a timestamp that scopes each change.
 
 Its static `doAnimate` inspects the spell's parameters to decide which characteristic-defining changes to apply, distinguishing ordinary timestamped changes from `"Perpetual"` ones persisted via the `Perpetual*` change objects. It assembles a single `GameCommand` that reverses every modification through `doUnanimate`, then registers that command as an until-, faceup-, or revert-cost-triggered cleanup so the effect's stated duration is honored. This timestamp-keyed apply/revert pairing, alongside optional remembering and `GameEventCardStatsChanged` firing, reflects a deliberate design for layered, cleanly reversible card-state modification.
 
@@ -358,4 +358,217 @@ public abstract class AnimateEffectBase extends SpellAbilityEffect {
         c.removeHiddenExtrinsicKeywords(timestamp, 0);
     }
 }
+```
+
+## Python
+`forge/game/ability/effects/AnimateEffectBase.py`
+
+```python
+from forge.GameCommand import GameCommand
+from forge.card.CardType import CardType
+from forge.card.ColorSet import ColorSet
+from forge.card.RemoveType import RemoveType
+from forge.card.mana.ManaCost import ManaCost
+from forge.game.CardTraitBase import CardTraitBase
+from forge.game.Game import Game
+from forge.game.ability.AbilityFactory import AbilityFactory
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.card.CardTraitChanges import CardTraitChanges
+from forge.game.card.ICardTraitChanges import ICardTraitChanges
+from forge.game.card.perpetual.PerpetualAbilities import PerpetualAbilities
+from forge.game.card.perpetual.PerpetualColors import PerpetualColors
+from forge.game.card.perpetual.PerpetualIncorporate import PerpetualIncorporate
+from forge.game.card.perpetual.PerpetualKeywords import PerpetualKeywords
+from forge.game.card.perpetual.PerpetualManaCost import PerpetualManaCost
+from forge.game.card.perpetual.PerpetualNewPT import PerpetualNewPT
+from forge.game.card.perpetual.PerpetualTypes import PerpetualTypes
+from forge.game.event.GameEventCardStatsChanged import GameEventCardStatsChanged
+from forge.game.keyword.Keyword import Keyword
+from forge.game.replacement.ReplacementEffect import ReplacementEffect
+from forge.game.replacement.ReplacementHandler import ReplacementHandler
+from forge.game.spellability.AbilityStatic import AbilityStatic
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.staticability.StaticAbility import StaticAbility
+from forge.game.trigger.Trigger import Trigger
+from forge.game.trigger.TriggerHandler import TriggerHandler
+
+
+class AnimateEffectBase(SpellAbilityEffect):
+    @staticmethod
+    def doAnimate(c: Card, sa: SpellAbility, power, toughness,
+            addType: CardType, removeType: CardType, colors: ColorSet,
+            keywords: list[str], removeKeywords: list[str], hiddenKeywords: list[str],
+            abilities: list[str], triggers: list[str], replacements: list[str], stAbs: list[str],
+            timestamp: int, duration: str) -> None:
+        source = sa.getHostCard()
+        game = source.getGame()
+        perpetual = "Perpetual" == duration
+
+        addAllCreatureTypes = sa.hasParam("AddAllCreatureTypes")
+
+        remove = set()
+        if sa.hasParam("RemoveSuperTypes"):
+            remove.add(RemoveType.SuperTypes)
+        if sa.hasParam("RemoveCardTypes"):
+            remove.add(RemoveType.CardTypes)
+        if sa.hasParam("RemoveSubTypes"):
+            remove.add(RemoveType.SubTypes)
+        if sa.hasParam("RemoveLandTypes"):
+            remove.add(RemoveType.LandTypes)
+        if sa.hasParam("RemoveCreatureTypes"):
+            remove.add(RemoveType.CreatureTypes)
+        if sa.hasParam("RemoveArtifactTypes"):
+            remove.add(RemoveType.ArtifactTypes)
+        if sa.hasParam("RemoveEnchantmentTypes"):
+            remove.add(RemoveType.EnchantmentTypes)
+
+        removeAbilities = None
+        removeAllKeywords = False
+        if sa.hasParam("RemoveAllAbilities"):
+            removeAbilities = lambda e: True
+            removeAllKeywords = True
+        elif sa.hasParam("RemoveNonManaAbilities"):
+            removeAbilities = lambda e: not e.isManaAbility()
+            removeAllKeywords = True
+        elif sa.hasParam("RemoveThisAbility"):
+            removeAbilities = lambda e: sa.getOriginalAbility().equals(e)
+
+        if sa.hasParam("RememberAnimated"):
+            source.addRemembered(c)
+
+        wasCreature = c.isCreature()
+
+        # Alchemy "incorporate" cost
+        if sa.hasParam("Incorporate"):
+            incMCost = ManaCost(sa.getParam("Incorporate"))
+            p = PerpetualIncorporate(timestamp, incMCost)
+            c.addPerpetual(p)
+            p.applyEffect(c)
+        if sa.hasParam("ManaCost"):
+            manaCost = ManaCost(sa.getParam("ManaCost"))
+            if perpetual:
+                p = PerpetualManaCost(timestamp, manaCost)
+                c.addPerpetual(p)
+                p.applyEffect(c)
+
+        if not addType.isEmpty() or not removeType.isEmpty() or addAllCreatureTypes or len(remove) != 0:
+            if perpetual:
+                c.addPerpetual(PerpetualTypes(timestamp, addType, removeType, remove))
+            c.addChangedCardTypes(addType, removeType, addAllCreatureTypes, remove, timestamp, 0, True, False)
+
+        if len(keywords) != 0 or len(removeKeywords) != 0 or removeAllKeywords:
+            if perpetual:
+                c.addPerpetual(PerpetualKeywords(timestamp, keywords, removeKeywords, removeAllKeywords))
+            c.addChangedCardKeywords(keywords, removeKeywords, removeAllKeywords, timestamp, None)
+
+        # do this after changing types in case it wasn't a creature before
+        if power is not None or toughness is not None:
+            if perpetual:
+                c.addPerpetual(PerpetualNewPT(timestamp, power, toughness))
+            c.addNewPT(power, toughness, timestamp, 0)
+        elif not wasCreature and c.isCreature():
+            c.updatePTforView()
+
+        if sa.hasParam("CantHaveKeyword"):
+            c.addCantHaveKeyword(timestamp, Keyword.setValueOf(sa.getParam("CantHaveKeyword")))
+
+        if len(hiddenKeywords) != 0:
+            c.addHiddenExtrinsicKeywords(timestamp, 0, hiddenKeywords)
+
+        if colors is not None:
+            overwrite = sa.hasParam("OverwriteColors")
+            if perpetual:
+                c.addPerpetual(PerpetualColors(timestamp, colors, overwrite))
+            c.addColor(colors, not overwrite, timestamp, None)
+
+        if sa.hasParam("LeaveBattlefield"):
+            AnimateEffectBase.addLeaveBattlefieldReplacement(c, sa, sa.getParam("LeaveBattlefield"))
+
+        # give abilities
+        addedAbilities = []
+        for s in abilities:
+            sSA = AbilityFactory.getAbility(c, s, sa)
+            addedAbilities.append(sSA)
+
+            if sa.hasParam("TransferActivator"):
+                sSA.getRestrictions().setActivator("Player.PlayerUID_" + sa.getActivatingPlayer().getId())
+
+        # Grant triggers
+        addedTriggers = []
+        for s in triggers:
+            addedTriggers.append(TriggerHandler.parseTrigger(AbilityUtils.getSVar(sa, s), c, False, sa))
+
+        # give replacement effects
+        addedReplacements = []
+        for s in replacements:
+            addedReplacements.append(ReplacementHandler.parseReplacement(AbilityUtils.getSVar(sa, s), c, False, sa))
+
+        # give static abilities (should only be used by cards to give
+        # itself a static ability)
+        addedStaticAbilities = []
+        for s in stAbs:
+            addedStaticAbilities.append(StaticAbility.create(AbilityUtils.getSVar(sa, s), c, sa.getCardState(), False))
+
+        class _Unanimate(GameCommand):
+            serialVersionUID = -5861759814760561373
+
+            def run(self):
+                AnimateEffectBase.doUnanimate(c, timestamp)
+
+                c.removeChangedSVars(timestamp, 0)
+                c.removeChangedName(timestamp, 0)
+                c.updateStateForView()
+                c.updatePTforView()
+
+                game.fireEvent(GameEventCardStatsChanged(c))
+
+        unanimate = _Unanimate()
+
+        if sa.hasParam("RevertCost"):
+            cost = ManaCost(sa.getParam("RevertCost"))
+            desc = sa.getStackDescription()
+
+            class _RevertSA(AbilityStatic):
+                def resolve(self):
+                    unanimate.run()
+
+                def getDescription(self):
+                    return str(cost) + ": End Effect: " + desc
+
+            revertSA = _RevertSA(c, cost)
+            addedAbilities.append(revertSA)
+
+        # after unanimate to add RevertCost
+        if (removeAbilities is not None
+                or len(addedAbilities) != 0 or len(addedTriggers) != 0
+                or len(addedReplacements) != 0 or len(addedStaticAbilities) != 0):
+            changes = c.addChangedCardTraits(addedAbilities, addedTriggers, addedReplacements,
+                addedStaticAbilities, removeAbilities, timestamp, 0)
+            if perpetual:
+                c.addPerpetual(PerpetualAbilities(timestamp, changes))
+                if isinstance(changes, CardTraitChanges) and changes.containsCostChange():
+                    c.calculatePerpetualAdjustedManaCost()
+
+        if "Permanent" != duration and not perpetual:
+            if "UntilAnimatedFaceup" == duration:
+                c.addFaceupCommand(unanimate)
+            else:
+                AnimateEffectBase.addUntilCommand(sa, unanimate)
+
+    @staticmethod
+    def doUnanimate(c: Card, timestamp: int) -> None:
+        c.removeNewPT(timestamp, 0)
+
+        c.removeChangedCardKeywords(timestamp, 0)
+
+        c.removeChangedCardTypes(timestamp, 0)
+        c.removeColor(timestamp, 0)
+
+        c.removeChangedCardTraits(timestamp, 0)
+
+        c.removeCantHaveKeyword(timestamp)
+
+        c.removeHiddenExtrinsicKeywords(timestamp, 0)
 ```

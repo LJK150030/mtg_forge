@@ -46,7 +46,7 @@ classDiagram
 
 MutateAi supplies the AI decision logic for casting Mutate spells, concentrating the engine's heuristics for *when* and *how* a computer player should mutate a creature. As a concrete subclass of `SpellAbilityAi`, it overrides three hooks: `canPlay` selects a target by gathering the AI's creatures, discarding ones that are useless to mutate onto (Defenders, can't-attack/block creatures, otherwise dead weight), and committing the best survivor via `ComputerUtilCard.getBestCreatureAI`; `chooseSingleCard` decides which card ends up on top of the merged pile, favoring the highest base power or toughness; and `confirmAction` unconditionally accepts.
 
-It collaborates with the game model (`Card`, `CardCollectionView`, `Player`, `SpellAbility`) and returns scored `AiAbilityDecision` results to the AI framework. The code is deliberately conservative and self-documented as provisional—TODO comments flag the rudimentary evaluation and invite context-aware improvements—reflecting a working-but-minimal placeholder rather than fully tuned strategy.
+It collaborates with the game model (`Card`, `CardCollectionView`, `Player`, `SpellAbility`) and returns scored `AiAbilityDecision` results to the AI framework. The code is deliberately conservative and self-documented as provisionalâ€”TODO comments flag the rudimentary evaluation and invite context-aware improvementsâ€”reflecting a working-but-minimal placeholder rather than fully tuned strategy.
 
 ## Source
 `forge-ai/src/main/java/forge/ai/ability/MutateAi.java`
@@ -115,4 +115,64 @@ public class MutateAi extends SpellAbilityAi {
         return true;
     }
 }
+```
+
+## Python
+`forge/ai/ability/MutateAi.py`
+
+```python
+from forge.ai.SpellAbilityAi import SpellAbilityAi
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.ai.ComputerUtil import ComputerUtil
+from forge.ai.ComputerUtilCard import ComputerUtilCard
+from forge.game.card.Card import Card
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CardPredicates import CardPredicates
+from forge.game.keyword.Keyword import Keyword
+from forge.game.player.Player import Player
+from forge.game.player.PlayerActionConfirmMode import PlayerActionConfirmMode
+from forge.game.spellability.SpellAbility import SpellAbility
+
+from typing import Iterable, Map
+
+
+class MutateAi(SpellAbilityAi):
+    def canPlay(self, aiPlayer: Player, sa: SpellAbility) -> AiAbilityDecision:
+        mutateTgts = CardLists.getTargetableCards(aiPlayer.getCreaturesInPlay(), sa)
+        mutateTgts = ComputerUtil.getSafeTargets(aiPlayer, sa, mutateTgts)
+
+        # Filter out some abilities that are useless
+        # TODO: add other stuff useless for Mutate here
+        mutateTgts = CardLists.filter(mutateTgts, lambda card: not (
+                CardPredicates.hasKeyword(Keyword.DEFENDER).test(card)
+                or CardPredicates.hasKeyword("CARDNAME can't attack.").test(card)
+                or CardPredicates.hasKeyword("CARDNAME can't block.").test(card)
+                or ComputerUtilCard.isUselessCreature(aiPlayer, card)
+        ))
+
+        if mutateTgts.isEmpty():
+            return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+        # Choose the best target
+        # TODO: maybe, instead of the standard evaluator, this could inspect the abilities and decide
+        # which are better in context, but that's a bit complicated for the time being (not sure if necessary?).
+        mutateTgt = ComputerUtilCard.getBestCreatureAI(mutateTgts)
+        sa.getTargets().add(mutateTgt)
+
+        return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+    def chooseSingleCard(self, ai: Player, sa: SpellAbility, options: Iterable[Card], isOptional: bool, targetedPlayer: Player, params: Map[str, object]) -> Card:
+        # Decide which card goes on top here. Pretty rudimentary, feel free to improve.
+        choice = None
+
+        for c in options:
+            if choice is None or c.getBasePower() > choice.getBasePower() or c.getBaseToughness() > choice.getBaseToughness():
+                choice = c
+
+        return choice
+
+    def confirmAction(self, player: Player, sa: SpellAbility, mode: PlayerActionConfirmMode, message: str, params: Map[str, object]) -> bool:
+        return True
 ```

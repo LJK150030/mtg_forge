@@ -39,6 +39,12 @@ classDiagram
     }
 ```
 
+## Design Description
+
+`Aggregates` is a stateless utility class in `forge.util` that provides a library of generic static helper methods for computing summary values over collections. Its responsibilities cluster around three concerns: extremes and reductions (`max`, `min`, `sum`, `itemWithMax`/`itemWithMin`, `listWithMin`), randomized selection (`random`, `removeRandom`, `randomInt`, and reservoir sampling for fixed-count draws), and grouping or deduplication (`uniqueByLast`, `groupSumBy`, `firstFieldEquals`). Most methods accept a `Function` value-accessor, decoupling the aggregation logic from any particular domain type so callers across the engine can reuse them on arbitrary `Iterable` sources.
+
+As a final utility holder it declares no supertype or interfaces, instead collaborating with Guava's `Lists`, the engine's `MyRandom` for deterministic-seedable randomness, `StreamUtil`, and Java streams. The design favors null-tolerant, defensive iteration (guarding null sources and empty collections) and single-pass algorithmsâ€”notably reservoir sampling to draw random subsets without materializing the whole sourceâ€”reflecting an intent toward broadly reusable, allocation-conscious collection operations.
+
 ## Source
 `forge-core/src/main/java/forge/util/Aggregates.java`
 
@@ -283,4 +289,205 @@ public class Aggregates {
         return StreamUtil.stream(source).collect(Collectors.groupingBy(kv -> fnGetField.apply(kv.getKey()), Collectors.summingInt(e -> e.getValue()))).entrySet();
     }
 }
+```
+
+## Python
+`forge/util/Aggregates.py`
+
+```python
+from forge.util.MyRandom import MyRandom
+from forge.util.StreamUtil import StreamUtil
+
+from typing import Callable, Iterable, List, TypeVar
+
+T = TypeVar("T")
+K = TypeVar("K")
+U = TypeVar("U")
+L = TypeVar("L")
+TItem = TypeVar("TItem")
+TField = TypeVar("TField")
+
+INT_MIN = -2147483648
+INT_MAX = 2147483647
+
+
+# TODO: Write javadoc for this type.
+class Aggregates:
+
+    # Returns the value matching predicate conditions with the maximum value of whatever valueAccessor returns.
+    @staticmethod
+    def max(source, valueAccessor=None):
+        if source is None:
+            return None
+        max = INT_MIN
+        if valueAccessor is not None:
+            for c in source:
+                value = valueAccessor(c)
+                if value > max:
+                    max = value
+        else:
+            for value in source:
+                if value > max:
+                    max = value
+        return max
+
+    @staticmethod
+    def min(source, valueAccessor=None):
+        if source is None:
+            return None
+        if valueAccessor is not None:
+            max = INT_MAX
+            for c in source:
+                value = valueAccessor(c)
+                if value < max:
+                    max = value
+            return max
+        else:
+            min = INT_MAX
+            for value in source:
+                if value < min:
+                    min = value
+            return min
+
+    @staticmethod
+    def itemWithMax(source, valueAccessor):
+        if source is None:
+            return None
+        max = INT_MIN
+        result = None
+        for c in source:
+            value = valueAccessor(c)
+            if value > max:
+                max = value
+                result = c
+        return result
+
+    @staticmethod
+    def listWithMin(source, valueAccessor):
+        if source is None:
+            return None
+        min = INT_MAX
+        result = []
+        for c in source:
+            value = valueAccessor(c)
+            if value == min:
+                result.append(c)
+            if value < min:
+                min = value
+                result.clear()
+                result.append(c)
+        return result
+
+    @staticmethod
+    def sum(source, valueAccessor=None):
+        result = 0
+        if source is not None:
+            if valueAccessor is not None:
+                for c in source:
+                    result += valueAccessor(c)
+            else:
+                for value in source:
+                    result += value
+        return result
+
+    @staticmethod
+    def random(source, count=None, list=None):
+        if count is None:
+            # random(T[] source) / random(Iterable<T> source)
+            if source is None:
+                return None
+
+            if isinstance(source, __import__("builtins").list):
+                src = source
+                length = len(src)
+                if length == 0:
+                    return None
+                elif length == 1:
+                    return src[0]
+                else:
+                    return src[MyRandom.getRandom().nextInt(length)]
+
+            candidate = None
+            lowest = INT_MAX
+            for item in source:
+                next = MyRandom.getRandom().nextInt()
+                if next < lowest:
+                    lowest = next
+                    candidate = item
+            return candidate
+
+        # random(Iterable<T> source, int count[, L list])
+        if list is None:
+            list = []
+        # Using Reservoir Sampling to grab X random values from source
+        i = 0
+        for item in source:
+            i += 1
+            if i <= count:
+                # Add the first count items into the result list
+                list.append(item)
+            else:
+                # Progressively reduce odds of item > count to get added into the reservoir
+                j = MyRandom.getRandom().nextInt(i)
+                if j < count:
+                    list[j] = item
+        return list
+
+    @staticmethod
+    def removeRandom(source):
+        if source is None or len(source) == 0:
+            return None
+
+        if len(source) > 1:
+            index = MyRandom.getRandom().nextInt(len(source))
+        else:
+            index = 0
+        return source.pop(index)
+
+    @staticmethod
+    def randomInt(min, max):
+        return MyRandom.getRandom().nextInt(max - min + 1) + min
+
+    @staticmethod
+    def uniqueByLast(source, fnUniqueKey):  # this might be exotic
+        uniques = {}
+        for c in source:
+            uniques[fnUniqueKey(c)] = c
+        return list(uniques.values())
+
+    @staticmethod
+    def itemWithMin(source, valueAccessor):
+        if source is None:
+            return None
+        max = INT_MAX
+        result = None
+        for c in source:
+            value = valueAccessor(c)
+            if value < max:
+                max = value
+                result = c
+        return result
+
+    @staticmethod
+    def firstFieldEquals(source, valueAccessor, valueEquals):
+        if source is None:
+            return None
+
+        if valueEquals is None:
+            for c in source:
+                if valueAccessor(c) is None:
+                    return c
+        else:
+            for c in source:
+                if valueEquals == valueAccessor(c):
+                    return c
+        return None
+
+    @staticmethod
+    def groupSumBy(source, fnGetField):
+        result = {}
+        for kv in StreamUtil.stream(source):
+            key = fnGetField(kv.getKey())
+            result[key] = result.get(key, 0) + kv.getValue()
+        return result.items()
 ```

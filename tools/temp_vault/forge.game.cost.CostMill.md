@@ -52,7 +52,7 @@ classDiagram
 
 ## Design Description
 
-CostMill models the Magic-specific "Mill" cost — paying for a spell or ability by moving a number of cards from the top of a player's library into their graveyard. As a concrete subclass of `CostPart`, it slots into Forge's composite cost framework: it parses an amount string at construction, reports affordability via `canPay` (requiring more cards in the Library zone than the amount), renders a human-readable label through `toString`, and applies the payment in `payAsDecided` by delegating to `Game.getAction().mill`. It collaborates with `Player`/`PlayerCollection` to locate cards, `AbilityKey` and `CardZoneTable` to record and trigger the resulting zone changes, and `PaymentDecision` to carry the chosen count.
+CostMill models the Magic-specific "Mill" cost â€” paying for a spell or ability by moving a number of cards from the top of a player's library into their graveyard. As a concrete subclass of `CostPart`, it slots into Forge's composite cost framework: it parses an amount string at construction, reports affordability via `canPay` (requiring more cards in the Library zone than the amount), renders a human-readable label through `toString`, and applies the payment in `payAsDecided` by delegating to `Game.getAction().mill`. It collaborates with `Player`/`PlayerCollection` to locate cards, `AbilityKey` and `CardZoneTable` to record and trigger the resulting zone changes, and `PaymentDecision` to carry the chosen count.
 
 Notable design intent: `paymentOrder` returns a high value (20) so this information-revealing cost is paid late, anticipating undoable costs, and `accept` implements the visitor pattern over `ICostVisitor`, letting AI and rules logic process cost types uniformly without instanceof checks.
 
@@ -169,4 +169,70 @@ public class CostMill extends CostPart {
     }
 
 }
+```
+
+## Python
+`forge/game/cost/CostMill.py`
+
+```python
+from forge.game.cost.CostPart import CostPart
+from forge.game.Game import Game
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.CardZoneTable import CardZoneTable
+from forge.game.cost.ICostVisitor import ICostVisitor
+from forge.game.cost.PaymentDecision import PaymentDecision
+from forge.game.player.Player import Player
+from forge.game.player.PlayerCollection import PlayerCollection
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+
+
+class CostMill(CostPart):
+    """
+    This is for the "Mill" Cost. Putting cards from the top of your library into
+    your graveyard as a cost. This Cost doesn't appear on very many cards, but
+    might appear in more in the future. This will show up in the form of Mill<1>
+    """
+
+    serialVersionUID = 1
+
+    def __init__(self, amount: str):
+        self.setAmount(amount)
+
+    def paymentOrder(self) -> int:
+        # In a world where costs are fully undoable, revealing unknown information should be done last.
+        return 20
+
+    def canPay(self, ability: SpellAbility, payer: Player, effect: bool) -> bool:
+        return self.getAbilityAmount(ability) < payer.getZone(ZoneType.Library).size()
+
+    def toString(self) -> str:
+        sb = []
+        i = self.convertAmount()
+        sb.append("Mill ")
+
+        if i is not None:
+            sb.append(str(i))
+        else:
+            sb.append(self.getAmount())
+
+        sb.append(" card")
+        if i is None or i > 1:
+            sb.append("s")
+
+        return "".join(sb)
+
+    def __str__(self) -> str:
+        return self.toString()
+
+    def payAsDecided(self, ai: Player, decision: PaymentDecision, ability: SpellAbility, effect: bool) -> bool:
+        game = ai.getGame()
+        moveParams = AbilityKey.newMap()
+        zoneMovements = AbilityKey.addCardZoneTableParams(moveParams, ability)
+        ability.getPaidHash().put("Milled", True, game.getAction().mill(PlayerCollection(ai), decision.c, ZoneType.Graveyard, ability, moveParams))
+        zoneMovements.triggerChangesZoneAll(game, ability)
+        return True
+
+    def accept(self, visitor: ICostVisitor):
+        return visitor.visit(self)
 ```

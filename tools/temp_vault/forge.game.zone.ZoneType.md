@@ -69,6 +69,12 @@ classDiagram
 **Uses:**
 - [[forge.trackable.TrackableProperty|TrackableProperty]]
 
+## Design Description
+
+Zone-related semantics in Magic: The Gathering, enumerating every game zone (Hand, Library, Graveyard, Battlefield, etc.) and centralizing the rules that distinguish them. Each constant carries a hidden-information flag, a localization label, and an optional TrackableProperty, so the enum encapsulates both visibility semantics and the binding to the network-trackable view layer. It implements ITranslatable to expose localized display names and uses TrackableProperty to map a zone to the field holding its cards on PlayerView.
+
+The class concentrates zone-classification logic through static EnumSets (deck zones, command-zone members, ordered zones, static-ability sources) and convenience predicates like isHidden, isDeck, and isPartOfCommandZone. Lenient string-parsing helpers (smartValueOf, listValueOf) tolerate case differences and the special "All" token, reflecting its role as a parsing target for card-script origin definitions.
+
 ## Source
 `forge-game/src/main/java/forge/game/zone/ZoneType.java`
 
@@ -210,4 +216,131 @@ public enum ZoneType implements ITranslatable {
         return !isHidden(origin);
     }
 }
+```
+
+## Python
+`forge/game/zone/ZoneType.py`
+
+```python
+from forge.trackable.TrackableProperty import TrackableProperty
+from forge.util.ITranslatable import ITranslatable
+from forge.util.Localizer import Localizer
+
+from enum import Enum
+from typing import List, Optional
+
+
+class ZoneType(ITranslatable, Enum):
+    """The Enum Zone."""
+
+    Hand = (True, "lblHandZone", TrackableProperty.Hand)
+    Library = (True, "lblLibraryZone", TrackableProperty.Library)
+    Graveyard = (False, "lblGraveyardZone", TrackableProperty.Graveyard)
+    Battlefield = (False, "lblBattlefieldZone", TrackableProperty.Battlefield)
+    Exile = (False, "lblExileZone", TrackableProperty.Exile)
+    Flashback = (False, "lblFlashbackZone", TrackableProperty.Flashback)
+    Command = (False, "lblCommandZone", TrackableProperty.Command)
+    Stack = (False, "lblStackZone")
+    Sideboard = (True, "lblSideboardZone", TrackableProperty.Sideboard)
+    Ante = (False, "lblAnteZone", TrackableProperty.Ante)
+    Merged = (False, "lblBattlefieldZone")
+    SchemeDeck = (True, "lblSchemeDeckZone", TrackableProperty.SchemeDeck)
+    PlanarDeck = (True, "lblPlanarDeckZone", TrackableProperty.PlanarDeck)
+    AttractionDeck = (True, "lblAttractionDeckZone", TrackableProperty.AttractionDeck)
+    Junkyard = (False, "lblJunkyardZone", TrackableProperty.Junkyard)
+    ContraptionDeck = (True, "lblContraptionDeckZone", TrackableProperty.ContraptionDeck)
+    # Scrapyard is like the Junkyard but for contraptions; just going to recycle the Junkyard for this.
+    Subgame = (True, "lblSubgameZone")
+    # ExtraHand is used for Backup Plan for temporary extra hands
+    ExtraHand = (True, "lblHandZone")
+    None_ = (True, "lblNoneZone")
+
+    def __init__(self, holdsHidden: bool, label: str, trackableProperty: Optional[TrackableProperty] = None):
+        self.holdsHiddenInfo = holdsHidden
+        self.label = label
+        self.trackableProperty = trackableProperty
+
+    def getTrackableProperty(self) -> TrackableProperty:
+        """Returns the TrackableProperty that holds this zone's cards on PlayerView, or null."""
+        return self.trackableProperty
+
+    @staticmethod
+    def smartValueOf(value: str) -> "ZoneType":
+        if value is None:
+            return None
+        if "All" == value:
+            return None
+        valToCompate = value.strip()
+        for v in ZoneType.values():
+            if v.name().lower() == valToCompate.lower():
+                return v
+        raise ValueError("No element named " + value + " in enum Zone")
+
+    @staticmethod
+    def listValueOf(values: str) -> List["ZoneType"]:
+        if "All" == values:
+            return [ZoneType.Battlefield, ZoneType.Hand, ZoneType.Graveyard, ZoneType.Exile,
+                    ZoneType.Stack, ZoneType.Library, ZoneType.Command]
+        import re
+        result: List[ZoneType] = []
+        for s in re.split("[, ]+", values):
+            zt = ZoneType.smartValueOf(s)
+            if zt is not None:
+                result.append(zt)
+        return result
+
+    def isHidden(self) -> bool:
+        return self.holdsHiddenInfo
+
+    def isKnown(self) -> bool:
+        return not self.holdsHiddenInfo
+
+    def isPartOfCommandZone(self) -> bool:
+        return self in ZoneType.PART_OF_COMMAND_ZONE
+
+    def isDeck(self) -> bool:
+        """
+        Indicates that this zone behaves as a deck - an ordered pile of face down cards
+        such as the Library or Planar Deck.
+        """
+        return self in ZoneType.DECK_ZONES
+
+    def getName(self) -> str:
+        return self.name()
+
+    def getTranslatedName(self) -> str:
+        return Localizer.getInstance().getMessage(self.label)
+
+    @staticmethod
+    def isHidden(origin: str) -> bool:
+        zone = ZoneType.listValueOf(origin)
+
+        if len(zone) == 0:
+            return True
+
+        for z in zone:
+            if z.isHidden():
+                return True
+        return False
+
+    @staticmethod
+    def isKnown(origin: str) -> bool:
+        return not ZoneType.isHidden(origin)
+
+
+ZoneType.STATIC_ABILITIES_SOURCE_ZONES = frozenset({
+    ZoneType.Battlefield, ZoneType.Graveyard, ZoneType.Exile, ZoneType.Command, ZoneType.Stack  # , Hand
+})
+ZoneType.PART_OF_COMMAND_ZONE = frozenset({
+    ZoneType.Command, ZoneType.SchemeDeck, ZoneType.PlanarDeck, ZoneType.AttractionDeck,
+    ZoneType.ContraptionDeck, ZoneType.Junkyard
+})
+ZoneType.DECK_ZONES = frozenset({
+    ZoneType.Library, ZoneType.SchemeDeck, ZoneType.PlanarDeck, ZoneType.AttractionDeck,
+    ZoneType.ContraptionDeck
+})
+ZoneType.ORDERED_ZONES = frozenset({
+    ZoneType.Library, ZoneType.SchemeDeck, ZoneType.PlanarDeck, ZoneType.AttractionDeck,
+    ZoneType.ContraptionDeck, ZoneType.Hand, ZoneType.Graveyard, ZoneType.Stack
+})
 ```

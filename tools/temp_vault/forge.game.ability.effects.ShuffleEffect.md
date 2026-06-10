@@ -35,7 +35,7 @@ classDiagram
 
 ## Design Description
 
-ShuffleEffect implements the resolution logic for spell and ability effects that shuffle one or more players' libraries. As a concrete subclass of `SpellAbilityEffect`, it overrides `resolve` to carry out the game action and `getStackDescription` to produce the human-readable stack text. During resolution it iterates over the effect's target players, skips any no longer in the game, and—when the effect is marked `Optional`—asks the activating player's controller to confirm before invoking `Player.shuffle`. It collaborates chiefly with `SpellAbility`, the carrier of parameters and targeting context, and `Player`, the entity acted upon. The design follows the engine's effect-handler pattern: each game keyword maps to a stateless, parameter-driven effect class, with optional-confirmation and localized prompts kept in the resolution path rather than in the shared base type.
+ShuffleEffect implements the resolution logic for spell and ability effects that shuffle one or more players' libraries. As a concrete subclass of `SpellAbilityEffect`, it overrides `resolve` to carry out the game action and `getStackDescription` to produce the human-readable stack text. During resolution it iterates over the effect's target players, skips any no longer in the game, andâ€”when the effect is marked `Optional`â€”asks the activating player's controller to confirm before invoking `Player.shuffle`. It collaborates chiefly with `SpellAbility`, the carrier of parameters and targeting context, and `Player`, the entity acted upon. The design follows the engine's effect-handler pattern: each game keyword maps to a stateless, parameter-driven effect class, with optional-confirmation and localized prompts kept in the resolution path rather than in the shared base type.
 
 ## Source
 `forge-game/src/main/java/forge/game/ability/effects/ShuffleEffect.java`
@@ -96,4 +96,56 @@ public class ShuffleEffect extends SpellAbilityEffect {
     }
 
 }
+```
+
+## Python
+`forge/game/ability/effects/ShuffleEffect.py`
+
+```python
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Localizer import Localizer
+
+
+class ShuffleEffect(SpellAbilityEffect):
+
+    def resolve(self, sa: SpellAbility) -> None:
+        optional = sa.hasParam("Optional")
+
+        for p in self.getTargetPlayers(sa):
+            if not p.isInGame():
+                continue
+            mustShuffle = not optional or sa.getActivatingPlayer().getController().confirmAction(sa, None, Localizer.getInstance().getMessage("lblHaveTargetShuffle", p.getName()), None)
+            if mustShuffle:
+                p.shuffle(sa)
+
+    def getStackDescription(self, sa: SpellAbility) -> str:
+        sb = []
+
+        tgtPlayers = self.getTargetPlayers(sa)
+
+        if len(tgtPlayers) > 0:
+            it = iter(tgtPlayers)
+            try:
+                current = next(it)
+                while True:
+                    sb.append(current.getName())
+                    try:
+                        current = next(it)
+                        sb.append(" and ")
+                    except StopIteration:
+                        break
+            except StopIteration:
+                pass
+        else:
+            sb.append("Error - no target players for Shuffle. ")
+        sb.append(" shuffle")
+        if len(tgtPlayers) > 1:
+            sb.append(" their libraries")
+        else:
+            sb.append("s their library")
+        sb.append(".")
+
+        return "".join(sb)
 ```

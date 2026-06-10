@@ -32,6 +32,10 @@ classDiagram
 - [[forge.game.card.Card|Card]]
 - [[forge.game.staticability.StaticAbility|StaticAbility]]
 
+## Design Description
+
+StaticAbilityNoCleanupDamage is a stateless utility that implements the "damage is not removed during cleanup" static-ability effect, letting Forge keep marked damage on a creature past the normal cleanup step when some permanent grants that exception. Its static `damageNotRemoved` method scans every card in the static-ability source zones, filters their `StaticAbility` entries to those matching the `NoCleanupDamage` mode, and returns true if any applies to the given card; `damageNotRemovedApplies` performs the per-ability `ValidCard` match. Rather than extending `StaticAbility`, it collaborates with it (plus `Card` and `Game`) as a helper in the rule-effect family, reaching the active game through `Card.getGame()`. The split between detection and per-ability predicate keeps the validity test reusable and the zone scan readable.
+
 ## Source
 `forge-game/src/main/java/forge/game/staticability/StaticAbilityNoCleanupDamage.java`
 
@@ -66,4 +70,37 @@ public class StaticAbilityNoCleanupDamage {
         return true;
     }
 }
+```
+
+## Python
+`forge/game/staticability/StaticAbilityNoCleanupDamage.py`
+
+```python
+package forge.game.staticability;
+
+from forge.game.Game import Game
+from forge.game.card.Card import Card
+from forge.game.zone.ZoneType import ZoneType
+from forge.game.staticability.StaticAbility import StaticAbility
+from forge.game.staticability.StaticAbilityMode import StaticAbilityMode
+
+
+class StaticAbilityNoCleanupDamage:
+
+    @staticmethod
+    def damageNotRemoved(card: Card) -> bool:
+        game = card.getGame()
+        for ca in game.getCardsIn(ZoneType.STATIC_ABILITIES_SOURCE_ZONES):
+            for stAb in ca.getStaticAbilities():
+                if not stAb.checkConditions(StaticAbilityMode.NoCleanupDamage):
+                    continue
+                if StaticAbilityNoCleanupDamage.damageNotRemovedApplies(stAb, card):
+                    return True
+        return False
+
+    @staticmethod
+    def damageNotRemovedApplies(stAb: StaticAbility, card: Card) -> bool:
+        if not stAb.matchesValidParam("ValidCard", card):
+            return False
+        return True
 ```

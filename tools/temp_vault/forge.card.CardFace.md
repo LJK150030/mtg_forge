@@ -113,7 +113,7 @@ classDiagram
 
 ## Design Description
 
-CardFace is a package-private, final value object in `forge.card` that holds the original, parsed characteristics of one side of a Magic card—name, type, mana cost, color, power/toughness, loyalty, defense, oracle text, and the raw, unparsed keyword, ability, trigger, static-ability, replacement, draft-action, and SVar lists consumed later during Card construction. It implements `ICardFace` (exposing card characteristics) and `Cloneable`, and collaborates with `CardType`, `ManaCost`, `ColorSet`, and `Lang`.
+CardFace is a package-private, final value object in `forge.card` that holds the original, parsed characteristics of one side of a Magic cardâ€”name, type, mana cost, color, power/toughness, loyalty, defense, oracle text, and the raw, unparsed keyword, ability, trigger, static-ability, replacement, draft-action, and SVar lists consumed later during Card construction. It implements `ICardFace` (exposing card characteristics) and `Cloneable`, and collaborates with `CardType`, `ManaCost`, `ColorSet`, and `Lang`.
 
 The design is deliberately parser-centric: its Javadoc directs external callers to the interface, and all mutating setters and adders are package-private so only the card parser may populate fields. Collections are lazily allocated and normalized to shared immutable empties by `assignMissingFields()`, which also supplies defaults and derives color from mana cost. It further supports named functional variants (Attractions and Un-cards) that inherit unspecified fields from the base face, including regex-based flavor-name substitution in variant oracle text.
 
@@ -391,4 +391,315 @@ final class CardFace implements ICardFace, Cloneable {
         }
     }
 }
+```
+
+## Python
+`forge/card/CardFace.py`
+
+```python
+from forge.card.ICardFace import ICardFace
+from forge.card.CardType import CardType
+from forge.card.ColorSet import ColorSet
+from forge.card.mana.ManaCost import ManaCost
+from forge.util.Lang import Lang
+
+import re
+import sys
+
+
+#
+# DO NOT AUTOFORMAT / CHECKSTYLE THIS FILE
+#
+
+class CardFace(ICardFace):
+    """
+    Represents a single side or part of a magic card with its original characteristics.
+
+    Do not use reference to class except for card parsing.
+    Always use reference to interface type outside of package.
+    """
+    emptyList = []
+    emptyMap = {}
+    emptySet = set()
+
+    def __init__(self, name0):
+        self.name = name0
+        self.flavorName = None
+        self.type = None
+        self.manaCost = None
+        self.color = None
+
+        self.oracleText = None
+        self.iPower = sys.maxsize
+        self.iToughness = sys.maxsize
+        self.power = None
+        self.toughness = None
+        self.initialLoyalty = ""
+        self.defense = ""
+        self.attractionLights = None
+
+        self.nonAbilityText = None
+        self.keywords = None
+        self.abilities = None
+        self.staticAbilities = None
+        self.triggers = None
+        self.draftActions = None
+        self.replacements = None
+        self.variables = None
+
+        self.functionalVariants = None
+
+        if name0 is None or name0.strip() == "":
+            raise RuntimeError("Card name is empty")
+
+    # these implement ICardCharacteristics
+    def getOracleText(self):        return self.oracleText
+    def getIntPower(self):          return self.iPower
+    def getIntToughness(self):      return self.iToughness
+    def getPower(self):             return self.power
+    def getToughness(self):         return self.toughness
+    def getInitialLoyalty(self):    return self.initialLoyalty
+    def getDefense(self):           return self.defense
+    def getAttractionLights(self):  return self.attractionLights
+    def getName(self):              return self.name
+    def getType(self):              return self.type
+    def getManaCost(self):          return self.manaCost
+    def getColor(self):             return self.color
+
+    # these are raw and unparsed used for Card creation
+    def getKeywords(self):          return self.keywords
+    def getAbilities(self):         return self.abilities
+    def getStaticAbilities(self):   return self.staticAbilities
+    def getTriggers(self):          return self.triggers
+    def getDraftActions(self):      return self.draftActions
+    def getReplacements(self):      return self.replacements
+    def getNonAbilityText(self):    return self.nonAbilityText
+    def getVariables(self):
+        if self.variables is None:
+            return None
+        return self.variables.items()
+
+    def getFlavorName(self):        return self.flavorName
+
+    # Here come setters to allow parser supply values
+    def setName(self, name):            self.name = name
+    def setFlavorName(self, name):      self.flavorName = name
+    def setType(self, type0):           self.type = type0
+    def setManaCost(self, manaCost0):   self.manaCost = manaCost0
+    def setColor(self, color0):         self.color = color0
+    def setOracleText(self, text):      self.oracleText = text
+    def setInitialLoyalty(self, value): self.initialLoyalty = value
+    def setDefense(self, value):        self.defense = value
+
+    def setAttractionLights(self, value):
+        if value is None:
+            self.attractionLights = None
+            return
+        self.attractionLights = set(int(x) for x in value.split(" "))
+
+    def setPtText(self, value):
+        k = value.split("/")
+
+        if len(k) != 2:
+            raise RuntimeError("Creature '" + self.getName() + "' has bad p/t stats")
+
+        self.power = k[0]
+        self.toughness = k[1]
+
+        self.iPower = CardFace.parsePT(k[0])
+        self.iToughness = CardFace.parsePT(k[1])
+
+    @staticmethod
+    def parsePT(val):
+        # normalize PT value
+        if "*" in val:
+            val = val.replace("+*", "")
+            val = val.replace("-*", "")
+            val = val.replace("*+", "")
+            val = val.replace("*", "0")
+        return int(val)
+
+    # Raw fields used for Card creation
+    def setNonAbilityText(self, value):     self.nonAbilityText = value
+
+    def addKeyword(self, value):
+        if self.keywords is None:
+            self.keywords = []
+        self.keywords.append(value)
+
+    def addAbility(self, value):
+        if self.abilities is None:
+            self.abilities = []
+        self.abilities.append(value)
+
+    def addTrigger(self, value):
+        if self.triggers is None:
+            self.triggers = []
+        self.triggers.append(value)
+
+    def addDraftAction(self, value):
+        if self.draftActions is None:
+            self.draftActions = []
+        self.draftActions.append(value)
+
+    def addStaticAbility(self, value):
+        if self.staticAbilities is None:
+            self.staticAbilities = []
+        self.staticAbilities.append(value)
+
+    def addReplacementEffect(self, value):
+        if self.replacements is None:
+            self.replacements = []
+        self.replacements.append(value)
+
+    def addSVar(self, key, value):
+        if self.variables is None:
+            self.variables = {}
+        self.variables[key] = value
+
+    # Functional variant methods. Used for Attractions and some Un-cards,
+    # when cards with the same name can have different logic.
+    def hasFunctionalVariants(self):
+        return self.functionalVariants is not None
+
+    def getFunctionalVariant(self, variant):
+        if self.functionalVariants is None:
+            return None
+        return self.functionalVariants.get(variant)
+
+    def getFunctionalVariants(self):
+        return self.functionalVariants
+
+    def getOrCreateFunctionalVariant(self, variant):
+        if self.functionalVariants is None:
+            self.functionalVariants = {}
+        if variant not in self.functionalVariants:
+            self.functionalVariants[variant] = CardFace(self.name)
+        return self.functionalVariants[variant]
+
+    def assignMissingFields(self):  # Most scripts do not specify color explicitly
+        if self.oracleText is None:
+            sys.stderr.write(self.name + " has no Oracle text.\n")
+            self.oracleText = ""
+        if self.manaCost is None and self.color is None:
+            sys.stderr.write(self.name + " has neither ManaCost nor Color\n")
+        if self.manaCost is None:
+            self.manaCost = ManaCost.NO_COST
+        if self.color is None:
+            self.color = ColorSet.fromManaCost(self.manaCost)
+
+        if self.keywords is None:
+            self.keywords = CardFace.emptyList
+        if self.abilities is None:
+            self.abilities = CardFace.emptyList
+        if self.staticAbilities is None:
+            self.staticAbilities = CardFace.emptyList
+        if self.triggers is None:
+            self.triggers = CardFace.emptyList
+        if self.replacements is None:
+            self.replacements = CardFace.emptyList
+        if self.variables is None:
+            self.variables = CardFace.emptyMap
+        if self.nonAbilityText is None:
+            self.nonAbilityText = ""
+        if self.attractionLights is None:
+            self.attractionLights = CardFace.emptySet
+
+        if self.functionalVariants is not None:
+            # Copy fields to undefined ones in functional variants
+            for variant in self.functionalVariants.values():
+                self.assignMissingFieldsToVariant(variant)
+
+    def assignMissingFieldsToVariant(self, variant):
+        if variant.oracleText is None:
+            if variant.flavorName is not None and self.oracleText is not None:
+                try:
+                    lang = Lang.getInstance()
+                    # Rudimentary name replacement. Can't do pronouns, ability words, or flavored keywords. Need to define variant text manually for that.
+                    # Regex here checks for the name following either a word boundary or a literal "\n" string, since those haven't yet been converted to line breaks.
+                    flavoredText = re.sub(r"(?<=\b|\\n)" + self.name + r"\b", variant.flavorName, self.oracleText)
+                    flavoredText = re.sub(r"(?<=\b|\\n)" + lang.getNickName(self.name) + r"\b", lang.getNickName(variant.flavorName), flavoredText)
+                    variant.oracleText = flavoredText
+                except re.error:
+                    # Old versions of Android are weird about patterns sometimes. I don't *think* this is such a case but
+                    # the documentation is unreliable. May be worth removing this once we're sure it's not a problem.
+                    variant.oracleText = self.oracleText
+            else:
+                variant.oracleText = self.oracleText
+        if variant.manaCost is None:
+            variant.manaCost = self.manaCost
+        if variant.color is None:
+            variant.color = ColorSet.fromManaCost(variant.manaCost)
+
+        if variant.type is None:
+            variant.type = self.type
+
+        if variant.power is None:
+            variant.power = self.power
+            variant.iPower = self.iPower
+        if variant.toughness is None:
+            variant.toughness = self.toughness
+            variant.iToughness = self.iToughness
+
+        if "" == variant.initialLoyalty:
+            variant.initialLoyalty = self.initialLoyalty
+        if "" == variant.defense:
+            variant.defense = self.defense
+
+        if variant.keywords is None:
+            variant.keywords = self.keywords
+        else:
+            variant.keywords[0:0] = self.keywords
+
+        if variant.abilities is None:
+            variant.abilities = self.abilities
+        else:
+            variant.abilities[0:0] = self.abilities
+
+        if variant.staticAbilities is None:
+            variant.staticAbilities = self.staticAbilities
+        else:
+            variant.staticAbilities[0:0] = self.staticAbilities
+
+        if variant.triggers is None:
+            variant.triggers = self.triggers
+        else:
+            variant.triggers[0:0] = self.triggers
+
+        if variant.replacements is None:
+            variant.replacements = self.replacements
+        else:
+            variant.replacements[0:0] = self.replacements
+
+        if variant.variables is None:
+            variant.variables = self.variables
+        else:
+            for k, v in self.variables.items():
+                variant.variables.setdefault(k, v)
+
+        if variant.nonAbilityText is None:
+            variant.nonAbilityText = self.nonAbilityText
+        if variant.draftActions is None:
+            variant.draftActions = self.draftActions
+        if variant.attractionLights is None:
+            variant.attractionLights = self.attractionLights
+        # if variant.flavorName is None: variant.flavorName = self.flavorName #Probably shouldn't be setting this on the main variant to begin with?
+
+    def toString(self):
+        return self.getName()
+
+    def __str__(self):
+        return self.getName()
+
+    def compareTo(self, o):
+        a = self.getName()
+        b = o.getName()
+        return (a > b) - (a < b)
+
+    def clone(self):
+        try:
+            import copy
+            return copy.copy(self)
+        except Exception as ex:
+            raise RuntimeError("CardFace : clone() error, " + str(ex))
 ```

@@ -47,9 +47,9 @@ classDiagram
 
 ## Design Description
 
-EarthbendAi is the AI decision module for the "earthbend" mechanic, determining whether and how the computer should activate a Spell­Ability that animates a land into a creature. As a concrete subclass of `SpellAbilityAi`, it overrides `canPlay` to choose a target and `doTriggerNoCost` to handle triggered or mandatory resolutions, returning `AiAbilityDecision` values that encode both a numeric score and an `AiPlayDecision` verdict.
+EarthbendAi is the AI decision module for the "earthbend" mechanic, determining whether and how the computer should activate a SpellÂ­Ability that animates a land into a creature. As a concrete subclass of `SpellAbilityAi`, it overrides `canPlay` to choose a target and `doTriggerNoCost` to handle triggered or mandatory resolutions, returning `AiAbilityDecision` values that encode both a numeric score and an `AiPlayDecision` verdict.
 
-Its core responsibility is target selection: it surveys the AI's lands via `CardCollection`, then inspects each land's activated abilities—drilling into the `Cost`/`CostPart` model to find affordable self-sacrifice (`CostSacrifice`) effects—so it can prefer fetchlands that retain later value. It delegates the final pick to `ComputerUtilCard.getBestLandToAnimate`, sets the chosen `Card` as the spell's target, and bails to `AnotherTime` when no lands exist. The design keeps all collaboration with the game model read-only until a viable play is confirmed.
+Its core responsibility is target selection: it surveys the AI's lands via `CardCollection`, then inspects each land's activated abilitiesâ€”drilling into the `Cost`/`CostPart` model to find affordable self-sacrifice (`CostSacrifice`) effectsâ€”so it can prefer fetchlands that retain later value. It delegates the final pick to `ComputerUtilCard.getBestLandToAnimate`, sets the chosen `Card` as the spell's target, and bails to `AnotherTime` when no lands exist. The design keeps all collaboration with the game model read-only until a viable play is confirmed.
 
 ## Source
 `forge-ai/src/main/java/forge/ai/ability/EarthbendAi.java`
@@ -116,4 +116,61 @@ public class EarthbendAi extends SpellAbilityAi {
     }
 
 }
+```
+
+## Python
+`forge/ai/ability/EarthbendAi.py`
+
+```python
+from forge.ai.SpellAbilityAi import SpellAbilityAi
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.ai.ComputerUtilCard import ComputerUtilCard
+from forge.ai.ComputerUtilCost import ComputerUtilCost
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardLists import CardLists
+from forge.game.cost.Cost import Cost
+from forge.game.cost.CostPart import CostPart
+from forge.game.cost.CostSacrifice import CostSacrifice
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+
+
+class EarthbendAi(SpellAbilityAi):
+    def canPlay(self, aiPlayer: Player, sa: SpellAbility) -> AiAbilityDecision:
+        lands = aiPlayer.getLandsInPlay()
+        if lands.isEmpty():
+            return AiAbilityDecision(0, AiPlayDecision.AnotherTime)
+
+        def _isFetchLand(c):
+            for ability in c.getAllSpellAbilities():
+                if ability.isActivatedAbility():
+                    cost = ability.getPayCosts()
+                    for part in cost.getCostParts():
+                        if not isinstance(part, CostSacrifice):
+                            continue
+                        sacCost = part
+                        if sacCost.payCostFromSource() and ComputerUtilCost.canPayCost(ability, c.getController(), False):
+                            return True
+            return False
+
+        fetchLands = CardLists.filter(lands, _isFetchLand)
+
+        if not fetchLands.isEmpty():
+            # Prioritize fetchlands as they can be reused later
+            tgtLand = ComputerUtilCard.getBestLandToAnimate(fetchLands)
+        else:
+            tgtLand = ComputerUtilCard.getBestLandToAnimate(lands)
+
+        sa.resetTargets()
+        sa.getTargets().add(tgtLand)
+
+        return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+    def doTriggerNoCost(self, aiPlayer: Player, sa: SpellAbility, mandatory: bool) -> AiAbilityDecision:
+        decision = self.canPlay(aiPlayer, sa)
+        if decision.willingToPlay() or mandatory:
+            return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+        return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
 ```

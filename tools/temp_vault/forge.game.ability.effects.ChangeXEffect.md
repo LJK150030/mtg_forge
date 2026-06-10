@@ -72,3 +72,29 @@ public class ChangeXEffect extends SpellAbilityEffect {
     }
 }
 ```
+
+## Python
+`forge/game/ability/effects/ChangeXEffect.py`
+
+```python
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.spellability.SpellAbility import SpellAbility
+
+
+class ChangeXEffect(SpellAbilityEffect):
+
+    # (non-Javadoc)
+    # @see forge.card.ability.SpellAbilityEffect#resolve(forge.card.spellability.SpellAbility)
+    def resolve(self, sa: SpellAbility) -> None:
+        # can't get the SpellAbilityStackInstances directly from the Stack,
+        # even if they are in the Triggered Objects
+        sas: list[SpellAbility] = self.getTargetSpells(sa)
+
+        for tgtSA in sas:
+            # for Unbound Flourishing, can't go over SpellAbilityStackInstances because the x is in cast SA copy
+            castSA = tgtSA.getHostCard().getCastSA()
+            if castSA is not None and tgtSA == castSA and castSA.getXManaCostPaid() is not None:
+                castSA.setXManaCostPaid(castSA.getXManaCostPaid() * 2)
+            if tgtSA.getXManaCostPaid() is not None:
+                tgtSA.setXManaCostPaid(tgtSA.getXManaCostPaid() * 2)
+```

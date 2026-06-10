@@ -68,3 +68,30 @@ public record GameEventPlayerPriority(PlayerView turn, PhaseType phase, PlayerVi
     }
 }
 ```
+
+## Python
+`forge/game/event/GameEventPlayerPriority.py`
+
+```python
+from forge.game.event.GameEvent import GameEvent
+from forge.game.event.IGameEventVisitor import IGameEventVisitor
+from forge.game.phase.PhaseType import PhaseType
+from forge.game.player.PlayerView import PlayerView
+from forge.util.TextUtil import TextUtil
+
+
+class GameEventPlayerPriority(GameEvent):
+
+    def __init__(self, turn: PlayerView, phase: PhaseType, priority: PlayerView):
+        self.turn = turn
+        self.phase = phase
+        self.priority = priority
+
+    def visit(self, visitor: IGameEventVisitor):
+        return visitor.visit(self)
+
+    # (non-Javadoc)
+    # @see java.lang.Object#toString()
+    def toString(self) -> str:
+        return TextUtil.concatWithSpace("Priority -", self.priority.toString())
+```

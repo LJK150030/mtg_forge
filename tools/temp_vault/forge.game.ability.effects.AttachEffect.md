@@ -58,7 +58,7 @@ classDiagram
 
 AttachEffect implements the resolution logic for Forge's "attach" ability, the mechanic behind moving Auras and Equipment onto a host entity. As a concrete `SpellAbilityEffect` subclass, it overrides `resolve` to carry out the effect and `getStackDescription` to render a human-readable stack entry. From a `SpellAbility`'s parameters it determines the attachments (an explicit `Object`, a player-driven `Choices` selection, or the source itself) and the target `GameEntity`, validating attachability via `CardPredicates.canBeAttached` before calling `attachToEntity`.
 
-The class collaborates broadly with the game model—`Card`, `CardCollection`, `Player`, `Game`, and `ZoneType`—and delegates choices to each player's controller, keeping decision-making UI-agnostic. Notable design intent includes LKI/timestamp checks to skip attachments no longer in their expected state, optional confirmation prompts, and special handling that moves an Aura cast as a spell onto the battlefield (tracking zone changes through a `CardZoneTable`) before attaching.
+The class collaborates broadly with the game modelâ€”`Card`, `CardCollection`, `Player`, `Game`, and `ZoneType`â€”and delegates choices to each player's controller, keeping decision-making UI-agnostic. Notable design intent includes LKI/timestamp checks to skip attachments no longer in their expected state, optional confirmation prompts, and special handling that moves an Aura cast as a spell onto the battlefield (tracking zone changes through a `CardZoneTable`) before attaching.
 
 ## Source
 `forge-game/src/main/java/forge/game/ability/effects/AttachEffect.java`
@@ -252,4 +252,169 @@ public class AttachEffect extends SpellAbilityEffect {
         return sb.toString();
     }
 }
+```
+
+## Python
+`forge/game/ability/effects/AttachEffect.py`
+
+```python
+from forge.game.Game import Game
+from forge.game.GameActionUtil import GameActionUtil
+from forge.game.GameEntity import GameEntity
+from forge.game.GameObject import GameObject
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CardZoneTable import CardZoneTable
+from forge.game.card.CardPredicates import CardPredicates
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.Lang import Lang
+from forge.util.Localizer import Localizer
+from forge.util.collect.FCollection import FCollection
+
+
+class AttachEffect(SpellAbilityEffect):
+    def resolve(self, sa: SpellAbility) -> None:
+        activator = sa.getActivatingPlayer()
+        source = sa.getHostCard()
+        game = source.getGame()
+
+        attachments: CardCollectionView
+
+        chooser = activator
+        if sa.hasParam("Chooser"):
+            definedPlayers = AbilityUtils.getDefinedPlayers(source, sa.getParam("Chooser"), sa)
+            chooser = next(iter(definedPlayers), None)
+
+        if sa.hasParam("Object"):
+            attachments = AbilityUtils.getDefinedCards(source, sa.getParam("Object"), sa)
+        elif sa.hasParam("Choices"):
+            choiceZone = ZoneType.Battlefield
+            if sa.hasParam("ChoiceZone"):
+                choiceZone = ZoneType.smartValueOf(sa.getParam("ChoiceZone"))
+            title = sa.getParam("ChoiceTitle") if sa.hasParam("ChoiceTitle") else Localizer.getInstance().getMessage("lblChoose") + " "
+
+            choices = CardLists.getValidCards(game.getCardsIn(choiceZone), sa.getParam("Choices"), activator, source, sa)
+
+            params: dict[str, object] = {}
+            params["Target"] = next(iter(self.getDefinedEntitiesOrTargeted(sa, "Defined")), None)
+
+            c = chooser.getController().chooseSingleEntityForEffect(choices, sa, title, params)
+            if c is None:
+                return
+            attachments = CardCollection(c)
+        else:
+            attachments = CardCollection(source)
+
+        if attachments.isEmpty():
+            return
+
+        attachTo: GameEntity
+
+        if sa.hasParam("Object") and (sa.hasParam("Choices") or sa.hasParam("PlayerChoices")):
+            choiceZone = ZoneType.Battlefield
+            if sa.hasParam("ChoiceZone"):
+                choiceZone = ZoneType.smartValueOf(sa.getParam("ChoiceZone"))
+            title = sa.getParam("ChoiceTitle") if sa.hasParam("ChoiceTitle") else \
+                Localizer.getInstance().getMessage("lblChoose") + " "
+
+            choices = FCollection()
+            if sa.hasParam("PlayerChoices"):
+                choices = AbilityUtils.getDefinedEntities(source, sa.getParam("PlayerChoices"), sa)
+                for attachment in attachments:
+                    for g in choices:
+                        if not g.canBeAttached(attachment, sa):
+                            choices.remove(g)
+            else:
+                cardChoices = CardLists.getValidCards(game.getCardsIn(choiceZone),
+                        sa.getParam("Choices"), activator, source, sa)
+                # Object + Choices means Attach Aura/Equipment onto new another card it can attach
+                # if multiple attachments, all of them need to be able to attach to new card
+                for attachment in attachments:
+                    if sa.hasParam("Move"):
+                        e = attachment.getAttachedTo()
+                        if e is not None:
+                            cardChoices.remove(e)
+                    cardChoices = CardLists.filter(cardChoices, CardPredicates.canBeAttached(attachment, sa))
+                choices.addAll(cardChoices)
+
+            params = {}
+            params["Attachments"] = attachments
+
+            attachTo = chooser.getController().chooseSingleEntityForEffect(choices, sa, title, params)
+        else:
+            targets = FCollection(self.getDefinedEntitiesOrTargeted(sa, "Defined"))
+            if targets.isEmpty():
+                return
+            title = Localizer.getInstance().getMessage("lblChoose")
+            params = {}
+            params["Attachments"] = attachments
+            attachTo = chooser.getController().chooseSingleEntityForEffect(targets, sa, title, params)
+
+        if attachTo is None:
+            return
+        attachToName: str
+        if isinstance(attachTo, Card):
+            c = attachTo
+            attachToName = c.getTranslatedName()
+        else:
+            attachToName = attachTo.toString()
+
+        attachments = GameActionUtil.orderCardsByTheirOwners(game, attachments, ZoneType.Battlefield, sa)
+
+        # If Cast Targets will be checked on the Stack
+        for attachment in attachments:
+            gameCard = attachment.getGame().getCardState(attachment, None)
+            # gameCard is LKI in that case, the card is not in game anymore
+            # or the timestamp did change
+            # this should check Self too
+            if gameCard is None or not attachment.equalsWithGameTimestamp(gameCard):
+                continue
+
+            message = Localizer.getInstance().getMessage("lblDoYouWantAttachSourceToTarget", attachment.getTranslatedName(), attachToName)
+            if sa.hasParam("Optional") and not chooser.getController().confirmAction(sa, None, message, None):
+                # TODO add params for message
+                continue
+
+            attachment.attachToEntity(attachTo, sa)
+            if sa.hasParam("RememberAttached") and attachment.isAttachedToEntity(attachTo):
+                source.addRemembered(attachment)
+
+        if source.isAura() and sa.isSpell():
+            table = CardZoneTable()
+            source.setController(activator, 0)
+
+            previousZone = source.getZone().getZoneType()
+
+            moveParams = AbilityKey.newMap()
+            moveParams[AbilityKey.LastStateBattlefield] = game.copyLastStateBattlefield()
+            moveParams[AbilityKey.LastStateGraveyard] = game.copyLastStateGraveyard()
+
+            # The Spell_Permanent (Auras) version of this AF needs to
+            # move the card into play before Attaching
+            c = game.getAction().moveToPlay(source, source.getController(), sa, moveParams)
+
+            newZone = c.getZone().getZoneType()
+            if newZone != previousZone:
+                table.put(previousZone, newZone, c)
+            table.triggerChangesZoneAll(game, sa)
+
+    def getStackDescription(self, sa: SpellAbility) -> str:
+        sb = []
+
+        sb.append(" ")
+        sb.append(Localizer.getInstance().getMessage("lblAttachTo"))
+        sb.append(" ")
+
+        targets = self.getTargets(sa)
+        # Should never allow more than one Attachment per card
+
+        sb.append(Lang.joinHomogenous(targets))
+        return "".join(sb)
 ```

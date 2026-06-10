@@ -52,3 +52,20 @@ public record StateChangedType(CardTypeView type) implements ICardChangedType {
     }
 }
 ```
+
+## Python
+`forge/card/StateChangedType.py`
+
+```python
+from forge.card.ICardChangedType import ICardChangedType
+from forge.card.CardType import CardType
+from forge.card.CardTypeView import CardTypeView
+
+
+class StateChangedType(ICardChangedType):
+    def __init__(self, type: CardTypeView):
+        self.type = type
+
+    def applyChanges(self, newType: CardType) -> CardType:
+        return CardType(self.type)
+```

@@ -302,3 +302,205 @@ public class CopySpellAbilityEffect extends SpellAbilityEffect {
 
 }
 ```
+
+## Python
+`forge/game/ability/effects/CopySpellAbilityEffect.py`
+
+```python
+from forge.game.Game import Game
+from forge.game.GameEntity import GameEntity
+from forge.game.GameObjectPredicates import GameObjectPredicates
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.card.CardFactory import CardFactory
+from forge.game.keyword.Keyword import Keyword
+from forge.game.player.Player import Player
+from forge.game.replacement.ReplacementType import ReplacementType
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.Lang import Lang
+from forge.util.Localizer import Localizer
+from forge.util.IterableUtil import IterableUtil
+from forge.util.collect.FCollection import FCollection
+
+
+class CopySpellAbilityEffect(SpellAbilityEffect):
+    def buildSpellAbility(self, sa: SpellAbility) -> None:
+        super().buildSpellAbility(sa)
+        if sa.usesTargeting():
+            sa.getTargetRestrictions().setZone(ZoneType.Stack)
+
+    def getStackDescription(self, sa: SpellAbility) -> str:
+        sb = []
+        tgtSpells = self.getTargetSpells(sa)
+
+        sb.append("Copy ")
+        # TODO Someone fix this Description when Copying Charms
+        it = iter(tgtSpells)
+        try:
+            current = next(it)
+            while True:
+                sb.append(str(current.getHostCard()))
+                try:
+                    current = next(it)
+                except StopIteration:
+                    break
+                sb.append(", ")
+        except StopIteration:
+            pass
+        amount = 1
+        if sa.hasParam("Amount"):
+            amount = AbilityUtils.calculateAmount(sa.getHostCard(), sa.getParam("Amount"), sa)
+        if amount > 1:
+            sb.append(" ")
+            sb.append(Lang.getNumeral(amount))
+            sb.append(" times")
+        sb.append(".")
+        # TODO probably add an optional "You may choose new targets..."
+        return "".join(sb)
+
+    # (non-Javadoc)
+    # @see forge.card.abilityfactory.SpellEffect#resolve(java.util.Map, forge.card.spellability.SpellAbility)
+    def resolve(self, sa: SpellAbility) -> None:
+        card = sa.getHostCard()
+        game = card.getGame()
+
+        amount = 1
+        if sa.hasParam("Amount"):
+            amount = AbilityUtils.calculateAmount(card, sa.getParam("Amount"), sa)
+
+        tgtSpells = self.getTargetSpells(sa)
+
+        tgtSpells[:] = [s for s in tgtSpells if not s.cantBeCopied()]
+
+        if not tgtSpells or amount == 0:
+            return
+
+        controllers = AbilityUtils.getDefinedPlayers(card, sa.getParam("Controller"), sa)
+
+        isOptional = sa.hasParam("Optional")
+
+        for controller in controllers:
+            copies = []
+
+            copySpells = tgtSpells
+            if sa.hasParam("SingleChoice"):
+                chosenSA = controller.getController().chooseSingleSpellForEffect(tgtSpells, sa,
+                        Localizer.getInstance().getMessage("lblSelectASpellCopy"), {})
+                copySpells = [chosenSA]
+
+            for chosenSA in copySpells:
+                if isOptional and not controller.getController().confirmAction(sa, None, Localizer.getInstance().getMessage("lblDoyouWantCopyTheSpell", chosenSA.getHostCard().getTranslatedName()), None):
+                    continue
+
+                # CR 707.10d
+                if sa.hasParam("CopyForEachCanTarget"):
+                    targetedSA = self.getTargetedSA(chosenSA)
+                    if targetedSA is None:
+                        continue
+
+                    all = FCollection(IterableUtil.filter(targetedSA.getTargetRestrictions().getAllCandidates(targetedSA, True), GameObjectPredicates.restriction(sa.getParam("CopyForEachCanTarget").split(","), sa.getActivatingPlayer(), card, sa)))
+                    # Remove targeted players because getAllCandidates include all the valid players
+                    all.removeAll(self.getTargetPlayers(targetedSA))
+
+                    if sa.hasParam("ChooseOnlyOne"):  # Beamsplitter Mage
+                        choice = controller.getController().chooseSingleEntityForEffect(all, sa, Localizer.getInstance().getMessage("lblChooseOne"), None)
+                        if choice is not None:
+                            copy = CardFactory.copySpellAbilityAndPossiblyHost(sa, chosenSA, controller)
+                            if self.changeToLegalTarget(copy, choice, targetedSA):
+                                copies.append(copy)
+                    else:
+                        for ge in all:
+                            copy = CardFactory.copySpellAbilityAndPossiblyHost(sa, chosenSA, controller)
+                            self.resetFirstTargetOnCopy(copy, ge, targetedSA)
+                            copies.append(copy)
+                elif sa.hasParam("DefinedTarget"):  # CR 707.10e
+                    tgts = AbilityUtils.getDefinedEntities(card, sa.getParam("DefinedTarget"), sa)
+                    if not tgts:
+                        continue
+                    targetedSA = self.getTargetedSA(chosenSA)
+                    if targetedSA is None:
+                        continue
+
+                    newTgts = FCollection()
+                    for e in tgts:
+                        if isinstance(e, Player):  # Zevlor
+                            choices = FCollection(e)
+                            choices.addAll(e.getCardsIn(ZoneType.Battlefield))
+                            newTgts.add(controller.getController().chooseSingleEntityForEffect(choices, sa, Localizer.getInstance().getMessage("lblChooseOne"), None))
+                        else:  # Ivy
+                            newTgts.add(e)
+
+                    for e in newTgts:
+                        copy = CardFactory.copySpellAbilityAndPossiblyHost(sa, chosenSA, controller)
+                        if self.changeToLegalTarget(copy, e, targetedSA):
+                            copies.append(copy)
+                else:
+                    for i in range(amount):
+                        copy = CardFactory.copySpellAbilityAndPossiblyHost(sa, chosenSA, controller)
+                        if sa.hasParam("IgnoreFreeze"):
+                            copy.putParam("IgnoreFreeze", "True")
+                        if sa.hasParam("MayChooseTarget"):
+                            copy.setMayChooseNewTargets(True)
+
+                        # extra case for Epic to remove the keyword and the last part of the SpellAbility
+                        if sa.hasParam("Epic"):
+                            copy.getHostCard().removeIntrinsicKeyword(Keyword.EPIC)
+
+                        copies.append(copy)
+
+                if not copies:
+                    continue
+
+                addAmount = len(copies)
+                repParams = AbilityKey.mapFromAffected(controller)
+                repParams[AbilityKey.SpellAbility] = chosenSA
+                repParams[AbilityKey.Amount] = addAmount
+
+                result = game.getReplacementHandler().run(ReplacementType.CopySpell, repParams)
+                if result == ReplacementType.NotReplaced:
+                    pass
+                elif result == ReplacementType.Updated:
+                    addAmount = int(repParams.get(AbilityKey.Amount))
+                else:
+                    addAmount = 0
+
+                if addAmount <= 0:
+                    continue
+                extraAmount = addAmount - len(copies)
+                for i in range(extraAmount):
+                    copy = CardFactory.copySpellAbilityAndPossiblyHost(sa, chosenSA, controller)
+                    # extra copies added with CopySpellReplacenment currently always has new choose targets
+                    copy.setMayChooseNewTargets(True)
+                    copies.append(copy)
+
+            controller.getController().orderAndPlaySimultaneousSa(copies)
+
+            if sa.hasParam("RememberCopies"):
+                card.addRemembered(copies)
+
+    def changeToLegalTarget(self, copy: SpellAbility, tgt: GameEntity, targetedSA: SpellAbility) -> bool:
+        targetedCopy = self.getTargetedSA(copy)
+        if targetedCopy is None:
+            return False
+        if not targetedCopy.canTarget(tgt):
+            return False
+        self.resetFirstTargetOnCopy(targetedCopy, tgt, targetedSA)
+        return True
+
+    def resetFirstTargetOnCopy(self, copy: SpellAbility, obj: GameEntity, targetedSA: SpellAbility) -> None:
+        subAb = copy
+        while subAb is not None:
+            subAb.resetFirstTarget(obj, targetedSA)
+            subAb = subAb.getSubAbility()
+
+    def getTargetedSA(self, targetedSA: SpellAbility) -> SpellAbility:
+        # Find subability or rootability that has targets
+        while targetedSA is not None:
+            if targetedSA.usesTargeting() and not targetedSA.getTargets().isEmpty():
+                break
+            targetedSA = targetedSA.getSubAbility()
+        return targetedSA
+```

@@ -37,6 +37,10 @@ classDiagram
 - [[forge.game.card.Card|Card]]
 - [[forge.game.spellability.SpellAbility|SpellAbility]]
 
+## Design Description
+
+TriggerClassLevelGained is a concrete trigger that fires when a Class permanent (the Dungeons & Dragons "Class" card type) advances to a new level, encapsulating the matching logic that decides whether such an event should activate a triggered ability. Extending the abstract Trigger base class, it overrides performTest to gate firing on an optional ValidCard filter and an optional exact ClassLevel match, and setTriggeringObjects to expose the gained level (via AbilityKey.ClassLevel) to the resulting SpellAbility. It collaborates with Card and AbilityKey to read run-time parameters and with SpellAbility to publish triggering objects. Following the engine's data-driven trigger pattern, its behavior is configured through the inherited String parameter map rather than hard-coded, and getImportantStackObjects formats the level for stack display, keeping presentation concerns local to the trigger.
+
 ## Source
 `forge-game/src/main/java/forge/game/trigger/TriggerClassLevelGained.java`
 
@@ -85,4 +89,42 @@ public class TriggerClassLevelGained extends Trigger {
         return sb.toString();
     }
 }
+```
+
+## Python
+`forge/game/trigger/TriggerClassLevelGained.py`
+
+```python
+from forge.game.trigger.Trigger import Trigger
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.spellability.SpellAbility import SpellAbility
+
+
+class TriggerClassLevelGained(Trigger):
+
+    def __init__(self, params: dict[str, str], host: Card, intrinsic: bool):
+        super().__init__(params, host, intrinsic)
+
+    def performTest(self, runParams: dict[AbilityKey, object]) -> bool:
+        if not self.matchesValidParam("ValidCard", runParams.get(AbilityKey.Card)):
+            return False
+
+        if self.hasParam("ClassLevel") and AbilityKey.ClassLevel in runParams:
+            levelCondition = int(self.getParam("ClassLevel"))
+            level = runParams.get(AbilityKey.ClassLevel)
+
+            if levelCondition != level:
+                return False
+
+        return True
+
+    def setTriggeringObjects(self, sa: SpellAbility, runParams: dict[AbilityKey, object]) -> None:
+        sa.setTriggeringObjectsFrom(runParams, AbilityKey.ClassLevel)
+
+    def getImportantStackObjects(self, sa: SpellAbility) -> str:
+        level = sa.getTriggeringObject(AbilityKey.ClassLevel)
+        sb = "Class Level: "
+        sb += str(level)
+        return sb
 ```

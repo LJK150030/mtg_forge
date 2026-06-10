@@ -39,12 +39,12 @@ classDiagram
 
 ## Design Description
 
-Necropotence is a stateless AI helper, nested within `SpecialCardAi`, that decides whether the computer should activate the Necropotence card's draw-by-exile ability. Its sole `consider` method takes the controlling `Player` and the candidate `SpellAbility` and returns an `AiAbilityDecision` pairing a confidence score with an `AiPlayDecision` verdict (e.g. `WillPlay`, `CantPlayAi`, `WaitForMain2`). To reach that verdict it inspects game state—hand and library zones, max hand size, cards exiled face-down by Necropotence, and the current phase via `Game` and `PhaseHandler`—and collaborates with `Card` to detect interacting permanents such as Yawgmoth's Bargain and Black Vise.
+Necropotence is a stateless AI helper, nested within `SpecialCardAi`, that decides whether the computer should activate the Necropotence card's draw-by-exile ability. Its sole `consider` method takes the controlling `Player` and the candidate `SpellAbility` and returns an `AiAbilityDecision` pairing a confidence score with an `AiPlayDecision` verdict (e.g. `WillPlay`, `CantPlayAi`, `WaitForMain2`). To reach that verdict it inspects game stateâ€”hand and library zones, max hand size, cards exiled face-down by Necropotence, and the current phase via `Game` and `PhaseHandler`â€”and collaborates with `Card` to detect interacting permanents such as Yawgmoth's Bargain and Black Vise.
 
 The design intent is conservative, turn-aware play: it restricts activation to the AI's own second main phase, avoids over-drawing into hand-size discard or Black Vise damage, and only loots aggressively when stuck with nothing castable. Inline TODOs flag unhandled edge cases (draw-punisher effects), marking it as heuristic, evolving card-specific logic rather than a general framework.
 
 ## Source
-`forge-ai/src/main/java/forge/ai/SpecialCardAi.java` â€” declaration excerpt
+`forge-ai/src/main/java/forge/ai/SpecialCardAi.java` Ã¢â‚¬â€ declaration excerpt
 
 ```java
     // Necropotence
@@ -114,4 +114,80 @@ The design intent is conservative, turn-aware play: it restricts activation to t
             return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
         }
     }
+```
+
+## Python
+`forge/ai/SpecialCardAi/Necropotence.py`
+
+```python
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.game.Game import Game
+from forge.game.card.Card import Card
+from forge.game.card.CardPredicates import CardPredicates
+from forge.game.phase.PhaseHandler import PhaseHandler
+from forge.game.phase.PhaseType import PhaseType
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+
+
+# Necropotence
+class Necropotence:
+    @staticmethod
+    def consider(ai: Player, sa: SpellAbility) -> AiAbilityDecision:
+        game = ai.getGame()
+        computerHandSize = ai.getZone(ZoneType.Hand).size()
+        maxHandSize = ai.getMaxHandSize()
+
+        if ai.getCardsIn(ZoneType.Library).isEmpty():
+            return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+        if ai.getCardsIn(ZoneType.Battlefield).anyMatch(CardPredicates.nameEquals("Yawgmoth's Bargain")):
+            # Prefer Yawgmoth's Bargain because AI is generally better with it
+
+            # TODO: in presence of bad effects which deal damage when a card is drawn, probably better to prefer Necropotence instead?
+            # (not sure how to detect the presence of such effects yet)
+            return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+        ph = game.getPhaseHandler()
+
+        exiledWithNecro = 1  # start with 1 because if this succeeds, one extra card will be exiled with Necro
+        for c in ai.getCardsIn(ZoneType.Exile):
+            if c.getExiledWith() is not None and "Necropotence" == c.getExiledWith().getName() and c.isFaceDown():
+                exiledWithNecro += 1
+
+        # TODO: Any other bad effects like that?
+        blackViseOTB = game.getCardsIn(ZoneType.Battlefield).anyMatch(CardPredicates.nameEquals("Black Vise"))
+
+        if (ph.getNextTurn() == ai and ph.is_(PhaseType.MAIN2)
+                and ai.getSpellsCastLastTurn() == 0
+                and ai.getSpellsCastThisTurn() == 0
+                and ai.getLandsPlayedLastTurn() == 0):
+            # We're in a situation when we have nothing castable in hand, something needs to be done
+            if not blackViseOTB:
+                # exile-loot +1 card when at max hand size, hoping to get a workable spell or land
+                if computerHandSize + exiledWithNecro - 1 == maxHandSize:
+                    return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+                else:
+                    return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+            else:
+                # Loot to 7 in presence of Black Vise, hoping to find what to do
+                # NOTE: can still currently get theoretically locked with 7 uncastable spells. Loot to 8 instead?
+                if computerHandSize + exiledWithNecro <= maxHandSize:
+                    # Loot to 7, hoping to find something playable
+                    return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+                else:
+                    # Loot to 8, hoping to find something playable
+                    return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+        elif blackViseOTB and computerHandSize + exiledWithNecro - 1 >= 4:
+            # try not to overdraw in presence of Black Vise
+            return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+        elif computerHandSize + exiledWithNecro - 1 >= maxHandSize:
+            # Only draw until we reach max hand size
+            return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+        elif not ph.isPlayerTurn(ai) or not ph.is_(PhaseType.MAIN2):
+            # Only activate in AI's own turn (sans the exception above)
+            return AiAbilityDecision(0, AiPlayDecision.WaitForMain2)
+        return AiAbilityDecision(100, AiPlayDecision.WillPlay)
 ```

@@ -33,6 +33,12 @@ classDiagram
 - [[forge.game.ability.AbilityKey|AbilityKey]]
 - [[forge.game.card.Card|Card]]
 
+## Design Description
+
+Repleplace effect that intercepts a player's loss of the game when the loss's reason and affected player satisfy the effect's filters.
+
+ReplaceGameLoss is a concrete `ReplacementEffect` that conditionally intercepts a player's game-loss event. As a leaf in the replacement-effect hierarchy, it overrides `canReplace` to test the incoming run parameters against its configured filters: the affected player must match the `ValidPlayer` criterion and the loss cause must match `ValidLoseReason`, both resolved through `AbilityKey` lookups (`Affected` and `LoseReason`). Its constructor simply forwards the parameter map, host `Card`, and intrinsic flag to the superclass, delegating all actual replacement behavior and leaving this subclass responsible only for the applicability check. The design keeps matching logic data-driven via the shared `matchesValidParam` helper, letting card scripts specify which losses and players the effect guards.
+
 ## Source
 `forge-game/src/main/java/forge/game/replacement/ReplaceGameLoss.java`
 
@@ -78,3 +84,31 @@ public class ReplaceGameLoss extends ReplacementEffect {
 
 }
 ```
+
+## Python
+`forge/game/replacement/ReplaceGameLoss.py`
+
+````python
+The port is below.
+
+```python
+from forge.game.replacement.ReplacementEffect import ReplacementEffect
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+
+
+# TODO: Write javadoc for this type.
+class ReplaceGameLoss(ReplacementEffect):
+
+    def __init__(self, map: dict[str, str], host: Card, intrinsic: bool):
+        super().__init__(map, host, intrinsic)
+
+    def canReplace(self, runParams: dict[AbilityKey, object]) -> bool:
+        if not self.matchesValidParam("ValidPlayer", runParams.get(AbilityKey.Affected)):
+            return False
+
+        if not self.matchesValidParam("ValidLoseReason", runParams.get(AbilityKey.LoseReason)):
+            return False
+
+        return True
+````

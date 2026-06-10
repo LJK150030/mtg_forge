@@ -287,3 +287,177 @@ public class CardZoneTable extends ForwardingTable<ZoneType, ZoneType, CardColle
     }
 }
 ```
+
+## Python
+`forge/game/card/CardZoneTable.py`
+
+```python
+from com.google.common.collect.ForwardingTable import ForwardingTable
+from com.google.common.collect.HashBasedTable import HashBasedTable
+from com.google.common.collect.Iterables import Iterables
+from com.google.common.collect.Table import Table
+from forge.game.CardTraitBase import CardTraitBase
+from forge.game.Game import Game
+from forge.game.GameAction import GameAction
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.card.CardLists import CardLists
+from forge.game.player.PlayerCollection import PlayerCollection
+from forge.game.replacement.ReplacementType import ReplacementType
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.trigger.TriggerType import TriggerType
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.IterableUtil import IterableUtil
+
+
+class CardZoneTable(ForwardingTable):
+    def __init__(self, *args):
+        # TODO use EnumBasedTable if exist
+        self.dataMap = HashBasedTable.create()
+
+        self.createdTokens = CardCollection()
+        self.firstTimeTokenCreators = PlayerCollection()
+
+        self.lastStateBattlefield = None
+        self.lastStateGraveyard = None
+
+        if len(args) == 0:
+            # CardZoneTable()
+            self.__init_two__(None, None)
+        elif len(args) == 1:
+            # CardZoneTable(CardZoneTable cardZoneTable)
+            cardZoneTable = args[0]
+            self.putAll(cardZoneTable)
+            self.lastStateBattlefield = cardZoneTable.getLastStateBattlefield()
+            self.lastStateGraveyard = cardZoneTable.getLastStateGraveyard()
+        else:
+            # CardZoneTable(CardCollectionView lastStateBattlefield, CardCollectionView lastStateGraveyard)
+            self.__init_two__(args[0], args[1])
+
+    def __init_two__(self, lastStateBattlefield, lastStateGraveyard):
+        self.setLastStateBattlefield(lastStateBattlefield)
+        self.setLastStateGraveyard(lastStateGraveyard)
+
+    @staticmethod
+    def getSimultaneousInstance(sa):
+        if (sa.isReplacementAbility() and sa.getReplacementEffect().getMode() == ReplacementType.Moved
+                and sa.getReplacingObject(AbilityKey.InternalTriggerTable) is not None):
+            # if a RE changes the destination zone try to make it simultaneous
+            return sa.getReplacingObject(AbilityKey.InternalTriggerTable)
+        ga = sa.getHostCard().getGame().getAction()
+        return CardZoneTable(
+            ga.getLastState(AbilityKey.LastStateBattlefield, sa, None, True),
+            ga.getLastState(AbilityKey.LastStateGraveyard, sa, None, True))
+
+    def getLastStateBattlefield(self):
+        return self.lastStateBattlefield
+
+    def getLastStateGraveyard(self):
+        return self.lastStateGraveyard
+
+    def setLastStateBattlefield(self, lastState):
+        # store it in a new object, it might be from Game which can also refresh itself
+        self.lastStateBattlefield = CardCollection.EMPTY if lastState is None else CardCollection(lastState)
+
+    def setLastStateGraveyard(self, lastState):
+        self.lastStateGraveyard = CardCollection.EMPTY if lastState is None else CardCollection(lastState)
+
+    def put(self, rowKey, columnKey, value):
+        """special put logic, add Card to Card Collection"""
+        if rowKey is None:
+            rowKey = ZoneType.None
+        if columnKey is None:
+            columnKey = ZoneType.None
+        if self.contains(rowKey, columnKey):
+            old = self.get(rowKey, columnKey)
+            old.add(value)
+        else:
+            old = CardCollection(value)
+            self.delegate().put(rowKey, columnKey, old)
+        return old
+
+    def delegate(self):
+        return self.dataMap
+
+    def triggerChangesZoneAll(self, game, cause):
+        self.triggerTokenCreatedOnce(game)
+        if cause is not None and cause.getReplacingObject(AbilityKey.InternalTriggerTable) is self:
+            # will be handled by original "cause" instead
+            return
+        if not self.isEmpty():
+            for c in self.allCards():
+                if c.isInPlay():
+                    c.updateWorldTimestamp(game.getTimestamp())
+
+            # this should still refresh for empty battlefield
+            if self.lastStateBattlefield is not CardCollection.EMPTY:
+                game.getTriggerHandler().resetActiveTriggers(False, self.lastStateBattlefield)
+                # register all LTB trigger from last state battlefield
+                for lki in self.lastStateBattlefield:
+                    game.getTriggerHandler().registerActiveLTBTrigger(lki)
+
+            runParams = AbilityKey.newMap()
+            runParams.put(AbilityKey.Cards, CardZoneTable(self))
+            runParams.put(AbilityKey.Cause, cause)
+            game.getTriggerHandler().runTrigger(TriggerType.ChangesZoneAll, runParams, False)
+        untilTable = game.getUntilHostLeavesPlayTriggerList()
+        if self is not untilTable:
+            untilTable.triggerChangesZoneAll(game, None)
+            untilTable.clear()
+
+    def triggerTokenCreatedOnce(self, game):
+        if not self.createdTokens.isEmpty():
+            runParams = AbilityKey.newMap()
+            runParams.put(AbilityKey.Cards, self.createdTokens)
+            runParams.put(AbilityKey.FirstTime, self.firstTimeTokenCreators)
+            game.getTriggerHandler().runTrigger(TriggerType.TokenCreatedOnce, runParams, False)
+
+    def filterCards(self, origin, destination, valid, host, sa):
+        allCards = CardCollection()
+        if destination is not None and not IterableUtil.any(destination, lambda d: self.columnKeySet().contains(d)):
+            return allCards
+        if origin is not None:
+            for z in origin:
+                if self.containsRow(z):
+                    lkiLookup = CardCollection.EMPTY
+                    # CR 603.10a
+                    if z == ZoneType.Battlefield:
+                        lkiLookup = self.lastStateBattlefield
+                    if z == ZoneType.Graveyard and destination is None:
+                        lkiLookup = self.lastStateGraveyard
+                    if destination is not None:
+                        for zt in destination:
+                            if self.row(z).containsKey(zt):
+                                for c in self.row(z).get(zt):
+                                    if lkiLookup is not CardCollection.EMPTY and not lkiLookup.contains(c):
+                                        # this can happen if e.g. a mutated permanent dies
+                                        continue
+                                    allCards.add(lkiLookup.get(c))
+                    else:
+                        for cc in self.row(z).values():
+                            for c in cc:
+                                if lkiLookup is not CardCollection.EMPTY and not lkiLookup.contains(c):
+                                    continue
+                                allCards.add(lkiLookup.get(c))
+        elif destination is not None:
+            for zt in destination:
+                for c in self.column(zt).values():
+                    allCards.addAll(c)
+        else:
+            for c in self.values():
+                allCards.addAll(c)
+
+        if valid is not None:
+            allCards = CardLists.getValidCards(allCards, valid, host.getController(), host, sa)
+        return allCards
+
+    def allCards(self):
+        return Iterables.concat(self.values())
+
+    def addToken(self, c, firstTime):
+        self.createdTokens.add(c)
+        if firstTime:
+            self.firstTimeTokenCreators.add(c.getOwner())
+```

@@ -34,7 +34,7 @@ The `Score` class is a small, immutable value object nested within `GameStateEva
 As a plain data holder it implements no interface and extends only `Object`, overriding `equals` for field-wise comparison and `toString` for compact, human-readable diagnostics that surface the summon-sick figure only when it diverges. The design intent is a lightweight, comparable container the evaluator can produce and the AI's decision logic can rank when choosing among simulated moves.
 
 ## Source
-`forge-ai/src/main/java/forge/ai/simulation/GameStateEvaluator.java` â€” declaration excerpt
+`forge-ai/src/main/java/forge/ai/simulation/GameStateEvaluator.java` Ã¢â‚¬â€ declaration excerpt
 
 ```java
     public static class Score {
@@ -61,4 +61,28 @@ As a plain data holder it implements no interface and extends only `Object`, ove
             return value + (summonSickValue != value ? " (ss " + summonSickValue + ")" :"");
         }
     }
+```
+
+## Python
+`forge/ai/simulation/GameStateEvaluator/Score.py`
+
+```python
+from forge.ai.simulation.GameStateEvaluator import GameStateEvaluator
+
+
+class Score:
+    def __init__(self, value: int, summonSickValue: int = None):
+        self.value = value
+        if summonSickValue is None:
+            self.summonSickValue = value
+        else:
+            self.summonSickValue = summonSickValue
+
+    def equals(self, other: "Score") -> bool:
+        if other is None:
+            return False
+        return self.value == other.value and self.summonSickValue == other.summonSickValue
+
+    def toString(self) -> str:
+        return str(self.value) + (" (ss " + str(self.summonSickValue) + ")" if self.summonSickValue != self.value else "")
 ```

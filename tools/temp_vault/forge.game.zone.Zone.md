@@ -83,6 +83,10 @@ classDiagram
 - [[forge.game.zone.ZoneType|ZoneType]]
 - [[forge.game.zone.ZoneView|ZoneView]]
 
+## Design Description
+
+Zone models a single Magic: the Gathering game region (library, graveyard, battlefield, stack, command, etc.), owning the ordered `CardCollection` of cards it holds and serving as the authoritative gatekeeper for cards moving in and out of that region. Implementing `Serializable` and `Iterable<Card>`, it exposes add/remove/contains/reorder/shuffle operations while firing `GameEventZone` notifications through its parent `Game` so views stay synchronized. It collaborates with `Card`, `ZoneType`, `Player`, and `ZoneView` to enforce zone-entry rulesâ€”resetting tap state, tracking commanders, descending on graveyard entryâ€”and uses transient multimaps to record which cards entered from which origin this and last turn. The base class deliberately returns a null player and an unfiltered card view, leaving player ownership and battlefield filtering to subclasses, and provides last-known-information snapshots via `getLKICopy`/`saveLKI` for rollback and game-state queries.
+
 ## Source
 `forge-game/src/main/java/forge/game/zone/Zone.java`
 
@@ -376,4 +380,239 @@ public class Zone implements java.io.Serializable, Iterable<Card> {
         enteredFromThisTurn.put(lki, zt);
     }
 }
+```
+
+## Python
+`forge/game/zone/Zone.py`
+
+```python
+from forge.game.Game import Game
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.event.GameEventZone import GameEventZone
+from forge.game.player.Player import Player
+from forge.game.zone.ZoneType import ZoneType
+from forge.game.zone.ZoneView import ZoneView
+
+import functools
+from typing import Iterator, List, Optional, Callable
+
+from forge.card.CardStateName import CardStateName
+from forge.game.GameType import GameType
+from forge.game.card.CardCopyService import CardCopyService
+from forge.game.event.EventValueChangeType import EventValueChangeType
+from forge.game.player.PlayerView import PlayerView
+from forge.util.MyRandom import MyRandom
+
+
+def _card_comparator(a: Card, b: Card) -> int:
+    # comparingInt(getCMC).thenComparing(color order weight)
+    # .thenComparing(getName).thenComparing(hasPerpetual)
+    ka = a.getCMC()
+    kb = b.getCMC()
+    if ka != kb:
+        return -1 if ka < kb else 1
+
+    ka = a.getColor().getOrderWeight()
+    kb = b.getColor().getOrderWeight()
+    if ka != kb:
+        return -1 if ka < kb else 1
+
+    ka = a.getName()
+    kb = b.getName()
+    if ka != kb:
+        return -1 if ka < kb else 1
+
+    ka = a.hasPerpetual()
+    kb = b.hasPerpetual()
+    if ka != kb:
+        return -1 if ka < kb else 1
+
+    return 0
+
+
+class Zone:
+    serialVersionUID = -5687652485777639176
+
+    # might support different order via preference later
+    COMPARATOR = staticmethod(functools.cmp_to_key(_card_comparator))
+
+    def __init__(self, zone0: ZoneType, game0: Game):
+        self.cardList = CardCollection()
+        self.zoneType = zone0
+        self.game = game0
+        self.cardsAddedThisTurn = {}
+        self.cardsAddedLastTurn = {}
+        self.enteredFromThisTurn = {}
+
+    def sort(self) -> None:
+        self.cardList.sort(Zone.COMPARATOR)
+
+    def onChanged(self) -> None:
+        pass
+
+    def getPlayer(self) -> Optional[Player]:  # generic zones like stack have no player associated
+        return None
+
+    def getView(self) -> ZoneView:
+        return ZoneView(PlayerView.get(self.getPlayer()), self.zoneType)
+
+    def reorder(self, c: Card, index: int) -> None:
+        self.cardList.remove(c)
+        self.cardList.add(index, c)
+
+    def add(self, c: Card, index: Optional[int] = None, latestState: Optional[Card] = None, rollback: bool = False) -> None:
+        if index is not None and self.cardList.isEmpty() and index > 0:
+            # something went wrong, most likely the method fired when the game was in an unexpected state
+            # (e.g. conceding during the mana payment prompt)
+            print("Warning: tried to add a card to zone with a specific non-zero index, but the zone was empty! Canceling Zone#add to avoid a crash.")
+            return
+
+        # ensure commander returns to being first card in command zone
+        if index is None and self.zoneType == ZoneType.Command and c.isCommander():
+            index = 0
+            if self.game.getRules().hasAppliedVariant(GameType.Oathbreaker) and c.getRules().canBeSignatureSpell() \
+                    and not self.cardList.isEmpty() and self.cardList.get(0).isCommander():
+                index = 1  # signature spell should return to being second card in command zone if oathbreaker is there too
+
+        if not rollback:
+            # Immutable cards are usually emblems and effects
+            if not c.isImmutable():
+                oldZone = self.game.getZoneOf(c)
+                zt = ZoneType.Stack if oldZone is None else oldZone.getZoneType()
+
+                # don't go in there if its a control change
+                if zt != self.zoneType:
+                    c.setTurnInController(self.getPlayer())
+                    c.setTurnInZone(self.game.getPhaseHandler().getTurn())
+                    if latestState is not None:
+                        self.cardsAddedThisTurn.setdefault(zt, []).append(latestState)
+                        self.enteredFromThisTurn[latestState] = zt
+
+            if self.zoneType != ZoneType.Battlefield:
+                c.setTapped(False)
+
+            if self.zoneType == ZoneType.Graveyard and c.isPermanent() and not c.isToken():
+                c.getOwner().descend()
+
+        c.setZone(self)
+
+        if (self.zoneType == ZoneType.Battlefield or not c.isToken() or c.getCurrentStateName() == CardStateName.PreparedSpell) or (self.zoneType == ZoneType.Stack and c.getCopiedPermanent() is not None):
+            if index is None:
+                self.cardList.add(c)
+            else:
+                self.cardList.add(index, c)
+        self.onChanged()
+
+        self.game.fireEvent(GameEventZone(self.zoneType, self.getPlayer(), EventValueChangeType.Added, c))
+
+    def contains(self, c) -> bool:
+        if callable(c) and not isinstance(c, Card):
+            return self.cardList.anyMatch(c)
+        return self.cardList.contains(c)
+
+    def remove(self, c: Card) -> None:
+        if self.cardList.remove(c):
+            self.onChanged()
+            self.game.fireEvent(GameEventZone(self.zoneType, self.getPlayer(), EventValueChangeType.Removed, c))
+
+    def setCards(self, cards) -> None:
+        self.cardList.clear()
+        for c in cards:
+            c.setZone(self)
+            self.cardList.add(c)
+        self.onChanged()
+        self.game.fireEvent(GameEventZone(self.zoneType, self.getPlayer(), EventValueChangeType.ComplexUpdate, None))
+
+    def removeAllCards(self, forcedWithoutEvents: bool) -> None:
+        if forcedWithoutEvents:
+            self.cardList.clear()
+        else:
+            for c in self.cardList:
+                self.remove(c)
+
+    def is_(self, zone: ZoneType, player: Optional[Player] = None) -> bool:
+        if player is None:
+            return zone == self.zoneType
+        return self.zoneType == zone and player == self.getPlayer()
+
+    def getZoneType(self) -> ZoneType:
+        return self.zoneType
+
+    def size(self) -> int:
+        return self.cardList.size()
+
+    def get(self, index: int) -> Card:
+        return self.cardList.get(index)
+
+    def getCards(self, filter: bool = True) -> CardCollectionView:
+        return self.cardList  # Non-Battlefield PlayerZones don't care about the filter
+
+    def isEmpty(self) -> bool:
+        return self.cardList.isEmpty()
+
+    def getCardsAddedThisTurn(self, origin: ZoneType) -> List[Card]:
+        return self.getCardsAdded(self.cardsAddedThisTurn, origin)
+
+    def getCardsAddedLastTurn(self, origin: ZoneType) -> List[Card]:
+        return self.getCardsAdded(self.cardsAddedLastTurn, origin)
+
+    def isCardAddedThisTurn(self, card: Card, origin: ZoneType) -> bool:
+        if card in self.cardsAddedThisTurn.get(origin, []):
+            return origin == self.enteredFromThisTurn.get(card)
+        return False
+
+    @staticmethod
+    def getCardsAdded(cardsAdded: dict, origin: ZoneType) -> List[Card]:
+        if origin is not None:
+            return list(cardsAdded.get(origin, []))
+
+        if not cardsAdded:
+            return []
+
+        # all cards if key == null
+        result = []
+        for values in cardsAdded.values():
+            result.extend(values)
+        return result
+
+    def resetCardsAddedThisTurn(self) -> None:
+        self.cardsAddedLastTurn.clear()
+        for k, v in self.cardsAddedThisTurn.items():
+            self.cardsAddedLastTurn.setdefault(k, []).extend(v)
+        self.cardsAddedThisTurn.clear()
+        self.enteredFromThisTurn.clear()
+
+    def __iter__(self) -> Iterator[Card]:
+        return iter(self.cardList)
+
+    def iterator(self) -> Iterator[Card]:
+        return self.cardList.iterator()
+
+    def shuffle(self) -> None:
+        MyRandom.getRandom().shuffle(self.cardList)
+        self.onChanged()
+
+    def __str__(self) -> str:
+        return str(self.zoneType)
+
+    def toString(self) -> str:
+        return self.zoneType.toString()
+
+    def getLKICopy(self, cachedMap: dict) -> "Zone":
+        result = Zone(self.zoneType, self.game)
+
+        result.setCards(CardCopyService.getLKICopyList(self.getCards(), cachedMap))
+
+        return result
+
+    def saveLKI(self, c: Card, old: Card) -> None:
+        oldZone = self.game.getZoneOf(old)
+        zt = ZoneType.Stack if oldZone is None else oldZone.getZoneType()
+        if zt == self.zoneType:
+            return
+        lki = CardCopyService.getLKICopy(c)
+        self.cardsAddedThisTurn.setdefault(zt, []).append(lki)
+        self.enteredFromThisTurn[lki] = zt
 ```

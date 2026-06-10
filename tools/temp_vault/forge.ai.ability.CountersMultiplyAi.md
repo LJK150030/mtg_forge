@@ -53,9 +53,9 @@ classDiagram
 
 ## Design Description
 
-CountersMultiplyAi supplies the AI's decision-making for spell/ability effects that multiply existing counters on permanents. Extending SpellAbilityAi, it overrides the standard hooks—`checkApiLogic` to confirm worthwhile counter-bearing cards exist, `checkPhaseRestrictions` to time non-P1P1 activations toward main phase two and sorcery speed, and `doTriggerNoCost` to handle forced triggers—while delegating to its private `setTargets` helper.
+CountersMultiplyAi supplies the AI's decision-making for spell/ability effects that multiply existing counters on permanents. Extending SpellAbilityAi, it overrides the standard hooksâ€”`checkApiLogic` to confirm worthwhile counter-bearing cards exist, `checkPhaseRestrictions` to time non-P1P1 activations toward main phase two and sorcery speed, and `doTriggerNoCost` to handle forced triggersâ€”while delegating to its private `setTargets` helper.
 
-Its core design intent is value-driven targeting: it prefers doubling beneficial counters on the AI's own cards (prioritizing loyalty, then +1/+1, then charge) and detrimental −1/−1 counters on opponents, avoiding cards bearing negative counters when no specific type is named. `setTargets` and `addTargetsByCounterType` sort candidates by counter quantity and respect Strive cost limits, collaborating with Card, CardCollection, CounterType, and SpellAbility to assemble an optimal target set and return an AiAbilityDecision conveying its willingness to act.
+Its core design intent is value-driven targeting: it prefers doubling beneficial counters on the AI's own cards (prioritizing loyalty, then +1/+1, then charge) and detrimental âˆ’1/âˆ’1 counters on opponents, avoiding cards bearing negative counters when no specific type is named. `setTargets` and `addTargetsByCounterType` sort candidates by counter quantity and respect Strive cost limits, collaborating with Card, CardCollection, CounterType, and SpellAbility to assemble an optimal target set and return an AiAbilityDecision conveying its willingness to act.
 
 ## Source
 `forge-ai/src/main/java/forge/ai/ability/CountersMultiplyAi.java`
@@ -269,4 +269,179 @@ public class CountersMultiplyAi extends SpellAbilityAi {
         }
     }
 }
+```
+
+## Python
+`forge/ai/ability/CountersMultiplyAi.py`
+
+```python
+from forge.ai.SpellAbilityAi import SpellAbilityAi
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.ai.ComputerUtil import ComputerUtil
+from forge.ai.ComputerUtilCost import ComputerUtilCost
+from forge.game.Game import Game
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CardPredicates import CardPredicates
+from forge.game.card.CounterEnumType import CounterEnumType
+from forge.game.card.CounterType import CounterType
+from forge.game.keyword.Keyword import Keyword
+from forge.game.phase.PhaseHandler import PhaseHandler
+from forge.game.phase.PhaseType import PhaseType
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+
+from functools import cmp_to_key
+
+
+class CountersMultiplyAi(SpellAbilityAi):
+
+    def checkApiLogic(self, ai: Player, sa: SpellAbility) -> AiAbilityDecision:
+        if sa.usesTargeting():
+            return self.setTargets(ai, sa)
+
+        counterType = self.getCounterType(sa)
+        # defined are mostly Self or Creatures you control
+        list = AbilityUtils.getDefinedCards(sa.getHostCard(), sa.getParam("Defined"), sa)
+
+        def _filter(c: Card) -> bool:
+            if not c.hasCounters():
+                return False
+
+            if counterType is not None:
+                if c.getCounters(counterType) <= 0:
+                    return False
+                if not c.canReceiveCounters(counterType):
+                    return False
+            else:
+                for key, value in c.getCounters().items():
+                    # has negative counter it would double
+                    if ComputerUtil.isNegativeCounter(key, c):
+                        return False
+
+            return True
+
+        list = CardLists.filter(list, _filter)
+
+        if list.isEmpty():
+            return AiAbilityDecision(0, AiPlayDecision.MissingNeededCards)
+
+        return super().checkApiLogic(ai, sa)
+
+    def checkPhaseRestrictions(self, ai: Player, sa: SpellAbility, ph: PhaseHandler) -> bool:
+        counterType = self.getCounterType(sa)
+
+        if counterType is not None and not counterType.is_(CounterEnumType.P1P1):
+            if not sa.hasParam("ActivationPhases"):
+                # Don't use non P1P1/M1M1 counters before main 2 if possible
+                if ph.getPhase().isBefore(PhaseType.MAIN2) and not ComputerUtil.castSpellInMain1(ai, sa):
+                    return False
+                if ph.isPlayerTurn(ai) and not self.isSorcerySpeed(sa, ai):
+                    return False
+        if ComputerUtil.waitForBlocking(sa):
+            return False
+
+        return True
+
+    def doTriggerNoCost(self, ai: Player, sa: SpellAbility, mandatory: bool) -> AiAbilityDecision:
+        if not sa.usesTargeting():
+            return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+        decision = self.setTargets(ai, sa)
+        if decision.willingToPlay():
+            return decision
+        elif mandatory:
+            list = CardLists.getTargetableCards(ai.getGame().getCardsIn(ZoneType.Battlefield), sa)
+            if list.isEmpty():
+                return AiAbilityDecision(0, AiPlayDecision.TargetingFailed)
+            notHasCounters = CardPredicates.hasCounters().negate()
+            safeMatch = next((c for c in list if notHasCounters(c)), None)
+            sa.getTargets().add(list.getFirst() if safeMatch is None else safeMatch)
+            return AiAbilityDecision(50, AiPlayDecision.MandatoryPlay)
+
+        return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+    def getCounterType(self, sa: SpellAbility) -> CounterType:
+        if sa.hasParam("CounterType"):
+            try:
+                return CounterType.getType(sa.getParam("CounterType"))
+            except Exception as e:
+                print("Counter type doesn't match, nor does an SVar exist with the type name.")
+                return None
+        return None
+
+    def setTargets(self, ai: Player, sa: SpellAbility) -> AiAbilityDecision:
+        counterType = self.getCounterType(sa)
+
+        game = ai.getGame()
+
+        list = CardLists.getTargetableCards(game.getCardsIn(ZoneType.Battlefield), sa)
+
+        # pre filter targetable cards with counters and can receive one of them
+        def _filter(c: Card) -> bool:
+            if not c.hasCounters():
+                return False
+
+            if counterType is not None:
+                if c.getCounters(counterType) <= 0:
+                    return False
+                if not c.canReceiveCounters(counterType):
+                    return False
+
+            return True
+
+        list = CardLists.filter(list, _filter)
+
+        aiList = CardLists.filterControlledBy(list, ai)
+        if not aiList.isEmpty():
+            # counter type list to check
+            # first loyalty, then P1P1, then Charge Counter
+            typeList = [CounterEnumType.LOYALTY, CounterEnumType.P1P1, CounterEnumType.CHARGE]
+            for type in typeList:
+                # enough targets
+                if not sa.canAddMoreTarget():
+                    break
+
+                if counterType is None or counterType.is_(type):
+                    self.addTargetsByCounterType(ai, sa, aiList, type)
+
+        oppList = CardLists.filterControlledBy(list, ai.getOpponents())
+        if not oppList.isEmpty():
+            # not enough targets
+            if sa.canAddMoreTarget():
+                type = CounterEnumType.M1M1
+                if counterType is None or counterType == type:
+                    self.addTargetsByCounterType(ai, sa, oppList, type)
+
+        # targeting does failed
+        if not sa.isTargetNumberValid() or sa.getTargets().size() == 0:
+            sa.resetTargets()
+            return AiAbilityDecision(0, AiPlayDecision.TargetingFailed)
+
+        return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+    def addTargetsByCounterType(self, ai: Player, sa: SpellAbility, list: CardCollection,
+            type: CounterType) -> None:
+        newList = CardLists.filter(list, CardPredicates.hasCounter(type))
+        if newList.isEmpty():
+            return
+
+        newList.sort(key=cmp_to_key(CardPredicates.compareByCounterType(type)), reverse=True)
+        while sa.canAddMoreTarget():
+            if newList.isEmpty():
+                break
+
+            c = newList.remove(0)
+            sa.getTargets().add(c)
+
+            # check if Spell with Strive is still playable
+            if sa.isSpell() and sa.getHostCard().hasKeyword(Keyword.STRIVE):
+                # if not remove target again and break list
+                if not ComputerUtilCost.canPayCost(sa, ai, False):
+                    sa.getTargets().remove(c)
+                    break
 ```

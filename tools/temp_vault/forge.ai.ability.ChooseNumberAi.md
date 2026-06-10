@@ -39,7 +39,7 @@ classDiagram
 
 ChooseNumberAi supplies the AI decision logic for "ChooseNumber" spell abilities, determining whether and how the computer player should activate effects that ask a player to pick a number. As a concrete subclass of `SpellAbilityAi`, it overrides `checkApiLogic` to evaluate playability and `doTriggerNoCost` to handle triggered activations, returning `AiAbilityDecision` objects that pair a confidence score with an `AiPlayDecision` enum. It collaborates with `Player` and `SpellAbility` to inspect game state, dispatching on the ability's `AILogic` parameter.
 
-The class's notable design intent is its special-casing of the "SweepCreatures" logic: it weighs the AI's creature count and board evaluation against the strongest opponent's, declining when the AI is unpressured and ahead, and committing only when the board math favors a sweep. Absent recognized logic it reports `MissingLogic`, and when targeting is required it picks a preferred defender—reflecting a conservative, situational approach to a generic numeric-choice effect.
+The class's notable design intent is its special-casing of the "SweepCreatures" logic: it weighs the AI's creature count and board evaluation against the strongest opponent's, declining when the AI is unpressured and ahead, and committing only when the board math favors a sweep. Absent recognized logic it reports `MissingLogic`, and when targeting is required it picks a preferred defenderâ€”reflecting a conservative, situational approach to a generic numeric-choice effect.
 
 ## Source
 `forge-ai/src/main/java/forge/ai/ability/ChooseNumberAi.java`
@@ -114,4 +114,68 @@ public class ChooseNumberAi extends SpellAbilityAi {
         return canPlay(ai, sa);
     }
 }
+```
+
+## Python
+`forge/ai/ability/ChooseNumberAi.py`
+
+```python
+from forge.ai.SpellAbilityAi import SpellAbilityAi
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.ai.ComputerUtilCard import ComputerUtilCard
+from forge.ai.AiAttackController import AiAttackController
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+
+
+class ChooseNumberAi(SpellAbilityAi):
+
+    def checkApiLogic(self, aiPlayer: Player, sa: SpellAbility) -> AiAbilityDecision:
+        aiLogic = sa.getParamOrDefault("AILogic", "")
+
+        if aiLogic == "":
+            return AiAbilityDecision(0, AiPlayDecision.MissingLogic)
+        elif aiLogic == "SweepCreatures":
+            maxChoiceLimit = AbilityUtils.calculateAmount(sa.getHostCard(), sa.getParam("Max"), sa)
+            ownCreatureCount = len(aiPlayer.getCreaturesInPlay())
+            oppMaxCreatureCount = 0
+            refOpp = None
+            for opp in aiPlayer.getOpponents():
+                oppCreatureCount = max(oppMaxCreatureCount, len(opp.getCreaturesInPlay()))
+                if oppCreatureCount > oppMaxCreatureCount:
+                    oppMaxCreatureCount = oppCreatureCount
+                    refOpp = opp
+
+            if refOpp is None:
+                return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+            evalAI = ComputerUtilCard.evaluateCreatureList(aiPlayer.getCreaturesInPlay())
+            evalOpp = ComputerUtilCard.evaluateCreatureList(refOpp.getCreaturesInPlay())
+
+            if aiPlayer.getLifeLostLastTurn() + aiPlayer.getLifeLostThisTurn() == 0 and evalAI > evalOpp:
+                # we're not pressured and our stuff seems better, don't do it yet
+                return AiAbilityDecision(0, AiPlayDecision.AnotherTime)
+
+            if ownCreatureCount > oppMaxCreatureCount + 2 or ownCreatureCount < min(oppMaxCreatureCount, maxChoiceLimit):
+                # we have more creatures than the opponent, or we have less than the opponent but more than the max choice limit
+                return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+            else:
+                # we have less creatures than the opponent and less than the max choice limit
+                return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+        if sa.usesTargeting():
+            sa.resetTargets()
+            opp = AiAttackController.choosePreferredDefenderPlayer(aiPlayer)
+            if sa.canTarget(opp):
+                sa.getTargets().add(opp)
+            else:
+                return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+        return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+    def doTriggerNoCost(self, ai: Player, sa: SpellAbility, mandatory: bool) -> AiAbilityDecision:
+        if mandatory:
+            return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+        return self.canPlay(ai, sa)
 ```

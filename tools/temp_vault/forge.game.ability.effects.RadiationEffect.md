@@ -82,3 +82,37 @@ public class RadiationEffect extends SpellAbilityEffect {
     }
 }
 ```
+
+## Python
+`forge/game/ability/effects/RadiationEffect.py`
+
+```python
+from forge.game.Game import Game
+from forge.game.GameEntityCounterTable import GameEntityCounterTable
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+
+
+class RadiationEffect(SpellAbilityEffect):
+
+    def resolve(self, sa: SpellAbility) -> None:
+        host = sa.getHostCard()
+        player = sa.getActivatingPlayer()
+        game = host.getGame()
+        num = AbilityUtils.calculateAmount(host, sa.getParamOrDefault("Num", "0"), sa)
+
+        table = GameEntityCounterTable()
+
+        for p in self.getTargetPlayers(sa):
+            if not p.isInGame():
+                continue
+
+            if num >= 1:
+                p.addRadCounters(num, player, table)
+            else:
+                p.removeRadCounters(-num)
+        table.replaceCounterEffect(game, sa)
+```

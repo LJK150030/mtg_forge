@@ -143,3 +143,62 @@ public class CostPayLife extends CostPart {
 
 }
 ```
+
+## Python
+`forge/game/cost/CostPayLife.py`
+
+```python
+package forge.game.cost
+
+from forge.game.cost.CostPart import CostPart
+from forge.game.cost.ICostVisitor import ICostVisitor
+from forge.game.cost.PaymentDecision import PaymentDecision
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+
+
+class CostPayLife(CostPart):
+    """The Class CostPayLife."""
+
+    # Serializables need a version ID.
+    serialVersionUID = 1
+
+    def __init__(self, amount: str, description: str):
+        """
+        Instantiates a new cost pay life.
+
+        :param amount: the amount
+        """
+        super().__init__(amount, "card", description)
+
+    def paymentOrder(self) -> int:
+        return 7
+
+    def toString(self) -> str:
+        sb = []
+        sb.append("Pay ")
+        desc = self.getTypeDescription()
+        if desc is not None:
+            sb.append(desc)
+        else:
+            sb.append(str(self.getAmount()))
+            sb.append(" life")
+        return "".join(sb)
+
+    def getMaxAmountX(self, ability: SpellAbility, payer: Player, effect: bool) -> int:
+        if not payer.canPayLife(1, effect, ability):
+            return 0
+        return payer.getLife()
+
+    def canPay(self, ability: SpellAbility, payer: Player, effect: bool) -> bool:
+        if not payer.canPayLife(self.getAbilityAmount(ability), effect, ability):
+            return False
+
+        return True
+
+    def payAsDecided(self, ai: Player, decision: PaymentDecision, ability: SpellAbility, effect: bool) -> bool:
+        return ai.payLife(decision.c, ability, effect)
+
+    def accept(self, visitor: ICostVisitor):
+        return visitor.visit(self)
+```

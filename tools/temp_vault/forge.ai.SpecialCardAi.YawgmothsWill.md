@@ -41,10 +41,10 @@ classDiagram
 
 Yawgmoth's Will determines whether the AI should cast an effect that lets it play cards from its graveyard this turn (Yawgmoth's Will, Magus of the Will, and similar). Implemented as a static nested helper class within `SpecialCardAi`, it exposes a single stateless `consider` method returning a play/no-play boolean rather than participating in any inheritance hierarchy.
 
-The method gates on basic viability—a non-empty graveyard and that it is the AI's own turn (avoiding weak instant-speed decisions)—then surveys the graveyard's `SpellAbility` set to estimate value. Collaborating with `ComputerUtilAbility`, `ComputerUtilMana`, and the `PlayerControllerAi`'s `canPlaySa` decision, it counts how many graveyard cards are actually castable given remaining mana, weighting one-shot instants and sorceries at half value. It deliberately skips counterspells, lands, and self-referential abilities to prevent infinite recursion, recommending the effect only when enough castable value clears a threshold.
+The method gates on basic viabilityâ€”a non-empty graveyard and that it is the AI's own turn (avoiding weak instant-speed decisions)â€”then surveys the graveyard's `SpellAbility` set to estimate value. Collaborating with `ComputerUtilAbility`, `ComputerUtilMana`, and the `PlayerControllerAi`'s `canPlaySa` decision, it counts how many graveyard cards are actually castable given remaining mana, weighting one-shot instants and sorceries at half value. It deliberately skips counterspells, lands, and self-referential abilities to prevent infinite recursion, recommending the effect only when enough castable value clears a threshold.
 
 ## Source
-`forge-ai/src/main/java/forge/ai/SpecialCardAi.java` â€” declaration excerpt
+`forge-ai/src/main/java/forge/ai/SpecialCardAi.java` Ã¢â‚¬â€ declaration excerpt
 
 ```java
     // Yawgmoth's Will and other cards with similar effect, e.g. Magus of the Will
@@ -106,4 +106,74 @@ The method gates on basic viability—a non-empty graveyard and that it is the A
             return numCastable >= minCastableInGY;
         }
     }
+```
+
+## Python
+`forge/ai/SpecialCardAi/YawgmothsWill.py`
+
+```python
+from forge.ai.PlayerControllerAi import PlayerControllerAi
+from forge.ai.ComputerUtilAbility import ComputerUtilAbility
+from forge.ai.ComputerUtilMana import ComputerUtilMana
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.game.ability.ApiType import ApiType
+from forge.game.card.Card import Card
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.spellability.SpellPermanent import SpellPermanent
+from forge.game.zone.ZoneType import ZoneType
+
+
+# Yawgmoth's Will and other cards with similar effect, e.g. Magus of the Will
+class YawgmothsWill:
+    @staticmethod
+    def consider(ai: Player, sa: SpellAbility) -> bool:
+        cardsInGY: CardCollectionView = ai.getCardsIn(ZoneType.Graveyard)
+        if cardsInGY.size() == 0:
+            return False
+        elif ai.getGame().getPhaseHandler().getPlayerTurn() != ai:
+            # The AI is not very good at deciding for what to viably do during the opp's turn when this
+            # comes from an instant speed effect (e.g. Magus of the Will)
+            return False
+
+        minManaAdj = 2  # we want the AI to have some spare mana for possible other spells to cast
+        minCastableInGY = 3.0  # we want the AI to have several castable cards in GY before attempting this effect
+        saList: list[SpellAbility] = ComputerUtilAbility.getSpellAbilities(cardsInGY, ai)
+        selfCMC = sa.getPayCosts().getCostMana().getMana().getCMC()
+
+        numCastable = 0.0
+        for ab in saList:
+            src = ab.getHostCard()
+
+            if ab.getApi() == ApiType.Counter:
+                # cut short considering to play counterspells via Yawgmoth's Will
+                continue
+
+            if (ComputerUtilAbility.getAbilitySourceName(ab) == ComputerUtilAbility.getAbilitySourceName(sa)
+                    and not isinstance(ab, SpellPermanent)) or ab.hasParam("AINoRecursiveCheck"):
+                # prevent infinitely recursing abilities that are susceptible to reentry
+                continue
+
+            # check to see if the AI is willing to play this card
+            testAb = ab.copy()
+            testAb.getRestrictions().setZone(ZoneType.Graveyard)
+            testAb.setActivatingPlayer(ai)
+
+            willPlayAb = ai.getController().getAi().canPlaySa(testAb) == AiPlayDecision.WillPlay
+
+            # Land drops are generally made by the AI in main 1 before casting spells, so testing for them is iffy.
+            if not src.getType().isLand() and willPlayAb:
+                CMC = ab.getPayCosts().getTotalMana().getCMC() if ab.getPayCosts().getTotalMana() is not None else 0
+                Xcount = ab.getPayCosts().getTotalMana().countX() if ab.getPayCosts().getTotalMana() is not None else 0
+
+                if (Xcount == 0 and CMC == 0) or ComputerUtilMana.canPayManaCost(ab, ai, selfCMC + minManaAdj, False):
+                    if src.isInstant() or src.isSorcery():
+                        # instants and sorceries are one-shot, so only treat them as 1/2 value for the purpose of meeting minimum
+                        # castable cards in graveyard requirements
+                        numCastable += 0.5
+                    else:
+                        numCastable += 1.0
+
+        return numCastable >= minCastableInGY
 ```

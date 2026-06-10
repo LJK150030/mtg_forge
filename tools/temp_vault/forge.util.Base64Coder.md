@@ -41,6 +41,10 @@ classDiagram
     }
 ```
 
+## Design Description
+
+Base64Coder is a final utility class in the `forge.util` package that provides static methods for encoding and decoding data in Base64 format per RFC 1521, supplemented by simple symmetric encryption helpers. As a stateless helper, it exposes no instancesâ€”its private no-arg constructor enforces purely static useâ€”and relies on two precomputed lookup tables (`map1`, `map2`), built in static initializers, to translate between 6-bit nibbles and Base64 characters for fast bitwise conversion. It offers layered overloads for strings, byte arrays, and line-wrapped output (76-char default), with an optional unpadded variant that delegates to `TextUtil.fastReplace`. The `encrypt`/`decrypt` methods extend its role beyond pure encoding, wrapping the JCE `Cipher` API (PBEWithMD5AndDES) with a hardcoded password and salt and Base64-encoding the cipher output. Validation throws `IllegalArgumentException` on malformed input, reflecting a defensively coded, dependency-light design.
+
 ## Source
 `forge-core/src/main/java/forge/util/Base64Coder.java`
 
@@ -444,4 +448,212 @@ public final class Base64Coder {
     private Base64Coder() {
     }
 } // end class Base64Coder
+```
+
+## Python
+`forge/util/Base64Coder.py`
+
+```python
+from forge.util.TextUtil import TextUtil
+
+import os
+import hashlib
+from Crypto.Cipher import DES
+from Crypto.Util.Padding import pad, unpad
+
+
+class Base64Coder:
+
+    # The line separator string of the operating system.
+    SYSTEM_LINE_SEPARATOR = os.linesep
+
+    # Mapping table from 6-bit nibbles to Base64 characters.
+    map1 = [None] * 64
+    _i = 0
+    for _c in range(ord('A'), ord('Z') + 1):
+        map1[_i] = chr(_c)
+        _i += 1
+    for _c in range(ord('a'), ord('z') + 1):
+        map1[_i] = chr(_c)
+        _i += 1
+    for _c in range(ord('0'), ord('9') + 1):
+        map1[_i] = chr(_c)
+        _i += 1
+    map1[_i] = '+'
+    _i += 1
+    map1[_i] = '/'
+    _i += 1
+    del _i
+    del _c
+
+    # Mapping table from Base64 characters to 6-bit nibbles.
+    map2 = [-1] * 128
+    for _i in range(64):
+        map2[ord(map1[_i])] = _i
+    del _i
+
+    @staticmethod
+    def encodeString(s, noPad=None):
+        if noPad is None:
+            return ''.join(Base64Coder.encode(s.encode()))
+        t = ''.join(Base64Coder.encode(s.encode()))
+        if noPad:
+            t = TextUtil.fastReplace(t, "=", "")
+        return t
+
+    @staticmethod
+    def encodeLines(in_, iOff=None, iLen=None, lineLen=None, lineSeparator=None):
+        if iOff is None:
+            return Base64Coder.encodeLines(in_, 0, len(in_), 76, Base64Coder.SYSTEM_LINE_SEPARATOR)
+        blockLen = (lineLen * 3) // 4
+        if blockLen <= 0:
+            raise ValueError()
+        lines = ((iLen + blockLen) - 1) // blockLen
+        bufLen = (((iLen + 2) // 3) * 4) + (lines * len(lineSeparator))
+        buf = []
+        ip = 0
+        while ip < iLen:
+            l = min(iLen - ip, blockLen)
+            buf.append(''.join(Base64Coder.encode(in_, iOff + ip, l)))
+            buf.append(lineSeparator)
+            ip += l
+        return ''.join(buf)
+
+    @staticmethod
+    def encode(in_, a=None, b=None):
+        if a is None:
+            return Base64Coder.encode(in_, 0, len(in_))
+        if b is None:
+            return Base64Coder.encode(in_, 0, a)
+        iOff, iLen = a, b
+        oDataLen = ((iLen * 4) + 2) // 3  # output length without padding
+        oLen = ((iLen + 2) // 3) * 4  # output length including padding
+        out = [''] * oLen
+        ip = iOff
+        iEnd = iOff + iLen
+        op = 0
+        while ip < iEnd:
+            i0 = in_[ip] & 0xff
+            ip += 1
+            if ip < iEnd:
+                i1 = in_[ip] & 0xff
+                ip += 1
+            else:
+                i1 = 0
+            if ip < iEnd:
+                i2 = in_[ip] & 0xff
+                ip += 1
+            else:
+                i2 = 0
+            o0 = i0 >> 2
+            o1 = ((i0 & 3) << 4) | (i1 >> 4)
+            o2 = ((i1 & 0xf) << 2) | (i2 >> 6)
+            o3 = i2 & 0x3F
+            out[op] = Base64Coder.map1[o0]
+            op += 1
+            out[op] = Base64Coder.map1[o1]
+            op += 1
+            out[op] = Base64Coder.map1[o2] if op < oDataLen else '='
+            op += 1
+            out[op] = Base64Coder.map1[o3] if op < oDataLen else '='
+            op += 1
+        return out
+
+    @staticmethod
+    def decodeString(s):
+        return bytes(Base64Coder.decode(s)).decode()
+
+    @staticmethod
+    def decodeLines(s):
+        buf = [''] * len(s)
+        p = 0
+        for ip in range(len(s)):
+            c = s[ip]
+            if (c != ' ') and (c != '\r') and (c != '\n') and (c != '\t'):
+                buf[p] = c
+                p += 1
+        return Base64Coder.decode(buf, 0, p)
+
+    @staticmethod
+    def decode(in_, iOff=None, iLen=None):
+        if iOff is None:
+            if isinstance(in_, str):
+                in_ = list(in_)
+            return Base64Coder.decode(in_, 0, len(in_))
+        if (iLen % 4) != 0:
+            raise ValueError("Length of Base64 encoded input string is not a multiple of 4.")
+        while (iLen > 0) and (in_[(iOff + iLen) - 1] == '='):
+            iLen -= 1
+        oLen = (iLen * 3) // 4
+        out = bytearray(oLen)
+        ip = iOff
+        iEnd = iOff + iLen
+        op = 0
+        while ip < iEnd:
+            i0 = ord(in_[ip])
+            ip += 1
+            i1 = ord(in_[ip])
+            ip += 1
+            if ip < iEnd:
+                i2 = ord(in_[ip])
+                ip += 1
+            else:
+                i2 = ord('A')
+            if ip < iEnd:
+                i3 = ord(in_[ip])
+                ip += 1
+            else:
+                i3 = ord('A')
+            if (i0 > 127) or (i1 > 127) or (i2 > 127) or (i3 > 127):
+                raise ValueError("Illegal character in Base64 encoded data.")
+            b0 = Base64Coder.map2[i0]
+            b1 = Base64Coder.map2[i1]
+            b2 = Base64Coder.map2[i2]
+            b3 = Base64Coder.map2[i3]
+            if (b0 < 0) or (b1 < 0) or (b2 < 0) or (b3 < 0):
+                raise ValueError("Illegal character in Base64 encoded data.")
+            o0 = (b0 << 2) | (b1 >> 4)
+            o1 = ((b1 & 0xf) << 4) | (b2 >> 2)
+            o2 = ((b2 & 3) << 6) | b3
+            out[op] = o0 & 0xff
+            op += 1
+            if op < oLen:
+                out[op] = o1 & 0xff
+                op += 1
+            if op < oLen:
+                out[op] = o2 & 0xff
+                op += 1
+        return out
+
+    PASSWORD = list("enfldsgbnlsngdlksdsgm")
+    SALT = bytes([
+        0xde, 0x33, 0x10, 0x12,
+        0xde, 0x33, 0x10, 0x12,
+    ])
+
+    @staticmethod
+    def _deriveKeyIv(password, salt, iterations):
+        pw = bytes([ord(c) & 0xff for c in password])
+        h = hashlib.md5(pw + salt).digest()
+        for _ in range(iterations - 1):
+            h = hashlib.md5(h).digest()
+        return h[:8], h[8:16]
+
+    @staticmethod
+    def encrypt(value):
+        key, iv = Base64Coder._deriveKeyIv(Base64Coder.PASSWORD, Base64Coder.SALT, 20)
+        pbeCipher = DES.new(key, DES.MODE_CBC, iv)
+        ct = pbeCipher.encrypt(pad(value.encode("utf-8"), 8))
+        return ''.join(Base64Coder.encode(ct))
+
+    @staticmethod
+    def decrypt(value):
+        key, iv = Base64Coder._deriveKeyIv(Base64Coder.PASSWORD, Base64Coder.SALT, 20)
+        pbeCipher = DES.new(key, DES.MODE_CBC, iv)
+        pt = unpad(pbeCipher.decrypt(bytes(Base64Coder.decode(value))), 8)
+        return pt.decode("utf-8")
+
+    # Dummy constructor.
+    def __init__(self):
+        pass
 ```

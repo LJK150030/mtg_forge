@@ -46,7 +46,7 @@ classDiagram
 
 ## Design Description
 
-RearrangeTopOfLibraryAi supplies the AI's decision logic for abilities that let a player rearrange (and optionally shuffle) the top cards of a library, such as scry-like and library-manipulation effects. Extending SpellAbilityAi, it overrides canPlay to gate activation—respecting sorcery-speed and cost restrictions, limiting paid uses to once per turn before the AI's own turn, and selecting a target player (self, opponent, or a coin-flip between them) via PlayerCollection and life comparison—while doTriggerNoCost reuses that judgment and falls back to a mandatory play when required.
+RearrangeTopOfLibraryAi supplies the AI's decision logic for abilities that let a player rearrange (and optionally shuffle) the top cards of a library, such as scry-like and library-manipulation effects. Extending SpellAbilityAi, it overrides canPlay to gate activationâ€”respecting sorcery-speed and cost restrictions, limiting paid uses to once per turn before the AI's own turn, and selecting a target player (self, opponent, or a coin-flip between them) via PlayerCollection and life comparisonâ€”while doTriggerNoCost reuses that judgment and falls back to a mandatory play when required.
 
 Its confirmAction implements the shuffle-or-keep choice using profile-driven heuristics (configurable land counts and uncastable-CMC thresholds) that inspect the revealed top card, mana availability, and lands in play, deciding to shuffle away uncastable or unwanted cards differently for allies versus opponents. The class collaborates with PhaseHandler, Card, and Player but delegates the actual card ordering to PlayerControllerAi, keeping itself focused purely on strategic intent.
 
@@ -176,4 +176,116 @@ public class RearrangeTopOfLibraryAi extends SpellAbilityAi {
         return false;
     }
 }
+```
+
+## Python
+`forge/ai/ability/RearrangeTopOfLibraryAi.py`
+
+```python
+from typing import Map
+
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.ai.AiProfileUtil import AiProfileUtil
+from forge.ai.AiProps import AiProps
+from forge.ai.ComputerUtilMana import ComputerUtilMana
+from forge.ai.SpellAbilityAi import SpellAbilityAi
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.card.Card import Card
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CardPredicates import CardPredicates
+from forge.game.phase.PhaseHandler import PhaseHandler
+from forge.game.phase.PhaseType import PhaseType
+from forge.game.player.Player import Player
+from forge.game.player.PlayerActionConfirmMode import PlayerActionConfirmMode
+from forge.game.player.PlayerCollection import PlayerCollection
+from forge.game.player.PlayerPredicates import PlayerPredicates
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.MyRandom import MyRandom
+
+
+class RearrangeTopOfLibraryAi(SpellAbilityAi):
+    # (non-Javadoc)
+    # @see forge.card.abilityfactory.SpellAiLogic#canPlayAI(forge.game.player.Player, java.util.Map, forge.card.spellability.SpellAbility)
+    def canPlay(self, aiPlayer: Player, sa: SpellAbility) -> AiAbilityDecision:
+        # Specific details of ordering cards are handled by PlayerControllerAi#orderMoveToZoneList
+        ph = aiPlayer.getGame().getPhaseHandler()
+        source = sa.getHostCard()
+
+        if not sa.isTrigger():
+            if (source.isPermanent() and not sa.getRestrictions().isSorcerySpeed()
+                    and (sa.getPayCosts().hasTapCost() or sa.getPayCosts().hasManaCost())):
+                # If it has an associated cost, try to only do this before own turn
+                if not (ph.is_(PhaseType.END_OF_TURN) and ph.getNextTurn() == aiPlayer):
+                    return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+            # Do it once per turn, generally (may be improved later)
+            if aiPlayer in source.getAbilityActivatedThisTurn().getActivators(sa):
+                return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+        if sa.usesTargeting():
+            sa.resetTargets()
+
+            targetableOpps = aiPlayer.getOpponents().filter(PlayerPredicates.isTargetableBy(sa))
+            opp = targetableOpps.min(PlayerPredicates.compareByLife())
+            canTgtAI = sa.canTarget(aiPlayer)
+            canTgtHuman = sa.canTarget(opp)
+
+            if canTgtHuman and canTgtAI:
+                # TODO: maybe some other consideration rather than random?
+                preferredTarget = aiPlayer if MyRandom.percentTrue(50) else opp
+                sa.getTargets().add(preferredTarget)
+            elif canTgtAI:
+                sa.getTargets().add(aiPlayer)
+            elif canTgtHuman:
+                sa.getTargets().add(opp)
+            else:
+                return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)  # could not find a valid target
+
+        return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+    # (non-Javadoc)
+    # @see forge.card.abilityfactory.SpellAiLogic#doTriggerAINoCost(forge.game.player.Player, java.util.Map, forge.card.spellability.SpellAbility, boolean)
+    def doTriggerNoCost(self, ai: Player, sa: SpellAbility, mandatory: bool) -> AiAbilityDecision:
+        decision = self.canPlay(ai, sa)
+        if decision.willingToPlay():
+            return decision
+
+        if mandatory:
+            return AiAbilityDecision(50, AiPlayDecision.MandatoryPlay)
+
+        return decision
+
+    # (non-Javadoc)
+    # @see forge.card.ability.SpellAbilityAi#confirmAction(forge.game.player.Player, forge.card.spellability.SpellAbility, forge.game.player.PlayerActionConfirmMode, java.lang.String)
+    def confirmAction(self, player: Player, sa: SpellAbility, mode: PlayerActionConfirmMode, message: str, params: Map[str, object]) -> bool:
+        # Confirming this action means shuffling the library if asked.
+
+        # First, let's check if we can play the top card of the library
+        pc = (PlayerCollection(sa.getTargets().getTargetPlayers()) if sa.usesTargeting()
+              else AbilityUtils.getDefinedPlayers(sa.getHostCard(), sa.getParam("Defined"), sa))
+
+        p = pc.getFirst()  # currently always a single target spell
+        top = None if p.getCardsIn(ZoneType.Library).isEmpty() else p.getCardsIn(ZoneType.Library).getFirst()
+        if top is None:
+            return False
+
+        minLandsToScryLandsAway = AiProfileUtil.getIntProperty(player, AiProps.SCRY_NUM_LANDS_TO_NOT_NEED_MORE)
+        uncastableCMCThreshold = AiProfileUtil.getIntProperty(player, AiProps.SCRY_IMMEDIATELY_UNCASTABLE_CMC_DIFF)
+
+        landsOTB = CardLists.count(p.getCardsIn(ZoneType.Battlefield), CardPredicates.LANDS_PRODUCING_MANA)
+        cmc = (min(top.getCMC(Card.SplitCMCMode.LeftSplitCMC), top.getCMC(Card.SplitCMCMode.RightSplitCMC)) if top.isSplitCard()
+               else top.getCMC())
+        maxCastable = ComputerUtilMana.getAvailableManaEstimate(p, False)
+
+        if not top.isLand() and cmc - maxCastable >= uncastableCMCThreshold:
+            # Can't cast in the foreseeable future. Shuffle if doing it to ourselves or an ally, otherwise keep it
+            return not p.isOpponentOf(player)
+        elif top.isLand() and landsOTB <= minLandsToScryLandsAway:
+            # We don't want to give the opponent a free land if his land count is low
+            return p.isOpponentOf(player)
+
+        # Usually we don't want to shuffle if we arranged things carefully
+        return False
 ```

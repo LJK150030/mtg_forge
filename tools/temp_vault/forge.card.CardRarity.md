@@ -42,7 +42,7 @@ classDiagram
 
 CardRarity is a fixed enumeration of the rarity tiers a Magic card can occupy, spanning the standard BasicLand, Common, Uncommon, Rare, and MythicRare values alongside the non-standard Special, Token, and Unknown categories. Each constant binds a single-character `shortName`, returned by the overridden `toString`, to a human-readable `longName` exposed through `getLongName`, so callers get both a compact code suited to serialization or display and a descriptive label. Residing in `forge-core`'s `forge.card` package, it functions as a shared domain vocabulary referenced across card definitions and deck-building code rather than as a behavioral collaborator.
 
-The design emphasizes lenient, defensive parsing: `smartValueOf` matches input case-insensitively against each constant's enum name, short name, or long name, returning `Unknown` instead of throwing so malformed or in-development data degrades gracefully. The static `FILTER_OPTIONS` array curates the user-facing subset of rarities—omitting BasicLand, Token, and Unknown—to drive filtering in card-browsing interfaces.
+The design emphasizes lenient, defensive parsing: `smartValueOf` matches input case-insensitively against each constant's enum name, short name, or long name, returning `Unknown` instead of throwing so malformed or in-development data degrades gracefully. The static `FILTER_OPTIONS` array curates the user-facing subset of raritiesâ€”omitting BasicLand, Token, and Unknownâ€”to drive filtering in card-browsing interfaces.
 
 ## Source
 `forge-core/src/main/java/forge/card/CardRarity.java`
@@ -106,4 +106,50 @@ public enum CardRarity {
         return Unknown;
     }
 }
+```
+
+## Python
+`forge/card/CardRarity.py`
+
+```python
+from enum import Enum
+
+
+class CardRarity(Enum):
+    BasicLand = ("L", "Basic Land")
+    Common = ("C", "Common")
+    Uncommon = ("U", "Uncommon")
+    Rare = ("R", "Rare")
+    MythicRare = ("M", "Mythic Rare")
+    Special = ("S", "Special")  # Timeshifted
+    Token = ("T", "Token")      # Tokens
+    Unknown = ("?", "Unknown")  # In development
+
+    def __init__(self, shortName0: str, longName0: str):
+        self.shortName = shortName0
+        self.longName = longName0
+
+    def __str__(self) -> str:
+        return self.shortName
+
+    def getLongName(self) -> str:
+        return self.longName
+
+    @staticmethod
+    def smartValueOf(input: str) -> "CardRarity":
+        for r in CardRarity:
+            if (r.name.lower() == input.lower()
+                    or r.shortName.lower() == input.lower()
+                    or r.longName.lower() == input.lower()):
+                return r
+        return CardRarity.Unknown
+
+
+CardRarity.FILTER_OPTIONS = [
+    CardRarity.Common,
+    CardRarity.Uncommon,
+    CardRarity.Rare,
+    CardRarity.MythicRare,
+    CardRarity.Special,
+]
 ```

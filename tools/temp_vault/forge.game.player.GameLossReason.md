@@ -31,6 +31,12 @@ classDiagram
     }
 ```
 
+## Design Description
+
+GameLossReason is an enumeration in the `forge.game.player` package that catalogs the distinct conditions under which a player loses (or ceases to continue) a game of Magic: the Gathering. Each constant maps to a specific comprehensive-rules clauseâ€”Conceded (104.3a), LifeReachedZero (104.3b), Milled (104.3c), Poisoned (104.3d), and SpellEffect (104.3e)â€”while CommanderDamage, OpponentWon, and IntentionalDraw cover format-specific and non-defeat termination cases.
+
+As a plain enum, it serves as a typed, self-documenting vocabulary that collaborating game-state and player classes use to record and branch on why a game ended, replacing error-prone string or integer codes. Its sole behavior, the static `smartValueOf` helper, supports lenient deserialization by matching names case-insensitively and trimming whitespace, throwing a runtime exception on unknown inputâ€”reflecting an intent to integrate cleanly with text-based card scripting and persisted state.
+
 ## Source
 `forge-game/src/main/java/forge/game/player/GameLossReason.java`
 
@@ -94,4 +100,47 @@ public enum GameLossReason {
         throw new RuntimeException("Element " + value + " not found in GameLossReason enum");
     }
 }
+```
+
+## Python
+`forge/game/player/GameLossReason.py`
+
+```python
+from enum import Enum
+
+
+class GameLossReason(Enum):
+    """The Enum GameLossReason."""
+
+    Conceded = "Conceded"  # rule 104.3a
+    LifeReachedZero = "LifeReachedZero"  # rule 104.3b
+    Milled = "Milled"  # 104.3c
+    Poisoned = "Poisoned"  # 104.3d
+
+    # 104.3e and others
+    SpellEffect = "SpellEffect"
+
+    CommanderDamage = "CommanderDamage"
+
+    OpponentWon = "OpponentWon"
+
+    IntentionalDraw = "IntentionalDraw"  # Not a real "game loss" as such, but a reason not to continue playing.
+
+    @staticmethod
+    def smartValueOf(value: str) -> "GameLossReason":
+        """
+        Parses a string into an enum member.
+        :param value: string to parse
+        :return: enum equivalent
+        """
+        valToCompate = value.strip()
+        for v in GameLossReason.values():
+            if v.name.casefold() == valToCompate.casefold():
+                return v
+
+        raise RuntimeError("Element " + value + " not found in GameLossReason enum")
+
+    @classmethod
+    def values(cls) -> list["GameLossReason"]:
+        return list(cls)
 ```

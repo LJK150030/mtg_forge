@@ -37,6 +37,12 @@ classDiagram
 - [[forge.game.card.Card|Card]]
 - [[forge.game.spellability.SpellAbility|SpellAbility]]
 
+## Design Description
+
+TriggerPayLife is a concrete trigger that fires when a player pays life, extending the abstract `Trigger` base class to plug into Forge's event-driven triggered-ability system. Its `performTest` gates activation by matching the paying player against the optional `ValidPlayer` restriction, while `setTriggeringObjects` exposes the `Player` and `LifeAmount` to the resulting `SpellAbility` so downstream effects can reference who paid and how much.
+
+Following the established Trigger contract, it communicates entirely through the `AbilityKey`-keyed run-parameter map rather than bespoke fields, and overrides `getImportantStackObjects` to render a localized, human-readable stack summary via `Localizer`. The design is deliberately thinâ€”delegating construction and core trigger machinery to its supertype and collaborating with `Card` (the host) and `SpellAbility`â€”reflecting Forge's data-driven pattern where each trigger subclass supplies only the condition test and the binding of triggering objects.
+
 ## Source
 `forge-game/src/main/java/forge/game/trigger/TriggerPayLife.java`
 
@@ -117,4 +123,41 @@ public class TriggerPayLife extends Trigger {
         return sb.toString();
     }
 }
+```
+
+## Python
+`forge/game/trigger/TriggerPayLife.py`
+
+```python
+from forge.game.trigger.Trigger import Trigger
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Localizer import Localizer
+
+
+class TriggerPayLife(Trigger):
+
+    def __init__(self, params: dict[str, str], host: Card, intrinsic: bool):
+        super().__init__(params, host, intrinsic)
+
+    def performTest(self, runParams: dict[AbilityKey, object]) -> bool:
+        if not self.matchesValidParam("ValidPlayer", runParams.get(AbilityKey.Player)):
+            return False
+
+        return True
+
+    def setTriggeringObjects(self, sa: SpellAbility, runParams: dict[AbilityKey, object]) -> None:
+        sa.setTriggeringObjectsFrom(runParams, AbilityKey.LifeAmount, AbilityKey.Player)
+
+    def getImportantStackObjects(self, sa: SpellAbility) -> str:
+        sb = []
+        sb.append(Localizer.getInstance().getMessage("lblPlayer"))
+        sb.append(": ")
+        sb.append(str(sa.getTriggeringObject(AbilityKey.Player)))
+        sb.append(", ")
+        sb.append(Localizer.getInstance().getMessage("lblPaidAmount"))
+        sb.append(": ")
+        sb.append(str(sa.getTriggeringObject(AbilityKey.LifeAmount)))
+        return "".join(sb)
 ```

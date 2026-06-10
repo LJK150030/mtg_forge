@@ -83,9 +83,9 @@ classDiagram
 
 ## Design Description
 
-GameActionUtil is a stateless utility class — final, with a private throwing constructor — that centralizes the rules logic for determining how a spell or ability may be cast and what costs apply. It exposes only static helpers operating on the `SpellAbility` graph: enumerating alternative casting options (Flashback, Escape, Foretell, Plotted, may-play permissions) via `getAlternativeCosts`/`getMayPlaySpellOptions`, discovering and applying optional and extra keyword costs (Kicker, Buyback, Casualty, Conspire), computing generated mana, ordering cards by owner under APNAP, and rolling back partially-paid abilities.
+GameActionUtil is a stateless utility class â€” final, with a private throwing constructor â€” that centralizes the rules logic for determining how a spell or ability may be cast and what costs apply. It exposes only static helpers operating on the `SpellAbility` graph: enumerating alternative casting options (Flashback, Escape, Foretell, Plotted, may-play permissions) via `getAlternativeCosts`/`getMayPlaySpellOptions`, discovering and applying optional and extra keyword costs (Kicker, Buyback, Casualty, Conspire), computing generated mana, ordering cards by owner under APNAP, and rolling back partially-paid abilities.
 
-It collaborates broadly across the game model — `Card`, `Player`, `Cost`/`CostPayment`, `KeywordInterface`, `StaticAbility`, and `Zone`/`ZoneType` — by copying and mutating `SpellAbility` instances rather than holding state. A recurring design intent is the freeze/LKI-copy/check-static-abilities/unfreeze pattern, which evaluates cards in hypothetical zones without disturbing the live game view.
+It collaborates broadly across the game model â€” `Card`, `Player`, `Cost`/`CostPayment`, `KeywordInterface`, `StaticAbility`, and `Zone`/`ZoneType` â€” by copying and mutating `SpellAbility` instances rather than holding state. A recurring design intent is the freeze/LKI-copy/check-static-abilities/unfreeze pattern, which evaluates cards in hypothetical zones without disturbing the live game view.
 
 ## Source
 `forge-game/src/main/java/forge/game/GameActionUtil.java`
@@ -245,7 +245,7 @@ public final class GameActionUtil {
 
                         final SpellAbility newSA = sa.copyWithManaCostReplaced(activator, escapeCost);
 
-                        newSA.putParam("PrecostDesc", "Escapeâ€”");
+                        newSA.putParam("PrecostDesc", "EscapeÃ¢â‚¬â€");
                         newSA.putParam("CostDesc", escapeCost.toString());
 
                         // makes new SpellDescription
@@ -1099,4 +1099,834 @@ public final class GameActionUtil {
     }
 
 }
+```
+
+## Python
+`forge/game/GameActionUtil.py`
+
+```python
+from forge.card.CardStateName import CardStateName
+from forge.card.ColorSet import ColorSet
+from forge.card.GamePieceType import GamePieceType
+from forge.card.mana.ManaCost import ManaCost
+from forge.game.ability.AbilityFactory import AbilityFactory
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.ability.ApiType import ApiType
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.ability.effects.DetachedCardEffect import DetachedCardEffect
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.card.CardCopyService import CardCopyService
+from forge.game.card.CardPlayOption import CardPlayOption
+from forge.game.card.CardPlayOption.PayManaCost import PayManaCost
+from forge.game.card.CounterType import CounterType
+from forge.game.cost.Cost import Cost
+from forge.game.cost.CostPayment import CostPayment
+from forge.game.keyword.Keyword import Keyword
+from forge.game.keyword.KeywordInterface import KeywordInterface
+from forge.game.player.Player import Player
+from forge.game.player.PlayerCollection import PlayerCollection
+from forge.game.player.PlayerController import PlayerController
+from forge.game.player.PlayerController.FullControlFlag import FullControlFlag
+from forge.game.replacement.ReplacementEffect import ReplacementEffect
+from forge.game.replacement.ReplacementHandler import ReplacementHandler
+from forge.game.replacement.ReplacementLayer import ReplacementLayer
+from forge.game.spellability.AbilityManaPart import AbilityManaPart
+from forge.game.spellability.AlternativeCost import AlternativeCost
+from forge.game.spellability.OptionalCost import OptionalCost
+from forge.game.spellability.OptionalCostValue import OptionalCostValue
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.spellability.SpellAbilityRestriction import SpellAbilityRestriction
+from forge.game.staticability.StaticAbility import StaticAbility
+from forge.game.staticability.StaticAbilityAlternativeCost import StaticAbilityAlternativeCost
+from forge.game.staticability.StaticAbilityLayer import StaticAbilityLayer
+from forge.game.staticability.StaticAbilityMode import StaticAbilityMode
+from forge.game.zone.Zone import Zone
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.Aggregates import Aggregates
+from forge.util.Lang import Lang
+from forge.util.TextUtil import TextUtil
+from org.apache.commons.lang3.StringUtils import StringUtils
+
+
+class GameActionUtil:
+
+    def __init__(self):
+        raise AssertionError()
+
+    @staticmethod
+    def getAlternativeCosts(sa, activator, altCostOnly):
+        alternatives = []
+
+        source = sa.getHostCard()
+        game = source.getGame()
+
+        if sa.isSpell() and source.isInPlay():
+            return alternatives
+
+        if sa.isSpell() or sa.isLandAbility():
+            lkicheck = False
+
+            newHost = sa.getAlternateHost(source)
+            if newHost is not None:
+                source = newHost
+                lkicheck = True
+
+            # 601.3e
+            if lkicheck:
+                # double freeze tracker, so it doesn't update view
+                game.getTracker().freeze()
+                source.clearStaticChangedCardKeywords(False)
+                preList = CardCollection(source)
+                game.getAction().checkStaticAbilities(False, {source}, preList)
+
+            # Alt Cost only for Basic Spells
+            if sa.isBasicSpell():
+                for newSA in StaticAbilityAlternativeCost.alternativeCosts(sa, source, activator):
+                    alternatives.append(newSA)
+                    # should only add MayPlay Zones
+                    alternatives.extend(GameActionUtil.getMayPlaySpellOptions(newSA, source, activator, altCostOnly))
+
+            alternatives.extend(GameActionUtil.getMayPlaySpellOptions(sa, source, activator, altCostOnly))
+
+            # need to be done there before static abilities does reset the card
+            # These Keywords depend on the Mana Cost of for Split Cards
+            if sa.isBasicSpell():
+                for inst in source.getKeywords():
+                    keyword = inst.getOriginal()
+
+                    if keyword.startswith("Mayhem"):
+                        if not source.isInZone(ZoneType.Graveyard) or not source.wasDiscarded() or not source.enteredThisTurn():
+                            continue
+
+                        alternatives.append(GameActionUtil.getGraveyardSpellByKeyword(inst, sa, activator, AlternativeCost.Mayhem))
+
+                    if sa.isLandAbility():
+                        continue
+
+                    if keyword.startswith("Escape"):
+                        if not source.isInZone(ZoneType.Graveyard):
+                            continue
+
+                        k = keyword.split(":")
+                        escapeCost = Cost(k[1], True)
+
+                        newSA = sa.copyWithManaCostReplaced(activator, escapeCost)
+
+                        newSA.putParam("PrecostDesc", "EscapeΓÇö")
+                        newSA.putParam("CostDesc", escapeCost.toString())
+
+                        # makes new SpellDescription
+                        desc = newSA.getCostDescription()
+                        desc += "(" + inst.getReminderText() + ")"
+                        newSA.setDescription(desc)
+                        newSA.putParam("AfterDescription", "(Escaped)")
+
+                        newSA.setAlternativeCost(AlternativeCost.Escape)
+                        newSA.getRestrictions().setZone(ZoneType.Graveyard)
+                        newSA.setIntrinsic(inst.isIntrinsic())
+
+                        alternatives.append(newSA)
+                    elif keyword.startswith("Flashback"):
+                        if not source.isInZone(ZoneType.Graveyard):
+                            continue
+
+                        # if source has No Mana cost, and flashback doesn't have own one,
+                        # flashback can't work
+                        if keyword == "Flashback" and source.getManaCost().isNoCost():
+                            continue
+
+                        alternatives.append(GameActionUtil.getGraveyardSpellByKeyword(inst, sa, activator, AlternativeCost.Flashback))
+                    elif keyword.startswith("Harmonize"):
+                        if not source.isInZone(ZoneType.Graveyard):
+                            continue
+
+                        if keyword == "Harmonize" and source.getManaCost().isNoCost():
+                            continue
+
+                        alternatives.append(GameActionUtil.getGraveyardSpellByKeyword(inst, sa, activator, AlternativeCost.Harmonize))
+                    elif keyword.startswith("Foretell"):
+                        # Foretell cast only from Exile
+                        if not source.isInZone(ZoneType.Exile) or not source.isForetold() or source.enteredThisTurn() or \
+                                not activator.equals(source.getOwner()):
+                            continue
+                        # skip this part for foretell by external source
+                        if keyword == "Foretell":
+                            continue
+
+                        foretold = sa.copy(activator)
+                        foretold.setAlternativeCost(AlternativeCost.Foretold)
+                        foretold.getRestrictions().setZone(ZoneType.Exile)
+                        foretold.putParam("AfterDescription", "(Foretold)")
+
+                        k = keyword.split(":")
+                        foretold.setPayCosts(Cost(k[1], False))
+
+                        alternatives.append(foretold)
+
+                # foretell by external source
+                if source.isForetoldCostByEffect() and source.isInZone(ZoneType.Exile) and activator.equals(source.getOwner()) \
+                        and source.isForetold() and not source.enteredThisTurn() and not source.getManaCost().isNoCost():
+                    # Its foretell cost is equal to its mana cost reduced by {2}.
+                    foretold = sa.copy(activator)
+                    reduced = min(2, sa.getPayCosts().getCostMana().getMana().getGenericCost())
+                    foretold.putParam("ReduceCost", str(reduced))
+                    foretold.setAlternativeCost(AlternativeCost.Foretold)
+                    foretold.getRestrictions().setZone(ZoneType.Exile)
+                    foretold.putParam("AfterDescription", "(Foretold)")
+                    alternatives.append(foretold)
+
+                if activator.canCastSorcery() and source.isPlotted() and source.isInZone(ZoneType.Exile) and activator.equals(source.getOwner()) and not source.enteredThisTurn():
+                    plotted = sa.copyWithNoManaCost(activator)
+                    plotted.setAlternativeCost(AlternativeCost.Plotted)
+                    plotted.getRestrictions().setZone(ZoneType.Exile)
+                    plotted.putParam("AfterDescription", "(Plotted)")
+                    alternatives.append(plotted)
+
+                # some needs to check after ability was put on the stack
+                if game.getAction().hasStaticAbilityAffectingZone(ZoneType.Stack, StaticAbilityLayer.ABILITIES):
+                    oldMayPlay = source.getMayPlay()
+                    oldZone = source.getLastKnownZone()
+                    stackCopy = source
+                    if not source.isLKI():
+                        stackCopy = CardCopyService.getLKICopy(source)
+                    stackCopy.setLastKnownZone(game.getStackZone())
+                    stackCopy.setCastFrom(oldZone)
+                    stackCopy.setCastSA(sa)
+                    lkicheck = True
+
+                    stackCopy.clearStaticChangedCardKeywords(False)
+                    preList = CardCollection(stackCopy)
+                    game.getAction().checkStaticAbilities(False, {stackCopy}, preList)
+
+                    stackCopy.setMayPlay(oldMayPlay)
+
+                    for inst in stackCopy.getUnhiddenKeywords():
+                        for iSa in inst.getAbilities():
+                            # do only non intrinsic
+                            if iSa.isSpell() and not iSa.isIntrinsic():
+                                alternatives.append(iSa)
+                                alternatives.extend(GameActionUtil.getMayPlaySpellOptions(iSa, stackCopy, activator, altCostOnly))
+                                # currently only AltCost get added this way
+                    # need to reset to Old Zone, or canPlay would fail
+                    stackCopy.setLastKnownZone(oldZone)
+
+            # reset static abilities
+            if lkicheck:
+                game.getAction().checkStaticAbilities(False)
+                # clear delayed changes, this check should not have updated the view
+                game.getTracker().clearDelayed()
+                # need to unfreeze tracker
+                game.getTracker().unfreeze()
+        else:
+            if sa.isManaAbility() and sa.isActivatedAbility() and activator.hasKeyword("Piracy") and source.isLand() and source.isInPlay() and not activator.equals(source.getController()) and sa.getPayCosts().hasTapCost():
+                newSA = sa.copy(activator)
+                # to bypass Activator restriction, set Activator to Player
+                newSA.getRestrictions().setActivator("Player")
+
+                # extra Mana restriction to only Spells
+                for mp in newSA.getAllManaParts():
+                    mp.setExtraManaRestriction("Spell")
+                alternatives.append(newSA)
+            # alternative Cost for activated abilities
+            alternatives.extend(StaticAbilityAlternativeCost.alternativeCosts(sa, source, activator))
+
+        return alternatives
+
+    @staticmethod
+    def getGraveyardSpellByKeyword(inst, sa, activator, altCost):
+        keyword = inst.getOriginal()
+        newSA = None
+
+        # there is a flashback cost (and not the cards cost)
+        if ":" in keyword:  # K:Flashback:Cost:ExtraParams:ExtraDescription
+            k = keyword.split(":")
+            newSA = sa.copyWithManaCostReplaced(activator, Cost(k[1], False))
+            extraParams = k[2] if len(k) > 2 else ""
+            if extraParams:
+                for key, value in AbilityFactory.getMapParams(extraParams).items():
+                    newSA.putParam(key, value)
+        else:  # same cost as original (e.g. Otaria plane)
+            newSA = sa.copy(activator)
+        newSA.setAlternativeCost(altCost)
+        newSA.getRestrictions().setZone(ZoneType.Graveyard)
+        newSA.setKeyword(inst)
+        newSA.setIntrinsic(inst.isIntrinsic())
+        return newSA
+
+    @staticmethod
+    def getMayPlaySpellOptions(sa, source, activator, altCostOnly):
+        alternatives = []
+
+        if sa.isSpell() and source.isInPlay():
+            return alternatives
+
+        for o in source.mayPlay(activator):
+            # do not appear if it can be cast with SorcerySpeed
+            if o.getAbility().hasParam("MayPlayNotSorcerySpeed") and activator.canCastSorcery():
+                continue
+            # non basic are only allowed if PayManaCost is yes
+            if (not sa.isBasicSpell() or (sa.costHasManaX() and sa.getPayCosts().getCostMana() is not None
+                    and sa.getPayCosts().getCostMana().getXMin() > 0)) and o.getPayManaCost() == PayManaCost.NO:
+                continue
+            # Timeline Culler overrides zone restriction
+            if sa.isKeyword(Keyword.WARP) and not sa.getHostCard().equals(o.getHost()):
+                continue
+            host = o.getHost()
+
+            newSA = None
+
+            if o.getPayManaCost() == PayManaCost.NO:
+                newSA = sa.copyWithNoManaCost(activator)
+                newSA.setBasicSpell(False)
+            elif o.getAltManaCost() is not None:
+                newSA = sa.copyWithManaCostReplaced(activator, o.getAltManaCost())
+                newSA.setBasicSpell(False)
+            else:
+                if altCostOnly:
+                    continue
+                newSA = sa.copy(activator)
+
+            if o.getAbility().hasParam("ValidAfterStack"):
+                newSA.getMapParams()["ValidAfterStack"] = o.getAbility().getParam("ValidAfterStack")
+            if o.getAbility().hasParam("RaiseCost"):
+                raise_ = o.getAbility().getParam("RaiseCost")
+                if o.getAbility().hasSVar(raise_):
+                    raise_ = str(AbilityUtils.calculateAmount(host, raise_, o.getAbility()))
+                newSA.getMapParams()["RaiseCost"] = raise_
+
+            sar = newSA.getRestrictions()
+            if o.isWithFlash():
+                sar.setInstantSpeed(True)
+            sar.setZone(None)
+            newSA.setMayPlay(o)
+
+            sb = sa.getDescription()
+            if not source.equals(host) and host.getRenderForUI():
+                sb += " by "
+                if host.isImmutable() and host.getEffectSource() is not None:
+                    sb += str(host.getEffectSource())
+                else:
+                    sb += str(host)
+            if o.getAbility().hasParam("MayPlayText"):
+                sb += " (" + o.getAbility().getParam("MayPlayText") + ")"
+            sb += o.toString(False)
+            newSA.setDescription(sb)
+            alternatives.append(newSA)
+
+        return alternatives
+
+    @staticmethod
+    def getOptionalCostValues(sa):
+        costs = []
+        if sa is None or not sa.isSpell():
+            return costs
+
+        sa.clearPipsToReduce()
+
+        source = sa.getHostCard()
+        game = source.getGame()
+        lkicheck = False
+
+        newHost = sa.getAlternateHost(source)
+        if newHost is not None:
+            source = newHost
+            lkicheck = True
+
+        # 601.3e
+        if lkicheck:
+            # double freeze tracker, so it doesn't update view
+            game.getTracker().freeze()
+            source.clearStaticChangedCardKeywords(False)
+            preList = CardCollection(source)
+            game.getAction().checkStaticAbilities(False, {source}, preList)
+
+        costSources = CardCollection(source)
+        costSources.addAll(game.getCardsIn(ZoneType.STATIC_ABILITIES_SOURCE_ZONES))
+        for ca in costSources:
+            for stAb in ca.getStaticAbilities():
+                if not stAb.checkConditions(StaticAbilityMode.OptionalCost):
+                    continue
+
+                if not stAb.matchesValidParam("ValidCard", source):
+                    continue
+                if not stAb.matchesValidParam("ValidSA", sa):
+                    continue
+                if not stAb.matchesValidParam("Activator", sa.getActivatingPlayer()):
+                    continue
+
+                cost = Cost(stAb.getParam("Cost"), False)
+                if stAb.hasParam("ReduceColor"):
+                    if stAb.getParam("ReduceColor") == "W":
+                        costs.append(OptionalCostValue(OptionalCost.ReduceW, cost))
+                    elif stAb.getParam("ReduceColor") == "U":
+                        costs.append(OptionalCostValue(OptionalCost.ReduceU, cost))
+                    elif stAb.getParam("ReduceColor") == "B":
+                        costs.append(OptionalCostValue(OptionalCost.ReduceB, cost))
+                    elif stAb.getParam("ReduceColor") == "R":
+                        costs.append(OptionalCostValue(OptionalCost.ReduceR, cost))
+                    elif stAb.getParam("ReduceColor") == "G":
+                        costs.append(OptionalCostValue(OptionalCost.ReduceG, cost))
+                else:
+                    costs.append(OptionalCostValue(OptionalCost.Generic, cost))
+
+        for inst in source.getKeywords():
+            keyword = inst.getOriginal()
+            if keyword == "Bargain":
+                cost = Cost("Sac<1/Artifact;Enchantment;Card.token/artifact, enchantment or token>", False)
+                costs.append(OptionalCostValue(OptionalCost.Bargain, cost))
+            elif keyword.startswith("Buyback"):
+                cost = Cost(keyword[8:], False)
+                costs.append(OptionalCostValue(OptionalCost.Buyback, cost))
+            elif keyword.startswith("Entwine"):
+                k = keyword.split(":")
+                cost = Cost(k[1], False)
+                costs.append(OptionalCostValue(OptionalCost.Entwine, cost))
+            elif keyword.startswith("Gift"):
+                cost = Cost("PromiseGift", False)
+                costs.append(OptionalCostValue(OptionalCost.PromiseGift, cost))
+            elif keyword.startswith("Kicker"):
+                sCosts = TextUtil.split(keyword[6:], ':')
+                numKickers = len(sCosts)
+                for j in range(numKickers):
+                    cost = Cost(sCosts[j], False)
+                    type_ = None
+                    type_ = OptionalCost.Kicker1 if j == 0 else OptionalCost.Kicker2
+                    costs.append(OptionalCostValue(type_, cost))
+            elif keyword == "Retrace":
+                if source.isInZone(ZoneType.Graveyard):
+                    cost = Cost("Discard<1/Land>", False)
+                    costs.append(OptionalCostValue(OptionalCost.Retrace, cost))
+            elif keyword == "Jump-start":
+                if source.isInZone(ZoneType.Graveyard):
+                    cost = Cost("Discard<1/Card>", False)
+                    costs.append(OptionalCostValue(OptionalCost.Jumpstart, cost))
+            elif keyword.startswith("MayFlashCost"):
+                k = keyword.split(":")
+                cost = Cost(k[1], False)
+                costs.append(OptionalCostValue(OptionalCost.Flash, cost))
+            elif keyword.startswith("Offering"):
+                type_ = keyword.split(":")[1]
+                cost = Cost("Sac<1/" + type_ + ">", False)
+                costs.append(OptionalCostValue(OptionalCost.Offering, cost))
+
+        # reset static abilities
+        if lkicheck:
+            game.getAction().checkStaticAbilities(False)
+            # clear delayed changes, this check should not have updated the view
+            game.getTracker().clearDelayed()
+            # need to unfreeze tracker
+            game.getTracker().unfreeze()
+
+        return costs
+
+    @staticmethod
+    def addOptionalCosts(sa, list):
+        if sa is None or len(list) == 0:
+            return sa
+        result = sa.copy()
+        if sa.hasParam("ReduceCost"):
+            result.putParam("ReduceCost", sa.getParam("ReduceCost"))
+        if sa.hasParam("RaiseCost"):
+            result.putParam("RaiseCost", sa.getParam("RaiseCost"))
+        for v in list:
+            if v.getType() != OptionalCost.Offering:
+                result.getPayCosts().add(v.getCost())
+            result.addOptionalCost(v.getType())
+
+            # add some extra logic, try to move it to other parts
+            t = v.getType()
+            if t == OptionalCost.Retrace or t == OptionalCost.Jumpstart:
+                result.getRestrictions().setZone(ZoneType.Graveyard)
+            elif t == OptionalCost.Flash or t == OptionalCost.Offering:
+                result.getRestrictions().setInstantSpeed(True)
+        return result
+
+    @staticmethod
+    def getAdditionalCostSpell(sa):
+        abilities = [sa]
+        if sa.isSpell():
+            source = sa.getHostCard()
+            for inst in source.getKeywords():
+                keyword = inst.getOriginal()
+                if keyword.startswith("AlternateAdditionalCost"):
+                    abilities.clear()
+
+                    for s in keyword.split(":", 1)[1].split(":"):
+                        newSA = sa.copy()
+                        newSA.setBasicSpell(False)
+
+                        cost = Cost(s, False)
+                        newSA.setDescription(sa.getDescription() + " (Additional cost: " + cost.toSimpleString() + ")")
+                        newSA.getPayCosts().add(cost)
+                        if newSA.canPlay():
+                            abilities.append(newSA)
+        elif sa.isActivatedAbility() and sa.hasParam("AlternateCost"):
+            # need to be handled there because it needs to rebuilt the description for the original ability
+
+            abilities.clear()
+
+            newSA = sa.copy()
+            newSA.removeParam("AlternateCost")
+            newSA.rebuiltDescription()
+            if newSA.canPlay():
+                abilities.append(newSA)
+
+            # set the cost to this directly to bypass non mana cost
+            alternateCost = Cost(sa.getParam("AlternateCost"), sa.isAbility())
+            newSA2 = sa.copyWithDefinedCost(alternateCost)
+            newSA2.removeParam("AlternateCost")
+            newSA2.rebuiltDescription()
+            if newSA2.canPlay():
+                abilities.append(newSA2)
+        return abilities
+
+    @staticmethod
+    def addExtraKeywordCost(sa):
+        if not sa.isSpell() or sa.isCopied():
+            return sa
+        result = None
+        host = sa.getHostCard()
+        game = host.getGame()
+        activator = sa.getActivatingPlayer()
+        pc = activator.getController()
+
+        game.getAction().checkStaticAbilities(False)
+
+        reset = False
+
+        for ki in host.getKeywords():
+            o = ki.getOriginal()
+            if o.startswith("Casualty"):
+                n = o.split(":")[1]
+                if host.wasCast() and n == "X":
+                    creatures = activator.getCreaturesInPlay()
+                    max = Aggregates.max(creatures, Card.getNetPower)
+                    n = str(pc.chooseNumber(sa, "Choose X for Casualty", 0, max))
+                casualtyCost = "Sac<1/Creature.powerGE" + n + "/creature with power " + n + \
+                    " or greater>"
+                cost = Cost(casualtyCost, False)
+                str_ = "Pay for Casualty? " + cost.toSimpleString()
+
+                if pc.addKeywordCost(sa, cost, ki, str_):
+                    if result is None:
+                        result = sa.copy()
+                    result.getPayCosts().add(cost)
+                    reset = True
+                    result.setOptionalKeywordAmount(ki, int(n))
+            elif o == "Conspire":
+                conspireCost = "tapXType<2/Creature.SharesColorWith/" + \
+                    "creature that shares a color with " + host.getDisplayName() + ">"
+                cost = Cost(conspireCost, False)
+                str_ = "Pay for Conspire? " + cost.toSimpleString()
+
+                if pc.addKeywordCost(sa, cost, ki, str_):
+                    if result is None:
+                        result = sa.copy()
+                    result.getPayCosts().add(cost)
+                    result.setOptionalKeywordAmount(ki, 1)
+                    reset = True
+            elif o.startswith("Multikicker"):
+                costStr = o.split(":")[1]
+                cost = Cost(costStr, False)
+
+                str_ = "Choose Amount for Multikicker: " + cost.toSimpleString()
+
+                v = pc.chooseNumberForKeywordCost(sa, cost, ki, str_, 2147483647)
+
+                for i in range(v):
+                    if result is None:
+                        result = sa.copy()
+                    result.getPayCosts().add(cost)
+                    reset = True
+
+                if result is not None:
+                    result.setOptionalKeywordAmount(ki, v)
+            elif o.startswith("Offspring"):
+                k = o.split(":")
+                cost = Cost(k[1], False)
+                str_ = "Pay for Offspring? " + cost.toSimpleString()
+
+                if pc.addKeywordCost(sa, cost, ki, str_):
+                    if result is None:
+                        result = sa.copy()
+                    result.getPayCosts().add(cost)
+                    reset = True
+                    result.setOptionalKeywordAmount(ki, 1)
+            elif o.startswith("Replicate"):
+                costStr = o.split(":")[1]
+                cost = Cost(costStr, False)
+
+                str_ = "Choose Amount for Replicate: " + cost.toSimpleString()
+
+                v = pc.chooseNumberForKeywordCost(sa, cost, ki, str_, 2147483647)
+
+                for i in range(v):
+                    if result is None:
+                        result = sa.copy()
+                    result.getPayCosts().add(cost)
+                    reset = True
+                if result is not None:
+                    result.setOptionalKeywordAmount(ki, v)
+            elif o.startswith("Squad"):
+                costStr = o.split(":")[1]
+                cost = Cost(costStr, False)
+
+                str_ = "Choose amount for Squad: " + cost.toSimpleString()
+
+                v = pc.chooseNumberForKeywordCost(sa, cost, ki, str_, 2147483647)
+
+                for i in range(v):
+                    if result is None:
+                        result = sa.copy()
+                    result.getPayCosts().add(cost)
+                    reset = True
+                if result is not None:
+                    result.setOptionalKeywordAmount(ki, v)
+
+        if sa.isHarmonize():
+            creatures = activator.getCreaturesInPlay()
+            if not creatures.isEmpty():
+                max = Aggregates.max(creatures, Card.getNetPower)
+                n = pc.chooseNumber(sa, "Choose power of creature to tap", 0, max)
+                harmonizeCost = "tapXType<1/Creature.powerEQ" + str(n) + "/creature for Harmonize>"
+                cost = Cost(harmonizeCost, False)
+
+                if pc.addKeywordCost(sa, cost, sa.getKeyword(), "Tap creature?"):
+                    if result is None:
+                        result = sa.copy()
+                    result.getPayCosts().add(cost)
+                    reset = True
+                    result.setOptionalKeywordAmount(sa.getKeyword(), n)
+
+        if host.isCreature():
+            kw = "As an additional cost to cast creature spells," + \
+                " you may pay any amount of mana. If you do, that creature enters " + \
+                "with that many additional +1/+1 counters on it."
+
+            for c in activator.getZone(ZoneType.Battlefield):
+                for ki in c.getKeywords():
+                    if kw == ki.getOriginal():
+                        cost = Cost(ManaCost.ONE, False)
+                        str_ = "Choose Amount for " + c.getDisplayName() + ": " + cost.toSimpleString()
+
+                        v = pc.chooseNumberForKeywordCost(sa, cost, ki, str_, 2147483647)
+
+                        if v > 0:
+                            eff = GameActionUtil.createETBCountersEffect(c, host, activator, "P1P1", str(v))
+
+                            if result is None:
+                                result = sa.copy()
+                            result.addRollbackEffect(eff)
+                            for i in range(v):
+                                result.getPayCosts().add(cost)
+
+        if reset:
+            host.getGame().getTriggerHandler().resetActiveTriggers(False, None)
+
+        if result is not None:
+            # sanity check if need to update castSA
+            if sa.getHostCard().getCastSA() == sa:
+                sa.getHostCard().setCastSA(result)
+            return result
+
+        return sa
+
+    @staticmethod
+    def createETBCountersEffect(sourceCard, c, controller, counter, amount):
+        game = sourceCard.getGame()
+        eff = Card(game.nextCardId(), game)
+        eff.setGameTimestamp(game.getNextTimestamp())
+        eff.setName(str(sourceCard) + "'s Effect")
+        eff.setOwner(controller)
+
+        eff.setImageKey(sourceCard.getImageKey())
+        eff.setColor(ColorSet.C)
+        eff.setGamePieceType(GamePieceType.EFFECT)
+        # try to get the SpellAbility from the mana ability
+        # eff.setEffectSource((SpellAbility)null);
+
+        eff.addRemembered(c)
+
+        abStr = "DB$ PutCounter | Defined$ ReplacedCard | CounterType$ " + counter \
+            + " | ETB$ True | CounterNum$ " + amount
+
+        sa = AbilityFactory.getAbility(abStr, c)
+        if not StringUtils.isNumeric(amount):
+            sa.setSVar(amount, sourceCard.getSVar(amount))
+
+        desc = "It enters with "
+        desc += Lang.nounWithNumeral(amount, CounterType.getType(counter).getName() + " counter")
+        desc += " on it."
+
+        repeffstr = "Event$ Moved | ValidCard$ Card.IsRemembered | Destination$ Battlefield | ReplacementResult$ Updated | Description$ " + desc
+
+        re = ReplacementHandler.parseReplacement(repeffstr, eff, True)
+        re.setLayer(ReplacementLayer.Other)
+        re.setOverridingAbility(sa)
+        re.setActiveZone({ZoneType.Command})
+
+        eff.addReplacementEffect(re)
+
+        SpellAbilityEffect.addForgetOnMovedTrigger(eff, "Stack")
+
+        game.getAction().moveToCommand(eff, sa)
+
+        return eff
+
+    @staticmethod
+    def generatedTotalMana(sa):
+        sb = ""
+        tail = sa
+        while tail is not None:
+            value = GameActionUtil.generatedMana(tail)
+            if value != "" and value != "0":
+                sb += value + " "
+            tail = tail.getSubAbility()
+        return sb.strip()
+
+    @staticmethod
+    def generatedMana(sa):
+        abMana = sa.getManaPart()
+        if abMana is None:
+            return ""
+
+        baseMana = None
+        amount = sa.amountOfManaGenerated(False)
+
+        if abMana.isComboMana():
+            baseMana = abMana.getExpressChoice()
+            if baseMana == "":
+                baseMana = abMana.getOrigProduced()
+        elif abMana.isAnyMana():
+            baseMana = abMana.getExpressChoice()
+            if baseMana == "":
+                baseMana = "Any"
+        elif sa.getApi() == ApiType.ManaReflected:
+            baseMana = abMana.getExpressChoice()
+        else:
+            baseMana = abMana.mana(sa)
+
+        if sa.getSubAbility() is not None:
+            # Mark SAs with subAbilities as undoable. These are generally things like damage, and other stuff
+            # that's hard to track and remove
+            sa.setUndoable(False)
+        elif sa.hasParam("Amount") and not StringUtils.isNumeric(sa.getParam("Amount")):
+            sa.setUndoable(False)
+
+        sb = ""
+        if amount <= 0:
+            sb += "0"
+        elif abMana.isComboMana():
+            # amount is already taken care of in resolve method for combination mana, just append baseMana
+            sb += baseMana
+        elif StringUtils.isNumeric(baseMana):
+            sb += str(amount * int(baseMana))
+        else:
+            sb += baseMana
+            for i in range(1, amount):
+                sb += " " + baseMana
+        return sb
+
+    @staticmethod
+    def orderCardsByTheirOwners(game, list, dest, sa):
+        if list.size() <= 1 and \
+                (sa is None or not sa.getActivatingPlayer().getController().isFullControl(FullControlFlag.LayerTimestampOrder)):
+            return list
+        eff = None
+        completeList = CardCollection()
+        # CR 613.7m use APNAP
+        players = game.getPlayersInTurnOrder(game.getPhaseHandler().getPlayerTurn())
+        for p in players:
+            subList = CardCollection()
+            for c in list:
+                decider = c.getController() if dest == ZoneType.Battlefield else c.getOwner()
+                if sa is not None and sa.hasParam("GainControl"):
+                    # TODO this doesn't account for changes from e.g. Gather Specimens yet
+                    decider = AbilityUtils.getDefinedPlayers(sa.getHostCard(), sa.getParam("GainControl"), sa).get(0)
+                if decider.equals(p):
+                    subList.add(c)
+            if sa is not None and sa.getActivatingPlayer() == p and sa.hasParam("StaticEffect"):
+                # create helper card for ordering
+                eff = DetachedCardEffect(sa.getHostCard(), "Static Effect of " + str(sa.getHostCard()))
+                subList.add(eff)
+            subListView = subList
+            if subList.size() > 1:
+                subListView = p.getController().orderMoveToZoneList(subList, dest, sa)
+            completeList.addAll(subListView)
+        if eff is not None:
+            idx = completeList.indexOf(eff)
+            if idx < completeList.size() - 1:
+                # effects with this param have the responsibility to realign it when later cards are reached
+                sa.setSVar("StaticEffectUntilCardID", str(completeList.get(idx + 1).getId()))
+                # add generous offset to timestamp, to ensure it applies last compared to cards that were ordered to ETB before it
+                idx += completeList.size() * 2
+            sa.setSVar("StaticEffectTimestamp", str(game.getNextTimestamp() + idx))
+            completeList.remove(eff)
+        return completeList
+
+    @staticmethod
+    def rollbackAbility(ability, fromZone, zonePosition, payment, oldCard):
+        # cancel ability during target choosing
+        game = ability.getActivatingPlayer().getGame()
+
+        if game.restoreGameState():
+            # If we're able to restore the whole game state when rolling back an ability don't try to manually roll back
+            print("Restored state from snapshot! Rolled back: " + ability.getHostCard().getName() + " - " + str(ability.getActivatingPlayer()))
+
+            return
+
+        if fromZone is not None and not fromZone.is_(ZoneType.None_):  # and not a copy
+            # add back to where it came from, hopefully old state
+            # skip GameAction
+            oldCard.getZone().remove(oldCard)
+
+            # might have been an alternative lki host
+            if oldCard.getCurrentStateName() != CardStateName.PreparedSpell:
+                oldCard = ability.getCardState().getCard()
+
+            oldCard.setCastSA(None)
+            oldCard.setCastFrom(None)
+
+            # in some rare cases the old position no longer exists (Panglacial Wurm + Selvala)
+            newPosition = min(zonePosition, fromZone.size()) if zonePosition >= 0 else None
+            fromZone.add(oldCard, newPosition, None, True)
+            ability.setHostCard(oldCard)
+            ability.setXManaCostPaid(None)
+            ability.setSpendPhyrexianMana(False)
+            ability.clearPipsToReduce()
+            ability.setPaidLife(0)
+            if ability.hasParam("Announce"):
+                for aVar in ability.getParam("Announce").split(","):
+                    varName = aVar.strip()
+                    if varName != "X":
+                        ability.setSVar(varName, "0")
+            # better safe than sorry approach in case rolled back ability was copy (from addExtraKeywordCost)
+            for sa in oldCard.getSpells():
+                sa.setHostCard(oldCard)
+            # for Chorus of the Conclave
+            ability.rollback()
+
+            oldCard.setBackSide(False)
+            oldCard.setState(oldCard.getFaceupCardStateName(), True)
+            oldCard.unanimateBestow()
+
+            if ability.hasParam("Prototype"):
+                oldCard.removeCloneState(oldCard.getPrototypeTimestamp())
+
+            for c in ability.getTappedForConvoke():
+                c.setTapped(False)
+
+        if ability.getApi() == ApiType.Charm:
+            # reset chain
+            ability.setSubAbility(None)
+            ability.setChosenList(None)
+
+        ability.clearTargets()
+
+        ability.resetOnceResolved()
+        payment.refundPayment()
+        game.getStack().clearFrozen()
+        game.getTriggerHandler().clearWaitingTriggers()
 ```

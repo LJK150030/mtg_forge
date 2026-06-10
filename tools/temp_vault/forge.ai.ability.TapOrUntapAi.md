@@ -87,3 +87,41 @@ public class TapOrUntapAi extends TapAiBase {
 
 }
 ```
+
+## Python
+`forge/ai/ability/TapOrUntapAi.py`
+
+```python
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.card.Card import Card
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.ai.ability.TapAiBase import TapAiBase
+
+
+class TapOrUntapAi(TapAiBase):
+
+    # (non-Javadoc)
+    # @see forge.card.abilityfactory.SpellAiLogic#canPlayAI(forge.game.player.Player, java.util.Map, forge.card.spellability.SpellAbility)
+    def checkApiLogic(self, ai: Player, sa: SpellAbility) -> AiAbilityDecision:
+        source = sa.getHostCard()
+
+        if not sa.usesTargeting():
+            # assume we are looking to tap human's stuff
+            # TODO - check for things with untap abilities, and don't tap those.
+
+            bFlag = False
+            for c in AbilityUtils.getDefinedCards(source, sa.getParam("Defined"), sa):
+                bFlag |= c.isUntapped()
+
+            if not bFlag:
+                return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+        else:
+            sa.resetTargets()
+            if not self.tapPrefTargeting(ai, source, sa, False):
+                return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+        return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+```

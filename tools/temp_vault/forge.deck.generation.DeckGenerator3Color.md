@@ -192,3 +192,109 @@ public class DeckGenerator3Color extends DeckGeneratorBase {
     }
 }
 ```
+
+## Python
+`forge/deck/generation/DeckGenerator3Color.py`
+
+```python
+from typing import Callable, List, Tuple
+
+from forge.card.ColorSet import ColorSet
+from forge.card.MagicColor import MagicColor
+from forge.deck.CardPool import CardPool
+from forge.deck.DeckFormat import DeckFormat
+from forge.item.PaperCard import PaperCard
+from forge.util.MyRandom import MyRandom
+from forge.deck.generation.DeckGeneratorBase import DeckGeneratorBase
+from forge.deck.generation.DeckGeneratorBase.FilterCMC import FilterCMC
+from forge.deck.generation.IDeckGenPool import IDeckGenPool
+
+
+class DeckGenerator3Color(DeckGeneratorBase):
+    def getLandPercentage(self) -> float:
+        return 0.44
+
+    def getCreaturePercentage(self) -> float:
+        return 0.33
+
+    def getSpellPercentage(self) -> float:
+        return 0.23
+
+    def __init__(self, pool0: IDeckGenPool, format0: DeckFormat, *args):
+        # Two Java constructors are merged here:
+        #   (pool0, format0, formatFilter0, clr1, clr2, clr3)
+        #   (pool0, format0, clr1, clr2, clr3)
+        if len(args) == 4:
+            formatFilter0, clr1, clr2, clr3 = args
+            super().__init__(pool0, format0, formatFilter0)
+        else:
+            clr1, clr2, clr3 = args
+            super().__init__(pool0, format0)
+
+        self.cmcLevels: List[Tuple[FilterCMC, int]] = [
+            (FilterCMC(0, 2), 12),
+            (FilterCMC(3, 5), 9),
+            (FilterCMC(6, 20), 3),
+        ]
+
+        self.initialize(format0, clr1, clr2, clr3)
+
+    def initialize(self, format0: DeckFormat, clr1: str, clr2: str, clr3: str) -> None:
+        format0.adjustCMCLevels(self.cmcLevels)
+
+        c1 = MagicColor.fromName(clr1)
+        c2 = MagicColor.fromName(clr2)
+        c3 = MagicColor.fromName(clr3)
+
+        rc = 0
+        combo = c1 | c2 | c3
+
+        param = ColorSet.fromMask(combo)
+        count = param.countColors()
+        if count == 3:
+            self.colors = param
+            return
+
+        if count == 0:
+            color1 = MyRandom.getRandom().nextInt(5)
+            color2 = (color1 + 1 + MyRandom.getRandom().nextInt(4)) % 5
+            self.colors = ColorSet.fromMask(MagicColor.WHITE << color1 | MagicColor.WHITE << color2).inverse()
+            return
+
+        if count == 1:
+            while True:
+                rc = MagicColor.WHITE << MyRandom.getRandom().nextInt(5)
+                if rc != combo:
+                    break
+            combo |= rc
+            # $FALL-THROUGH$ to case 2
+        if count == 1 or count == 2:
+            while True:
+                rc = MagicColor.WHITE << MyRandom.getRandom().nextInt(5)
+                if (rc & combo) == 0:
+                    break
+            combo |= rc
+
+        self.colors = ColorSet.fromMask(combo)
+
+    def getDeck(self, size: int, forAi: bool) -> CardPool:
+        self.addCreaturesAndSpells(size, self.cmcLevels, forAi)
+
+        # Add lands
+        numLands = round(size * self.getLandPercentage())
+        self.adjustDeckSize(size - numLands)
+        self.trace.append("numLands:").append(numLands).append("\n")
+
+        # Add dual lands
+        duals = self.getDualLandList(forAi)
+        for s in duals:
+            self.cardCounts.put(s, 0)
+
+        dblsAdded = self.addSomeStr((numLands // 4), duals)
+        numLands -= dblsAdded
+
+        self.addBasicLand(numLands)
+        self.adjustDeckSize(size)
+        self.trace.append("DeckSize:").append(self.tDeck.countAll()).append("\n")
+        return self.tDeck
+```

@@ -68,7 +68,7 @@ classDiagram
 
 ## Design Description
 
-`CostPartMana` represents the mana component of a spell or ability cost. As a concrete subclass of `CostPart`, it wraps an immutable `ManaCost` and a set of flags that qualify how that cost is derived—`XMin` for minimum X values, plus exiled-creature, enchanted-creature, and pay-any-number-of-times variants parsed from a restriction string. Its central responsibility is computing the effective cost at resolution time via `getManaCostFor`, which augments the base cost using `ManaCostBeingPaid` according to the active flag, and driving interactive payment through `payAsDecided`, where it snapshots and restores the player's `ManaConversionMatrix` to isolate payment chains.
+`CostPartMana` represents the mana component of a spell or ability cost. As a concrete subclass of `CostPart`, it wraps an immutable `ManaCost` and a set of flags that qualify how that cost is derivedâ€”`XMin` for minimum X values, plus exiled-creature, enchanted-creature, and pay-any-number-of-times variants parsed from a restriction string. Its central responsibility is computing the effective cost at resolution time via `getManaCostFor`, which augments the base cost using `ManaCostBeingPaid` according to the active flag, and driving interactive payment through `payAsDecided`, where it snapshots and restores the player's `ManaConversionMatrix` to isolate payment chains.
 
 It collaborates with `SpellAbility` and `Player` to resolve context and delegate payment to the controller, and participates in the visitor pattern through `accept(ICostVisitor)`. Design intent is visible in its always-reusable, always-undoable nature, its `paymentOrder`/`shouldPayLast` hooks that defer exiled-creature costs, and the secondary copy constructor that sets flags explicitly.
 
@@ -254,4 +254,146 @@ public class CostPartMana extends CostPart {
     }
 
 }
+```
+
+## Python
+`forge/game/cost/CostPartMana.py`
+
+```python
+from forge.card.mana.ManaCost import ManaCost
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.cost.CostExile import CostExile
+from forge.game.cost.CostPart import CostPart
+from forge.game.cost.ICostVisitor import ICostVisitor
+from forge.game.cost.PaymentDecision import PaymentDecision
+from forge.game.mana.ManaConversionMatrix import ManaConversionMatrix
+from forge.game.mana.ManaCostBeingPaid import ManaCostBeingPaid
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+
+
+class CostPartMana(CostPart):
+    """The mana component of any spell or ability cost"""
+
+    # Serializables need a version ID.
+    serialVersionUID = 1
+
+    def paymentOrder(self) -> int:
+        return 200 if self.shouldPayLast() else 0
+
+    def shouldPayLast(self) -> bool:
+        return self.isExiledCreatureCost
+
+    def __init__(self, cost: ManaCost, *args):
+        # "Leftover"
+        self.cost = cost
+        self.xMin = 0
+        self.isExiledCreatureCost = False
+        self.isEnchantedCreatureCost = False
+        self.isCostPayAnyNumberOfTimes = False
+        self.maxWaterbend = None
+
+        if len(args) == 1:
+            # CostPartMana(final ManaCost cost, String restriction)
+            restriction = args[0]
+            if restriction is not None and restriction.startswith("XMin"):
+                self.xMin = int(restriction[4:])
+            self.isExiledCreatureCost = restriction is not None and "Exiled".lower() == restriction.lower()
+            self.isEnchantedCreatureCost = restriction is not None and "EnchantedCost".lower() == restriction.lower()
+            self.isCostPayAnyNumberOfTimes = restriction is not None and "NumTimes".lower() == restriction.lower()
+        else:
+            # This version of the constructor allows to explicitly set
+            # exiledCreatureCost/enchantedCreatureCost, used only when copying costs
+            # CostPartMana(final ManaCost cost, boolean exiledCreatureCost, boolean enchantedCreatureCost, int xMin)
+            exiledCreatureCost, enchantedCreatureCost, xMin = args
+            self.xMin = xMin
+            self.isExiledCreatureCost = exiledCreatureCost
+            self.isEnchantedCreatureCost = enchantedCreatureCost
+
+    def getMaxWaterbend(self) -> str:
+        return self.maxWaterbend
+
+    def setMaxWaterbend(self, max: str) -> None:
+        self.maxWaterbend = max
+
+    def getMana(self) -> ManaCost:
+        """Gets the mana.
+
+        :return: the mana
+        """
+        return self.cost
+
+    def getAmountOfX(self) -> int:
+        return self.cost.countX()
+
+    def getXMin(self) -> int:
+        """:return: the xMin"""
+        return self.xMin
+
+    def isExiledCreatureCost(self) -> bool:
+        """:return: the isExiledCreatureCost"""
+        return self.isExiledCreatureCost
+
+    def isEnchantedCreatureCost(self) -> bool:
+        return self.isEnchantedCreatureCost
+
+    def isReusable(self) -> bool:
+        return True
+
+    def isUndoable(self) -> bool:
+        return True
+
+    def toString(self) -> str:
+        return self.cost.toString()
+
+    def __str__(self) -> str:
+        return self.cost.toString()
+
+    def canPay(self, ability: SpellAbility, payer: Player, effect: bool) -> bool:
+        # For now, always return true. But this should probably be checked at some point
+        return True
+
+    def accept(self, visitor: ICostVisitor):
+        return visitor.visit(self)
+
+    def getManaCostFor(self, sa: SpellAbility) -> ManaCost:
+        if self.isExiledCreatureCost() and sa.getPaidList(CostExile.HashLKIListKey, True) is not None and len(sa.getPaidList(CostExile.HashLKIListKey, True)) != 0:
+            mod = sa.getPaidList(CostExile.HashLKIListKey, True)[0].getManaCost()
+            if mod.isNoCost():
+                return mod
+            manaCostNew = ManaCostBeingPaid(self.getMana())
+            manaCostNew.addManaCost(mod)
+            return manaCostNew.toManaCost()
+        if self.isEnchantedCreatureCost() and sa.getHostCard().isEnchantingCard():
+            mod = sa.getHostCard().getEnchantingCard().getManaCost()
+            if mod.isNoCost():
+                return mod
+            manaCostNew = ManaCostBeingPaid(self.getMana())
+            manaCostNew.addManaCost(mod)
+            return manaCostNew.toManaCost()
+        if self.isCostPayAnyNumberOfTimes:
+            timesToPay = AbilityUtils.calculateAmount(sa.getHostCard(), sa.getSVar("NumTimes"), sa)
+            if timesToPay == 0:
+                return ManaCost.ZERO
+            totalMana = ManaCostBeingPaid(self.getMana())
+            for i in range(1, timesToPay):
+                totalMana.addManaCost(self.getMana())
+            return totalMana.toManaCost()
+        return self.getMana()
+
+    def payAsDecided(self, payer: Player, pd: PaymentDecision, sa: SpellAbility, effect: bool) -> bool:
+        sa.clearManaPaid()
+
+        old = ManaConversionMatrix()
+        old.restoreColorReplacements()
+        old.applyCardMatrix(payer.getManaPool())
+
+        # decision not used here, the whole payment is interactive!
+        result = payer.getController().payManaCost(self, sa, None, pd.matrix, effect)
+
+        # restore old matrix during payment chains
+        payer.getManaPool().restoreColorReplacements()
+        payer.getManaPool().applyCardMatrix(old)
+
+        return result
 ```

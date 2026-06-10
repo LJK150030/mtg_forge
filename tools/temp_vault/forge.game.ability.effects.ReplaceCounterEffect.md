@@ -154,3 +154,86 @@ public class ReplaceCounterEffect extends SpellAbilityEffect {
     }
 }
 ```
+
+## Python
+`forge/game/ability/effects/ReplaceCounterEffect.py`
+
+```python
+from typing import Optional
+
+from forge.game.GameEntity import GameEntity
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.card.CounterType import CounterType
+from forge.game.player.Player import Player
+from forge.game.player.PlayerCollection import PlayerCollection
+from forge.game.replacement.ReplacementResult import ReplacementResult
+from forge.game.spellability.SpellAbility import SpellAbility
+
+
+class ReplaceCounterEffect(SpellAbilityEffect):
+
+    def resolve(self, sa: SpellAbility) -> None:
+        card = sa.getHostCard()
+
+        # outside of Replacement Effect, unwanted result
+        if not sa.isReplacementAbility():
+            return
+
+        originalParams = sa.getReplacingObject(AbilityKey.OriginalParams)
+        counterTable = sa.getReplacingObject(AbilityKey.CounterMap)
+
+        if len(counterTable) > 1 and sa.hasParam("ChooseCounter"):
+            # ChooseCounter is for ones that only adds one counter, when that is coming from multiple sources, the affected player needs to choose
+
+            ge = sa.getReplacingObject(AbilityKey.Object)
+            chooser = ge if isinstance(ge, Player) else ge.getController()
+
+            # for some effects, the Player -> CounterType Table needs to be flip into a CounterType -> [Player] list for the player to select
+            from com.google.common.collect.HashMultimap import HashMultimap
+            playerMap = HashMultimap.create()
+            for key, value in counterTable.items():
+                for ct in value.keys():
+                    playerMap.put(ct, key.orElse(None) if key is not None else None)
+
+            # there shouldn't be a case where one of the players is null, and the other is not
+
+            for ct, players in playerMap.asMap().items():
+                p = chooser.getController().chooseSingleEntityForEffect(PlayerCollection(players), sa, "Choose Player for " + ct.getName(), None)
+
+                sa.setReplacingObject(AbilityKey.CounterNum, counterTable.get(p).get(ct))
+                value = AbilityUtils.calculateAmount(card, sa.getParam("Amount"), sa)
+                if value <= 0:
+                    counterTable.get(p).remove(ct)
+                else:
+                    counterTable.get(p).put(ct, value)
+        else:
+            for key, value in counterTable.items():
+                if not sa.matchesValidParam("ValidSource", key.orElse(None) if key is not None else None):
+                    continue
+
+                if sa.hasParam("ValidCounterType"):
+                    ct = CounterType.getType(sa.getParam("ValidCounterType"))
+                    if ct in value:
+                        sa.setReplacingObject(AbilityKey.CounterNum, value.get(ct))
+                        amount = AbilityUtils.calculateAmount(card, sa.getParam("Amount"), sa)
+                        if amount <= 0:
+                            value.remove(ct)
+                        else:
+                            value.put(ct, amount)
+                else:
+                    toRemove = []
+                    for ec_key, ec_value in value.items():
+                        sa.setReplacingObject(AbilityKey.CounterNum, ec_value)
+                        amount = AbilityUtils.calculateAmount(card, sa.getParam("Amount"), sa)
+                        if amount <= 0:
+                            toRemove.append(ec_key)
+                        else:
+                            value.put(ec_key, amount)
+                    for k in toRemove:
+                        value.keySet().remove(k)
+
+        originalParams.put(AbilityKey.ReplacementResult, ReplacementResult.Updated)
+```

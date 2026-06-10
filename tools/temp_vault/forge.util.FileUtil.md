@@ -45,6 +45,12 @@ classDiagram
     }
 ```
 
+## Design Description
+
+Forge's `FileUtil` is a final, non-instantiable utility class (its private constructor throws `AssertionError`) that centralizes common filesystem operations for the forge-core module. It exposes only static methods covering path manipulation (`pathCombine`, `getParent`), existence and directory checks, directory creation and recursive deletion, file copying, and a broad family of overloaded read/write helpers that work against `String` filenames, `File` objects, `Reader`s, and `URL`s.
+
+As a stateless helper, it has no supertype beyond `Object` and implements no interfaces; instead it collaborates with sibling utilities â€” delegating line joining to `TextUtil` and bounding remote `URL` reads via `ThreadUtil.executeWithTimeout` (a 5-second cap). It leans on Apache Commons `StringUtils` and `Pair` (notably in `readNameUrlFile`, which parses name/URL pairs and synthesizes names from URLs when absent). Design intent is visible in its UTF-8-explicit reads, try-with-resources stream handling, and convenience overloads that funnel to a few core implementations, keeping file I/O consistent across the engine.
+
 ## Source
 `forge-core/src/main/java/forge/util/FileUtil.java`
 
@@ -371,4 +377,215 @@ public final class FileUtil {
         return "";
     }
 }
+```
+
+## Python
+`forge/util/FileUtil.py`
+
+```python
+from forge.util.TextUtil import TextUtil
+from forge.util.ThreadUtil import ThreadUtil
+from org.apache.commons.lang3.StringUtils import StringUtils
+from org.apache.commons.lang3.tuple.Pair import Pair
+
+import os
+import shutil
+import re
+import urllib.request
+
+
+class FileUtil:
+
+    def __init__(self):
+        raise AssertionError()
+
+    # Takes two paths and combines them into a valid path string
+    # for the current OS.
+    # Similar to the Path.Combine() function in .Net.
+    @staticmethod
+    def pathCombine(path1, path2):
+        return os.path.join(path1, path2)
+
+    @staticmethod
+    def doesFileExist(filename):
+        return os.path.exists(filename)
+
+    @staticmethod
+    def isDirectoryWithFiles(path):
+        if path is None:
+            return False
+        if not os.path.isdir(path):
+            return False
+        fileList = os.listdir(path)
+        return fileList is not None and len(fileList) > 0
+
+    @staticmethod
+    def ensureDirectoryExists(path):
+        if isinstance(path, str):
+            return FileUtil.ensureDirectoryExists_File(path)
+        return FileUtil.ensureDirectoryExists_File(path)
+
+    @staticmethod
+    def ensureDirectoryExists_File(dir):
+        if os.path.exists(dir) and os.path.isdir(dir):
+            return True
+        try:
+            os.makedirs(dir)
+            return True
+        except Exception:
+            return False
+
+    @staticmethod
+    def deleteDirectory(dir):
+        if os.path.isdir(dir):
+            for filename in os.listdir(dir):
+                if not FileUtil.deleteDirectory(os.path.join(dir, filename)):
+                    return False
+        try:
+            if os.path.isdir(dir):
+                os.rmdir(dir)
+            else:
+                os.remove(dir)
+            return True
+        except Exception:
+            return False
+
+    @staticmethod
+    def deleteFile(filename):
+        try:
+            os.remove(filename)
+            return True
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return False
+
+    @staticmethod
+    def copyFile(sourceFilename, destFilename):
+        if not os.path.exists(sourceFilename):  # if source doesn't exist, nothing to copy
+            return
+
+        try:
+            with open(sourceFilename, "rb") as is_, open(destFilename, "wb") as os_:
+                while True:
+                    buffer = is_.read(1024)
+                    if not buffer:
+                        break
+                    os_.write(buffer)
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+
+    @staticmethod
+    def writeFile(filename, data):
+        # writeFile(String filename, String text) / writeFile(File file, String text)
+        # writeFile(String filename, List<String> data) / writeFile(File file, Collection<?> data)
+        if isinstance(data, str):
+            try:
+                with open(filename, "w") as p:
+                    p.write(data)
+            except Exception as ex:
+                raise RuntimeError("FileUtil : writeFile() error, problem writing file - " + str(filename) + " : " + str(ex))
+        else:
+            try:
+                with open(filename, "w") as p:
+                    for o in data:
+                        p.write(str(o) + "\n")
+            except Exception as ex:
+                raise RuntimeError("FileUtil : writeFile() error, problem writing file - " + str(filename) + " : " + str(ex))
+
+    @staticmethod
+    def readFileToString(file):
+        # readFileToString(String filename) / readFileToString(File file) / readFileToString(URL url)
+        if isinstance(file, URL):
+            return TextUtil.join(FileUtil.readFile(file), "\n")
+        return TextUtil.join(FileUtil.readFile(file), "\n")
+
+    @staticmethod
+    def readFile(file):
+        # readFile(String filename) / readFile(File file) / readFile(URL url)
+        if isinstance(file, URL):
+            lines = []
+
+            def task():
+                with urllib.request.urlopen(file.openStream() if hasattr(file, "openStream") else file) as response:
+                    in_ = response
+                    for raw in in_:
+                        line = raw.decode().rstrip("\n")
+                        lines.append(line)
+                return None
+
+            ThreadUtil.executeWithTimeout(task, 5000)  # abort reading file if it takes longer than 5 seconds
+            return lines
+
+        try:
+            if (file is None) or (not os.path.exists(file)):
+                return []
+            return FileUtil.readAllLines(file, False)
+        except Exception as ex:
+            raise RuntimeError("FileUtil : readFile() error, " + str(ex))
+
+    @staticmethod
+    def readAllLines(reader, mayTrim=False):
+        # readAllLines(Reader reader) / readAllLines(Reader reader, boolean mayTrim)
+        # readAllLines(File file, boolean mayTrim)
+        list_ = []
+        if isinstance(reader, str):
+            # treated as a File path
+            try:
+                with open(reader, "r", encoding="utf-8") as in_:
+                    for raw in in_:
+                        line = raw.rstrip("\n")
+                        if mayTrim:
+                            line = line.strip()
+                        list_.append(line)
+            except IOError as ex:
+                raise RuntimeError("FileUtil : readAllLines() error, " + str(ex))
+            return list_
+        else:
+            try:
+                in_ = reader
+                for raw in in_:
+                    line = raw.rstrip("\n") if isinstance(raw, str) else raw.decode().rstrip("\n")
+                    if mayTrim:
+                        line = line.strip()
+                    list_.append(line)
+                if hasattr(in_, "close"):
+                    in_.close()
+            except IOError as ex:
+                raise RuntimeError("FileUtil : readAllLines() error, " + str(ex))
+            return list_
+
+    # returns a list of <name, url> pairs.  if the name is not in the file, it is synthesized from the url
+    @staticmethod
+    def readNameUrlFile(nameUrlFile):
+        lineSplitter = re.compile(re.escape(" "))
+        replacer = re.compile(re.escape("%20"))
+
+        list_ = []
+
+        for line in FileUtil.readFile(nameUrlFile):
+            if StringUtils.isBlank(line) or line.startswith("#"):
+                continue
+
+            parts = lineSplitter.split(line, 1)
+            if 2 == len(parts):
+                list_.append(Pair.of(replacer.sub(" ", parts[0]), parts[1]))
+            else:
+                # figure out the filename from the URL
+                pathSplitter = re.compile(re.escape("/"))
+                pathParts = pathSplitter.split(parts[0])
+                last = pathParts[len(pathParts) - 1]
+                list_.append(Pair.of(replacer.sub(" ", last), parts[0]))
+
+        return list_
+
+    @staticmethod
+    def getParent(resourcePath):
+        f = resourcePath
+        parent = os.path.dirname(os.path.abspath(f))
+        name = os.path.basename(parent)
+        if name is not None:
+            return name
+        return ""
 ```

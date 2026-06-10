@@ -351,3 +351,254 @@ public class  DamageAllAi extends SpellAbilityAi {
     }
 }
 ```
+
+## Python
+`forge/ai/ability/DamageAllAi.py`
+
+```python
+from forge.ai.SpellAbilityAi import SpellAbilityAi
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.ai.ComputerUtilMana import ComputerUtilMana
+from forge.ai.ComputerUtilCost import ComputerUtilCost
+from forge.ai.ComputerUtilCombat import ComputerUtilCombat
+from forge.ai.ComputerUtilCard import ComputerUtilCard
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardLists import CardLists
+from forge.game.keyword.Keyword import Keyword
+from forge.game.phase.PhaseType import PhaseType
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+
+
+class DamageAllAi(SpellAbilityAi):
+    def checkApiLogic(self, ai: Player, sa: SpellAbility) -> AiAbilityDecision:
+        # AI needs to be expanded, since this function can be pretty complex
+        # based on what the expected targets could be
+        source = sa.getHostCard()
+
+        # wait until stack is empty (prevents duplicate kills)
+        if not ai.getGame().getStack().isEmpty():
+            return AiAbilityDecision(0, AiPlayDecision.StackNotEmpty)
+
+        x = -1
+        damage = sa.getParam("NumDmg")
+        dmg = AbilityUtils.calculateAmount(source, damage, sa)
+        if damage == "X" and sa.getSVar(damage) == "Count$Converge":
+            dmg = ComputerUtilMana.getConvergeCount(sa, ai)
+        if damage == "X" and sa.getSVar(damage) == "Count$xPaid":
+            x = ComputerUtilCost.setMaxXValue(sa, ai, sa.isTrigger())
+        if x == -1:
+            if self.determineOppToKill(ai, sa, source, dmg) is not None:
+                # we already know we can kill a player, so go for it
+                return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+            # look for other value in this (damaging creatures or
+            # creatures + player, e.g. Pestilence, etc.)
+            if self.evaluateDamageAll(ai, sa, source, dmg) > 0:
+                return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+            return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+        else:
+            best, best_x = -1, -1
+            bestOpp = self.determineOppToKill(ai, sa, source, x)
+            if bestOpp is not None:
+                # we can finish off a player, so go for it
+
+                # TODO: improve this by possibly damaging more creatures
+                # on the battlefield belonging to other opponents at the same
+                # time, if viable
+                best_x = bestOpp.getLife()
+            else:
+                # see if it's possible to get value from killing off creatures
+                for i in range(0, x + 1):
+                    value = self.evaluateDamageAll(ai, sa, source, i)
+                    if value > best:
+                        best = value
+                        best_x = i
+
+            if best_x > 0:
+                if sa.getSVar(damage) == "Count$xPaid":
+                    sa.setXManaCostPaid(best_x)
+                return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+            return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+    def determineOppToKill(self, ai: Player, sa: SpellAbility, source: Card, x: int) -> Player:
+        # Attempt to determine which opponent can be finished off such that the most players
+        # are killed at the same time, given X damage tops
+        validP = sa.getParamOrDefault("ValidPlayers", "")
+        aiLife = ai.getLife()
+        bestOpp = None  # default opponent, if all else fails
+
+        for dmg in range(1, x + 1):
+            # Don't kill yourself in the process
+            if validP == "Player" and aiLife <= ComputerUtilCombat.predictDamageTo(ai, dmg, source, False):
+                break
+            for opp in ai.getOpponents():
+                if (validP == "Player" or "Opponent" in validP) \
+                        and (opp.getLife() <= ComputerUtilCombat.predictDamageTo(opp, dmg, source, False)):
+                    bestOpp = opp
+
+        return bestOpp
+
+    def evaluateDamageAll(self, ai: Player, sa: SpellAbility, source: Card, dmg: int) -> int:
+        opp = ai.getWeakestOpponent()
+        humanList = self.getKillableCreatures(sa, opp, dmg)
+        computerList = self.getKillableCreatures(sa, ai, dmg)
+
+        if sa.usesTargeting() and sa.canTarget(opp):
+            sa.resetTargets()
+            sa.getTargets().add(opp)
+            computerList.clear()
+
+        validP = sa.getParamOrDefault("ValidPlayers", "")
+        # TODO: if damage is dependent on mana paid, maybe have X be human's max life
+        # Don't kill yourself
+        if validP == "Player" and (ai.getLife() <= ComputerUtilCombat.predictDamageTo(ai, dmg, source, False)):
+            return -1
+
+        minGain = 200  # The minimum gain in destroyed creatures
+        if sa.getPayCosts().isReusuableResource():
+            if computerList.isEmpty():
+                minGain = 10  # nothing to lose
+                # no creatures to lose and player can be damaged
+                # so do it if it's helping!
+                # ----------------------------
+                # needs future improvement on pestilence :
+                # what if we lose creatures but can win by repeated activations?
+                # that tactic only works if there are creatures left to keep pestilence in play
+                # and can kill the player in a reasonable amount of time (no more than 2-3 turns?)
+                if validP == "Player":
+                    if ComputerUtilCombat.predictDamageTo(opp, dmg, source, False) > 0:
+                        # When using Pestilence to hurt players, do it at
+                        # the end of the opponent's turn only
+                        if not ("DmgAllCreaturesAndPlayers" == sa.getParam("AILogic")) \
+                                or (ai.getGame().getPhaseHandler().is_(PhaseType.END_OF_TURN)
+                                    and not ai.getGame().getPhaseHandler().isPlayerTurn(ai)):
+                            # Need further improvement : if able to kill immediately with repeated activations, do not wait
+                            # for phases! Will also need to implement considering repeated activations for killed creatures!
+                            # || (ai.sa.getPayCosts(). ??? )
+
+                            # would take zero damage, and hurt opponent, do it!
+                            if ComputerUtilCombat.predictDamageTo(ai, dmg, source, False) < 1:
+                                return 1
+                            # enemy is expected to die faster than AI from damage if repeated
+                            if ai.getLife() > ComputerUtilCombat.predictDamageTo(ai, dmg, source, False) \
+                                    * ((opp.getLife() + ComputerUtilCombat.predictDamageTo(opp, dmg, source, False) - 1)
+                                       // ComputerUtilCombat.predictDamageTo(opp, dmg, source, False)):
+                                # enemy below 10 life, go for it!
+                                if (opp.getLife() < 10) \
+                                        and (ComputerUtilCombat.predictDamageTo(opp, dmg, source, False) >= 1):
+                                    return 1
+                                # At least half enemy remaining life can be removed in one go
+                                # worth doing even if enemy still has high health - one more copy of spell to win!
+                                if opp.getLife() <= 2 * ComputerUtilCombat.predictDamageTo(opp, dmg, source, False):
+                                    return 1
+            else:
+                minGain = 100  # safety for errors in evaluate creature
+        elif sa.getSubAbility() is not None and ai.getGame().getPhaseHandler().is_(PhaseType.MAIN1) and computerList.isEmpty() \
+                and opp.getCreaturesInPlay().size() > 1 and not ai.getCreaturesInPlay().isEmpty():
+            minGain = 126  # prepare for attack
+
+        return ComputerUtilCard.evaluateCreatureList(humanList) - ComputerUtilCard.evaluateCreatureList(computerList) \
+            - minGain
+
+    def chkDrawback(self, ai: Player, sa: SpellAbility) -> AiAbilityDecision:
+        source = sa.getHostCard()
+        validP = sa.getParamOrDefault("ValidPlayers", "")
+
+        damage = sa.getParam("NumDmg")
+        if damage == "X" and sa.getSVar(damage) == "Count$xPaid":
+            dmg = ComputerUtilCost.setMaxXValue(sa, ai, sa.isTrigger())
+        else:
+            dmg = AbilityUtils.calculateAmount(source, damage, sa)
+
+        # Evaluate creatures getting killed
+        enemy = ai.getWeakestOpponent()
+        humanList = self.getKillableCreatures(sa, enemy, dmg)
+        computerList = self.getKillableCreatures(sa, ai, dmg)
+
+        if sa.usesTargeting() and sa.canTarget(enemy):
+            sa.resetTargets()
+            sa.getTargets().add(enemy)
+            computerList.clear()
+        # Don't get yourself killed
+        if validP == "Player" and (ai.getLife() <= ComputerUtilCombat.predictDamageTo(ai, dmg, source, False)):
+            return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+        # if we can kill human, do it
+        if (validP == "Player" or validP == "Opponent" or "Targeted" in validP) \
+                and (enemy.getLife() <= ComputerUtilCombat.predictDamageTo(enemy, dmg, source, False)):
+            return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+        if not computerList.isEmpty() and ComputerUtilCard.evaluateCreatureList(computerList) > ComputerUtilCard \
+                .evaluateCreatureList(humanList):
+            return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+        return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+    def getKillableCreatures(self, sa: SpellAbility, player: Player, dmg: int) -> CardCollection:
+        """
+        getKillableCreatures.
+
+        :param sa: a forge.game.spellability.SpellAbility object.
+        :param player: a forge.game.player.Player object.
+        :param dmg: a int.
+        :return: a forge.game.card.CardCollection object.
+        """
+        source = sa.getHostCard()
+        validC = sa.getParamOrDefault("ValidCards", "")
+
+        # TODO: X may be something different than X paid
+        list = CardLists.getValidCards(player.getCardsIn(ZoneType.Battlefield), validC, source.getController(), source, sa)
+
+        filterKillable = lambda c: ComputerUtilCombat.predictDamageTo(c, dmg, source, False) >= ComputerUtilCombat.getDamageToKill(c, False)
+
+        list = CardLists.getNotKeyword(list, Keyword.INDESTRUCTIBLE)
+        list = CardLists.filter(list, filterKillable)
+
+        return list
+
+    def doTriggerNoCost(self, ai: Player, sa: SpellAbility, mandatory: bool) -> AiAbilityDecision:
+        source = sa.getHostCard()
+        validP = sa.getParamOrDefault("ValidPlayers", "")
+
+        damage = sa.getParam("NumDmg")
+
+        if damage == "X" and sa.getSVar(damage) == "Count$xPaid" \
+                and sa.getPayCosts() is not None and sa.getPayCosts().hasXInAnyCostPart():
+            # Set PayX here to maximum value.
+            dmg = ComputerUtilCost.setMaxXValue(sa, ai, True)
+            sa.setXManaCostPaid(dmg)
+        else:
+            dmg = AbilityUtils.calculateAmount(source, damage, sa)
+
+        # Evaluate creatures getting killed
+        enemy = ai.getWeakestOpponent()
+        humanList = self.getKillableCreatures(sa, enemy, dmg)
+        computerList = self.getKillableCreatures(sa, ai, dmg)
+
+        if sa.usesTargeting() and sa.canTarget(enemy):
+            sa.resetTargets()
+            sa.getTargets().add(enemy)
+            computerList.clear()
+
+        # If it's not mandatory check a few things
+        if mandatory:
+            return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+        # Don't get yourself killed
+        if validP == "Player" and (ai.getLife() <= ComputerUtilCombat.predictDamageTo(ai, dmg, source, False)):
+            return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+        # if we can kill human, do it
+        if (validP == "Player" or "Opponent" in validP or "Targeted" in validP) \
+                and (enemy.getLife() <= ComputerUtilCombat.predictDamageTo(enemy, dmg, source, False)):
+            return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+        if not computerList.isEmpty() and ComputerUtilCard.evaluateCreatureList(computerList) + 50 >= ComputerUtilCard \
+                .evaluateCreatureList(humanList):
+            return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+        return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+```

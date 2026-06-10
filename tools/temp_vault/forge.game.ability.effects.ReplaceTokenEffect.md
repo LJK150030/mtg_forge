@@ -47,9 +47,9 @@ classDiagram
 
 ## Design Description
 
-ReplaceTokenEffect is a resolution-time `SpellAbilityEffect` that customizes how an in-progress token-creation replacement plays out. Overriding `resolve`, it locates the triggering replacement context — resolving the replacement effect, the affected `Player`, and the `TokenCreateTable` from the replacing-objects map — then branches on a `Type` parameter to one of four behaviors: scaling token counts ("Amount"), inserting additional tokens ("AddToken"), substituting different token scripts ("ReplaceToken", optionally copying a chosen permanent), or reassigning control ("ReplaceController"). On completion it records `ReplacementResult.Updated` back into the original parameter map.
+ReplaceTokenEffect is a resolution-time `SpellAbilityEffect` that customizes how an in-progress token-creation replacement plays out. Overriding `resolve`, it locates the triggering replacement context â€” resolving the replacement effect, the affected `Player`, and the `TokenCreateTable` from the replacing-objects map â€” then branches on a `Type` parameter to one of four behaviors: scaling token counts ("Amount"), inserting additional tokens ("AddToken"), substituting different token scripts ("ReplaceToken", optionally copying a chosen permanent), or reassigning control ("ReplaceController"). On completion it records `ReplacementResult.Updated` back into the original parameter map.
 
-Its design intent is a single data-driven dispatcher: card scripts configure behavior declaratively through parameters rather than via separate effect classes. Candidate tokens are filtered through the `ReplacementEffect`'s `ValidToken` predicate, while it collaborates with `AbilityUtils` for amount math, `TokenInfo`/`Card` for prototyping new tokens, and `Game` timestamps to stamp controller changes — keeping all token-replacement variants centralized and consistent.
+Its design intent is a single data-driven dispatcher: card scripts configure behavior declaratively through parameters rather than via separate effect classes. Candidate tokens are filtered through the `ReplacementEffect`'s `ValidToken` predicate, while it collaborates with `AbilityUtils` for amount math, `TokenInfo`/`Card` for prototyping new tokens, and `Game` timestamps to stamp controller changes â€” keeping all token-replacement variants centralized and consistent.
 
 ## Source
 `forge-game/src/main/java/forge/game/ability/effects/ReplaceTokenEffect.java`
@@ -216,4 +216,139 @@ public class ReplaceTokenEffect extends SpellAbilityEffect {
     }
 
 }
+```
+
+## Python
+`forge/game/ability/effects/ReplaceTokenEffect.py`
+
+```python
+from typing import Iterable
+
+from forge.game.Game import Game
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.card.CardLists import CardLists
+from forge.game.card.TokenCreateTable import TokenCreateTable
+from forge.game.card.token.TokenInfo import TokenInfo
+from forge.game.player.Player import Player
+from forge.game.replacement.ReplacementEffect import ReplacementEffect
+from forge.game.replacement.ReplacementResult import ReplacementResult
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.Localizer import Localizer
+from forge.game.ability.effects.CopyPermanentEffect import CopyPermanentEffect
+
+
+class ReplaceTokenEffect(SpellAbilityEffect):
+
+    def resolve(self, sa: SpellAbility) -> None:
+        card = sa.getHostCard()
+        p = sa.getActivatingPlayer()
+        game = card.getGame()
+        repSA = sa
+
+        if not repSA.getReplacingObjects():
+            repSA = sa.getRootAbility()
+        re = repSA.getReplacementEffect()
+        # ReplaceToken Effect only applies to one Player
+        affected = repSA.getReplacingObject(AbilityKey.Player)
+        table = repSA.getReplacingObject(AbilityKey.Token)
+
+        originalParams = repSA.getReplacingObject(AbilityKey.OriginalParams)
+
+        if "Amount" == sa.getParam("Type"):
+            mod = sa.getParamOrDefault("Amount", "Twice")
+            for key, value in list(table.row(affected).items()):
+                if not re.matchesValidParam("ValidToken", key):
+                    continue
+                newAmt = AbilityUtils.doXMath(value, mod, card, sa)
+                table.put(affected, key, newAmt)
+        elif "AddToken" == sa.getParam("Type"):
+            timestamp = game.getNextTimestamp()
+
+            byController: dict[Player, int] = {}
+            for key, value in table.row(affected).items():
+                if not re.matchesValidParam("ValidToken", key):
+                    continue
+                controller = key.getController()
+                byController[controller] = byController.get(controller, 0) + value
+
+            if byController:
+                # for Xorn, might matter if you could somehow create Treasure under multiple players control
+                if sa.hasParam("Amount"):
+                    i = AbilityUtils.calculateAmount(card, sa.getParam("Amount"), sa)
+                    for controller in byController:
+                        byController[controller] = i
+                for controller, amount in byController.items():
+                    for script in sa.getParam("TokenScript").split(","):
+                        token = TokenInfo.getProtoType(script, sa, p)
+
+                        if token is None:
+                            raise RuntimeError("don't find Token for TokenScript: " + script)
+                        token.setTokenSpawningAbility(repSA.getReplacingObject(AbilityKey.Cause))
+                        token.setController(controller, timestamp)
+                        table.put(p, token, amount)
+        elif "ReplaceToken" == sa.getParam("Type"):
+            chosen = None
+            if sa.hasParam("ValidChoices"):
+                choices = CardLists.getValidCards(game.getCardsIn(ZoneType.Battlefield), sa.getParam("ValidChoices"), p, card, sa)
+                if not choices:
+                    originalParams[AbilityKey.ReplacementResult] = ReplacementResult.NotReplaced
+                    return
+                chosen = p.getController().chooseSingleEntityForEffect(choices, sa, Localizer.getInstance().getMessage("lblChooseaCard"), False, None)
+
+            timestamp = game.getNextTimestamp()
+
+            toInsertMap: dict[Player, list[tuple[int, Iterable[object]]]] = {}
+            toRemoveSet: set[Card] = set()
+            for key, value in table.row(affected).items():
+                if not re.matchesValidParam("ValidToken", key):
+                    continue
+                controller = key.getController()
+                # TODO should still merge the amounts to avoid additional prototypes when sourceSA doesn't use ForEach
+                # int old = ObjectUtils.defaultIfNull(toInsertMap.get(controller), 0);
+                tokenAmountPair = (value, key.getRemembered())
+                toInsertMap.setdefault(controller, []).append(tokenAmountPair)
+                toRemoveSet.add(key)
+            # remove replaced tokens
+            for k in list(table.row(affected).keys()):
+                if k in toRemoveSet:
+                    del table.row(affected)[k]
+
+            # insert new tokens
+            for controller, pairs in toInsertMap.items():
+                for pair in pairs:
+                    amt = pair[0]
+                    if amt <= 0:
+                        continue
+                    for script in sa.getParam("TokenScript").split(","):
+                        if script == "Chosen":
+                            token = CopyPermanentEffect.getProtoType(sa, chosen, controller)
+                            token.setCopiedPermanent(token)
+                        else:
+                            token = TokenInfo.getProtoType(script, sa, controller)
+
+                        if token is None:
+                            raise RuntimeError("don't find Token for TokenScript: " + script)
+
+                        token.setTokenSpawningAbility(repSA.getReplacingObject(AbilityKey.Cause))
+                        token.setController(controller, timestamp)
+                        # if token is created from ForEach keep that
+                        token.addRemembered(pair[1])
+                        table.put(affected, token, amt)
+        elif "ReplaceController" == sa.getParam("Type"):
+            timestamp = game.getNextTimestamp()
+            newController = p
+            if sa.hasParam("NewController"):
+                newController = AbilityUtils.getDefinedPlayers(sa.getHostCard(), sa.getParam("NewController"), sa)[0]
+            for key, value in table.row(affected).items():
+                if not re.matchesValidParam("ValidToken", key):
+                    continue
+                key.setController(newController, timestamp)
+
+        # effect was updated
+        originalParams[AbilityKey.ReplacementResult] = ReplacementResult.Updated
 ```

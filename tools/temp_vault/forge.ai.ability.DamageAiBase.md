@@ -207,3 +207,129 @@ public abstract class DamageAiBase extends SpellAbilityAi {
     }
 }
 ```
+
+## Python
+`forge/ai/ability/DamageAiBase.py`
+
+```python
+from forge.ai.ComputerUtil import ComputerUtil
+from forge.ai.ComputerUtilCombat import ComputerUtilCombat
+from forge.ai.SpellAbilityAi import SpellAbilityAi
+from forge.game.Game import Game
+from forge.game.card.Card import Card
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.keyword.Keyword import Keyword
+from forge.game.phase.PhaseHandler import PhaseHandler
+from forge.game.phase.PhaseType import PhaseType
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.trigger.Trigger import Trigger
+from forge.game.trigger.TriggerType import TriggerType
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.MyRandom import MyRandom
+
+
+class DamageAiBase(SpellAbilityAi):
+    def avoidTargetP(self, comp: Player, sa: SpellAbility) -> bool:
+        enemy = comp.getWeakestOpponent()
+        # Logic for cards that damage owner, like Fireslinger
+        # Do not target a player if they aren't below 75% of our health.
+        # Unless Lifelink will cancel the damage to us
+        hostcard = sa.getHostCard()
+        lifelink = hostcard.hasKeyword(Keyword.LIFELINK)
+        if not lifelink:
+            for ench in hostcard.getEnchantedBy():
+                # Treat cards enchanted by older cards with "when enchanted creature deals damage, gain life" as if they had lifelink.
+                if ench.hasSVar("LikeLifeLink"):
+                    if "True" == ench.getSVar("LikeLifeLink"):
+                        lifelink = True
+        if "SelfDamage" == sa.getParam("AILogic"):
+            if comp.getLife() * 0.75 < enemy.getLife():
+                return not lifelink
+        return False
+
+    def shouldTgtP(self, comp: Player, sa: SpellAbility, d: int, noPrevention: bool) -> bool:
+        restDamage = d
+        game = comp.getGame()
+        enemy = comp.getWeakestOpponent()
+        dmgByCardsInHand = False
+        hostcard = sa.getHostCard()
+
+        if ("X" == sa.getParam("NumDmg") and hostcard is not None and sa.hasSVar(sa.getParam("NumDmg")) and
+                sa.getSVar(sa.getParam("NumDmg")) == "TargetedPlayer$CardsInHand"):
+            dmgByCardsInHand = True
+        # Not sure if type choice implemented for the AI yet but it should at least recognize this spell hits harder on larger enemy hand size
+        if "Blood Oath" == hostcard.getName():
+            dmgByCardsInHand = True
+
+        if not sa.canTarget(enemy):
+            return False
+        if sa.getTargets() is not None and sa.getTargets().contains(enemy):
+            return False
+
+        # If the opponent will gain life (ex. Fiery Justice), not beneficial unless life gain is harmful or ignored
+        if "OpponentGainLife" == sa.getParam("AILogic") and ComputerUtil.lifegainPositive(enemy, hostcard):
+            return False
+
+        # Benefits hitting players?
+        # If has triggered ability on dealing damage to an opponent, go for it!
+        for trig in hostcard.getTriggers():
+            if trig.getMode() == TriggerType.DamageDone:
+                if ("Opponent" == trig.getParam("ValidTarget")
+                        and "True" != trig.getParam("CombatDamage")):
+                    return True
+
+        if self.avoidTargetP(comp, sa):
+            return False
+
+        if not enemy.canLoseLife():
+            return False
+
+        if not noPrevention:
+            restDamage = ComputerUtilCombat.predictDamageTo(enemy, restDamage, hostcard, False)
+        else:
+            restDamage = enemy.staticReplaceDamage(restDamage, hostcard, False)
+        if restDamage == 0:
+            return False
+
+        if (enemy.getLife() - restDamage) < 5:
+            # drop the human to less than 5 life
+            return True
+
+        if sa.isSpell():
+            hand = comp.getCardsIn(ZoneType.Hand)
+            phase = game.getPhaseHandler()
+            # If this is a spell, cast it instead of discarding
+            if ((phase.is_(PhaseType.END_OF_TURN) or phase.is_(PhaseType.MAIN2))
+                    and phase.isPlayerTurn(comp) and hand.size() > comp.getMaxHandSize()):
+                return True
+
+            # chance to burn player based on current hand size
+            if hand.size() > 2:
+                value = 0
+                if self.isSorcerySpeed(sa, comp):
+                    # lower chance for sorcery as other spells may be cast in main2
+                    if phase.isPlayerTurn(comp) and phase.is_(PhaseType.MAIN2):
+                        value = 1.0 * restDamage / enemy.getLife()
+                else:
+                    # If Sudden Impact type spell, and can hit at least 3 cards during draw phase
+                    # have a 100% chance to go for it, enemy hand will only lose cards over time!
+                    # But if 3 or less cards, use normal rules, just in case enemy starts holding card or plays a draw spell or we need mana for other instants.
+                    if phase.isPlayerTurn(enemy):
+                        if (dmgByCardsInHand
+                                and phase.is_(PhaseType.DRAW)
+                                and enemy.getCardsIn(ZoneType.Hand).size() > 3):
+                            value = 1
+                        elif (phase.is_(PhaseType.END_OF_TURN)
+                                or (dmgByCardsInHand and phase.getPhase().isAfter(PhaseType.UPKEEP))):
+                            value = 1.5 * restDamage / enemy.getLife()
+                if value > 0:  # more likely to burn with larger hand
+                    for i in range(3, hand.size()):
+                        value *= 1.1
+                if value < 0.2:  # hard floor to reduce ridiculous odds for instants over time
+                    return False
+                chance = MyRandom.getRandom().nextFloat()
+                return chance < value
+
+        return False
+```

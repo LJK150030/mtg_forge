@@ -207,3 +207,102 @@ public class DeckGroup extends DeckBase {
     }
 }
 ```
+
+## Python
+`forge/deck/DeckGroup.py`
+
+```python
+from typing import Callable, Optional
+
+from forge.deck.DeckBase import DeckBase
+from forge.deck.Deck import Deck
+
+
+class DeckGroup(DeckBase):
+    """
+    Related decks usually pertaining to a limited experience like draft or sealed
+    This file represents a human player deck and all opposing AI decks
+    """
+
+    serialVersionUID = -1628725522049635829
+
+    def __init__(self, name0: str = ""):
+        super().__init__(name0)
+        self.humanDeck: Optional[Deck] = None
+        self.aiDecks: list[Deck] = []
+
+    def getHumanDeck(self) -> Deck:
+        """
+        Gets the human deck.
+
+        :return: the human deck
+        """
+        return self.humanDeck
+
+    def getAiDecks(self) -> list[Deck]:
+        """
+        Gets the ai decks.
+
+        :return: the ai decks
+        """
+        return self.aiDecks
+
+    def setHumanDeck(self, humanDeck0: Deck) -> None:
+        """
+        Sets the human deck.
+
+        :param humanDeck0: the new human deck
+        """
+        self.humanDeck = humanDeck0
+        if self.humanDeck is not None:
+            self.humanDeck.setDirectory(self.getDirectory())
+
+    def rankAiDecks(self, comparator: Callable[[Deck], object]) -> None:
+        """
+        Evaluate and 'rank' the ai decks.
+        """
+        if len(self.aiDecks) < 2:
+            return
+        self.aiDecks.sort(key=comparator)
+
+    def getItemType(self) -> str:
+        return "Group of decks"
+
+    def cloneFieldsTo(self, clone: DeckBase) -> None:
+        super().cloneFieldsTo(clone)
+
+        myClone = clone
+        # human deck name should always match DeckGroup name
+        myClone.setHumanDeck(self.humanDeck.copyTo(self.getName()))
+
+        for src in self.aiDecks:
+            myClone.addAiDeck(src.copyTo(src.getName()))
+
+    def addAiDeck(self, aiDeck: Deck) -> None:
+        """
+        Adds the ai deck.
+
+        :param aiDeck: the ai deck
+        """
+        if aiDeck is None:
+            return
+        aiDeck.setDirectory(self.getDirectory())
+        self.aiDecks.append(aiDeck)
+
+    def addAiDecks(self, computer: list[Deck]) -> None:
+        """
+        Adds the ai decks.
+
+        :param computer: the computer
+        """
+        self.aiDecks.extend(computer)
+
+    def newInstance(self, name0: str) -> DeckBase:
+        return DeckGroup(name0)
+
+    def isEmpty(self) -> bool:
+        return self.humanDeck is None or self.humanDeck.isEmpty()
+
+    def getImageKey(self, altState: bool) -> str:
+        return None
+```

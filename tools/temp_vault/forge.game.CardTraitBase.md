@@ -130,7 +130,7 @@ classDiagram
 
 ## Design Description
 
-CardTraitBase is the abstract foundation for the three card-text-driven game traits in Forge — Triggers, ReplacementEffects, and StaticAbilities. It models a trait as a host card plus a parameter map (`mapParams`/`originalMapParams`) parsed from card script, and centralizes the behavior shared across those subtypes: parameter access, SVar resolution, keyword association, intrinsic/suppressed flags, and validity matching against game objects via `matchesValid`. Its `meetsCommonRequirements` method encodes the large catalog of conditional ability checks (Metalcraft, Delirium, day/night, life totals, presence counts, mana spent, class level, and more).
+CardTraitBase is the abstract foundation for the three card-text-driven game traits in Forge â€” Triggers, ReplacementEffects, and StaticAbilities. It models a trait as a host card plus a parameter map (`mapParams`/`originalMapParams`) parsed from card script, and centralizes the behavior shared across those subtypes: parameter access, SVar resolution, keyword association, intrinsic/suppressed flags, and validity matching against game objects via `matchesValid`. Its `meetsCommonRequirements` method encodes the large catalog of conditional ability checks (Metalcraft, Delirium, day/night, life totals, presence counts, mana spent, class level, and more).
 
 Implementing GameObject, IHasCardView, and IHasSVars, it collaborates with Card, CardState, Player, and Game to evaluate conditions, and exposes a CardView for the UI. Notable design intent includes the dual original/current parameter maps supporting text-changing effects (`changeText`/`changeTextIntrinsic`, guarded by descriptive and no-change key lists) and `copyHelper` for cloning traits onto copied cards.
 
@@ -896,4 +896,572 @@ public abstract class CardTraitBase implements GameObject, IHasCardView, IHasSVa
     }
 
 }
+```
+
+## Python
+`forge/game/CardTraitBase.py`
+
+```python
+from typing import List, Optional
+import collections.abc
+
+from forge.game.GameObject import GameObject
+from forge.game.IHasSVars import IHasSVars
+from forge.game.card.IHasCardView import IHasCardView
+
+from forge.card.CardStateName import CardStateName
+from forge.card.MagicColor import MagicColor
+from forge.card.mana.ManaAtom import ManaAtom
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CardPredicates import CardPredicates
+from forge.game.card.CardState import CardState
+from forge.game.card.CardView import CardView
+from forge.game.keyword.Keyword import Keyword
+from forge.game.keyword.KeywordInterface import KeywordInterface
+from forge.game.player.GameLossReason import GameLossReason
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.trigger.Trigger import Trigger
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.Expressions import Expressions
+from forge.util.ITranslatable import ITranslatable
+from forge.game.Game import Game
+
+
+_UNSET = object()
+
+
+def _equalsIgnoreCase(a, b):
+    if a is None or b is None:
+        return False
+    return a.lower() == b.lower()
+
+
+def _isNumeric(s):
+    return s is not None and len(s) > 0 and s.isdigit()
+
+
+class CardTraitBase(GameObject, IHasCardView, IHasSVars):
+    """
+    Base class for Triggers,ReplacementEffects and StaticAbilities.
+    """
+
+    # Keys of descriptive (text) parameters.
+    descriptiveKeys = [
+        "Description", "SpellDescription", "StackDescription", "TriggerDescription",
+        "ChangeTypeDesc", "ValidTgtsDesc",
+    ]
+
+    # Keys that should not changed
+    noChangeKeys = [
+        "TokenScript", "NewName", "DefinedName", "ChooseFromList",
+        "AddAbility",
+    ]
+
+    def __init__(self):
+        # The host card.
+        self.hostCard = None
+        self.cardState = None
+        self.keyword = None
+        # The map params.
+        self.originalMapParams = {}
+        self.mapParams = {}
+        # The is intrinsic.
+        self.intrinsic = False
+        # The suppressed.
+        self.suppressed = False
+        self.sVars = {}
+        self.intrinsicChangedTextColors = {}
+        self.intrinsicChangedTextTypes = {}
+        self.changedTextColors = {}
+        self.changedTextTypes = {}
+
+    def getMapParams(self) -> dict[str, str]:
+        return self.mapParams
+
+    def getParamOrDefault(self, key: str, defaultValue: str) -> str:
+        param = self.mapParams.get(key)
+        return param if param is not None else defaultValue
+
+    def getParam(self, key: str) -> str:
+        return self.mapParams.get(key)
+
+    def getOriginalParam(self, key: str) -> str:
+        return self.originalMapParams.get(key)
+
+    def hasParam(self, key: str) -> bool:
+        return key in self.mapParams
+
+    def putParam(self, key: str, value: str) -> str:
+        prev = self.mapParams.get(key)
+        self.mapParams[key] = value
+        return prev
+
+    def removeParam(self, key: str) -> None:
+        self.mapParams.pop(key, None)
+
+    def getOriginalMapParams(self) -> dict[str, str]:
+        return self.originalMapParams
+
+    def isIntrinsic(self) -> bool:
+        return self.intrinsic
+
+    def setIntrinsic(self, i: bool) -> None:
+        self.intrinsic = i
+
+    def getHostCard(self) -> Card:
+        return self.hostCard
+
+    def setHostCard(self, c: Card) -> None:
+        self.hostCard = c
+
+    def isKeyword(self, kw: Keyword) -> bool:
+        return self.keyword is not None and self.keyword.getKeyword() == kw
+
+    def getKeyword(self) -> KeywordInterface:
+        return self.keyword
+
+    def setKeyword(self, kw: KeywordInterface) -> None:
+        self.keyword = kw
+
+    def isEmbalm(self) -> bool:
+        return self.isKeyword(Keyword.EMBALM)
+
+    def isEternalize(self) -> bool:
+        return self.isKeyword(Keyword.ETERNALIZE)
+
+    def isSecondary(self) -> bool:
+        return self.getParamOrDefault("Secondary", "False") == "True"
+
+    def isClassAbility(self) -> bool:
+        return self.hasParam("ClassLevel")
+
+    def isClassLevelNAbility(self, level: int) -> bool:
+        classLevel = self.getParamOrDefault("ClassLevel", "0")
+        if not _isNumeric(classLevel):
+            classLevel = classLevel[2:]
+        return level == int(classLevel)
+
+    def isManaAbility(self) -> bool:
+        return False
+
+    def matchesValid(self, o, valids, srcCard=_UNSET, srcPlayer=_UNSET) -> bool:
+        if srcCard is _UNSET:
+            srcCard = self.getHostCard()
+        if srcPlayer is _UNSET:
+            if srcCard is None:
+                return False
+
+            controller = srcCard.getController()
+            if isinstance(self, Trigger):
+                # check for delayed trigger
+                if self.getSpawningAbility() is not None:
+                    controller = self.getSpawningAbility().getActivatingPlayer()
+            return self.matchesValid(o, valids, srcCard, controller)
+
+        if isinstance(o, GameObject):
+            return o.isValid(valids, srcPlayer, srcCard, self)
+        elif isinstance(o, collections.abc.Iterable) and not isinstance(o, str):
+            for o2 in o:
+                if self.matchesValid(o2, valids, srcCard, srcPlayer):
+                    return True
+        elif isinstance(o, str):
+            if o in valids:
+                return True
+        elif isinstance(o, PlanarDice):
+            for s in valids:
+                valid = PlanarDice.smartValueOf(s)
+                if o.name() == valid.name():
+                    return True
+        elif isinstance(o, GameLossReason):
+            for s in valids:
+                valid = GameLossReason.smartValueOf(s)
+                if o.name() == valid.name():
+                    return True
+
+        return False
+
+    def matchesValidParam(self, param: str, o, srcCard=_UNSET) -> bool:
+        if srcCard is _UNSET:
+            srcCard = self.getHostCard()
+        result = self.hasParam("Invert" + param)
+        if self.hasParam(param) and not self.matchesValid(o, self.getParam(param).split(","), srcCard):
+            return result
+        return not result
+
+    def setSuppressed(self, supp: bool) -> None:
+        self.suppressed = supp
+
+    def isSuppressed(self) -> bool:
+        return self.suppressed
+
+    def meetsCommonRequirements(self, params: dict[str, str]) -> bool:
+        hostController = self.getHostCard().getController()
+        game = hostController.getGame()
+
+        # intervening if check, make sure to use right controller
+        if not game.getStack().isEmpty() and game.getStack().isResolving(self.getHostCard()):
+            sa = game.getStack().peek().getSpellAbility()
+            if sa.isTrigger():
+                hostController = sa.getActivatingPlayer()
+
+        if "Metalcraft" in params:
+            if _equalsIgnoreCase("True", params.get("Metalcraft")) != hostController.hasMetalcraft():
+                return False
+        if "Delirium" in params:
+            if _equalsIgnoreCase("True", params.get("Delirium")) != hostController.hasDelirium():
+                return False
+        if "Threshold" in params:
+            if _equalsIgnoreCase("True", params.get("Threshold")) != hostController.hasThreshold():
+                return False
+        if "Hellbent" in params:
+            if _equalsIgnoreCase("True", params.get("Hellbent")) != hostController.hasHellbent():
+                return False
+        if "Bloodthirst" in params:
+            if _equalsIgnoreCase("True", params.get("Bloodthirst")) != hostController.hasBloodthirst():
+                return False
+        if "FatefulHour" in params:
+            if _equalsIgnoreCase("True", params.get("FatefulHour")) != (hostController.getLife() <= 5):
+                return False
+        if "Monarch" in params:
+            if _equalsIgnoreCase("True", params.get("Monarch")) != hostController.isMonarch():
+                return False
+        if "Revolt" in params:
+            if _equalsIgnoreCase("True", params.get("Revolt")) != hostController.hasRevolt():
+                return False
+            elif _equalsIgnoreCase("None", params.get("Revolt")):
+                none = True
+                for p in game.getRegisteredPlayers():
+                    if p.hasRevolt():
+                        none = False
+                        break
+                if not none:
+                    return False
+        if "Desert" in params:
+            if _equalsIgnoreCase("True", params.get("Desert")) != hostController.hasDesert():
+                return False
+        if "Blessing" in params:
+            if _equalsIgnoreCase("True", params.get("Blessing")) != hostController.hasBlessing():
+                return False
+
+        if "DayTime" in params:
+            if _equalsIgnoreCase("Day", params.get("DayTime")):
+                if not game.isDay():
+                    return False
+            elif _equalsIgnoreCase("Night", params.get("DayTime")):
+                if not game.isNight():
+                    return False
+            elif _equalsIgnoreCase("Neither", params.get("DayTime")):
+                if not game.isNeitherDayNorNight():
+                    return False
+
+        if "Adamant" in params:
+            if self.hostCard.getCastSA() is None:
+                return False
+            payingMana = "".join(map(str, self.hostCard.getCastSA().getPayingMana()))
+            color = params.get("Adamant")
+            if "Any" == color:
+                bFlag = False
+                for c in MagicColor.WUBRG:
+                    if payingMana.count(MagicColor.toShortString(c)) >= 3:
+                        bFlag = True
+                        break
+                if not bFlag:
+                    return False
+            elif payingMana.count(MagicColor.toShortString(color)) < 3:
+                return False
+
+        if "LifeTotal" in params:
+            player = params.get("LifeTotal")
+            lifeCompare = self.getParamOrDefault("LifeAmount", "GE1")
+            life = 1
+
+            if player == "You":
+                life = hostController.getLife()
+            if player == "OpponentSmallest":
+                life = hostController.getOpponentsSmallestLifeTotal()
+            if player == "OpponentGreatest":
+                life = hostController.getOpponentsGreatestLifeTotal()
+            if player == "ActivePlayer":
+                life = game.getPhaseHandler().getPlayerTurn().getLife()
+
+            rightString = lifeCompare[2:]
+            right = AbilityUtils.calculateAmount(self.getHostCard(), rightString, self)
+
+            if not Expressions.compare(life, lifeCompare, right):
+                return False
+
+        if "IsPresent" in params:
+            sIsPresent = params.get("IsPresent")
+            presentCompare = self.getParamOrDefault("PresentCompare", "GE1")
+            presentPlayer = self.getParamOrDefault("PresentPlayer", "Any")
+            presentZone = ZoneType.Battlefield
+            if "PresentZone" in params:
+                presentZone = ZoneType.smartValueOf(params.get("PresentZone"))
+            if "PresentDefined" in params:
+                list_ = AbilityUtils.getDefinedCards(self.getHostCard(), params.get("PresentDefined"), self)
+            else:
+                list_ = CardCollection()
+                if presentPlayer == "You" or presentPlayer == "Any":
+                    list_.addAll(hostController.getCardsIn(presentZone))
+                if presentPlayer == "Opponent" or presentPlayer == "Any":
+                    list_.addAll(hostController.getOpponents().getCardsIn(presentZone))
+                if presentPlayer == "Any":
+                    list_.addAll(hostController.getAllies().getCardsIn(presentZone))
+            list_ = CardLists.getValidCards(list_, sIsPresent, hostController, self.getHostCard(), self)
+
+            rightString = presentCompare[2:]
+            right = AbilityUtils.calculateAmount(self.getHostCard(), rightString, self)
+            left = list_.size()
+
+            if not Expressions.compare(left, presentCompare, right):
+                return False
+
+        if "IsPresent2" in params:
+            sIsPresent = params.get("IsPresent2")
+            presentCompare = self.getParamOrDefault("PresentCompare2", "GE1")
+            presentPlayer = self.getParamOrDefault("PresentPlayer2", "Any")
+            presentZone = ZoneType.Battlefield
+            if "PresentZone2" in params:
+                presentZone = ZoneType.smartValueOf(params.get("PresentZone2"))
+            list_ = CardCollection()
+            if presentPlayer == "You" or presentPlayer == "Any":
+                list_.addAll(hostController.getCardsIn(presentZone))
+            if presentPlayer == "Opponent" or presentPlayer == "Any":
+                list_.addAll(hostController.getOpponents().getCardsIn(presentZone))
+
+            list_ = CardLists.getValidCards(list_, sIsPresent, hostController, self.getHostCard(), self)
+
+            rightString = presentCompare[2:]
+            right = AbilityUtils.calculateAmount(self.getHostCard(), rightString, self)
+            left = list_.size()
+
+            if not Expressions.compare(left, presentCompare, right):
+                return False
+
+        if "CheckDefinedPlayer" in params:
+            sIsPresent = params.get("CheckDefinedPlayer")
+            playersize = AbilityUtils.getDefinedPlayers(self.getHostCard(), sIsPresent, self).size()
+            comparator = self.getParamOrDefault("DefinedPlayerCompare", "GE1")
+            svarOperator = comparator[0:2]
+            svarOperand = comparator[2:]
+            operandValue = AbilityUtils.calculateAmount(self.getHostCard(), svarOperand, self)
+            if not Expressions.compare(playersize, svarOperator, operandValue):
+                return False
+
+        if "CheckSVar" in params:
+            # TODO this provides only the card controller instead of the stack one
+            sVar = AbilityUtils.calculateAmount(self.getHostCard(), params.get("CheckSVar"), self)
+            comparator = self.getParamOrDefault("SVarCompare", "GE1")
+            svarOperator = comparator[0:2]
+            svarOperand = comparator[2:]
+            operandValue = AbilityUtils.calculateAmount(self.getHostCard(), svarOperand, self)
+            if not Expressions.compare(sVar, svarOperator, operandValue):
+                return False
+            if self.hasParam("CheckSecondSVar"):
+                sVar2 = AbilityUtils.calculateAmount(self.hostCard, self.getParam("CheckSecondSVar"), self)
+                comparator2 = self.getParamOrDefault("SecondSVarCompare", "GE1")
+                svarOperator2 = comparator2[0:2]
+                svarOperand2 = comparator2[2:]
+                operandValue2 = AbilityUtils.calculateAmount(self.getHostCard(), svarOperand2, self)
+                if not Expressions.compare(sVar2, svarOperator2, operandValue2):
+                    return False
+
+        if "ManaSpent" in params:
+            castSA = self.getHostCard().getCastSA()
+            if castSA is None:
+                return False
+            if not castSA.getPayingColors().hasAllColors(ManaAtom.fromName(params.get("ManaSpent"))):
+                return False
+
+        if "ManaNotSpent" in params:
+            castSA = self.getHostCard().getCastSA()
+            if castSA is not None and castSA.getPayingColors().hasAllColors(ManaAtom.fromName(params.get("ManaNotSpent"))):
+                return False
+
+        if "WerewolfTransformCondition" in params:
+            if not game.getStack().getSpellsCastLastTurn().isEmpty():
+                return False
+
+        if "WerewolfUntransformCondition" in params:
+            casted = game.getStack().getSpellsCastLastTurn()
+            conditionMet = False
+            for p in game.getPlayers():
+                if CardLists.count(casted, CardPredicates.isController(p)) > 1:
+                    conditionMet = True
+                    break
+            if not conditionMet:
+                return False
+
+        if "ClassLevel" in params:
+            level = self.getHostCard().getClassLevel()
+            levelMin = int(params.get("ClassLevel"))
+            if level < levelMin:
+                return False
+
+        return True
+
+    def getCardView(self) -> CardView:
+        return CardView.get(self.hostCard)
+
+    def getSVarFallback(self, name: str) -> List[IHasSVars]:
+        result = []
+
+        if self.getKeyword() is not None and self.getKeyword().getStatic() is not None:
+            # only do when the keyword has part of the SVar in ins original string
+            if name is None or name in self.getKeyword().getOriginal():
+                # TODO try to add the keyword instead if possible?
+                result.append(self.getKeyword().getStatic())
+        if self.getCardState() is not None:
+            result.append(self.getCardState())
+        result.append(self.getHostCard())
+        return result
+
+    def findSVar(self, name: str) -> Optional[IHasSVars]:
+        for f in self.getSVarFallback(name):
+            if f.hasSVar(name):
+                return f
+        return None
+
+    def getSVar(self, name: str) -> str:
+        if name in self.sVars:
+            return self.sVars.get(name)
+        f = self.findSVar(name)
+        return f.getSVar(name) if f is not None else ""
+
+    def hasSVar(self, name: str) -> bool:
+        return name in self.sVars or self.findSVar(name) is not None
+
+    def getSVarInt(self, name: str):
+        var = self.getSVar(name)
+        if var is not None:
+            try:
+                return int(var)
+            except Exception:
+                pass
+        return None
+
+    def setSVar(self, name: str, value: str) -> None:
+        self.sVars[name] = value
+
+    def getSVars(self) -> dict[str, str]:
+        res = {}
+        # TODO reverse the order
+        for s in self.getSVarFallback(None):
+            res.update(s.getSVars())
+        res.update(self.sVars)
+        return res
+
+    def setSVars(self, newSVars: dict[str, str]) -> None:
+        self.sVars = {}
+        self.sVars.update(newSVars)
+
+    def removeSVar(self, var: str) -> None:
+        self.sVars.pop(var, None)
+
+    def getCardState(self) -> CardState:
+        return self.cardState
+
+    def setCardState(self, state: CardState) -> None:
+        self.cardState = state
+
+    def getCardStateName(self) -> CardStateName:
+        if self.getCardState() is None:
+            return None
+        return self.getCardState().getView().getState()
+
+    def getHostName(self, node: "CardTraitBase") -> ITranslatable:
+        # if alternate state is viewed while card uses original
+        if node.isIntrinsic() and node.cardState is not None and node.cardState.getStateName() != self.getHostCard().getCurrentStateName():
+            return node.cardState
+        return node.getHostCard()
+
+    def getOriginalHost(self) -> Card:
+        if self.getCardState() is not None:
+            return self.getCardState().getCard()
+        return None
+
+    def isCopiedTrait(self) -> bool:
+        if self.getCardState() is None:
+            return False
+        return not self.getHostCard().equals(self.getCardState().getCard())
+
+    def getChangedTextColors(self) -> dict[str, str]:
+        return self._combineChangedMap(self.intrinsicChangedTextColors, self.changedTextColors)
+
+    def getChangedTextTypes(self) -> dict[str, str]:
+        return self._combineChangedMap(self.intrinsicChangedTextTypes, self.changedTextTypes)
+
+    def _combineChangedMap(self, input: dict[str, str], output: dict[str, str]) -> dict[str, str]:
+        # no need to do something, just return hash
+        if len(input) == 0:
+            return output
+        if len(output) == 0:
+            return input
+        # magic combine them
+        result = dict(output)
+        for key, value in input.items():
+            result[key] = output.get(value, value)
+        return result
+
+    def changeTextIntrinsic(self, colorMap: dict[str, str], typeMap: dict[str, str]) -> None:
+        self.intrinsicChangedTextColors = colorMap
+        self.intrinsicChangedTextTypes = typeMap
+        for key in list(self.mapParams.keys()):
+            value = self.originalMapParams.get(key)
+            if key in self.noChangeKeys:
+                continue
+            elif key in self.descriptiveKeys:
+                # change descriptions differently
+                newValue = AbilityUtils.applyTextChangeEffects(value, True, colorMap, typeMap)
+            elif self.getHostCard().hasSVar(value):
+                # don't change literal SVar names!
+                continue
+            else:
+                newValue = AbilityUtils.applyTextChangeEffects(value, False, colorMap, typeMap)
+
+            if newValue is not None:
+                self.mapParams[key] = newValue
+        # this does overwrite the original MapParams
+        self.originalMapParams = dict(self.mapParams)
+
+    def changeText(self) -> None:
+        # copy changed text words into card trait there
+        self.changedTextColors = self.getHostCard().getChangedTextColorWords()
+        self.changedTextTypes = self.getHostCard().getChangedTextTypeWords()
+
+        for key in list(self.mapParams.keys()):
+            value = self.originalMapParams.get(key)
+            if key in self.noChangeKeys:
+                continue
+            elif key in self.descriptiveKeys:
+                # change descriptions differently
+                newValue = AbilityUtils.applyDescriptionTextChangeEffects(value, self)
+            elif self.getHostCard().hasSVar(value):
+                # don't change literal SVar names!
+                newValue = None
+            else:
+                newValue = AbilityUtils.applyAbilityTextChangeEffects(value, self)
+
+            if newValue is not None:
+                self.mapParams[key] = newValue
+
+    def copyHelper(self, copy: "CardTraitBase", host: Card, keepTextChanges: bool = False) -> None:
+        copy.originalMapParams = dict(self.originalMapParams)
+        copy.mapParams = dict(self.mapParams if keepTextChanges else self.originalMapParams)
+        copy.setSVars(self.sVars)
+        copy.setCardState(self.cardState)
+        # dont use setHostCard to not trigger the not copied parts yet
+        copy.hostCard = host
+        copy.keyword = self.keyword
+
+    def getTriggerRemembered(self) -> List[object]:
+        if isinstance(self, SpellAbility) and self.isTrigger():
+            return self.getTrigger().getTriggerRemembered()
+        if isinstance(self, Trigger):
+            return self.getTriggerRemembered()
+        return []
 ```

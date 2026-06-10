@@ -111,3 +111,59 @@ public record GameEventBlockersDeclared(PlayerView defendingPlayer, Map<GameEnti
     }
 }
 ```
+
+## Python
+`forge/game/event/GameEventBlockersDeclared.py`
+
+```python
+from typing import TypeVar
+
+from forge.game.event.GameEvent import GameEvent
+from forge.game.GameEntity import GameEntity
+from forge.game.GameEntityView import GameEntityView
+from forge.game.card.Card import Card
+from forge.game.card.CardView import CardView
+from forge.game.event.IGameEventVisitor import IGameEventVisitor
+from forge.game.player.Player import Player
+from forge.game.player.PlayerView import PlayerView
+from forge.util.Lang import Lang
+from forge.util.TextUtil import TextUtil
+
+T = TypeVar("T")
+
+
+class GameEventBlockersDeclared(GameEvent):
+
+    def __init__(self, defendingPlayer: PlayerView, blockers: dict[GameEntityView, dict[CardView, list[CardView]]]):
+        self.defendingPlayer = defendingPlayer
+        self.blockers = blockers
+
+    @classmethod
+    def fromModel(cls, defendingPlayer: Player, blockers: dict[GameEntity, dict[Card, list[Card]]]) -> "GameEventBlockersDeclared":
+        return cls(PlayerView.get(defendingPlayer), GameEventBlockersDeclared.convertMap(blockers))
+
+    @staticmethod
+    def convertMap(map: dict[GameEntity, dict[Card, list[Card]]]) -> dict[GameEntityView, dict[CardView, list[CardView]]]:
+        result: dict[GameEntityView, dict[CardView, list[CardView]]] = {}
+        for key, value in map.items():
+            innerResult: dict[CardView, list[CardView]] = {}
+            for innerKey, innerValue in value.entries():
+                innerResult.setdefault(CardView.get(innerKey), []).append(CardView.get(innerValue))
+            result[GameEntityView.get(key)] = innerResult
+        return result
+
+    def visit(self, visitor: IGameEventVisitor[T]) -> T:
+        return visitor.visit(self)
+
+    # (non-Javadoc)
+    # @see java.lang.Object#toString()
+    def toString(self) -> str:
+        blockerCards: list[CardView] = []
+        for vv in self.blockers.values():
+            for values in vv.values():
+                blockerCards.extend(values)
+        return TextUtil.concatWithSpace(self.defendingPlayer.getName(), "declared", str(len(blockerCards)), "blockers:", Lang.joinHomogenous(blockerCards))
+
+    def __str__(self) -> str:
+        return self.toString()
+```

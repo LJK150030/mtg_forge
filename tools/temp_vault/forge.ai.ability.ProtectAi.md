@@ -62,7 +62,7 @@ classDiagram
 
 ## Design Description
 
-ProtectAi is the forge-ai decision layer for "Protection from" effects, extending `SpellAbilityAi` to override the standard hooks (`checkApiLogic`, `checkPhaseRestrictions`, `doTriggerNoCost`, `chkDrawback`) that the AI framework calls to decide whether and how to play a Protection ability. Its core responsibility is selecting worthwhile creatures to shield: the static helpers (`getProtectCreatures`, `toProtectFrom`, and the `hasProtectionFrom*` keyword checks) evaluate the threat landscape—objects predicted to die, blockers or attackers that would be destroyed in `Combat`, or pushing through unblockable damage during MAIN1—and match an available protection color to each threat.
+ProtectAi is the forge-ai decision layer for "Protection from" effects, extending `SpellAbilityAi` to override the standard hooks (`checkApiLogic`, `checkPhaseRestrictions`, `doTriggerNoCost`, `chkDrawback`) that the AI framework calls to decide whether and how to play a Protection ability. Its core responsibility is selecting worthwhile creatures to shield: the static helpers (`getProtectCreatures`, `toProtectFrom`, and the `hasProtectionFrom*` keyword checks) evaluate the threat landscapeâ€”objects predicted to die, blockers or attackers that would be destroyed in `Combat`, or pushing through unblockable damage during MAIN1â€”and match an available protection color to each threat.
 
 Notably, the class collaborates broadly with the game model (`Card`, `CardCollection`, `Player`, `PhaseHandler`, `Combat`, `AiAttackController`) yet stays stateless via static utilities, returning `AiAbilityDecision` values so callers get both a play/no-play verdict and a confidence score. It carefully avoids redundant protection, respects tap and sacrifice costs around combat timing, and separates optional targeting (`protectTgtAI`) from forced casts (`protectMandatoryTarget`).
 
@@ -408,4 +408,291 @@ public class ProtectAi extends SpellAbilityAi {
     } // protectDrawbackAI()
 
 }
+```
+
+## Python
+`forge/ai/ability/ProtectAi.py`
+
+```python
+from forge.ai.SpellAbilityAi import SpellAbilityAi
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiAttackController import AiAttackController
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.ai.ComputerUtil import ComputerUtil
+from forge.ai.ComputerUtilCard import ComputerUtilCard
+from forge.ai.ComputerUtilCombat import ComputerUtilCombat
+from forge.ai.ComputerUtilCost import ComputerUtilCost
+from forge.card.MagicColor import MagicColor
+from forge.game.Game import Game
+from forge.game.GameObject import GameObject
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.ability.ApiType import ApiType
+from forge.game.ability.effects.ProtectEffect import ProtectEffect
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CardUtil import CardUtil
+from forge.game.combat.Combat import Combat
+from forge.game.phase.PhaseHandler import PhaseHandler
+from forge.game.phase.PhaseType import PhaseType
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.spellability.TargetRestrictions import TargetRestrictions
+from forge.util.MyRandom import MyRandom
+
+
+class ProtectAi(SpellAbilityAi):
+    @staticmethod
+    def hasProtectionFrom(card, color):
+        onlyColors = list(MagicColor.Constant.ONLY_COLORS)
+
+        # make sure we have a valid color
+        if color not in onlyColors:
+            return False
+
+        protection = "Protection from " + color
+
+        return card.hasKeyword(protection)
+
+    @staticmethod
+    def hasProtectionFromAny(card, colors):
+        protect = False
+        for color in colors:
+            protect |= ProtectAi.hasProtectionFrom(card, color)
+        return protect
+
+    @staticmethod
+    def hasProtectionFromAll(card, colors):
+        protect = True
+        isEmpty = True
+        for color in colors:
+            protect &= ProtectAi.hasProtectionFrom(card, color)
+            isEmpty = False
+        return protect and not isEmpty
+
+    # \brief Find a choice for a Protect SpellAbility that protects from a specific threat card.
+    # @param threat Card to protect against
+    # @param sa Protect SpellAbility
+    # @return choice that can protect against the given threat, null if no such choice exists
+    @staticmethod
+    def toProtectFrom(threat, sa):
+        if sa.getApi() != ApiType.Protection:
+            return None
+        choices = ProtectEffect.getProtectionList(sa)
+        if threat.isArtifact() and "Artifact" in choices:
+            return "Artifact"
+        if threat.isBlack() and "black" in choices:
+            return "black"
+        if threat.isBlue() and "blue" in choices:
+            return "blue"
+        if threat.isGreen() and "green" in choices:
+            return "green"
+        if threat.isRed() and "red" in choices:
+            return "red"
+        if threat.isWhite() and "white" in choices:
+            return "white"
+        return None
+
+    # getProtectCreatures.
+    @staticmethod
+    def getProtectCreatures(ai, sa):
+        gains = ProtectEffect.getProtectionList(sa)
+        game = ai.getGame()
+        combat = game.getCombat()
+        ph = game.getPhaseHandler()
+
+        list = ai.getCreaturesInPlay()
+        threatenedObjects = ComputerUtil.predictThreatenedObjects(sa.getActivatingPlayer(), sa, True)
+
+        def predicate(c):
+            if not c.canBeTargetedBy(sa):
+                return False
+
+            # Don't add duplicate protections
+            if ProtectAi.hasProtectionFromAll(c, gains):
+                return False
+
+            if c in threatenedObjects:
+                return True
+
+            if combat is not None:
+                # creature is blocking and would be destroyed itself
+                if combat.isBlocking(c) and ComputerUtilCombat.blockerWouldBeDestroyed(ai, c, combat):
+                    threats = combat.getAttackersBlockedBy(c)
+                    return threats is not None and len(threats) != 0 and ProtectAi.toProtectFrom(threats[0], sa) is not None
+
+                # creature is attacking and would be destroyed itself
+                if combat.isAttacking(c) and combat.isBlocked(c) and ComputerUtilCombat.attackerWouldBeDestroyed(ai, c, combat):
+                    threats = combat.getBlockers(c)
+                    if threats is not None and len(threats) != 0:
+                        ComputerUtilCard.sortByEvaluateCreature(threats)
+                        return ProtectAi.toProtectFrom(threats[0], sa) is not None
+
+            # make unblockable
+            if ph.getPlayerTurn() == ai and ph.getPhase() == PhaseType.MAIN1:
+                aiAtk = AiAttackController(ai, c)
+                s = aiAtk.toProtectAttacker(sa)
+                if s is None:
+                    return False
+                opponent = ai.getWeakestOpponent()
+                combat1 = ai.getGame().getCombat()
+                dmg = ComputerUtilCombat.damageIfUnblocked(c, opponent, combat1, True)
+                ratio = 1.0 * dmg / opponent.getLife()
+                return MyRandom.getRandom().nextFloat() < ratio
+            return False
+
+        list = CardLists.filter(list, predicate)
+        return list
+
+    def checkPhaseRestrictions(self, ai, sa, ph):
+        notAiMain1 = not (ph.getPlayerTurn() == ai and ph.getPhase() == PhaseType.MAIN1)
+        # sorceries can only give protection in order to create an unblockable attacker
+        return not self.isSorcerySpeed(sa, ai) or not notAiMain1
+
+    def checkApiLogic(self, ai, sa):
+        if sa.usesTargeting():
+            return self.protectTgtAI(ai, sa, False)
+
+        cards = AbilityUtils.getDefinedCards(sa.getHostCard(), sa.getParam("Defined"), sa)
+        if len(cards) == 0:
+            return AiAbilityDecision(0, AiPlayDecision.MissingNeededCards)
+        elif len(cards) == 1:
+            # Affecting single card
+            if cards[0] in ProtectAi.getProtectCreatures(ai, sa):
+                return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+            else:
+                return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+        #
+        # when this happens we need to expand AI to consider if its ok
+        # for everything? for (Card card : cards) { // TODO if AI doesn't
+        # control Card and Pump is a Curse, than maybe use?
+        # }
+        #
+        return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+    def protectTgtAI(self, ai, sa, mandatory):
+        game = ai.getGame()
+        if not mandatory and game.getPhaseHandler().getPhase().isAfter(PhaseType.COMBAT_DECLARE_BLOCKERS) \
+                and game.getStack().isEmpty():
+            return AiAbilityDecision(0, AiPlayDecision.WaitForCombat)
+
+        source = sa.getHostCard()
+
+        tgt = sa.getTargetRestrictions()
+        sa.resetTargets()
+        list = ProtectAi.getProtectCreatures(ai, sa)
+
+        list = CardLists.getValidCards(list, tgt.getValidTgts(), sa.getActivatingPlayer(), source, sa)
+
+        if game.getStack().isEmpty():
+            # If the cost is tapping, don't activate before declare attack/block
+            if sa.getPayCosts().hasTapCost():
+                if game.getPhaseHandler().getPhase().isBefore(PhaseType.COMBAT_DECLARE_ATTACKERS) \
+                        and game.getPhaseHandler().isPlayerTurn(ai):
+                    list.remove(sa.getHostCard())
+                if game.getPhaseHandler().getPhase().isBefore(PhaseType.COMBAT_DECLARE_BLOCKERS) \
+                        and game.getPhaseHandler().isPlayerTurn(ai):
+                    list.remove(sa.getHostCard())
+
+        # Don't target cards that will die.
+        list = ComputerUtil.getSafeTargets(ai, sa, list)
+
+        # Don't target self if the cost includes sacrificing itself
+        if ComputerUtilCost.isSacrificeSelfCost(sa.getPayCosts()):
+            list.remove(source)
+
+        if list.isEmpty():
+            if mandatory and ProtectAi.protectMandatoryTarget(ai, sa):
+                return AiAbilityDecision(50, AiPlayDecision.MandatoryPlay)
+            else:
+                sa.resetTargets()
+                return AiAbilityDecision(0, AiPlayDecision.TargetingFailed)
+
+        while sa.canAddMoreTarget():
+            t = None
+            # boolean goodt = false;
+
+            if list.isEmpty():
+                if sa.getTargets().size() < sa.getMinTargets() or sa.getTargets().size() == 0:
+                    if mandatory:
+                        if ProtectAi.protectMandatoryTarget(ai, sa):
+                            return AiAbilityDecision(50, AiPlayDecision.MandatoryPlay)
+
+                    sa.resetTargets()
+                    return AiAbilityDecision(0, AiPlayDecision.TargetingFailed)
+                else:
+                    # TODO is this good enough? for up to amounts?
+                    break
+
+            t = ComputerUtilCard.getBestCreatureAI(list)
+            sa.getTargets().add(t)
+            list.remove(t)
+
+        return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+    # protectTgtAI()
+
+    @staticmethod
+    def protectMandatoryTarget(ai, sa):
+        list = CardUtil.getValidCardsToTarget(sa)
+
+        if len(list) < sa.getMinTargets():
+            sa.resetTargets()
+            return False
+
+        pref = CardLists.filterControlledBy(list, ai)
+        pref = CardLists.filter(pref, lambda c: not ProtectAi.hasProtectionFromAll(c, ProtectEffect.getProtectionList(sa)))
+        pref2 = CardLists.filterControlledBy(list, ai)
+        pref = CardLists.filter(pref, lambda c: not ProtectAi.hasProtectionFromAny(c, ProtectEffect.getProtectionList(sa)))
+        forced = CardLists.filterControlledBy(list, ai)
+
+        while sa.canAddMoreTarget():
+            if pref.isEmpty():
+                break
+
+            c = ComputerUtilCard.getBestAI(pref)
+            pref.remove(c)
+            sa.getTargets().add(c)
+
+        while sa.canAddMoreTarget():
+            if pref2.isEmpty():
+                break
+
+            c = ComputerUtilCard.getBestAI(pref2)
+            pref2.remove(c)
+            sa.getTargets().add(c)
+
+        while not sa.isMinTargetChosen():
+            if forced.isEmpty():
+                break
+
+            if CardLists.getNotType(forced, "Creature").isEmpty():
+                c = ComputerUtilCard.getWorstCreatureAI(forced)
+            else:
+                c = ComputerUtilCard.getCheapestPermanentAI(forced, sa, False)
+            forced.remove(c)
+            sa.getTargets().add(c)
+
+        if not sa.isMinTargetChosen():
+            sa.resetTargets()
+            return False
+
+        return True
+    # protectMandatoryTarget()
+
+    def doTriggerNoCost(self, ai, sa, mandatory):
+        if not sa.usesTargeting():
+            if mandatory:
+                return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+        else:
+            return self.protectTgtAI(ai, sa, mandatory)
+
+        return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+    # protectTriggerAI
+
+    def chkDrawback(self, ai, sa):
+        if sa.usesTargeting():
+            return self.protectTgtAI(ai, sa, False)
+
+        return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+    # protectDrawbackAI()
 ```

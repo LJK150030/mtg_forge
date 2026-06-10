@@ -165,6 +165,12 @@ classDiagram
 - [[forge.util.storage.IStorage|IStorage]]
 - [[forge.util.storage.StorageBase|StorageBase]]
 
+## Design Description
+
+StaticData is the central, in-memory registry of game invariants for the Forge engine â€” the cards, tokens, editions, sealed-product templates, and format-legality predicates that remain fixed during play. Constructed once from CardStorageReader sources, it builds and owns the CardDb databases (common and variant), the TokenDb, and the CardEdition.Collection, exposing them through a quasi-singleton accessed via the static instance() handle.
+
+Beyond simple storage, it serves as a faÃ§ade and lookup service: it resolves PaperCards across all databases by name, set, and collector number, and houses the substantial card-art-preference logic for selecting alternative prints by release date, edition type, and frame. Sealed-product storages (boosters, fat packs, print sheets) are loaded lazily via IStorage/StorageBase, and the audit() method parallelizes image/implementation verification across editions with CompletableFuture, reflecting an intent to keep heavy data marshalling off the critical path.
+
 ## Source
 `forge-core/src/main/java/forge/StaticData.java`
 
@@ -941,7 +947,7 @@ public class StaticData {
         Queue<String> TOKEN_Q = new ConcurrentLinkedQueue<>();
         boolean nifHeader = false;
         boolean cniHeader = false;
-        final Pattern funnyCardCollectorNumberPattern = Pattern.compile("^F★?\\d+★?");
+        final Pattern funnyCardCollectorNumberPattern = Pattern.compile("^FÃ¢Ëœâ€¦?\\d+Ã¢Ëœâ€¦?");
         for (CardEdition e : editions) {
             if (CardEdition.Type.FUNNY.equals(e.getType()))
                 continue;
@@ -1174,4 +1180,759 @@ public class StaticData {
         return ImageKeys.getTokenKey(name);
     }
 }
+```
+
+## Python
+`forge/StaticData.py`
+
+```python
+from forge.CardStorageReader import CardStorageReader
+from forge.MulliganDefs import MulliganDefs
+from forge.MulliganDefs.MulliganRule import MulliganRule
+from forge.card.CardDb import CardDb
+from forge.card.CardDb.CardArtPreference import CardArtPreference
+from forge.card.CardDb.CardRequest import CardRequest
+from forge.card.CardEdition import CardEdition
+from forge.card.CardEdition.Collection import Collection
+from forge.card.CardEdition.Reader import Reader
+from forge.card.CardEdition.Type import Type
+from forge.card.CardRules import CardRules
+from forge.card.PrintSheet import PrintSheet
+from forge.item.BoosterBox import BoosterBox
+from forge.item.BoosterBox.Template import Template
+from forge.item.FatPack import FatPack
+from forge.item.FatPack.Template import Template
+from forge.item.PaperCard import PaperCard
+from forge.item.PaperToken import PaperToken
+from forge.item.SealedTemplate import SealedTemplate
+from forge.item.SealedTemplate.Reader import Reader
+from forge.item.IPaperCard import IPaperCard
+from forge.token.TokenDb import TokenDb
+from forge.util.storage.IStorage import IStorage
+from forge.util.storage.StorageBase import StorageBase
+from forge.ImageKeys import ImageKeys
+from forge.util.FileUtil import FileUtil
+from forge.util.ImageUtil import ImageUtil
+from forge.util.TextUtil import TextUtil
+
+import os
+import re
+import traceback
+from datetime import timedelta
+
+
+class StaticData:
+    """
+    The class holding game invariants, such as cards, editions, game formats. All that data, which is not supposed to be changed by player
+
+    @author Max
+    """
+
+    lastInstance = None
+
+    def __init__(self, *args):
+        if len(args) == 8:
+            (cardReader, customCardReader, editionFolder, customEditionsFolder,
+             blockDataFolder, cardArtPreference, enableUnknownCards, loadNonLegalCards) = args
+            self.__init__(cardReader, None, customCardReader, None, editionFolder,
+                          customEditionsFolder, blockDataFolder, "", cardArtPreference,
+                          enableUnknownCards, loadNonLegalCards, False, False)
+            return
+
+        (cardReader, tokenReader, customCardReader, customTokenReader, editionFolder,
+         customEditionsFolder, blockDataFolder, setLookupFolder, cardArtPreference,
+         enableUnknownCards, loadNonLegalCards, allowCustomCardsInDecksConformance,
+         enableSmartCardArtSelection) = args
+
+        # field defaults
+        self.filteredHandsEnabled = False
+        self.mulliganRule = MulliganDefs.getDefaultRule()
+        self.sourceImageForClone = False
+        # Loaded lazily:
+        self.boosters = None
+        self.specialBoosters = None
+        self.tournaments = None
+        self.fatPacks = None
+        self.boosterBoxes = None
+        self.printSheets = None
+        self.setLookup = {}
+        self.sortedEditions = None
+        self.editionsTypeMap = None
+        self.standardPredicate = None
+        self.brawlPredicate = None
+        self.pioneerPredicate = None
+        self.modernPredicate = None
+        self.commanderPredicate = None
+        self.oathbreakerPredicate = None
+
+        self.cardReader = cardReader
+        self.tokenReader = tokenReader
+        self.editions = CardEdition.Collection(CardEdition.Reader(editionFolder))
+        self.blockDataFolder = blockDataFolder
+        self.allowCustomCardsInDecksConformance = allowCustomCardsInDecksConformance
+        self.enableSmartCardArtSelection = enableSmartCardArtSelection
+        self.loadNonLegalCards = loadNonLegalCards
+        StaticData.lastInstance = self
+        funnyCards = set()
+        filtered = set()
+
+        self.editions.append(CardEdition.Collection(CardEdition.Reader(customEditionsFolder, True)))
+
+        # case-insensitive ordering in Java; plain dicts here
+        regularCards = {}
+        variantsCards = {}
+
+        if not loadNonLegalCards:
+            for e in self.editions:
+                if e.getType() == CardEdition.Type.FUNNY or e.getBorderColor() == CardEdition.BorderColor.SILVER:
+                    eternalCards = e.getFunnyEternalCards()
+
+                    for cis in e.getAllCardsInSet():
+                        if cis in eternalCards:
+                            continue
+                        funnyCards.add(cis.name())
+
+        for card in cardReader.loadCards():
+            if card is None:
+                continue
+
+            cardName = card.getPreInitName()
+
+            if (not loadNonLegalCards) and cardName in funnyCards and not card.getType().isBasicLand():
+                filtered.add(cardName)
+
+            if card.isVariant():
+                variantsCards[cardName] = card
+            else:
+                regularCards[cardName] = card
+
+        if customCardReader is not None:  # Load user's custom cards.
+            for card in customCardReader.loadCards():
+                if card is None:
+                    continue
+
+                cardName = card.getName()
+                card.setCustom()
+                if card.isVariant():  # Append loaded custom cards to the respective list.
+                    variantsCards[cardName] = card
+                else:
+                    regularCards[cardName] = card
+
+        self.commonCards = CardDb(regularCards, self.editions, filtered)
+        self.variantCards = CardDb(variantsCards, self.editions, filtered)
+
+        self.commonCards.setCardArtPreference(cardArtPreference)
+        self.variantCards.setCardArtPreference(cardArtPreference)
+
+        # must initialize after establish field values for the sake of card image logic
+        self.commonCards.initialize(False, False, enableUnknownCards)
+        self.variantCards.initialize(False, False, enableUnknownCards)
+
+        if self.tokenReader is not None:
+            tokens = {}
+
+            for card in self.tokenReader.loadCards():
+                if card is None:
+                    continue
+                tokens[card.getNormalizedName()] = card
+            if customTokenReader is not None:
+                for card in customTokenReader.loadCards():
+                    if card is None:
+                        continue
+                    card.setCustom()
+                    tokens[card.getNormalizedName()] = card
+            self.allTokens = TokenDb(tokens, self.editions)
+        else:
+            self.allTokens = None
+
+        # initialize setLookup
+        if FileUtil.isDirectoryWithFiles(setLookupFolder):
+            for name in os.listdir(setLookupFolder):
+                f = os.path.join(setLookupFolder, name)
+                if os.path.isfile(f):
+                    self.setLookup[name.replace(".txt", "")] = FileUtil.readFile(f)
+
+    @staticmethod
+    def instance():
+        return StaticData.lastInstance
+
+    def getSetLookup(self):
+        return self.setLookup
+
+    def getEditions(self):
+        return self.editions
+
+    def getSortedEditions(self):
+        if self.sortedEditions is None:
+            self.sortedEditions = []
+            for st in self.editions:
+                self.sortedEditions.append(st)
+            self.sortedEditions.sort()
+            self.sortedEditions.reverse()  # put newer sets at the top
+        return self.sortedEditions
+
+    def getEditionsTypeMap(self):
+        if self.editionsTypeMap is None:
+            self.editionsTypeMap = {}
+            for editionType in CardEdition.Type.values():
+                self.editionsTypeMap[editionType] = []
+            for edition in self.getSortedEditions():
+                key = edition.getType()
+                editionsOfType = self.editionsTypeMap[key]
+                editionsOfType.append(edition)
+        return self.editionsTypeMap
+
+    def getCardEdition(self, setCode):
+        if CardEdition.UNKNOWN_CODE == setCode:
+            return CardEdition.UNKNOWN
+        edition = self.editions.get(setCode)
+        return edition
+
+    def getOrLoadCommonCard(self, cardName, setCode, artIndex, foil):
+        card = self.commonCards.getCard(cardName, setCode, artIndex)
+        if card is None:
+            self.attemptToLoadCard(cardName, setCode)
+            card = self.commonCards.getCard(cardName, setCode, artIndex)
+        if card is None:
+            card = self.commonCards.getCard(cardName, setCode)
+        if card is None:
+            return None
+        return card.getFoiled() if foil else card
+
+    def attemptToLoadCard(self, cardName, setCode=None):
+        rules = self.cardReader.attemptToLoadCard(cardName)
+        if rules is not None:
+            if rules.isVariant():
+                self.variantCards.loadCard(cardName, setCode, rules)
+            else:
+                self.commonCards.loadCard(cardName, setCode, rules)
+
+    def fetchCard(self, cardName, setCode=None, collectorNumber=None):
+        """
+        Retrieve a PaperCard by looking at all available card databases.
+        """
+        card = None
+        for db in self.getAvailableDatabases().values():
+            card = db.getCard(cardName, setCode, collectorNumber)
+            if card is not None:
+                break
+        return card
+
+    def getCardFromSet(self, cardName, edition, collectorNumber, artIndex, isFoil):
+        cr = CardDb.CardRequest.fromString(cardName)  # accounts for any foil request ending with +
+        cr.isFoil = cr.isFoil or isFoil
+        targetDb = self.matchTargetCardDb(cr.cardName)
+        if targetDb is None:
+            return None
+        # Try with collector number first
+        result = targetDb.getCardFromSet(cardName, edition, collectorNumber, cr.isFoil)
+        if result is None and collectorNumber != IPaperCard.NO_COLLECTOR_NUMBER:
+            if artIndex != IPaperCard.NO_ART_INDEX:
+                # So here we know cardName exists (checked before invoking this method)
+                # and also a Collector Number was specified.
+                # The only case we would reach this point is either due to a wrong edition-card match
+                # (later resulting in Unknown card - e.g. "Counterspell|FEM") or due to the fact that
+                # art Index was specified instead of collector number! Let's give it a go with that
+                # but only if artIndex is not NO_ART_INDEX (e.g. collectorNumber = "*32")
+                maxArtForCard = targetDb.getMaxArtIndex(cardName)
+                if artIndex <= maxArtForCard:
+                    # if collNr was "78", it's hardly an artIndex. It was just the wrong collNr for the requested card
+                    result = targetDb.getCardFromSet(cardName, edition, artIndex, cr.isFoil)
+            if result is None:
+                # Last chance, try without collector number and see if any match is found
+                result = targetDb.getCardFromSet(cardName, edition, cr.isFoil)
+        return result
+
+    def getCardFromSupportedEditions(self, cardName, isFoil, artPreference, allowedSetCodes, releasedBefore):
+        cr = CardDb.CardRequest.fromString(cardName)  # accounts for any foil request ending with +
+        isFoil = cr.isFoil or isFoil
+        targetDb = self.matchTargetCardDb(cr.cardName)
+        if targetDb is None:
+            return None
+        filter = None
+        if allowedSetCodes is not None:
+            filter = targetDb.isLegal(allowedSetCodes)
+        cardRequest = CardDb.CardRequest.compose(cardName, isFoil)
+        if releasedBefore is not None:
+            result = targetDb.getCardFromEditionsReleasedBefore(cardRequest, artPreference, releasedBefore, filter)
+            if result is None:
+                result = targetDb.getCardFromEditions(cardRequest, artPreference, filter)
+        else:
+            result = targetDb.getCardFromEditions(cardRequest, artPreference, filter)
+        return result
+
+    def matchTargetCardDb(self, cardName):
+        # NOTE: any foil request in cardName is NOT taken into account here.
+        # It's a private method, so it's a fair assumption.
+        for targetDb in self.getAvailableDatabases().values():
+            if targetDb.contains(cardName):
+                return targetDb
+        return None
+
+    def isMTGCard(self, cardName):
+        if cardName is None or len(cardName.strip()) == 0:
+            return False
+        cr = CardDb.CardRequest.fromString(cardName)  # accounts for any foil request ending with +
+        return self.commonCards.contains(cr.cardName) or self.variantCards.contains(cr.cardName)
+
+    def getTournamentPacks(self):
+        if self.tournaments is None:
+            self.tournaments = StorageBase("Starter sets", SealedTemplate.Reader(os.path.join(self.blockDataFolder, "starters.txt")))
+        return self.tournaments
+
+    def getBoosters(self):
+        if self.boosters is None:
+            self.boosters = StorageBase("Boosters", self.editions.getBoosterGenerator())
+        return self.boosters
+
+    def getSpecialBoosters(self):
+        if self.specialBoosters is None:
+            self.specialBoosters = StorageBase("Special boosters", SealedTemplate.Reader(os.path.join(self.blockDataFolder, "boosters-special.txt")))
+        return self.specialBoosters
+
+    def getPrintSheets(self):
+        if self.printSheets is None:
+            self.printSheets = PrintSheet.initializePrintSheets(os.path.join(self.blockDataFolder, "printsheets.txt"), self.getEditions())
+        return self.printSheets
+
+    def getCommonCards(self):
+        return self.commonCards
+
+    def getVariantCards(self):
+        return self.variantCards
+
+    def getAvailableDatabases(self):
+        databases = {}  # to process dbs in this exact order
+        databases["Common"] = self.commonCards
+        databases["Variant"] = self.variantCards
+        return databases
+
+    def getAllTokens(self):
+        return self.allTokens
+
+    def allowCustomCardsInDecksConformance(self):
+        return self.allowCustomCardsInDecksConformance
+
+    def setStandardPredicate(self, standardPredicate):
+        self.standardPredicate = standardPredicate
+
+    def setPioneerPredicate(self, pioneerPredicate):
+        self.pioneerPredicate = pioneerPredicate
+
+    def setModernPredicate(self, modernPredicate):
+        self.modernPredicate = modernPredicate
+
+    def setCommanderPredicate(self, commanderPredicate):
+        self.commanderPredicate = commanderPredicate
+
+    def setOathbreakerPredicate(self, oathbreakerPredicate):
+        self.oathbreakerPredicate = oathbreakerPredicate
+
+    def setBrawlPredicate(self, brawlPredicate):
+        self.brawlPredicate = brawlPredicate
+
+    def getStandardPredicate(self):
+        return self.standardPredicate
+
+    def getPioneerPredicate(self):
+        return self.pioneerPredicate
+
+    def getModernPredicate(self):
+        return self.modernPredicate
+
+    def getCommanderPredicate(self):
+        return self.commanderPredicate
+
+    def getOathbreakerPredicate(self):
+        return self.oathbreakerPredicate
+
+    def getBrawlPredicate(self):
+        return self.brawlPredicate
+
+    def getAlternativeCardPrint(self, card, setReleaseDate, isCardArtPreferenceLatestArt=None,
+                                cardArtPreferenceHasFilter=None, preferCandidatesFromExpansionSets=None,
+                                preferModernFrame=None, allowedSetCodes=None):
+        # Overload 1: (card, setReleaseDate)
+        if isCardArtPreferenceLatestArt is None:
+            isLatest = self.cardArtPreferenceIsLatest()
+            hasFilter = self.isCoreExpansionOnlyFilterSet()
+            return self.getAlternativeCardPrint(card, setReleaseDate, isLatest, hasFilter, None, None, None)
+
+        # Overload 2: (card, setReleaseDate, isCardArtPreferenceLatestArt, cardArtPreferenceHasFilter, allowedSetCodes)
+        if preferCandidatesFromExpansionSets is None and preferModernFrame is None:
+            searchReferenceDate = self.getReferenceDate(setReleaseDate, isCardArtPreferenceLatestArt)
+            searchCardArtStrategy = self.getSearchStrategyForAlternativeCardArt(isCardArtPreferenceLatestArt,
+                                                                                cardArtPreferenceHasFilter)
+            return self.searchAlternativeCardCandidate(card, isCardArtPreferenceLatestArt, searchReferenceDate,
+                                                       searchCardArtStrategy, allowedSetCodes)
+
+        # Overload 3/4: (..., preferCandidatesFromExpansionSets, preferModernFrame[, allowedSetCodes])
+        altCard = self.getAlternativeCardPrint(card, setReleaseDate, isCardArtPreferenceLatestArt,
+                                               cardArtPreferenceHasFilter, allowedSetCodes)
+        if altCard is None:
+            return altCard
+        # from here on, we're sure we do have a candidate already!
+
+        # Try to refine selection by getting one candidate with frame matching current
+        # Card Art Preference (that is NOT the lookup strategy!)
+        refinedAltCandidate = self.tryToGetCardPrintWithMatchingFrame(altCard, isCardArtPreferenceLatestArt,
+                                                                      cardArtPreferenceHasFilter,
+                                                                      preferModernFrame, allowedSetCodes)
+        if refinedAltCandidate is not None:
+            altCard = refinedAltCandidate
+
+        if cardArtPreferenceHasFilter and preferCandidatesFromExpansionSets:
+            # Now try to refine selection by looking for an alternative choice extracted from an Expansion Set.
+            # NOTE: At this stage, any future selection should be already compliant with previous filter on
+            # Card Frame (if applied) given that we'll be moving either UP or DOWN the timeline of Card Edition
+            refinedAltCandidate = self.tryToGetCardPrintFromExpansionSet(altCard, isCardArtPreferenceLatestArt,
+                                                                         preferModernFrame, allowedSetCodes)
+            if refinedAltCandidate is not None:
+                altCard = refinedAltCandidate
+        return altCard
+
+    def searchAlternativeCardCandidate(self, card, isCardArtPreferenceLatestArt, searchReferenceDate,
+                                       searchCardArtStrategy, allowedSetCodes):
+        # Note: this won't apply to Custom Nor Variant Cards, so won't bother including it!
+        cardDb = self.commonCards
+        cardName = card.getName()
+        artIndex = card.getArtIndex()
+        altCard = None
+        filter = None
+        if allowedSetCodes is not None and len(allowedSetCodes) != 0:
+            filter = cardDb.isLegal(allowedSetCodes)
+
+        if isCardArtPreferenceLatestArt:  # RELEASED AFTER REFERENCE DATE
+            altCard = cardDb.getCardFromEditionsReleasedAfter(cardName, searchCardArtStrategy, artIndex,
+                                                              searchReferenceDate, filter)
+            if altCard is None:  # relax artIndex condition
+                altCard = cardDb.getCardFromEditionsReleasedAfter(cardName, searchCardArtStrategy,
+                                                                  searchReferenceDate, filter)
+        else:  # RELEASED BEFORE REFERENCE DATE
+            altCard = cardDb.getCardFromEditionsReleasedBefore(cardName, searchCardArtStrategy, artIndex,
+                                                               searchReferenceDate, filter)
+            if altCard is None:  # relax artIndex constraint
+                altCard = cardDb.getCardFromEditionsReleasedBefore(cardName, searchCardArtStrategy,
+                                                                   searchReferenceDate, filter)
+        if altCard is None:
+            return None
+        return altCard.getFoiled() if card.isFoil() else altCard
+
+    def getReferenceDate(self, setReleaseDate, isCardArtPreferenceLatestArt):
+        if isCardArtPreferenceLatestArt:
+            return setReleaseDate - timedelta(days=2)  # go two days behind to also include the original reference set
+        else:
+            return setReleaseDate + timedelta(days=2)  # go two days ahead to also include the original reference set
+
+    def getSearchStrategyForAlternativeCardArt(self, isCardArtPreferenceLatestArt, cardArtPreferenceHasFilter):
+        if isCardArtPreferenceLatestArt:
+            # Get Lower bound (w/ Original Art and Edition Released AFTER Pivot Date)
+            if cardArtPreferenceHasFilter:
+                lookupStrategy = CardDb.CardArtPreference.ORIGINAL_ART_CORE_EXPANSIONS_REPRINT_ONLY  # keep the filter
+            else:
+                lookupStrategy = CardDb.CardArtPreference.ORIGINAL_ART_ALL_EDITIONS
+        else:
+            # Get Upper bound (w/ Latest Art and Edition released BEFORE Pivot Date)
+            if cardArtPreferenceHasFilter:
+                lookupStrategy = CardDb.CardArtPreference.LATEST_ART_CORE_EXPANSIONS_REPRINT_ONLY  # keep the filter
+            else:
+                lookupStrategy = CardDb.CardArtPreference.LATEST_ART_ALL_EDITIONS
+        return lookupStrategy
+
+    def tryToGetCardPrintFromExpansionSet(self, altCard, isCardArtPreferenceLatestArt, preferModernFrame, allowedSetCodes):
+        altCardEdition = self.editions.get(altCard.getEdition())
+        if altCardEdition.getType() == CardEdition.Type.EXPANSION:
+            return None  # Nothing to do here!
+        searchStrategyFlag = (isCardArtPreferenceLatestArt == preferModernFrame) == isCardArtPreferenceLatestArt
+        # We'll force the filter on to strictly reduce the alternative candidates retrieved to those
+        # from Expansions, Core, and Reprint sets.
+        searchStrategy = self.getSearchStrategyForAlternativeCardArt(searchStrategyFlag, True)
+        altCandidate = altCard
+        while altCandidate is not None:
+            referenceDate = self.editions.get(altCandidate.getEdition()).getDate()
+            altCandidate = self.searchAlternativeCardCandidate(altCandidate, preferModernFrame,
+                                                               referenceDate, searchStrategy, allowedSetCodes)
+            if altCandidate is not None:
+                altCandidateEdition = self.editions.get(altCandidate.getEdition())
+                if altCandidateEdition.getType() == CardEdition.Type.EXPANSION:
+                    break
+        # this will be either a true candidate or null if the cycle broke because of no other suitable candidates
+        return altCandidate
+
+    def tryToGetCardPrintWithMatchingFrame(self, altCard, isCardArtPreferenceLatestArt, cardArtHasFilter,
+                                           preferModernFrame, allowedSetCodes):
+        altCardEdition = self.editions.get(altCard.getEdition())
+        frameIsCompliantAlready = (altCardEdition.isModern() == preferModernFrame)
+        if frameIsCompliantAlready:
+            return None  # Nothing to do here!
+        searchStrategyFlag = (isCardArtPreferenceLatestArt == preferModernFrame) == isCardArtPreferenceLatestArt
+        searchStrategy = self.getSearchStrategyForAlternativeCardArt(searchStrategyFlag, cardArtHasFilter)
+        altCandidate = altCard
+        while altCandidate is not None:
+            referenceDate = self.editions.get(altCandidate.getEdition()).getDate()
+            altCandidate = self.searchAlternativeCardCandidate(altCandidate, preferModernFrame,
+                                                               referenceDate, searchStrategy, allowedSetCodes)
+            if altCandidate is not None:
+                altCandidateEdition = self.editions.get(altCandidate.getEdition())
+                if altCandidateEdition.isModern() == preferModernFrame:
+                    break
+        # this will be either a true candidate or null if the cycle broke because of no other suitable candidates
+        return altCandidate
+
+    def getCardArtCount(self, card):
+        databases = self.getAvailableDatabases().values()
+        for db in databases:
+            artCount = db.getArtCount(card.getName(), card.getEdition())
+            if artCount > 0:
+                return artCount
+        return 0
+
+    def getFilteredHandsEnabled(self):
+        return self.filteredHandsEnabled
+
+    def setFilteredHandsEnabled(self, filteredHandsEnabled):
+        self.filteredHandsEnabled = filteredHandsEnabled
+
+    def setMulliganRule(self, rule):
+        self.mulliganRule = rule
+
+    def getMulliganRule(self):
+        return self.mulliganRule
+
+    def setCardArtPreference(self, *args):
+        if len(args) == 2:
+            latestArt, coreExpansionOnly = args
+            self.commonCards.setCardArtPreference(latestArt, coreExpansionOnly)
+            self.variantCards.setCardArtPreference(latestArt, coreExpansionOnly)
+        else:
+            artPreference = args[0]
+            self.commonCards.setCardArtPreference(artPreference)
+            self.variantCards.setCardArtPreference(artPreference)
+
+    def getCardArtPreferenceName(self):
+        return str(self.commonCards.getCardArtPreference())
+
+    def getCardArtPreference(self, latestArt=None, coreExpansionOnly=None):
+        if latestArt is None:
+            return self.commonCards.getCardArtPreference()
+        if latestArt:
+            return CardDb.CardArtPreference.LATEST_ART_CORE_EXPANSIONS_REPRINT_ONLY if coreExpansionOnly else CardDb.CardArtPreference.LATEST_ART_ALL_EDITIONS
+        return CardDb.CardArtPreference.ORIGINAL_ART_CORE_EXPANSIONS_REPRINT_ONLY if coreExpansionOnly else CardDb.CardArtPreference.ORIGINAL_ART_ALL_EDITIONS
+
+    def isCoreExpansionOnlyFilterSet(self):
+        return self.commonCards.getCardArtPreference().filterSets
+
+    def cardArtPreferenceIsLatest(self):
+        return self.commonCards.getCardArtPreference().latestFirst
+
+    # === MOBILE APP Alternative Methods (using String Labels, not yet localised!!) ===
+    # Note: only used in mobile
+    def getCardArtAvailablePreferences(self):
+        preferences = CardDb.CardArtPreference.values()
+        preferences_avails = [None] * len(preferences)
+        for i in range(len(preferences)):
+            preferences_avails[i] = self.prettifyCardArtPreferenceName(preferences[i])
+        return preferences_avails
+
+    def audit(self, noImageFound, cardNotImplemented):
+        EDITION_Q = []
+        NIF_Q = []
+        CNI_Q = []
+        TOKEN_Q = []
+        nifHeader = False
+        cniHeader = False
+        funnyCardCollectorNumberPattern = re.compile("^F.*\\d+.*")
+        for e in self.editions:
+            if CardEdition.Type.FUNNY == e.getType():
+                continue
+
+            cardCount = {}
+            for c in e.getObtainableCards():
+                amount = 1
+
+                if c.name() in cardCount:
+                    amount = cardCount[c.name()][1] + 1
+
+                cardCount[c.name()] = (c.collectorNumber() is not None and bool(funnyCardCollectorNumberPattern.fullmatch(c.collectorNumber())), amount)
+
+            # loop through the cards in this edition, considering art variations...
+            for key, value in cardCount.items():
+                try:
+                    c = key
+                    artID = value[1]
+                    isFunny = value[0]
+                    cp = self.getCommonCards().getCard(c, e.getCode(), artID)
+                    if cp is None:
+                        cp = self.getVariantCards().getCard(c, e.getCode(), artID)
+                    if cp is None:
+                        if isFunny:  # skip funny cards
+                            continue
+                        if (not self.loadNonLegalCards) and CardEdition.Type.FUNNY == e.getType():
+                            continue
+                        EDITION_Q.append(e.getCode() + "_" + e.getName())
+                        CNI_Q.append(e.getCode() + "_" + c + "\n")
+                        continue
+                    # check the front image
+                    imagePath = ImageUtil.getImageRelativePath(cp, "", True, False)
+                    if imagePath is not None:
+                        file = ImageKeys.getImageFile(imagePath)
+                        if file is None and ImageKeys.hasSetLookup(imagePath):
+                            file = ImageKeys.setLookUpFile(imagePath, imagePath + "border")
+                        if file is None:
+                            if imagePath == "":
+                                continue
+                            EDITION_Q.append(e.getCode() + "_" + e.getName())
+                            NIF_Q.append(e.getCode() + "_" + imagePath + "\n")
+                    # check the back face
+                    if cp.hasBackFace():
+                        imagePath = ImageUtil.getImageRelativePath(cp, "back", True, False)
+                        if imagePath is not None:
+                            file = ImageKeys.getImageFile(imagePath)
+                            if file is None and ImageKeys.hasSetLookup(imagePath):
+                                file = ImageKeys.setLookUpFile(imagePath, imagePath + "border")
+                            if file is None:
+                                if imagePath == "":
+                                    continue
+                                EDITION_Q.append(e.getCode() + "_" + e.getName())
+                                NIF_Q.append(e.getCode() + "_" + imagePath + "\n")
+                except Exception:
+                    traceback.print_exc()
+
+            # TODO: Audit token images here...
+            for name, coll in e.getTokens().asMap().items():
+                artIndex = len(coll)
+                try:
+                    token = self.getAllTokens().getToken(name, e.getCode())
+                    if token is None:
+                        continue
+
+                    for i in range(artIndex):
+                        imgKey = token.getImageKey(i)
+                        file = ImageKeys.getImageFile(imgKey)
+                        if file is None:
+                            EDITION_Q.append(e.getCode() + "_" + e.getName())
+                            TOKEN_Q.append(e.getCode() + "_" + token.getImageFilename(i + 1) + "\n")
+                except Exception:
+                    print("No Token found: " + name + " in " + e.getName())
+
+        # stream().toList() causes crash on Android 8-13, use Collectors.toList()
+        NIF = sorted(NIF_Q)
+        CNI = sorted(CNI_Q)
+        TOK = sorted(TOKEN_Q)
+        sorted_editions = sorted(set(EDITION_Q))
+        for edition in sorted_editions:
+            arr = edition.split("_")
+            code = arr[0]
+            NIF_TITLE = False
+            CNI_TITLE = False
+            TOK_TITLE = False
+            for nif in NIF:
+                if nif.startswith(code):
+                    if not nifHeader:
+                        noImageFound.append("\n-------------------\n")
+                        noImageFound.append("NO IMAGE FOUND LIST\n")
+                        noImageFound.append("-------------------\n\n")
+                        nifHeader = True
+                    if not NIF_TITLE:
+                        noImageFound.append(edition.replace(code + "_", ""))
+                        noImageFound.append(" (")
+                        noImageFound.append(code)
+                        noImageFound.append(")")
+                        noImageFound.append("\n")
+                        NIF_TITLE = True
+                    noImageFound.append("    ")
+                    noImageFound.append(nif.replace(code + "_", ""))
+            if NIF_TITLE:
+                noImageFound.append("\n")
+            for tok in TOK:
+                if tok.startswith(code):
+                    if not nifHeader:
+                        noImageFound.append("\n-------------------\n")
+                        noImageFound.append("NO IMAGE FOUND LIST\n")
+                        noImageFound.append("-------------------\n\n")
+                        nifHeader = True
+                    if not NIF_TITLE:
+                        noImageFound.append(edition.replace(code + "_", ""))
+                        noImageFound.append(" (")
+                        noImageFound.append(code)
+                        noImageFound.append(")")
+                        noImageFound.append("\n")
+                        NIF_TITLE = True
+                    if not TOK_TITLE:
+                        noImageFound.append("  TOKENS\n")
+                        TOK_TITLE = True
+                    noImageFound.append("    ")
+                    noImageFound.append(tok.replace(code + "_", ""))
+            if TOK_TITLE:
+                noImageFound.append("\n")
+            for cni in CNI:
+                if cni.startswith(code):
+                    if not cniHeader:
+                        cardNotImplemented.append("\n-------------------\n")
+                        cardNotImplemented.append("UNIMPLEMENTED CARD LIST\n")
+                        cardNotImplemented.append("-------------------\n\n")
+                        cniHeader = True
+                    if not CNI_TITLE:
+                        cardNotImplemented.append(edition.replace(code + "_", ""))
+                        cardNotImplemented.append(" (")
+                        cardNotImplemented.append(code)
+                        cardNotImplemented.append(")")
+                        cardNotImplemented.append("\n")
+                        CNI_TITLE = True
+                    cardNotImplemented.append("     ")
+                    cardNotImplemented.append(cni.replace(code + "_", ""))
+            if CNI_TITLE:
+                cardNotImplemented.append("\n")
+
+        missingImages = len(NIF) + len(TOK)
+        unimplemenedCards = len(CNI)
+        totalStats = "Missing images: " + str(missingImages) + "\nUnimplemented cards: " + str(unimplemenedCards) + "\n"
+        cardNotImplemented.append("\n-----------\n")
+        cardNotImplemented.append(totalStats)
+        cardNotImplemented.append("-----------\n\n")
+
+        noImageFound.append(cardNotImplemented)  # combine things together...
+        return (missingImages, unimplemenedCards)
+
+    def prettifyCardArtPreferenceName(self, preference):
+        label = ""
+        fullNames = str(preference).split("_")
+        for name in fullNames:
+            label += TextUtil.capitalize(name.lower()) + " "
+        return label.strip()
+
+    def isEnabledCardArtSmartSelection(self):
+        return self.enableSmartCardArtSelection
+
+    def setEnableSmartCardArtSelection(self, isEnabled):
+        self.enableSmartCardArtSelection = isEnabled
+
+    def useSourceImageForClone(self):
+        return self.sourceImageForClone
+
+    def setSourceImageForClone(self, b):
+        self.sourceImageForClone = b
+
+    def isRebalanced(self, name):
+        if not name.startswith("A-"):
+            return False
+        for pc in self.getCommonCards().getAllCards(name):
+            e = self.editions.get(pc.getEdition())
+            if e is not None and e.isRebalanced(name):
+                return True
+        return False
+
+    def getOtherImageKey(self, name, set):
+        if self.editions.get(set) is not None:
+            realSetCode = self.editions.get(set).getOtherSet(name)
+            if realSetCode is not None:
+                ee = self.editions.get(realSetCode).findOther(name)
+                if ee is not None:  # TODO add collector Number and new ImageKey format
+                    return ImageKeys.getTokenKey("%s|%s|%s" % (name, realSetCode, ee.collectorNumber()))
+        for e in self.editions:
+            ee = e.findOther(name)
+            if ee is not None:  # TODO add collector Number and new ImageKey format
+                return ImageKeys.getTokenKey("%s|%s|%s" % (name, e.getCode(), ee.collectorNumber()))
+        # final fallback
+        return ImageKeys.getTokenKey(name)
 ```

@@ -248,3 +248,162 @@ public class DiscoverEffect extends SpellAbilityEffect {
     }
 }
 ```
+
+## Python
+`forge/game/ability/effects/DiscoverEffect.py`
+
+```python
+from forge.game.Game import Game
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CardZoneTable import CardZoneTable
+from forge.game.cost.CostDiscard import CostDiscard
+from forge.game.cost.CostPart import CostPart
+from forge.game.cost.CostReveal import CostReveal
+from forge.game.player.Player import Player
+from forge.game.player.PlayerCollection import PlayerCollection
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.trigger.TriggerType import TriggerType
+from forge.game.zone.PlayerZone import PlayerZone
+from forge.game.zone.Zone import Zone
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.Lang import Lang
+from forge.util.Localizer import Localizer
+
+import sys
+
+from org.apache.commons.lang3.StringUtils import StringUtils
+
+
+class DiscoverEffect(SpellAbilityEffect):
+
+    def getStackDescription(self, sa: SpellAbility) -> str:
+        players = self.getDefinedPlayersOrTargeted(sa)
+        verb = " discovers " if players.size() == 1 else " discover "
+
+        return Lang.joinHomogenous(players) + verb + sa.getParamOrDefault("Num", "1") + "."
+
+    def resolve(self, sa: SpellAbility) -> None:
+        host = sa.getHostCard()
+        game = host.getGame()
+        players = self.getDefinedPlayersOrTargeted(sa)
+
+        # Exile cards from the top of your library until you exile a nonland card with <N> mana value or less.
+        num = AbilityUtils.calculateAmount(host, sa.getParamOrDefault("Num", "1"), sa)
+
+        for p in players:
+            if p is None or not p.isInGame():
+                return
+
+            found = None
+            exiled = CardCollection()
+            rest = CardCollection()
+
+            library = p.getZone(ZoneType.Library)
+
+            for c in library:
+                exiled.add(c)
+                if not c.isLand() and c.getCMC() <= num:
+                    found = c
+                    if sa.hasParam("RememberDiscovered"):
+                        host.addRemembered(c)
+                    break
+                rest.add(c)
+
+            game.getAction().reveal(exiled, p, False)
+
+            self.changeZone(exiled, ZoneType.Exile, game, sa)
+
+            # Cast it without paying its mana cost or put it into your hand.
+            params = {}
+            params["Card"] = found
+            if found is not None:
+                prompt = Localizer.getInstance().getMessage("lblDiscoverChoice",
+                        found.getTranslatedName())
+                origin = found.getZone()
+                options = [
+                        StringUtils.capitalize(Localizer.getInstance().getMessage("lblCast")),
+                        StringUtils.capitalize(Localizer.getInstance().getMessage("lblHandZone"))]
+                play = p.getController().confirmAction(sa, None, prompt, options, found, params)
+                cancel = False
+
+                if play:
+                    # get basic spells (no flashback, etc.)
+                    sas = AbilityUtils.getBasicSpellsFromPlayEffect(found, p)
+
+                    # filter out land abilities due to MDFC or similar
+                    sas[:] = [sp for sp in sas if not sp.isLandAbility()]
+                    # the spell must also have a mana value equal to or less than the discover number
+                    sas[:] = [sp for sp in sas if not (sp.getPayCosts().getTotalMana().getCMC() > num)]
+
+                    if not sas:  # shouldn't happen!
+                        print("DiscoverEffect Error: " + str(host) + " found " + str(found) + " but couldn't play sa", file=sys.stderr)
+                    else:
+                        tgtSA = p.getController().getAbilityToPlay(found, sas)
+
+                        if tgtSA is None:  # in case player canceled from choice dialog
+                            cancel = True
+                        else:
+                            tgtSA = tgtSA.copyWithNoManaCost()
+
+                            # 118.8c
+                            optional = False
+                            for cost in tgtSA.getPayCosts().getCostParts():
+                                if ((isinstance(cost, CostDiscard) or isinstance(cost, CostReveal))
+                                        and not cost.getType() == "Card" and not cost.getType() == "Random"):
+                                    optional = True
+                                    break
+                            if not optional:
+                                tgtSA.getPayCosts().setMandatory(True)
+
+                            if tgtSA.usesTargeting() and not optional:
+                                tgtSA.getTargetRestrictions().setMandatory(True)
+
+                            if p.getController().playSaFromPlayEffect(tgtSA):
+                                played = tgtSA.getHostCard()
+                                # add remember successfully played here if ever needed
+                                zone = game.getCardState(played).getZone()
+                                if not origin.equals(zone):
+                                    trigList = CardZoneTable()
+                                    trigList.put(origin.getZoneType(), zone.getZoneType(), game.getCardState(found))
+                                    trigList.triggerChangesZoneAll(game, sa)
+                if not play or cancel:
+                    self.changeZone(CardCollection(found), ZoneType.Hand, game, sa)
+
+            # Put the rest on the bottom in a random order.
+            self.changeZone(rest, ZoneType.Library, game, sa)
+
+            # Run discover triggers
+            runParams = AbilityKey.mapFromPlayer(p)
+            runParams[AbilityKey.Amount] = num
+            game.getTriggerHandler().runTrigger(TriggerType.Discover, runParams, False)
+
+    def changeZone(self, cards: CardCollection, zone: ZoneType, game: Game, sa: SpellAbility) -> None:
+        table = CardZoneTable()
+        moveParams = AbilityKey.newMap()
+        moveParams[AbilityKey.LastStateBattlefield] = game.copyLastStateBattlefield()
+        moveParams[AbilityKey.LastStateGraveyard] = game.copyLastStateGraveyard()
+        pos = 0
+        exileSeq = ZoneType.Exile.equals(zone)
+
+        if ZoneType.Library.equals(zone):  # bottom of library in a random order
+            pos = -1
+            CardLists.shuffle(cards)
+
+        for c in cards:
+            origin = c.getZone().getZoneType()
+
+            m = game.getAction().moveTo(zone, c, pos, sa, moveParams)
+
+            if m is not None and not origin.equals(m.getZone().getZoneType()):
+                table.put(origin, m.getZone().getZoneType(), m)
+                if exileSeq:  # exile cards one at a time
+                    table.triggerChangesZoneAll(game, sa)
+                    table.clear()
+        if not exileSeq:
+            table.triggerChangesZoneAll(game, sa)
+```

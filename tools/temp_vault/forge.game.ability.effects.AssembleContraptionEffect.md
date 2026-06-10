@@ -47,7 +47,7 @@ classDiagram
 
 ## Design Description
 
-AssembleContraptionEffect is a concrete `SpellAbilityEffect` subclass that implements Magic's "assemble a Contraption" mechanic within Forge's data-driven ability framework, where each effect keyword maps to one handler. It overrides `getStackDescription` to build human-readable stack text and `resolve` to mutate game state. Its responsibility is moving Contraption cards onto the battlefield and assigning each a sprocket. It resolves assemblers from the `DefinedAssembler` parameter (defaulting to "Self" for creatures, else "You") via `AbilityUtils`, coercing each `GameEntity` to a controlling `Player`. Two paths exist: a `DefinedContraption` mode that (re)assembles named cards—respecting `Reassemble` by forcing a different sprocket—and the default mode that pulls from each player's `ContraptionDeck` zone, honoring `AssembleContraption` replacement effects and an optional `Amount`. Zone moves are batched through a `CardZoneTable`, so one `triggerChangesZoneAll` call fires the appropriate triggers, reflecting Forge's centralized zone-change accounting.
+AssembleContraptionEffect is a concrete `SpellAbilityEffect` subclass that implements Magic's "assemble a Contraption" mechanic within Forge's data-driven ability framework, where each effect keyword maps to one handler. It overrides `getStackDescription` to build human-readable stack text and `resolve` to mutate game state. Its responsibility is moving Contraption cards onto the battlefield and assigning each a sprocket. It resolves assemblers from the `DefinedAssembler` parameter (defaulting to "Self" for creatures, else "You") via `AbilityUtils`, coercing each `GameEntity` to a controlling `Player`. Two paths exist: a `DefinedContraption` mode that (re)assembles named cardsâ€”respecting `Reassemble` by forcing a different sprocketâ€”and the default mode that pulls from each player's `ContraptionDeck` zone, honoring `AssembleContraption` replacement effects and an optional `Amount`. Zone moves are batched through a `CardZoneTable`, so one `triggerChangesZoneAll` call fires the appropriate triggers, reflecting Forge's centralized zone-change accounting.
 
 ## Source
 `forge-game/src/main/java/forge/game/ability/effects/AssembleContraptionEffect.java`
@@ -204,4 +204,144 @@ public class AssembleContraptionEffect extends SpellAbilityEffect {
         triggerList.triggerChangesZoneAll(sa.getHostCard().getGame(), sa);
     }
 }
+```
+
+## Python
+`forge/game/ability/effects/AssembleContraptionEffect.py`
+
+```python
+from forge.game.Game import Game
+from forge.game.GameEntity import GameEntity
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.card.CardZoneTable import CardZoneTable
+from forge.game.player.Player import Player
+from forge.game.replacement.ReplacementResult import ReplacementResult
+from forge.game.replacement.ReplacementType import ReplacementType
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.PlayerZone import PlayerZone
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.Lang import Lang
+
+
+class AssembleContraptionEffect(SpellAbilityEffect):
+
+    def getStackDescription(self, sa: SpellAbility) -> str:
+        sb = []
+        host = sa.getHostCard()
+
+        defaultAssembler = "Self" if host.isCreature() else "You"
+        definedAssembler = sa.getParamOrDefault("DefinedAssembler", defaultAssembler)
+        assemblers = AbilityUtils.getDefinedEntities(host, definedAssembler, sa)
+
+        if not assemblers:
+            return ""
+
+        sb.append(Lang.joinHomogenous(assemblers))
+
+        definedContraption = sa.getParam("DefinedContraption")
+
+        tgtCards = None if definedContraption is None else AbilityUtils.getDefinedCards(host, definedContraption, sa)
+        if tgtCards is not None:
+            sb.append(Lang.joinVerb(tgtCards, " reassemble" if sa.hasParam("Reassemble") else " assemble"))
+            sb.append(" ")
+            sb.append(Lang.joinHomogenous(tgtCards))
+            sb.append(".")
+            return "".join(sb)
+
+        if sa.hasParam("Amount"):
+            amountText = sa.getParam("Amount")
+            if amountText == "Result":
+                # Used for Hard-Hat Area; Shouldn't actually display, usually overridden by a parent ability's trigger
+                # description, but gets evaluated regardless and calculateAmount complains since Result isn't defined.
+                sb.append(" assembles a number of Contraptions equal to the result.")
+                return "".join(sb)
+            amount = AbilityUtils.calculateAmount(sa.getHostCard(), amountText, sa)
+        else:
+            amount = 1
+
+        if len(assemblers) > 1:
+            sb.append(" each")
+        sb.append(Lang.joinVerb(assemblers, " assemble"))
+        sb.append(" ")
+        sb.append("a Contraption." if amount == 1 else (Lang.getNumeral(amount) + " Contraptions."))
+        return "".join(sb)
+
+    def resolve(self, sa: SpellAbility) -> None:
+        source = sa.getHostCard()
+        host = sa.getHostCard()
+        game = host.getGame()
+
+        defaultAssembler = "Self" if host.isCreature() else "You"
+        definedAssembler = sa.getParamOrDefault("DefinedAssembler", defaultAssembler)
+        assemblers = AbilityUtils.getDefinedEntities(host, definedAssembler, sa)
+
+        if not assemblers:
+            return
+
+        moveParams = AbilityKey.newMap()
+        triggerList = AbilityKey.addCardZoneTableParams(moveParams, sa)
+
+        definedContraption = sa.getParam("DefinedContraption")
+        if definedContraption is not None:
+            tgtCards = AbilityUtils.getDefinedCards(host, definedContraption, sa)
+            # Defined contraptions; (re)assemble them specifically.
+            # This could be its own keyword, but it only shows up on two cards and works similarly.
+            if not tgtCards:
+                return
+            assembler = assemblers[0]
+            p = assembler if isinstance(assembler, Player) \
+                else assembler.getController() if isinstance(assembler, Card) \
+                else None
+            if p is None or not p.isInGame():
+                return
+
+            for card in tgtCards:
+                changedControllers = card.getController() != p
+                card.setController(p, game.getNextTimestamp())
+                if card.getZone().getZoneType() != ZoneType.Battlefield:
+                    card.getGame().getAction().moveToPlay(card, sa, moveParams)
+
+                if sa.hasParam("Remember"):
+                    source.addRemembered(card)
+
+                if changedControllers:
+                    game.getAction().controllerChangeZoneCorrection(card)
+
+                # Assign a sprocket. If reassembling, it needs to be a different sprocket than the current one.
+                sprockets = [1, 2, 3]
+                if sa.hasParam("Reassemble"):
+                    sprockets.remove(card.getSprocket())
+                sprocket = card.getController().getController().chooseSprocket(card, sprockets)
+                card.setSprocket(sprocket)
+            triggerList.triggerChangesZoneAll(sa.getHostCard().getGame(), sa)
+            return
+
+        amount = AbilityUtils.calculateAmount(sa.getHostCard(), sa.getParam("Amount"), sa) if sa.hasParam("Amount") else 1
+
+        for assembler in assemblers:
+            p = assembler if isinstance(assembler, Player) \
+                else assembler.getController() if isinstance(assembler, Card) \
+                else None
+            if p is None or not p.isInGame():
+                continue
+            # Replacement effects
+            replaceMap = AbilityKey.mapFromAffected(p)
+            replaceMap[AbilityKey.Player] = p
+            replaceMap[AbilityKey.Cause] = assembler
+            contraptionDeck = p.getZone(ZoneType.ContraptionDeck)
+            for i in range(amount):
+                if game.getReplacementHandler().run(ReplacementType.AssembleContraption, replaceMap) != ReplacementResult.NotReplaced:
+                    continue
+                if contraptionDeck.isEmpty():
+                    continue
+                contraption = contraptionDeck.get(0)
+                contraption = p.getGame().getAction().moveToPlay(contraption, sa, moveParams)
+                sprocket = contraption.getController().getController().chooseSprocket(contraption)
+                contraption.setSprocket(sprocket)
+                if sa.hasParam("Remember"):
+                    source.addRemembered(contraption)
+        triggerList.triggerChangesZoneAll(sa.getHostCard().getGame(), sa)
 ```

@@ -41,6 +41,12 @@ classDiagram
 - [[forge.game.card.Card|Card]]
 - [[forge.game.spellability.SpellAbility|SpellAbility]]
 
+## Design Description
+
+TriggerDamageDealtOnce is a concrete trigger that fires a single time when damage is dealt, aggregating all simultaneous damage into one event rather than firing per recipient. Extending the abstract Trigger base class, it overrides performTest to gate firing on configured parametersâ€”CombatDamage, ValidSource, and ValidTargetâ€”and setTriggeringObjects to expose the damage source, the set of valid targets, and the summed damage amount to the responding SpellAbility via AbilityKey-keyed entries.
+
+It collaborates with the engine's DamageMap (a Map of GameEntity to Integer) supplied through runParams, providing helper methods getDamageAmount and getDamageTargets that filter and total damage against the ValidTarget restriction. The "Once" design intent is visible in this aggregation: damage to multiple GameEntities is collapsed into a single trigger carrying a target set and combined total, and getImportantStackObjects uses Localizer to render a human-readable, localized summary of that event on the stack.
+
 ## Source
 `forge-game/src/main/java/forge/game/trigger/TriggerDamageDealtOnce.java`
 
@@ -170,4 +176,77 @@ public class TriggerDamageDealtOnce extends Trigger {
         return result;
     }
 }
+```
+
+## Python
+`forge/game/trigger/TriggerDamageDealtOnce.py`
+
+```python
+from typing import Map, Set
+from forge.game.trigger.Trigger import Trigger
+from forge.game.GameEntity import GameEntity
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Localizer import Localizer
+
+
+class TriggerDamageDealtOnce(Trigger):
+
+    def __init__(self, params: dict[str, str], host: Card, intrinsic: bool):
+        super().__init__(params, host, intrinsic)
+
+    def performTest(self, runParams: dict[AbilityKey, object]) -> bool:
+        if self.hasParam("CombatDamage"):
+            if (self.getParam("CombatDamage") == "True") != runParams.get(AbilityKey.IsCombatDamage):
+                return False
+
+        if self.hasParam("ValidTarget"):
+            damageMap: dict[GameEntity, int] = runParams.get(AbilityKey.DamageMap)
+
+            if self.getDamageAmount(damageMap) <= 0:
+                return False
+
+        if not self.matchesValidParam("ValidSource", runParams.get(AbilityKey.DamageSource)):
+            return False
+
+        return True
+
+    def setTriggeringObjects(self, sa: SpellAbility, runParams: dict[AbilityKey, object]) -> None:
+        damageMap: dict[GameEntity, int] = runParams.get(AbilityKey.DamageMap)
+
+        sa.setTriggeringObject(AbilityKey.Source, runParams.get(AbilityKey.DamageSource))
+        sa.setTriggeringObject(AbilityKey.Targets, self.getDamageTargets(damageMap))
+        sa.setTriggeringObject(AbilityKey.DamageAmount, self.getDamageAmount(damageMap))
+
+    def getImportantStackObjects(self, sa: SpellAbility) -> str:
+        sb = []
+        sb.append(Localizer.getInstance().getMessage("lblDamageSource"))
+        sb.append(": ")
+        sb.append(str(sa.getTriggeringObject(AbilityKey.Source)))
+        sb.append(", ")
+        sb.append(Localizer.getInstance().getMessage("lblDamaged"))
+        sb.append(": ")
+        sb.append(str(sa.getTriggeringObject(AbilityKey.Targets)))
+        sb.append(", ")
+        sb.append(Localizer.getInstance().getMessage("lblAmount"))
+        sb.append(": ")
+        sb.append(str(sa.getTriggeringObject(AbilityKey.DamageAmount)))
+        return "".join(sb)
+
+    def getDamageAmount(self, damageMap: dict[GameEntity, int]) -> int:
+        result = 0
+        for key, value in damageMap.items():
+            if self.matchesValidParam("ValidTarget", key):
+                result += value
+        return result
+
+    def getDamageTargets(self, damageMap: dict[GameEntity, int]) -> set[GameEntity]:
+        if not self.hasParam("ValidTarget"):
+            return set(damageMap.keys())
+        result: set[GameEntity] = set()
+        for e in damageMap.keys():
+            if self.matchesValidParam("ValidTarget", e):
+                result.add(e)
+        return result
 ```

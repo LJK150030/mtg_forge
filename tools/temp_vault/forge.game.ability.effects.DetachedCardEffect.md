@@ -39,7 +39,7 @@ classDiagram
 
 ## Design Description
 
-`DetachedCardEffect` represents a game effect that exists as a standalone card rather than being attached to an existing one — the Commander Effect being the canonical example. By extending `Card`, it can participate in the game like any other card object while marking itself as a non-rendered `EFFECT` game piece, so it carries game state without appearing as a normal card in the UI.
+`DetachedCardEffect` represents a game effect that exists as a standalone card rather than being attached to an existing one â€” the Commander Effect being the canonical example. By extending `Card`, it can participate in the game like any other card object while marking itself as a non-rendered `EFFECT` game piece, so it carries game state without appearing as a normal card in the UI.
 
 The class holds an optional reference to a linked source `Card`, which it exposes through the overridden `getCardForUi()` so display logic can borrow that card's appearance. Its constructors handle the distinct creation paths: deriving from a source card, instantiating bare against a `Player` owner, and copying an existing effect (optionally into another `Game` with a fresh or preserved id). The copy constructor only transfers owner and effect source when the target `Game` matches, reflecting careful handling of cross-game cloning during state duplication.
 
@@ -101,4 +101,66 @@ public class DetachedCardEffect extends Card {
         return card; //use linked card for the sake of UI display logic
     }
 }
+```
+
+## Python
+`forge/game/ability/effects/DetachedCardEffect.py`
+
+```python
+from forge.card.GamePieceType import GamePieceType
+from forge.game.Game import Game
+from forge.game.card.Card import Card
+from forge.game.player.Player import Player
+
+
+# Class for an effect that acts as its own card instead of being attached to a card
+# Example: Commander Effect
+class DetachedCardEffect(Card):
+    def __init__(self, *args):
+        if len(args) == 2 and isinstance(args[0], Card) and not isinstance(args[0], DetachedCardEffect):
+            card0, name0 = args
+            self._init_from_card(card0, name0)
+        elif len(args) == 2 and isinstance(args[0], Player):
+            owner, name = args
+            self._init_from_player(owner, name)
+        elif len(args) == 2 and isinstance(args[0], DetachedCardEffect):
+            from_, assignNewId = args
+            self._init_copy(from_, from_.getGame(), assignNewId)
+        elif len(args) == 3 and isinstance(args[0], DetachedCardEffect):
+            from_, game, assignNewId = args
+            self._init_copy(from_, game, assignNewId)
+        else:
+            raise TypeError("Invalid arguments to DetachedCardEffect")
+
+    def _init_from_card(self, card0, name0):
+        super().__init__(card0.getOwner().getGame().nextCardId(), card0.getPaperCard(), card0.getOwner().getGame())
+        self.card = card0  # card linked to effect
+
+        self.renderForUi = False
+        self.setName(name0)
+        self.setOwner(card0.getOwner())
+        self.setGamePieceType(GamePieceType.EFFECT)
+
+        self.setEffectSource(card0)
+
+    def _init_from_player(self, owner, name):
+        super().__init__(owner.getGame().nextCardId(), None, owner.getGame())
+        self.card = None
+        self.renderForUi = False
+
+        self.setName(name)
+        self.setOwner(owner)
+        self.setGamePieceType(GamePieceType.EFFECT)
+
+    def _init_copy(self, from_, game, assignNewId):
+        super().__init__(game.nextCardId() if assignNewId else from_.id, from_.getPaperCard(), game)
+        self.renderForUi = from_.renderForUi
+        self.setName(from_.getName())
+        self.setGamePieceType(GamePieceType.EFFECT)
+        if from_.getGame() == game:
+            self.setOwner(from_.getOwner())
+            self.setEffectSource(from_.getEffectSource())
+
+    def getCardForUi(self) -> Card:
+        return self.card  # use linked card for the sake of UI display logic
 ```

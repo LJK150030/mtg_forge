@@ -121,3 +121,70 @@ public class HeistEffect extends SpellAbilityEffect {
     }
 }
 ```
+
+## Python
+`forge/game/ability/effects/HeistEffect.py`
+
+```python
+from typing import List, Map
+
+from forge.game.Game import Game
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CardZoneTable import CardZoneTable
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.Aggregates import Aggregates
+from forge.util.Localizer import Localizer
+
+
+class HeistEffect(SpellAbilityEffect):
+
+    def resolve(self, sa: SpellAbility) -> None:
+        moveParams: dict[AbilityKey, object] = AbilityKey.newMap()
+        moveParams[AbilityKey.LastStateBattlefield] = sa.getLastStateBattlefield()
+        moveParams[AbilityKey.LastStateGraveyard] = sa.getLastStateGraveyard()
+        source = sa.getHostCard()
+        player = AbilityUtils.getDefinedPlayers(source, sa.getParam("Defined"), sa)[0]
+        game = player.getGame()
+        target = self.getTargetPlayers(sa)[0]
+        triggerList = CardZoneTable()
+        num = AbilityUtils.calculateAmount(source, sa.getParamOrDefault("Num", "1"), sa)
+        heisted = CardCollection()
+
+        for i in range(num):
+            choices = Aggregates.random(CardLists.getNotType(target.getCardsIn(ZoneType.Library),
+                "Land"), 3)
+            if not choices:
+                continue  # nothing to heist
+            chosenCard = player.getController().chooseSingleCardForZoneChange(ZoneType.Exile,
+                [ZoneType.Library], sa, CardCollection(choices),
+                None, Localizer.getInstance().getMessage("lblChooseCardHeist"), False,
+                player)
+            if not chosenCard.canExiledBy(sa, True):
+                continue
+            exiled = game.getAction().moveTo(ZoneType.Exile, chosenCard, sa, moveParams)
+            exiled.turnFaceDown(True)
+            exiled.addMayLookFaceDownExile(player)
+            self.handleExiledWith(exiled, sa)
+            heisted.add(exiled)
+            triggerList.put(ZoneType.Library, exiled.getZone().getZoneType(), exiled)
+
+        if not heisted.isEmpty():
+            eff = self.createEffect(sa, player, str(source) + "'s Heist Effect", source.getImageKey())
+            eff.addRemembered(heisted)
+            mayPlay = "Mode$ Continuous | MayPlay$ True | MayPlayIgnoreType$ True | EffectZone$ Command | " + \
+            "Affected$ Card.IsRemembered | AffectedZone$ Exile | Description$ You may play the heisted card for as " + \
+            "long as it remains exiled, and mana of any type can be spent to cast it."
+            eff.addStaticAbility(mayPlay)
+            self.addForgetOnMovedTrigger(eff, "Exile")
+            self.addForgetOnCastTrigger(eff, "Card.IsRemembered")
+            game.getAction().moveToCommand(eff, sa)
+
+        triggerList.triggerChangesZoneAll(game, sa)
+```

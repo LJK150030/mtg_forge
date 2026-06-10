@@ -239,3 +239,165 @@ public class FightEffect extends DamageBaseEffect {
     }
 }
 ```
+
+## Python
+`forge/game/ability/effects/FightEffect.py`
+
+```python
+from typing import List
+from java.util import Map
+
+from forge.game.Game import Game
+from forge.game.GameEntityCounterTable import GameEntityCounterTable
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.card.CardDamageMap import CardDamageMap
+from forge.game.player.Player import Player
+from forge.game.replacement.ReplacementType import ReplacementType
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.trigger.TriggerType import TriggerType
+from forge.util.Lang import Lang
+from forge.util.Localizer import Localizer
+
+from forge.game.ability.effects.DamageBaseEffect import DamageBaseEffect
+
+
+class FightEffect(DamageBaseEffect):
+
+    # (non-Javadoc)
+    # @see forge.game.ability.SpellAbilityEffect#getStackDescription(forge.game.spellability.SpellAbility)
+    def getStackDescription(self, sa: SpellAbility) -> str:
+        sb = []
+
+        fighters = FightEffect.getFighters(sa)
+
+        if len(fighters) > 1:
+            sb.append(str(fighters[0]))
+            sb.append(" fights ")
+            sb.append(str(fighters[1]))
+            sb.append(".")
+        elif len(fighters) == 1:
+            sb.append(str(fighters[0]))
+            sb.append(" fights.")
+        if sa.hasParam("ReplaceDyingDefined"):
+            cards = AbilityUtils.getDefinedCards(sa.getHostCard(), sa.getParam("ReplaceDyingDefined"), sa)
+            if not cards.isEmpty():
+                sb.append(" If ")
+                sb.append(Lang.joinHomogenous(cards, None, "or"))
+                sb.append(" would die this turn, exile it instead.")
+        return "".join(sb)
+
+    # (non-Javadoc)
+    # @see forge.game.ability.SpellAbilityEffect#resolve(forge.game.spellability.SpellAbility)
+    def resolve(self, sa: SpellAbility) -> None:
+        host = sa.getHostCard()
+        fighters = FightEffect.getFighters(sa)
+        game = host.getGame()
+
+        # check is done in getFighters
+        if len(fighters) < 2:
+            return
+
+        controller = host.getController()
+        isOptional = sa.hasParam("Optional")
+
+        if isOptional and not controller.getController().confirmAction(sa, None, Localizer.getInstance().getMessage("lblWouldYouLikeFight", fighters[0].getTranslatedName(), fighters[1].getTranslatedName()), None):
+            return
+
+        self.dealDamage(sa, fighters[0], fighters[1])
+
+        for c in fighters:
+            runParams = AbilityKey.newMap()
+            runParams[AbilityKey.Fighter] = c
+            game.getTriggerHandler().runTrigger(TriggerType.Fight, runParams, False)
+
+        runParams = AbilityKey.newMap()
+        runParams[AbilityKey.Fighters] = fighters
+        game.getTriggerHandler().runTrigger(TriggerType.FightOnce, runParams, False)
+
+    @staticmethod
+    def getFighters(sa: SpellAbility) -> List[Card]:
+        fighterList: List[Card] = []
+
+        fighter1 = None
+        fighter2 = None
+        host = sa.getHostCard()
+        game = host.getGame()
+
+        tgts: CardCollectionView = None
+        if sa.usesTargeting():
+            tgts = sa.getTargets().getTargetCards()
+            if not tgts.isEmpty():
+                fighter1 = tgts.get(0)
+        if sa.hasParam("Defined"):
+            defined = FightEffect.getTargetCardsWithDuplicates(True, "Defined", sa)
+            # Allow both fighters to come from defined list if first fighter not already found
+
+            newDefined: List[Card] = []
+            for d in defined:
+                g = game.getCardState(d, None)
+                # 701.12b If a creature instructed to fight is no longer on the battlefield or is no longer a creature,
+                # no damage is dealt. If a creature is an illegal target
+                # for a resolving spell or ability that instructs it to fight, no damage is dealt.
+                if g is None or not g.equalsWithGameTimestamp(d) or not d.isInPlay() or d.isPhasedOut() or not d.isCreature():
+                    # Test to see if the card we're trying to add is in the expected state
+                    continue
+                newDefined.append(g)
+            # replace with new List using CardState
+            defined = newDefined
+
+            if defined:
+                if len(defined) > 1 and fighter1 is None:
+                    fighter1 = defined[0]
+                    fighter2 = defined[1]
+                else:  # template often Defined$ ParentTarget vs. Targeted - this yields good StackDesc order
+                    fighter2 = fighter1
+                    fighter1 = defined[0]
+        elif tgts.size() > 1:
+            fighter2 = tgts.get(1)
+
+        if fighter1 is not None:
+            fighterList.append(fighter1)
+        if fighter2 is not None:
+            fighterList.append(fighter2)
+
+        return fighterList
+
+    def dealDamage(self, sa: SpellAbility, fighterA: Card, fighterB: Card) -> None:
+        usedDamageMap = True
+        damageMap = sa.getDamageMap()
+        preventMap = sa.getPreventMap()
+        counterTable = sa.getCounterTable()
+
+        if damageMap is None:
+            # make a new damage map
+            damageMap = CardDamageMap()
+            preventMap = CardDamageMap()
+            counterTable = GameEntityCounterTable()
+            usedDamageMap = False
+
+        # Run replacement effects
+        fighterA.getGame().getReplacementHandler().run(ReplacementType.AssignDealDamage, AbilityKey.mapFromAffected(fighterA))
+        fighterB.getGame().getReplacementHandler().run(ReplacementType.AssignDealDamage, AbilityKey.mapFromAffected(fighterB))
+
+        # 701.12c If a creature fights itself, it deals damage to itself equal to twice its power.
+
+        dmg1 = fighterA.getNetPower()
+        if fighterA.equals(fighterB):
+            damageMap.put(fighterA, fighterA, dmg1 * 2)
+        else:
+            dmg2 = fighterB.getNetPower()
+
+            damageMap.put(fighterA, fighterB, dmg1)
+            damageMap.put(fighterB, fighterA, dmg2)
+            fighterB.setFoughtThisTurn(True)
+        fighterA.setFoughtThisTurn(True)
+
+        if not usedDamageMap:
+            sa.getHostCard().getGame().getAction().dealDamage(False, damageMap, preventMap, counterTable, sa)
+
+        self.replaceDying(sa)
+```

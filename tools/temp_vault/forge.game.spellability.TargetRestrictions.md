@@ -120,6 +120,12 @@ classDiagram
 - [[forge.game.spellability.SpellAbilityStackInstance|SpellAbilityStackInstance]]
 - [[forge.game.zone.ZoneType|ZoneType]]
 
+## Design Description
+
+TargetRestrictions is a mutable data holder that captures all the targeting rules attached to a single SpellAbility: which game objects are legal targets (the valid-target string array and description), how many may be chosen (min/max, plus caps on total CMC or power), the zones to search, and a large set of optional constraints such as uniqueness, differing or matching controllers, creature/card-type sameness, equal toughness, random selection, and mandatoriness. It is typically built from a card-script parameter map, and provides a copy constructor and `copy()` for cloning per ability instance.
+
+Beyond storing restrictions, it actively enumerates legality: `hasCandidates`, `getNumCandidates`, and `getAllCandidates` walk the Game's players and cards in the target zones, validating each against the spell's source and activating player, while `canTgt*` helpers classify what kinds of GameEntity the ability may hit. It collaborates with SpellAbility, Card, Player, Game, GameEntity, ZoneType, and SpellAbilityStackInstance, and delegates dynamic numeric/text resolution to AbilityUtils â€” keeping the rules declarative while deferring evaluation to call time, including applying text-change effects to the valid-target list.
+
 ## Source
 `forge-game/src/main/java/forge/game/spellability/TargetRestrictions.java`
 
@@ -877,4 +883,412 @@ public class TargetRestrictions {
         }
     }
 }
+```
+
+## Python
+`forge/game/spellability/TargetRestrictions.py`
+
+```python
+from forge.card.CardType import CardType
+from forge.game.Game import Game
+from forge.game.GameEntity import GameEntity
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.card.Card import Card
+from forge.game.player.Player import Player
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.Lang import Lang
+from forge.util.TextUtil import TextUtil
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.spellability.SpellAbilityStackInstance import SpellAbilityStackInstance
+
+import copy as _copy
+
+
+class TargetRestrictions:
+    # Target has two things happening:
+    # Targeting restrictions (Creature, Min/Maxm etc) which are true for this
+    # What this Object is restricted to targeting
+
+    def __init__(self, arg):
+        # Default field values
+        self.originalValidTgts = None
+        self.validTgts = None
+        self.uiPrompt = ""
+        self.validTgtsDesc = ""
+        self.tgtZone = [ZoneType.Battlefield]
+
+        # The target SA of this SA must be targeting a Valid X
+        self.saValidTargeting = None
+
+        # Additional restrictions that may not fit into Valid
+        self.uniqueTargets = False
+        self.forEachPlayer = False
+        self.differentControllers = False
+        self.differentCMC = False
+        self.differentNames = False
+        self.equalToughness = False
+        self.sameController = False
+        self.withoutSameCreatureType = False
+        self.withSameCreatureType = False
+        self.withSameCardType = False
+        self.randomTarget = False
+        self.randomNumTargets = False
+
+        # How many can be targeted?
+        self.minTargets = None
+        self.maxTargets = None
+
+        # What's the max total CMC of targets?
+        self.maxTotalCMC = None
+
+        # What's the max total power of targets?
+        self.maxTotalPower = None
+
+        # Not sure what's up with Mandatory? Why wouldn't targeting be mandatory?
+        self.bMandatory = False
+
+        if isinstance(arg, TargetRestrictions):
+            self._init_from_target(arg)
+        else:
+            self._init_from_map(arg)
+
+    def _init_from_target(self, target):
+        self.uiPrompt = target.getVTSelection()
+        self.originalValidTgts = target.getValidTgts()
+        self.validTgts = list(self.originalValidTgts)
+        self.minTargets = target.getMinTargets()
+        self.maxTargets = target.getMaxTargets()
+        self.maxTotalCMC = target._getMaxTotalCMC()
+        self.maxTotalPower = target._getMaxTotalPower()
+        self.tgtZone = target.getZone()
+        self.saValidTargeting = target.getSAValidTargeting()
+        self.uniqueTargets = target.isUniqueTargets()
+        self.forEachPlayer = target.isForEachPlayer()
+        self.differentControllers = target.isDifferentControllers()
+        self.differentCMC = target.isDifferentCMC()
+        self.equalToughness = target.isEqualToughness()
+        self.sameController = target.isSameController()
+        self.withoutSameCreatureType = target.isWithoutSameCreatureType()
+        self.withSameCreatureType = target.isWithSameCreatureType()
+        self.withSameCardType = target.isWithSameCardType()
+        self.randomTarget = target.isRandomTarget()
+        self.randomNumTargets = target.isRandomNumTargets()
+
+    def _init_from_map(self, mapParams):
+        self.originalValidTgts = mapParams.get("ValidTgts").split(",")
+        self.validTgts = list(self.originalValidTgts)
+        self.minTargets = mapParams.get("TargetMin", "1")
+        self.maxTargets = mapParams.get("TargetMax", "1")
+
+        if "ValidTgtsDesc" in mapParams:
+            self.validTgtsDesc = mapParams.get("ValidTgtsDesc")
+        elif "Any" == mapParams.get("ValidTgts"):
+            self.validTgtsDesc = "damage target"
+        else:
+            self.validTgtsDesc = Lang.getInstance().buildValidDesc(list(self.validTgts), self.maxTargets != "1")
+
+        if "TgtPrompt" in mapParams:
+            self.uiPrompt = mapParams.get("TgtPrompt")
+        elif "Any" == mapParams.get("ValidTgts"):
+            self.uiPrompt = "Select any target"
+        else:
+            self.uiPrompt = "Select target " + self.validTgtsDesc
+
+        if "TgtZone" in mapParams:
+            # if Targeting something not in play, this Key should be set
+            self.setZone(ZoneType.listValueOf(mapParams.get("TgtZone")))
+
+        if "MaxTotalTargetCMC" in mapParams:
+            # only target cards up to a certain total max CMC
+            self.setMaxTotalCMC(mapParams.get("MaxTotalTargetCMC"))
+
+        if "MaxTotalTargetPower" in mapParams:
+            # only target cards up to a certain total max power
+            self.setMaxTotalPower(mapParams.get("MaxTotalTargetPower"))
+
+        # TargetValidTargeting most for Counter: e.g. target spell that targets X.
+        if "TargetValidTargeting" in mapParams:
+            self.setSAValidTargeting(mapParams.get("TargetValidTargeting"))
+
+        if "TargetUnique" in mapParams:
+            self.setUniqueTargets(True)
+        if "TargetsWithoutSameCreatureType" in mapParams:
+            self.setWithoutSameCreatureType(True)
+        if "TargetsWithSameCreatureType" in mapParams:
+            self.setWithSameCreatureType(True)
+        if "TargetsWithSameCardType" in mapParams:
+            self.setWithSameCardType(True)
+        if "TargetsWithSameController" in mapParams:
+            self.setSameController(True)
+        if "TargetsWithDifferentControllers" in mapParams:
+            self.setDifferentControllers(True)
+        if "TargetsForEachPlayer" in mapParams:
+            self.setForEachPlayer(True)
+        if "TargetsWithDifferentCMC" in mapParams:
+            self.setDifferentCMC(True)
+        if "TargetsWithDifferentNames" in mapParams:
+            self.setDifferentNames(True)
+        if "TargetsWithEqualToughness" in mapParams:
+            self.setEqualToughness(True)
+        if "TargetsAtRandom" in mapParams:
+            self.setRandomTarget(True)
+        if "RandomNumTargets" in mapParams:
+            self.setRandomNumTargets(True)
+        if "TargetingPlayer" in mapParams:
+            self.setMandatory(True)
+
+    def getMandatory(self) -> bool:
+        return self.bMandatory
+
+    def setMandatory(self, m: bool) -> None:
+        self.bMandatory = m
+
+    def setMaxTotalCMC(self, cmc: str) -> None:
+        self.maxTotalCMC = cmc
+
+    def setMaxTotalPower(self, power: str) -> None:
+        self.maxTotalPower = power
+
+    def getValidTgts(self) -> list[str]:
+        return self.validTgts
+
+    def getValidDesc(self) -> str:
+        return self.validTgtsDesc
+
+    def getVTSelection(self) -> str:
+        return self.uiPrompt
+
+    def getMinTargets(self) -> str:
+        return self.minTargets
+
+    def getMaxTargets(self) -> str:
+        return self.maxTargets
+
+    def _getMaxTotalCMC(self) -> str:
+        return self.maxTotalCMC
+
+    def getMaxTotalCMC(self, c: Card, sa: SpellAbility) -> int:
+        return AbilityUtils.calculateAmount(c, self.maxTotalCMC, sa)
+
+    def _getMaxTotalPower(self) -> str:
+        return self.maxTotalPower
+
+    def getMaxTotalPower(self, c: Card, sa: SpellAbility) -> int:
+        return AbilityUtils.calculateAmount(c, self.maxTotalPower, sa)
+
+    def getMinTargets(self, c: Card, sa: SpellAbility) -> int:
+        return AbilityUtils.calculateAmount(c, self.minTargets, sa)
+
+    def getMaxTargets(self, c: Card, sa: SpellAbility) -> int:
+        return AbilityUtils.calculateAmount(c, self.maxTargets, sa)
+
+    def isMaxTargetsChosen(self, c: Card, sa: SpellAbility) -> bool:
+        return self.getMaxTargets(c, sa) == len(sa.getTargets())
+
+    def isMinTargetsChosen(self, c: Card, sa: SpellAbility) -> bool:
+        min = self.getMinTargets(c, sa)
+        if min == 0 or (sa.isDividedAsYouChoose() and (sa.getDividedValue() if sa.getDividedValue() is not None else 0) == 0):
+            return True
+        return min <= len(sa.getTargets())
+
+    def setZone(self, tZone) -> None:
+        if isinstance(tZone, list):
+            self.tgtZone = tZone
+        else:
+            self.tgtZone = [tZone]
+
+    def getZone(self) -> list[ZoneType]:
+        return self.tgtZone
+
+    def setSAValidTargeting(self, saValidTgting: str) -> None:
+        self.saValidTargeting = saValidTgting
+
+    def getSAValidTargeting(self) -> str:
+        return self.saValidTargeting
+
+    def canOnlyTgtOpponent(self) -> bool:
+        player = False
+        opponent = False
+        for s in self.validTgts:
+            if s.startswith("Opponent"):
+                opponent = True
+            elif s.startswith("Player"):
+                player = True
+        return opponent and not player
+
+    def canTgtPlayer(self) -> bool:
+        for s in self.validTgts:
+            if s.startswith("Player") or s.startswith("Opponent") or s.startswith("Any"):
+                return True
+        return False
+
+    def canTgtPermanent(self) -> bool:
+        for s in self.validTgts:
+            if "Permanent" in s:
+                return True
+        return False
+
+    def canTgtCreature(self) -> bool:
+        for s in self.validTgts:
+            # TODO check IsCommander when in that variant
+            if ("Creature" in s or s.startswith("Permanent") or s.startswith("Any")) \
+                    and "nonCreature" not in s:
+                return True
+            tgtParams = TextUtil.split(s, '.')
+            for param in tgtParams:
+                if CardType.isACreatureType(param):
+                    return True
+        return False
+
+    def canTgtPlaneswalker(self) -> bool:
+        for s in self.validTgts:
+            if s.startswith("Planeswalker") or s.startswith("Any"):
+                return True
+        return False
+
+    def hasCandidates(self, sa: SpellAbility) -> bool:
+        srcCard = sa.getHostCard()  # should there be OrginalHost at any moment?
+        game = srcCard.getGame()
+
+        self.applyTargetTextChanges(sa)
+
+        for player in game.getPlayers():
+            if not player.isValid(self.validTgts, sa.getActivatingPlayer(), srcCard, sa):
+                continue
+            if not sa.canTarget(player):
+                continue
+            if player in sa.getTargets():
+                continue
+            return True
+
+        if ZoneType.Stack in self.tgtZone:
+            # Stack Zone targets are considered later
+            return True
+        for c in game.getCardsIn(self.tgtZone):
+            if not c.isValid(self.validTgts, sa.getActivatingPlayer(), srcCard, sa):
+                continue
+            if not sa.canTarget(c):
+                continue
+            if c in sa.getTargets():
+                continue
+            return True
+
+        return False
+
+    def getNumCandidates(self, sa: SpellAbility, isTargeted: bool) -> int:
+        num = 0
+        if ZoneType.Stack in self.tgtZone:
+            for si in sa.getHostCard().getGame().getStack():
+                abilityOnStack = si.getSpellAbility()
+                if sa.canTargetSpellAbility(abilityOnStack):
+                    num += 1
+        # TODO this may count some SA twice
+        return num + len(self.getAllCandidates(sa, isTargeted))
+
+    def getAllCandidates(self, sa: SpellAbility, isTargeted: bool, onlyNonCard: bool = False) -> list[GameEntity]:
+        game = sa.getActivatingPlayer().getGame()
+        candidates = []
+        for player in game.getPlayers():
+            if sa.canTarget(player):
+                candidates.append(player)
+
+        self.applyTargetTextChanges(sa)
+
+        if onlyNonCard:
+            return candidates
+
+        srcCard = sa.getHostCard()  # should there be OrginalHost at any moment?
+
+        for c in game.getCardsIn(self.tgtZone):
+            if c.isValid(self.validTgts, sa.getActivatingPlayer(), srcCard, sa) \
+                    and (not isTargeted or sa.canTarget(c)) \
+                    and c not in sa.getTargets():
+                candidates.append(c)
+
+        return candidates
+
+    def isUniqueTargets(self) -> bool:
+        return self.uniqueTargets
+
+    def setUniqueTargets(self, unique: bool) -> None:
+        self.uniqueTargets = unique
+
+    def isWithoutSameCreatureType(self) -> bool:
+        return self.withoutSameCreatureType
+
+    def setWithoutSameCreatureType(self, b: bool) -> None:
+        self.withoutSameCreatureType = b
+
+    def isWithSameCreatureType(self) -> bool:
+        return self.withSameCreatureType
+
+    def setWithSameCreatureType(self, b: bool) -> None:
+        self.withSameCreatureType = b
+
+    def isWithSameCardType(self) -> bool:
+        return self.withSameCardType
+
+    def setWithSameCardType(self, b: bool) -> None:
+        self.withSameCardType = b
+
+    def copy(self) -> "TargetRestrictions":
+        clone = None
+        try:
+            clone = _copy.copy(self)
+        except Exception as e:
+            import sys
+            print(e, file=sys.stderr)
+        return clone
+
+    def isRandomTarget(self) -> bool:
+        return self.randomTarget
+
+    def setRandomTarget(self, random: bool) -> None:
+        self.randomTarget = random
+
+    def isRandomNumTargets(self) -> bool:
+        return self.randomNumTargets
+
+    def setRandomNumTargets(self, randomNumTgts: bool) -> None:
+        self.randomNumTargets = randomNumTgts
+
+    def isDifferentCMC(self) -> bool:
+        return self.differentCMC
+
+    def setDifferentCMC(self, different: bool) -> None:
+        self.differentCMC = different
+
+    def isDifferentNames(self) -> bool:
+        return self.differentNames
+
+    def setDifferentNames(self, different: bool) -> None:
+        self.differentNames = different
+
+    def isEqualToughness(self) -> bool:
+        return self.equalToughness
+
+    def setEqualToughness(self, b: bool) -> None:
+        self.equalToughness = b
+
+    def isDifferentControllers(self) -> bool:
+        return self.differentControllers
+
+    def setDifferentControllers(self, different: bool) -> None:
+        self.differentControllers = different
+
+    def isForEachPlayer(self) -> bool:
+        return self.forEachPlayer
+
+    def setForEachPlayer(self, each: bool) -> None:
+        self.forEachPlayer = each
+
+    def isSameController(self) -> bool:
+        return self.sameController
+
+    def setSameController(self, same: bool) -> None:
+        self.sameController = same
+
+    def applyTargetTextChanges(self, sa: SpellAbility) -> None:
+        for i in range(len(self.validTgts)):
+            self.validTgts[i] = AbilityUtils.applyAbilityTextChangeEffects(self.originalValidTgts[i], sa)
 ```

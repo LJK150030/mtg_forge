@@ -55,7 +55,7 @@ classDiagram
 
 ## Design Description
 
-Beyond targeting, `DebuffAi` is a `SpellAbilityAi` subclass that drives the AI's decision-making for "debuff" effects—spells and abilities that strip keywords (typically evasion such as Flying, Horsemanship, or Shadow, or protective keywords like Indestructible and Persist) from creatures. It overrides the standard AI hooks—`canPlay`, `chkDrawback`, and `doTriggerNoCost`—to decide when activation is worthwhile, layering in cost checks (sacrifice, life, counter removal via `ComputerUtilCost`) and phase restrictions that confine instant-speed use to combat.
+Beyond targeting, `DebuffAi` is a `SpellAbilityAi` subclass that drives the AI's decision-making for "debuff" effectsâ€”spells and abilities that strip keywords (typically evasion such as Flying, Horsemanship, or Shadow, or protective keywords like Indestructible and Persist) from creatures. It overrides the standard AI hooksâ€”`canPlay`, `chkDrawback`, and `doTriggerNoCost`â€”to decide when activation is worthwhile, layering in cost checks (sacrifice, life, counter removal via `ComputerUtilCost`) and phase restrictions that confine instant-speed use to combat.
 
 Its private helpers encode the core intent: `getCurseCreatures` collects an opponent's targetable creatures that actually bear the keywords being removed (avoiding wasted, duplicate debuffs), `debuffTgtAI` greedily picks the best such creatures via `ComputerUtilCard`, and `debuffMandatoryTarget` handles forced-targeting fallbacks, preferring opponents' permanents but conceding own-controlled ones when required. It collaborates with `Game`, `PhaseHandler`, and `Combat` to time decisions around the combat phase, and returns `AiAbilityDecision` verdicts throughout.
 
@@ -329,4 +329,201 @@ public class DebuffAi extends SpellAbilityAi {
     }
 
 }
+```
+
+## Python
+`forge/ai/ability/DebuffAi.py`
+
+```python
+from forge.ai.SpellAbilityAi import SpellAbilityAi
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.ai.ComputerUtilCost import ComputerUtilCost
+from forge.ai.ComputerUtilCard import ComputerUtilCard
+from forge.ai.AiAttackController import AiAttackController
+from forge.game.Game import Game
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CardUtil import CardUtil
+from forge.game.combat.Combat import Combat
+from forge.game.cost.Cost import Cost
+from forge.game.phase.PhaseHandler import PhaseHandler
+from forge.game.phase.PhaseType import PhaseType
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.spellability.TargetRestrictions import TargetRestrictions
+
+
+class DebuffAi(SpellAbilityAi):
+
+    def canPlay(self, ai: Player, sa: SpellAbility) -> AiAbilityDecision:
+        # if there is no target and host card isn't in play, don't activate
+        source = sa.getHostCard()
+        game = ai.getGame()
+        if not sa.usesTargeting() and not source.isInPlay():
+            return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+        cost = sa.getPayCosts()
+
+        # temporarily disabled until AI is improved
+        if not ComputerUtilCost.checkCreatureSacrificeCost(ai, cost, source, sa):
+            return AiAbilityDecision(0, AiPlayDecision.CantAfford)
+
+        if not ComputerUtilCost.checkLifeCost(ai, cost, source, 40, sa):
+            return AiAbilityDecision(0, AiPlayDecision.CantAfford)
+
+        if not ComputerUtilCost.checkRemoveCounterCost(cost, source, sa):
+            return AiAbilityDecision(0, AiPlayDecision.CantAfford)
+
+        ph = game.getPhaseHandler()
+
+        # Phase Restrictions
+        if (ph.getPhase().isBefore(PhaseType.COMBAT_DECLARE_ATTACKERS)
+                or ph.getPhase().isAfter(PhaseType.COMBAT_DECLARE_BLOCKERS)
+                or not game.getStack().isEmpty()):
+            # Instant-speed pumps should not be cast outside of combat when the
+            # stack is empty, unless there are specific activation phase requirements
+            if not self.isSorcerySpeed(sa, ai) and not sa.hasParam("ActivationPhases"):
+                return AiAbilityDecision(0, AiPlayDecision.AnotherTime)
+
+        if not sa.usesTargeting():
+            cards = AbilityUtils.getDefinedCards(source, sa.getParam("Defined"), sa)
+
+            combat = game.getCombat()
+
+            def matches(c: Card) -> bool:
+                if c.getController().equals(sa.getActivatingPlayer()) or combat is None:
+                    return False
+
+                if not combat.isBlocking(c) and not combat.isAttacking(c):
+                    return False
+                # don't add duplicate negative keywords
+                return sa.hasParam("Keywords") and c.hasAnyKeyword(sa.getParam("Keywords").split(" & "))
+
+            if any(matches(c) for c in cards):
+                return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+            else:
+                return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+        else:
+            if self.debuffTgtAI(ai, sa, sa.getParam("Keywords").split(" & ") if sa.hasParam("Keywords") else None, False):
+                return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+            else:
+                return AiAbilityDecision(0, AiPlayDecision.TargetingFailed)
+
+    def chkDrawback(self, ai: Player, sa: SpellAbility) -> AiAbilityDecision:
+        if not sa.usesTargeting():
+            # TODO - copied from AF_Pump.pumpDrawbackAI() - what should be here?
+            pass
+        else:
+            if self.debuffTgtAI(ai, sa, sa.getParam("Keywords").split(" & ") if sa.hasParam("Keywords") else None, False):
+                return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+            else:
+                return AiAbilityDecision(0, AiPlayDecision.TargetingFailed)
+
+        return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+    # debuffDrawbackAI()
+
+    def debuffTgtAI(self, ai: Player, sa: SpellAbility, kws: list[str], mandatory: bool) -> bool:
+        # this would be for evasive things like Flying, Unblockable, etc
+        if not mandatory and ai.getGame().getPhaseHandler().getPhase().isAfter(PhaseType.COMBAT_DECLARE_BLOCKERS):
+            return False
+
+        tgt = sa.getTargetRestrictions()
+        sa.resetTargets()
+        list = self.getCurseCreatures(ai, sa, [] if kws is None else kws)
+
+        # several uses here:
+        # 1. make human creatures lose evasion when they are attacking
+        # 2. make human creatures lose Flying/Horsemanship/Shadow/etc. when
+        # Comp is attacking
+        # 3. remove Indestructible keyword so it can be destroyed?
+        # 3a. remove Persist?
+
+        if list.isEmpty():
+            return mandatory and self.debuffMandatoryTarget(ai, sa, mandatory)
+
+        while sa.canAddMoreTarget():
+            t = None
+
+            if list.isEmpty():
+                if sa.getTargets().size() < sa.getMinTargets() or sa.getTargets().size() == 0:
+                    if mandatory:
+                        return self.debuffMandatoryTarget(ai, sa, mandatory)
+
+                    sa.resetTargets()
+                    return False
+                else:
+                    # TODO is this good enough? for up to amounts?
+                    break
+
+            t = ComputerUtilCard.getBestCreatureAI(list)
+            sa.getTargets().add(t)
+            list.remove(t)
+
+        return True
+
+    # pumpTgtAI()
+
+    def getCurseCreatures(self, ai: Player, sa: SpellAbility, kws: list[str]) -> CardCollection:
+        opp = AiAttackController.choosePreferredDefenderPlayer(ai)
+        list = CardLists.getTargetableCards(opp.getCreaturesInPlay(), sa)
+        if not list.isEmpty():
+            list = CardLists.filter(list, lambda c: c.hasAnyKeyword(kws))  # don't add duplicate negative keywords
+        return list
+
+    def debuffMandatoryTarget(self, ai: Player, sa: SpellAbility, mandatory: bool) -> bool:
+        list = CardUtil.getValidCardsToTarget(sa)
+
+        if list.size() < sa.getMinTargets():
+            sa.resetTargets()
+            return False
+
+        pref = CardLists.filterControlledBy(list, ai.getOpponents())
+        forced = CardLists.filterControlledBy(list, ai)
+        source = sa.getHostCard()
+
+        while sa.canAddMoreTarget():
+            if pref.isEmpty():
+                break
+
+            c = ComputerUtilCard.getBestAI(pref)
+            pref.remove(c)
+            sa.getTargets().add(c)
+
+        while not sa.isMinTargetChosen():
+            if forced.isEmpty():
+                break
+
+            # TODO - if forced targeting, just pick something without the given keyword
+            if CardLists.getNotType(forced, "Creature").size() == 0:
+                c = ComputerUtilCard.getWorstCreatureAI(forced)
+            else:
+                c = ComputerUtilCard.getCheapestPermanentAI(forced, sa, False)
+
+            forced.remove(c)
+
+            sa.getTargets().add(c)
+
+        if not sa.isMinTargetChosen():
+            sa.resetTargets()
+            return False
+
+        return True
+
+    def doTriggerNoCost(self, ai: Player, sa: SpellAbility, mandatory: bool) -> AiAbilityDecision:
+        kws = sa.getParam("Keywords").split(" & ") if sa.hasParam("Keywords") else []
+
+        if not sa.usesTargeting():
+            if mandatory:
+                return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+        else:
+            if self.debuffTgtAI(ai, sa, kws, mandatory):
+                return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+            else:
+                return AiAbilityDecision(0, AiPlayDecision.TargetingFailed)
+
+        return AiAbilityDecision(100, AiPlayDecision.WillPlay)
 ```

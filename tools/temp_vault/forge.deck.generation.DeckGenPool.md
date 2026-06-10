@@ -123,3 +123,48 @@ public class DeckGenPool implements IDeckGenPool {
     }
 }
 ```
+
+## Python
+`forge/deck/generation/DeckGenPool.py`
+
+```python
+from forge.deck.generation.IDeckGenPool import IDeckGenPool
+from forge.item.PaperCard import PaperCard
+from forge.item.PaperCardPredicates import PaperCardPredicates
+from forge.util.IterableUtil import IterableUtil
+
+from typing import Callable, Iterable
+
+
+class DeckGenPool(IDeckGenPool):
+    def __init__(self, cc: Iterable[PaperCard] = None):
+        self.cards: dict[str, PaperCard] = {}
+        if cc is not None:
+            self.addAll(cc)
+
+    def add(self, c: PaperCard) -> None:
+        self.cards[c.getName()] = c
+
+    def addAll(self, cc: Iterable[PaperCard]) -> None:
+        for c in cc:
+            self.add(c)
+
+    def size(self) -> int:
+        return len(self.cards)
+
+    def getCard(self, name: str, edition: str = None, artIndex: int = None) -> PaperCard:
+        if edition is None:
+            return self.cards.get(name)
+        filter = PaperCardPredicates.printedInSet(edition).and_(PaperCardPredicates.name(name))
+        return next((c for c in self.cards.values() if filter(c)), None) or self.getCard(name)
+
+    def contains(self, card) -> bool:
+        if isinstance(card, PaperCard):
+            return self.contains(card.getName())
+        return card in self.cards
+
+    def getAllCards(self, filter: Callable[[PaperCard], bool] = None) -> Iterable[PaperCard]:
+        if filter is None:
+            return self.cards.values()
+        return IterableUtil.filter(self.getAllCards(), filter)
+```

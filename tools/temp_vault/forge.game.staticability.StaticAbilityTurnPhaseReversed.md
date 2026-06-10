@@ -38,6 +38,12 @@ classDiagram
 - [[forge.game.staticability.StaticAbility|StaticAbility]]
 - [[forge.game.staticability.StaticAbilityMode|StaticAbilityMode]]
 
+## Design Description
+
+StaticAbilityTurnPhaseReversed is a stateless utility that evaluates whether a player's turn order or phase sequence is currently reversed by active continuous static abilities. Its public entry points, `isTurnReversed` and `isPhaseReversed`, delegate to the shared helper `anyTurnPhaseReversed`, which scans every `Card` in the game's static-ability source zones, filters each `StaticAbility` by the relevant `StaticAbilityMode` (TurnReversed or PhaseReversed), and applies it via `applyTurnPhaseReversed`, which checks the `ValidPlayer` parameter against the given `Player`.
+
+Notably, each matching ability toggles the result rather than setting it, so an even number of reversal effects cancels outâ€”correctly modeling stacked reversals. Implemented entirely as static methods collaborating with `Game`, `Card`, `Player`, and `StaticAbility`, it follows the package's convention of grouping one static-ability mode's evaluation logic into a dedicated, instance-free helper class.
+
 ## Source
 `forge-game/src/main/java/forge/game/staticability/StaticAbilityTurnPhaseReversed.java`
 
@@ -82,4 +88,45 @@ public class StaticAbilityTurnPhaseReversed {
         return true;
     }
 }
+```
+
+## Python
+`forge/game/staticability/StaticAbilityTurnPhaseReversed.py`
+
+```python
+from forge.game.Game import Game
+from forge.game.card.Card import Card
+from forge.game.player.Player import Player
+from forge.game.zone.ZoneType import ZoneType
+from forge.game.staticability.StaticAbility import StaticAbility
+from forge.game.staticability.StaticAbilityMode import StaticAbilityMode
+
+
+class StaticAbilityTurnPhaseReversed:
+    @staticmethod
+    def isTurnReversed(player: Player) -> bool:
+        return StaticAbilityTurnPhaseReversed.anyTurnPhaseReversed(player, StaticAbilityMode.TurnReversed)
+
+    @staticmethod
+    def isPhaseReversed(player: Player) -> bool:
+        return StaticAbilityTurnPhaseReversed.anyTurnPhaseReversed(player, StaticAbilityMode.PhaseReversed)
+
+    @staticmethod
+    def anyTurnPhaseReversed(player: Player, mode: StaticAbilityMode) -> bool:
+        result = False
+        game = player.getGame()
+        for ca in game.getCardsIn(ZoneType.STATIC_ABILITIES_SOURCE_ZONES):
+            for stAb in ca.getStaticAbilities():
+                if not stAb.checkConditions(mode):
+                    continue
+                if StaticAbilityTurnPhaseReversed.applyTurnPhaseReversed(stAb, player):
+                    result = not result
+        return result
+
+    @staticmethod
+    def applyTurnPhaseReversed(stAb: StaticAbility, player: Player) -> bool:
+        if not stAb.matchesValidParam("ValidPlayer", player):
+            return False
+
+        return True
 ```

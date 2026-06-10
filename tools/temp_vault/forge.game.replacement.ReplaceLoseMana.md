@@ -36,6 +36,10 @@ classDiagram
 - [[forge.game.card.Card|Card]]
 - [[forge.game.spellability.SpellAbility|SpellAbility]]
 
+## Design Description
+
+ReplaceLoseMana is a concrete replacement effect that intercepts mana-loss events, allowing card scripts to substitute or modify what happens when a player would lose mana. It specializes the abstract ReplacementEffect base class by supplying the two hooks the replacement framework drives: canReplace, which gates the effect by testing the affected player against the script's ValidPlayer condition, and setReplacingObjects, which exposes the affected Player and the Mana amount to the triggered SpellAbility for downstream resolution. It collaborates with AbilityKey to read and write typed entries in the runtime parameter map, and with Card as its host. The class deliberately holds no state of its own beyond what the superclass tracks, keeping all configuration data-driven through the constructor's string map so that game behavior is defined declaratively in card scripts rather than in code.
+
 ## Source
 `forge-game/src/main/java/forge/game/replacement/ReplaceLoseMana.java`
 
@@ -93,4 +97,30 @@ public class ReplaceLoseMana extends ReplacementEffect {
     }
 
 }
+```
+
+## Python
+`forge/game/replacement/ReplaceLoseMana.py`
+
+```python
+from forge.game.replacement.ReplacementEffect import ReplacementEffect
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.spellability.SpellAbility import SpellAbility
+
+
+class ReplaceLoseMana(ReplacementEffect):
+
+    def __init__(self, map: dict[str, str], host: Card, intrinsic: bool):
+        super().__init__(map, host, intrinsic)
+
+    def canReplace(self, runParams: dict[AbilityKey, object]) -> bool:
+        if not self.matchesValidParam("ValidPlayer", runParams.get(AbilityKey.Affected)):
+            return False
+
+        return True
+
+    def setReplacingObjects(self, runParams: dict[AbilityKey, object], sa: SpellAbility) -> None:
+        sa.setReplacingObject(AbilityKey.Player, runParams.get(AbilityKey.Affected))
+        sa.setReplacingObject(AbilityKey.Mana, runParams.get(AbilityKey.Mana))
 ```

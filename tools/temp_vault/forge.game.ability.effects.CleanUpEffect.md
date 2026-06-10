@@ -163,3 +163,92 @@ public class CleanUpEffect extends SpellAbilityEffect {
     }
 }
 ```
+
+## Python
+`forge/game/ability/effects/CleanUpEffect.py`
+
+```python
+from forge.game.Game import Game
+from forge.game.GameEntity import GameEntity
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.event.GameEventRandomLog import GameEventRandomLog
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Localizer import Localizer
+
+
+class CleanUpEffect(SpellAbilityEffect):
+
+    # (non-Javadoc)
+    # @see forge.card.abilityfactory.SpellEffect#resolve(java.util.Map, forge.card.spellability.SpellAbility)
+    def resolve(self, sa: SpellAbility) -> None:
+        if sa.hasParam("Defined"):
+            source = self.getDefinedCardsOrTargeted(sa)[0]
+        else:
+            source = sa.getHostCard()
+        game = source.getGame()
+
+        logMessage = ""
+        if sa.hasParam("Log"):
+            logMessage = self.logOutput(sa, source)
+
+        if sa.hasParam("ClearRemembered"):
+            source.clearRemembered()
+            game.getCardState(source).clearRemembered()
+        if sa.hasParam("ForgetDefined"):
+            for ge in AbilityUtils.getDefinedEntities(source, sa.getParam("ForgetDefined"), sa):
+                source.removeRemembered(ge)
+        if sa.hasParam("ClearImprinted"):
+            source.clearImprintedCards()
+            game.getCardState(source).clearImprintedCards()
+        if sa.hasParam("ClearTriggered"):
+            game.getTriggerHandler().clearDelayedTrigger(source)
+        if sa.hasParam("ClearCoinFlips"):
+            source.clearFlipResult()
+        if sa.hasParam("ClearChosenCard"):
+            source.setChosenCards(None)
+        if sa.hasParam("ClearChosenPlayer"):
+            source.setChosenPlayer(None)
+        if sa.hasParam("ClearChosenType"):
+            source.setChosenType("")
+            source.setChosenType2("")
+        if sa.hasParam("ClearChosenColor"):
+            source.setChosenColors(None)
+        if sa.hasParam("ClearNamedCard"):
+            source.setNamedCards([])
+        if sa.hasParam("Log"):
+            source.getController().getGame().fireEvent(GameEventRandomLog(logMessage))
+
+    def logOutput(self, sa: SpellAbility, source: Card) -> str:
+        log = []
+        name = source.getTranslatedName()
+        linebreak = "\r\n"
+
+        if sa.hasParam("ClearRemembered") and source.getRememberedCount() != 0:
+            for o in source.getRemembered():
+                rem = str(o)
+                if isinstance(o, Card):
+                    log.append(linebreak if len("".join(log)) > 0 else "")
+                    log.append(Localizer.getInstance().getMessage("lblChosenCard", name, rem))
+                elif isinstance(o, Player):
+                    log.append(linebreak if len("".join(log)) > 0 else "")
+                    log.append(Localizer.getInstance().getMessage("lblChosenPlayer", name, rem))
+
+        chCard = source.getChosenCards().toString().replace("[", "").replace("]", "") \
+            if sa.hasParam("ClearChosenCard") and source.hasChosenCard() else ""
+        if len(chCard) > 0 and chCard not in "".join(log):
+            log.append(linebreak if len("".join(log)) > 0 else "")
+            message = "lblChosenMultiCard" if source.getChosenCards().size() > 1 else "lblChosenCard"
+            log.append(Localizer.getInstance().getMessage(message, name, chCard))
+
+        chPlay = str(source.getChosenPlayer()) \
+            if sa.hasParam("ClearChosenPlayer") and source.hasChosenPlayer() else ""
+        if len(chPlay) > 0 and chPlay not in "".join(log):
+            log.append(linebreak if len("".join(log)) > 0 else "")
+            log.append(Localizer.getInstance().getMessage("lblChosenPlayer", name, chPlay))
+        log.append("" if len("".join(log)) > 0 else Localizer.getInstance().getMessage("lblNoValidChoice", name))
+
+        return "".join(log)
+```

@@ -27,6 +27,12 @@ classDiagram
     }
 ```
 
+## Design Description
+
+The IItemReader interface defines a generic contract for reading collections of items of type T from a hierarchical storage layout, typically the filesystem. Implementations expose their backing location via getFullPath() and produce a keyed Map of items through readAll(), with getItemKey() supplying the canonical identity used to index each item. The getSubFolders() and getReaderForFolder() methods extend this abstraction to nested directory structures, letting a reader recursively yield child readers scoped to each subfolder.
+
+Parameterized over T rather than tied to any concrete item type, the interface decouples item loading from item representation, allowing the same traversal and aggregation logic to serve different domain objects within forge-core. Returning IItemReader<T> from getReaderForFolder() makes the hierarchy uniformly composable, so callers can walk an arbitrarily deep folder tree without knowing how individual items are parsed or persisted.
+
 ## Source
 `forge-core/src/main/java/forge/util/IItemReader.java`
 
@@ -69,4 +75,37 @@ public interface IItemReader<T> {
     
     IItemReader<T> getReaderForFolder(File subfolder);
 }
+```
+
+## Python
+`forge/util/IItemReader.py`
+
+```python
+from abc import ABC, abstractmethod
+from pathlib import Path
+from typing import Generic, Iterable, TypeVar
+
+T = TypeVar("T")
+
+
+class IItemReader(ABC, Generic[T]):
+    @abstractmethod
+    def getFullPath(self) -> str:
+        ...
+
+    @abstractmethod
+    def readAll(self) -> dict[str, T]:
+        ...
+
+    @abstractmethod
+    def getItemKey(self, item: T) -> str:
+        ...
+
+    @abstractmethod
+    def getSubFolders(self) -> Iterable[Path]:
+        ...
+
+    @abstractmethod
+    def getReaderForFolder(self, subfolder: Path) -> "IItemReader[T]":
+        ...
 ```

@@ -37,7 +37,7 @@ classDiagram
 
 ## Design Description
 
-UnattachEffect is a resolution handler for the "Unattach" spell ability, extending SpellAbilityEffect to plug into Forge's ability-factory framework. It overrides getStackDescription to render a human-readable stack entry ("Unattach " followed by the affected cards) and resolve to perform the actual game mutation. During resolution it iterates over the ability's defined or targeted Cards, querying the Game for each card's current state to guard against stale references—skipping cards no longer in play, replaced by last-known-information copies, or whose game timestamp has changed. For each still-valid attachment, it detaches the card from whatever entity it is attached to.
+UnattachEffect is a resolution handler for the "Unattach" spell ability, extending SpellAbilityEffect to plug into Forge's ability-factory framework. It overrides getStackDescription to render a human-readable stack entry ("Unattach " followed by the affected cards) and resolve to perform the actual game mutation. During resolution it iterates over the ability's defined or targeted Cards, querying the Game for each card's current state to guard against stale referencesâ€”skipping cards no longer in play, replaced by last-known-information copies, or whose game timestamp has changed. For each still-valid attachment, it detaches the card from whatever entity it is attached to.
 
 The design intent is defensive: rather than trusting the targets captured when the ability was cast, it revalidates each against live game state before mutating, ensuring the effect only acts on genuinely present, unchanged attachments.
 
@@ -89,4 +89,38 @@ public class UnattachEffect extends SpellAbilityEffect {
         }
     }
 }
+```
+
+## Python
+`forge/game/ability/effects/UnattachEffect.py`
+
+```python
+from forge.game.Game import Game
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Lang import Lang
+
+
+class UnattachEffect(SpellAbilityEffect):
+    def getStackDescription(self, sa: SpellAbility) -> str:
+        sb = []
+        sb.append("Unattach ")
+        sb.append(Lang.joinHomogenous(self.getDefinedCardsOrTargeted(sa)))
+        return "".join(sb)
+
+    def resolve(self, sa: SpellAbility) -> None:
+        game = sa.getHostCard().getGame()
+        for tgtC in self.getDefinedCardsOrTargeted(sa):
+            if not tgtC.isInPlay():
+                continue
+            # check if the object is still in game or if it was moved
+            gameCard = game.getCardState(tgtC, None)
+            # gameCard is LKI in that case, the card is not in game anymore
+            # or the timestamp did change
+            # this should check Self too
+            if gameCard is None or not tgtC.equalsWithGameTimestamp(gameCard):
+                continue
+            if gameCard.isAttachment() and gameCard.isAttachedToEntity():
+                gameCard.unattachFromEntity(gameCard.getEntityAttachedTo())
 ```

@@ -41,7 +41,7 @@ classDiagram
 
 ## Design Description
 
-ControlExchangeEffect implements the resolution logic for spell abilities that swap control of two permanents, such as Magic's "exchange control" effects. As a concrete subclass of SpellAbilityEffect, it plugs into Forge's ability-factory framework, overriding `getStackDescription` to render a human-readable summary and `resolve` to apply the swap. It resolves its two operands from either targeted Cards or a "Defined" parameter, then collaborates with the Card, Player, and Game model to perform the exchange. Notable design intent includes defensive guards—both permanents must remain in play, not phased out, and be legally controllable by the prospective new controller—and a single Game timestamp applied via `addTempController` so the two control changes are simultaneous and correctly layered. Optional player confirmation and a RememberExchanged hook reflect Forge's data-driven card-scripting conventions.
+ControlExchangeEffect implements the resolution logic for spell abilities that swap control of two permanents, such as Magic's "exchange control" effects. As a concrete subclass of SpellAbilityEffect, it plugs into Forge's ability-factory framework, overriding `getStackDescription` to render a human-readable summary and `resolve` to apply the swap. It resolves its two operands from either targeted Cards or a "Defined" parameter, then collaborates with the Card, Player, and Game model to perform the exchange. Notable design intent includes defensive guardsâ€”both permanents must remain in play, not phased out, and be legally controllable by the prospective new controllerâ€”and a single Game timestamp applied via `addTempController` so the two control changes are simultaneous and correctly layered. Optional player confirmation and a RememberExchanged hook reflect Forge's data-driven card-scripting conventions.
 
 ## Source
 `forge-game/src/main/java/forge/game/ability/effects/ControlExchangeEffect.java`
@@ -150,4 +150,90 @@ public class ControlExchangeEffect extends SpellAbilityEffect {
     }
 
 }
+```
+
+## Python
+`forge/game/ability/effects/ControlExchangeEffect.py`
+
+```python
+package = forge.game.ability.effects, but wait the FQN is forge.game.ability.effects.ControlExchangeEffect. Imports per rules.
+
+Let me write the Python.from forge.game.Game import Game
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Localizer import Localizer
+
+
+class ControlExchangeEffect(SpellAbilityEffect):
+
+    # (non-Javadoc)
+    # @see forge.card.abilityfactory.SpellEffect#getStackDescription(java.util.Map, forge.card.spellability.SpellAbility)
+    def getStackDescription(self, sa: SpellAbility) -> str:
+        object1 = None
+        object2 = None
+        tgts = None
+        if sa.usesTargeting():
+            tgts = sa.getTargets().getTargetCards()
+            if tgts.size() > 0:
+                object1 = tgts.get(0)
+        if sa.hasParam("Defined"):
+            cards = AbilityUtils.getDefinedCards(sa.getHostCard(), sa.getParam("Defined"), sa)
+            object2 = None if cards.isEmpty() else cards.get(0)
+            if cards.size() > 1 and not sa.usesTargeting():
+                object1 = cards.get(1)
+        elif tgts.size() > 1:
+            object2 = tgts.get(1)
+
+        if object1 is None or object2 is None:
+            return ""
+
+        return str(object1) + " exchanges controller with " + str(object2)
+
+    # (non-Javadoc)
+    # @see forge.card.abilityfactory.SpellEffect#resolve(java.util.Map, forge.card.spellability.SpellAbility)
+    def resolve(self, sa: SpellAbility) -> None:
+        host = sa.getHostCard()
+        game = host.getGame()
+        object1 = None
+        object2 = None
+
+        tgts = None
+        if sa.usesTargeting():
+            tgts = sa.getTargets().getTargetCards()
+            if tgts.size() > 0:
+                object1 = tgts.get(0)
+        if sa.hasParam("Defined"):
+            cards = AbilityUtils.getDefinedCards(host, sa.getParam("Defined"), sa)
+            object2 = None if cards.isEmpty() else cards.get(0)
+            if cards.size() > 1 and not sa.usesTargeting():
+                object1 = cards.get(1)
+        elif tgts.size() > 1:
+            object2 = tgts.get(1)
+
+        if (object1 is None or object2 is None or not object1.isInPlay() or not object2.isInPlay()
+                or object1.isPhasedOut() or object2.isPhasedOut()):
+            return
+
+        player1 = object1.getController()
+        player2 = object2.getController()
+
+        if not object2.canBeControlledBy(player1) or not object1.canBeControlledBy(player2):
+            return
+
+        if sa.hasParam("Optional") and not sa.getActivatingPlayer().getController().confirmAction(sa, None,
+                Localizer.getInstance().getMessage("lblExchangeControl",
+                        object1.getTranslatedName(),
+                        object2.getTranslatedName()), None):
+            return
+
+        tStamp = game.getNextTimestamp()
+        object2.addTempController(player1, tStamp)
+        object1.addTempController(player2, tStamp)
+        if sa.hasParam("RememberExchanged"):
+            host.addRemembered(object1)
+            host.addRemembered(object2)
 ```

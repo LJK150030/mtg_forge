@@ -42,6 +42,10 @@ classDiagram
 - [[forge.game.spellability.SpellAbility|SpellAbility]]
 - [[forge.util.collect.FCollection|FCollection]]
 
+## Design Description
+
+TriggerVote is a concrete trigger that fires on the resolution of a voting effect, extending the abstract `Trigger` base class within the `forge.game.trigger` package. Its `performTest` unconditionally returns true, so the trigger always fires once a vote occurs; its real work lies in `setTriggeringObjects`, which inspects the `AllVotes` tally (a `ListMultimap` keyed by vote choice) and exposes two derived `FCollection<Player>` sets â€” opponents who voted differently from, and the same as, the host's controller â€” under the `OpponentVotedDiff` and `OpponentVotedSame` ability keys. It collaborates with `SpellAbility`, `AbilityKey`, `Card`, and `Player` to wire these results into the ability stack. A private static `getVoters` helper centralizes the choice-comparison and opponent-filtering logic, while `getImportantStackObjects` formats the voter lists into localized, human-readable stack text.
+
 ## Source
 `forge-game/src/main/java/forge/game/trigger/TriggerVote.java`
 
@@ -169,4 +173,77 @@ public class TriggerVote extends Trigger {
     }
 
 }
+```
+
+## Python
+`forge/game/trigger/TriggerVote.py`
+
+```python
+from typing import List
+
+from com.google.common.collect.ListMultimap import ListMultimap
+
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Localizer import Localizer
+from forge.util.collect.FCollection import FCollection
+from forge.game.trigger.Trigger import Trigger
+
+
+class TriggerVote(Trigger):
+
+    def __init__(self, params: dict[str, str], host: Card, intrinsic: bool):
+        super().__init__(params, host, intrinsic)
+
+    def performTest(self, runParams: dict[AbilityKey, object]) -> bool:
+        return True
+
+    def setTriggeringObjects(self, sa: SpellAbility, runParams: dict[AbilityKey, object]) -> None:
+        oppVotedDiff = TriggerVote.getVoters(
+            self.getHostCard().getController(),
+            runParams.get(AbilityKey.AllVotes),
+            True, True
+        )
+        sa.setTriggeringObject(AbilityKey.OpponentVotedDiff, oppVotedDiff)
+
+        oppVotedSame = TriggerVote.getVoters(
+            self.getHostCard().getController(),
+            runParams.get(AbilityKey.AllVotes),
+            True, False
+        )
+        sa.setTriggeringObject(AbilityKey.OpponentVotedSame, oppVotedSame)
+
+    def getImportantStackObjects(self, sa: SpellAbility) -> str:
+        sb = []
+        if self.hasParam("List"):
+            l = self.getParam("List")
+            if "OppVotedSame" in l:
+                ovs = str(sa.getTriggeringObject(AbilityKey.OpponentVotedSame))
+                sb.append(Localizer.getInstance().getMessage("lblOppVotedSame"))
+                sb.append(": ")
+                sb.append(ovs[1:len(ovs) - 1] if ovs != "[]"
+                          else Localizer.getInstance().getMessage("lblNone"))
+            if "OppVotedDiff" in l:
+                if len("".join(sb)) > 0:
+                    sb.append("] [")
+                ovd = str(sa.getTriggeringObject(AbilityKey.OpponentVotedDiff))
+                sb.append(Localizer.getInstance().getMessage("lblOppVotedDiff"))
+                sb.append(": ")
+                sb.append(ovd[1:len(ovd) - 1] if ovd != "[]"
+                          else Localizer.getInstance().getMessage("lblNone"))
+        return "".join(sb)
+
+    @staticmethod
+    def getVoters(player: Player, votes: ListMultimap[object, Player],
+                  isOpponent: bool, votedOtherchoice: bool) -> FCollection[Player]:
+        voters = FCollection()
+        for voteType in votes.keySet():
+            players = votes.get(voteType)
+            if votedOtherchoice ^ (player in players):
+                voters.addAll(players)
+        if isOpponent:
+            voters.retainAll(player.getOpponents())
+        return voters
 ```

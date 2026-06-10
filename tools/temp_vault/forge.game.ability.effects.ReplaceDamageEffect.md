@@ -38,9 +38,9 @@ classDiagram
 
 ## Design Description
 
-ReplaceDamageEffect is a concrete `SpellAbilityEffect` that implements Magic's damage-prevention mechanic, running only as a replacement ability—it returns immediately if `resolve` is invoked outside that context. It reads the original replacement parameters and incoming damage amount from the `SpellAbility`'s replacing objects (keyed by `AbilityKey`), computes the preventable amount via `AbilityUtils.calculateAmount`, and clamps it against both the remaining damage and any divided-shield limit.
+ReplaceDamageEffect is a concrete `SpellAbilityEffect` that implements Magic's damage-prevention mechanic, running only as a replacement abilityâ€”it returns immediately if `resolve` is invoked outside that context. It reads the original replacement parameters and incoming damage amount from the `SpellAbility`'s replacing objects (keyed by `AbilityKey`), computes the preventable amount via `AbilityUtils.calculateAmount`, and clamps it against both the remaining damage and any divided-shield limit.
 
-A central design intent is distinguishing two prevention flavors: consumable "prevent next X" shields, whose backing `Number$` SVar on the host `Card` is decremented (and whose immutable effect is exiled through the `Game`'s action layer once depleted), versus fixed "prevent X" effects that are never updated. It reports results back through the original parameter map—marking the replacement `Replaced` when all damage is absorbed, or `Updated` with the reduced amount otherwise—and records the prevented total in the `PreventedDamage` SVar for downstream consumers.
+A central design intent is distinguishing two prevention flavors: consumable "prevent next X" shields, whose backing `Number$` SVar on the host `Card` is decremented (and whose immutable effect is exiled through the `Game`'s action layer once depleted), versus fixed "prevent X" effects that are never updated. It reports results back through the original parameter mapâ€”marking the replacement `Replaced` when all damage is absorbed, or `Updated` with the reduced amount otherwiseâ€”and records the prevented total in the `PreventedDamage` SVar for downstream consumers.
 
 ## Source
 `forge-game/src/main/java/forge/game/ability/effects/ReplaceDamageEffect.java`
@@ -117,3 +117,67 @@ public class ReplaceDamageEffect extends SpellAbilityEffect {
 
 }
 ```
+
+## Python
+`forge/game/ability/effects/ReplaceDamageEffect.py`
+
+````python
+package forge.game.ability.effects
+
+```python
+from forge.game.Game import Game
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.replacement.ReplacementResult import ReplacementResult
+from forge.game.spellability.SpellAbility import SpellAbility
+
+from org.apache.commons.lang3 import StringUtils
+
+
+# This class handles two kinds of prevention effect:
+# - Prevent next X damages. Those will use `Amount$ <SVar>`, and the `<SVar>` will have form `Number$ X`.
+#   That SVar will be updated after each prevention "shield" used up.
+# - Prevent X damages. Those will use `Amount$ N` or `Amount$ <SVar>`, where the `<SVar>` will have form other than
+#   `Number$ X`. These "shields" are not used up so won't be updated.
+class ReplaceDamageEffect(SpellAbilityEffect):
+
+    def resolve(self, sa: SpellAbility) -> None:
+        card = sa.getHostCard()
+        game = card.getGame()
+
+        # outside of Replacement Effect, unwanted result
+        if not sa.isReplacementAbility():
+            return
+
+        originalParams = sa.getReplacingObject(AbilityKey.OriginalParams)
+        dmg = sa.getReplacingObject(AbilityKey.DamageAmount)
+
+        varValue = sa.getParamOrDefault("Amount", "1")
+        prevent = AbilityUtils.calculateAmount(card, varValue, sa)
+
+        if prevent > 0:
+            n = min(dmg, prevent)
+            # if the effect has divided shield, use that
+            if originalParams.get(AbilityKey.DividedShieldAmount) is not None:
+                n = min(n, originalParams.get(AbilityKey.DividedShieldAmount))
+            dmg -= n
+            prevent -= n
+
+            if not StringUtils.isNumeric(varValue) and card.getSVar(varValue).startswith("Number$"):
+                if card.isImmutable() and prevent <= 0:
+                    game.getAction().exileEffect(card)
+                else:
+                    card.setSVar(varValue, "Number$" + str(prevent))
+                    card.updateAbilityTextForView()
+            # Set PreventedDamage SVar
+            card.setSVar("PreventedDamage", "Number$" + str(n))
+
+        # no damage for original target anymore
+        if dmg <= 0:
+            originalParams.put(AbilityKey.ReplacementResult, ReplacementResult.Replaced)
+            return
+        originalParams.put(AbilityKey.DamageAmount, dmg)
+        originalParams.put(AbilityKey.ReplacementResult, ReplacementResult.Updated)
+````

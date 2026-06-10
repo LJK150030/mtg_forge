@@ -30,7 +30,7 @@ classDiagram
 `FaceSelectionMethod` is a small nested enumeration within `CardSplitType` that names the strategies for resolving which face of a multi-faced card (split, transforming, modal, or adventure cards) should supply a given property when the card is queried. Its three constants encode distinct policies: `USE_ACTIVE_FACE` defers to whichever face is currently presented, `USE_PRIMARY_FACE` always reads the canonical front face, and `COMBINE` merges data from both faces. As an enum it serves as a type-safe selector consumed by `CardSplitType` and card-view logic, replacing ad hoc flags or booleans with a closed, self-documenting set of options. Nesting it inside `CardSplitType` signals that face-selection behavior is conceptually bound to a card's layout/split classification, keeping the policy choice colocated with the type that determines how many faces exist.
 
 ## Source
-`forge-core/src/main/java/forge/card/CardSplitType.java` â€” declaration excerpt
+`forge-core/src/main/java/forge/card/CardSplitType.java` Ã¢â‚¬â€ declaration excerpt
 
 ```java
     public enum FaceSelectionMethod {
@@ -38,4 +38,17 @@ classDiagram
         USE_PRIMARY_FACE,
         COMBINE
     }
+```
+
+## Python
+`forge/card/CardSplitType/FaceSelectionMethod.py`
+
+```python
+from enum import Enum, auto
+
+
+class FaceSelectionMethod(Enum):
+    USE_ACTIVE_FACE = auto()
+    USE_PRIMARY_FACE = auto()
+    COMBINE = auto()
 ```

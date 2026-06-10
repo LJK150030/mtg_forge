@@ -37,6 +37,12 @@ classDiagram
 - [[forge.game.card.Card|Card]]
 - [[forge.game.spellability.SpellAbility|SpellAbility]]
 
+## Design Description
+
+Trigger Blocks is a concrete trigger that fires when a creature is declared as a blocker during combat. Extending the abstract `Trigger` base class, it specializes the generic trigger machinery for the block event by implementing the three template hooks its parent defines: `performTest` validates the firing conditions against the `ValidCard` and `ValidBlocked` parameters (matching the blocker and the attackers it blocks), `setTriggeringObjects` populates the resolving `SpellAbility` with the `Blocker` and `Attackers` drawn from the run parameters, and `getImportantStackObjects` produces a localized, human-readable summary naming the blocker.
+
+The class collaborates with `AbilityKey` to key into the typed run-parameter map, with `Card` and the inherited parameter map at construction, and with `SpellAbility` to wire triggering objects through to the ability that executes. Its design intent is narrow and declarative: it holds no state, delegates construction to the supertype, and confines all block-specific knowledge to the overridden hooks, keeping the trigger taxonomy uniform and data-driven.
+
 ## Source
 `forge-game/src/main/java/forge/game/trigger/TriggerBlocks.java`
 
@@ -121,4 +127,40 @@ public class TriggerBlocks extends Trigger {
         return sb.toString();
     }
 }
+```
+
+## Python
+`forge/game/trigger/TriggerBlocks.py`
+
+```python
+from forge.game.trigger.Trigger import Trigger
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Localizer import Localizer
+
+
+class TriggerBlocks(Trigger):
+
+    def __init__(self, params: dict[str, str], host: Card, intrinsic: bool):
+        super().__init__(params, host, intrinsic)
+
+    def performTest(self, runParams: dict[AbilityKey, object]) -> bool:
+        if not self.matchesValidParam("ValidCard", runParams.get(AbilityKey.Blocker)):
+            return False
+
+        if not self.matchesValidParam("ValidBlocked", runParams.get(AbilityKey.Attackers)):
+            return False
+
+        return True
+
+    def setTriggeringObjects(self, sa: SpellAbility, runParams: dict[AbilityKey, object]) -> None:
+        sa.setTriggeringObjectsFrom(runParams, AbilityKey.Blocker, AbilityKey.Attackers)
+
+    def getImportantStackObjects(self, sa: SpellAbility) -> str:
+        sb = []
+        sb.append(Localizer.getInstance().getMessage("lblBlocker"))
+        sb.append(": ")
+        sb.append(str(sa.getTriggeringObject(AbilityKey.Blocker)))
+        return "".join(sb)
 ```

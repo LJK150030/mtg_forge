@@ -56,7 +56,7 @@ classDiagram
 
 ## Design Description
 
-AiProfileUtil is a stateless, static utility that manages the AI's "personality" profiles, which tune how the computer opponent makes decisions. It loads `.ai` property files from a configurable directory into an in-memory cache (`loadedProfiles`), parsing each `key=value` line into a map keyed by the `AiProps` enum. Its primary service is typed property lookup—`getProperty`, `getIntProperty`, `getBoolProperty`—resolving a value for a given `Player` by routing through its `LobbyPlayer`, falling back to each property's hard-coded default when a profile is missing or silent.
+AiProfileUtil is a stateless, static utility that manages the AI's "personality" profiles, which tune how the computer opponent makes decisions. It loads `.ai` property files from a configurable directory into an in-memory cache (`loadedProfiles`), parsing each `key=value` line into a map keyed by the `AiProps` enum. Its primary service is typed property lookupâ€”`getProperty`, `getIntProperty`, `getBoolProperty`â€”resolving a value for a given `Player` by routing through its `LobbyPlayer`, falling back to each property's hard-coded default when a profile is missing or silent.
 
 It collaborates with `LobbyPlayerAi` to read the active profile name (returning empty for human players), and exposes profile enumeration for UI selection, including special "Random" pseudo-profiles and a `getRandomProfile` picker. The design favors safe degradation: every lookup guarantees a usable default rather than failing. It also holds the global `AISideboardingMode` toggle, a loosely related piece of AI configuration co-located here for convenience.
 
@@ -294,4 +294,192 @@ public class AiProfileUtil {
     }
     */
 }
+```
+
+## Python
+`forge/ai/AiProfileUtil.py`
+
+```python
+from forge.LobbyPlayer import LobbyPlayer
+from forge.ai.AiProps import AiProps
+from forge.ai.LobbyPlayerAi import LobbyPlayerAi
+from forge.game.player.Player import Player
+from forge.util.Aggregates import Aggregates
+from forge.util.FileUtil import FileUtil
+from forge.util.TextUtil import TextUtil
+from org.apache.commons.lang3.ArrayUtils import ArrayUtils
+
+import os
+from enum import Enum
+
+
+class AiProfileUtil:
+    """
+    Holds default AI personality profile values in an enum.
+    Loads profile from the given text file when setProfile is called.
+    If a requested value is not loaded from a profile, default is returned.
+
+    @author Forge
+    @version $Id: AIProfile.java 20169 2013-03-08 08:24:17Z Agetian $
+    """
+    loadedProfiles: dict[str, dict["AiProps", str]] = {}
+
+    AI_PROFILE_DIR = None
+    AI_PROFILE_EXT = ".ai"
+
+    AI_PROFILE_RANDOM_MATCH = "Random (Every Match)"
+    AI_PROFILE_RANDOM_DUEL = "Random (Every Game)"
+
+    class AISideboardingMode(Enum):
+        Off = "Off"
+        AI = "AI"
+        HumanForAI = "HumanForAI"
+
+        @staticmethod
+        def normalizedValueOf(value: str) -> "AiProfileUtil.AISideboardingMode":
+            return AiProfileUtil.AISideboardingMode[value.replace(" ", "")]
+
+    aiSideboardingMode = AISideboardingMode.Off
+
+    @staticmethod
+    def getAISideboardingMode() -> "AiProfileUtil.AISideboardingMode":
+        return AiProfileUtil.aiSideboardingMode
+
+    @staticmethod
+    def setAiSideboardingMode(mode: "AiProfileUtil.AISideboardingMode") -> None:
+        AiProfileUtil.aiSideboardingMode = mode
+
+    @staticmethod
+    def buildFileName(profileName: str) -> str:
+        """
+        Builds an AI profile file name with full relative
+        path based on the profile name.
+        @param profileName the name of the profile.
+        @return the full relative path and file name for the given profile.
+        """
+        return TextUtil.concatNoSpace(AiProfileUtil.AI_PROFILE_DIR, "/", profileName, AiProfileUtil.AI_PROFILE_EXT)
+
+    @staticmethod
+    def loadAllProfiles(aiProfileDir: str) -> None:
+        """
+        Load all profiles
+        """
+        AiProfileUtil.AI_PROFILE_DIR = aiProfileDir
+
+        AiProfileUtil.loadedProfiles.clear()
+        availableProfiles = AiProfileUtil.getAvailableProfiles()
+        for profile in availableProfiles:
+            AiProfileUtil.loadedProfiles[profile] = AiProfileUtil.loadProfile(profile)
+
+    @staticmethod
+    def loadProfile(profileName: str) -> dict["AiProps", str]:
+        """
+        Load a single profile.
+        @param profileName a profile to load.
+        """
+        profileMap: dict[AiProps, str] = {}
+
+        lines = FileUtil.readFile(AiProfileUtil.buildFileName(profileName))
+        for line in lines:
+            if line.startswith("#") or (len(line) == 0):
+                continue
+
+            split = line.split("=")
+
+            if len(split) == 2:
+                profileMap[AiProps.valueOf(split[0])] = split[1]
+            elif len(split) == 1 and line.endswith("="):
+                profileMap[AiProps.valueOf(split[0])] = ""
+
+        return profileMap
+
+    @staticmethod
+    def getProperty(p: Player, propName: "AiProps") -> str:
+        prop = AiProfileUtil.getAIProp(p.getLobbyPlayer(), propName)
+
+        if prop is None or len(prop) == 0:
+            # TODO if p is human try to predict some values from previous plays or something
+            return propName.getDefault()
+
+        return prop
+
+    @staticmethod
+    def getIntProperty(p: Player, propName: "AiProps") -> int:
+        return int(AiProfileUtil.getProperty(p, propName))
+
+    @staticmethod
+    def getBoolProperty(p: Player, propName: "AiProps") -> bool:
+        return AiProfileUtil.getProperty(p, propName).lower() == "true"
+
+    @staticmethod
+    def getAIProp(p: LobbyPlayer, fp0: "AiProps") -> str:
+        """
+        Returns an AI property value for the current profile.
+
+        @param fp0 an AI property.
+        @return String
+        """
+        val = None
+        if not isinstance(p, LobbyPlayerAi):
+            return ""
+        profile = p.getAiProfile()
+
+        if AiProfileUtil.loadedProfiles.get(profile) is not None:
+            val = AiProfileUtil.loadedProfiles.get(profile).get(fp0)
+        if val is None:
+            val = fp0.getDefault()
+
+        return val
+
+    @staticmethod
+    def getAvailableProfiles() -> list[str]:
+        """
+        Returns an array of strings containing all available profiles.
+        @return ArrayList<String> - an array of strings containing all
+        available profiles.
+        """
+        availableProfiles: list[str] = []
+
+        try:
+            children = os.listdir(AiProfileUtil.AI_PROFILE_DIR)
+        except (FileNotFoundError, NotADirectoryError, TypeError):
+            children = None
+
+        if children is None:
+            import sys
+            print("AIProfile > can't find AI profile directory!", file=sys.stderr)
+        else:
+            for child in children:
+                if child.endswith(AiProfileUtil.AI_PROFILE_EXT):
+                    availableProfiles.append(child[0:len(child) - len(AiProfileUtil.AI_PROFILE_EXT)])
+
+        return availableProfiles
+
+    @staticmethod
+    def getProfilesDisplayList() -> list[str]:
+        """
+        Returns an array of strings containing all available profiles including
+        the special "Random" profiles.
+        @return ArrayList<String> - an array list of strings containing all
+        available profiles including special random profile tags.
+        """
+        availableProfiles: list[str] = []
+        availableProfiles.append(AiProfileUtil.AI_PROFILE_RANDOM_MATCH)
+        availableProfiles.append(AiProfileUtil.AI_PROFILE_RANDOM_DUEL)
+        availableProfiles.extend(AiProfileUtil.getAvailableProfiles())
+
+        return availableProfiles
+
+    @staticmethod
+    def getProfilesArray() -> list[str]:
+        return AiProfileUtil.getProfilesDisplayList()
+
+    @staticmethod
+    def getRandomProfile() -> str:
+        """
+        Returns a random personality from the currently available ones.
+        @return String - a string containing a random profile from all the
+        currently available ones.
+        """
+        return Aggregates.random(AiProfileUtil.getAvailableProfiles())
 ```

@@ -34,7 +34,7 @@ classDiagram
 
 ## Design Description
 
-GameEventCombatChanged is an immutable, parameterless event record signaling that the state of combat has changed during a game. As a record with no components, it carries no payload—its mere occurrence is the notification, suitable for prompting observers to refresh any combat-derived view or state.
+GameEventCombatChanged is an immutable, parameterless event record signaling that the state of combat has changed during a game. As a record with no components, it carries no payloadâ€”its mere occurrence is the notification, suitable for prompting observers to refresh any combat-derived view or state.
 
 By implementing `GameEvent`, it participates in the engine's event-dispatch mechanism and adopts the visitor pattern: its `visit` method dispatches to the appropriate overload on a supplied `IGameEventVisitor<T>`, letting handlers respond in a type-safe, generic manner without the event knowing their concrete logic. The overridden `toString` returns a fixed human-readable label, "Combat changed," aiding logging and debugging. This design keeps the event a lightweight, type-identity-based signal within the broader `forge.game.event` family of double-dispatch game notifications.
 
@@ -59,4 +59,23 @@ public record GameEventCombatChanged() implements GameEvent {
         return "Combat changed";
     }
 }
+```
+
+## Python
+`forge/game/event/GameEventCombatChanged.py`
+
+```python
+from forge.game.event.GameEvent import GameEvent
+from forge.game.event.IGameEventVisitor import IGameEventVisitor
+
+
+class GameEventCombatChanged(GameEvent):
+
+    def visit(self, visitor: IGameEventVisitor):
+        return visitor.visit(self)
+
+    # (non-Javadoc)
+    # @see java.lang.Object#toString()
+    def __str__(self) -> str:
+        return "Combat changed"
 ```

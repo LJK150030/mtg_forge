@@ -45,6 +45,12 @@ classDiagram
 - [[forge.game.zone.PlayerZone.OwnCardsActivationFilter|OwnCardsActivationFilter]]
 - [[forge.game.zone.ZoneType|ZoneType]]
 
+## Design Description
+
+PlayerZone specializes the abstract `Zone` to model a single player's region of cards (hand, battlefield, library, graveyard, exile, etc.), binding each zone instance to its owning `Player` and that player's `Game`. Beyond holding the player reference, it overrides `onChanged()` to keep the player's view synchronized and sort ordered hands, and renders a possessive label via `Lang`. Its central responsibility is `getCardsPlayerCanActivate(Player)`, which determinesâ€”through `Card` and `SpellAbility` queriesâ€”which cards a given player may legally play or activate from this zone.
+
+The design distinguishes owner from non-owner access via two `Predicate<Card>` filters: the inner `OwnCardsActivationFilter` encodes zone-specific permissions (graveyard keywords like Flashback/Escape, exile's foretell/adventure, and SpellAbility zone restrictions), while `alienCardsActivationFilter` handles look/may-play rights for other players. Library access is deliberately limited to the top card, reflecting MTG rules.
+
 ## Source
 `forge-game/src/main/java/forge/game/zone/PlayerZone.java`
 
@@ -166,4 +172,90 @@ public class PlayerZone extends Zone {
         return CardLists.filter(cl, filterPredicate);
     }
 }
+```
+
+## Python
+`forge/game/zone/PlayerZone.py`
+
+```python
+from forge.game.card.Card import Card
+from forge.game.card.CardLists import CardLists
+from forge.game.keyword.Keyword import Keyword
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Lang import Lang
+from forge.game.zone.Zone import Zone
+from forge.game.zone.ZoneType import ZoneType
+
+import itertools
+from typing import Callable, Iterable
+
+
+class PlayerZone(Zone):
+    serialVersionUID = -5687652485777639176
+
+    # the this is not the owner of the card
+    @staticmethod
+    def alienCardsActivationFilter(who: Player) -> Callable[[Card], bool]:
+        return lambda c: len(c.mayPlay(who)) != 0 or c.mayPlayerLook(who)
+
+    class OwnCardsActivationFilter:
+        def __init__(self, outer: "PlayerZone"):
+            self.outer = outer
+
+        def test(self, c: Card) -> bool:
+            if c.mayPlayerLook(c.getController()):
+                return True
+
+            if len(c.mayPlay(c.getController())) != 0:
+                return True
+
+            # Keywords like Flashback/Escape create alternative SAs at play time,
+            # not stored on the card or in the mayPlay map. Check directly.
+            if self.outer.is_(ZoneType.Graveyard) and (c.hasKeyword(Keyword.FLASHBACK)
+                    or c.hasKeyword(Keyword.RETRACE) or c.hasKeyword(Keyword.JUMP_START)
+                    or c.hasKeyword(Keyword.ESCAPE) or c.hasKeyword(Keyword.DISTURB)):
+                return True
+            if self.outer.is_(ZoneType.Exile) and (c.isForetold() or c.isOnAdventure()):
+                return True
+
+            for sa in c.getSpellAbilities():
+                if self.outer.is_(sa.getRestrictions().getZone()):
+                    return True
+            return False
+
+        def __call__(self, c: Card) -> bool:
+            return self.test(c)
+
+    def __init__(self, zone: ZoneType, inPlayer: Player):
+        super().__init__(zone, inPlayer.getGame())
+        self.player = inPlayer
+
+    def onChanged(self) -> None:
+        if self.getZoneType() == ZoneType.Hand and self.player.getController().isOrderedZone():
+            self.sort()
+        self.player.updateZoneForView(self)
+
+    def getPlayer(self) -> Player:
+        return self.player
+
+    def toString(self) -> str:
+        return Lang.getInstance().getPossessedObject(self.player.toString(), self.zoneType.toString())
+
+    def __str__(self) -> str:
+        return self.toString()
+
+    def getCardsPlayerCanActivate(self, who: Player) -> Iterable[Card]:
+        cl = self.getCards(False)
+        checkingForOwner = who == self.player
+
+        if checkingForOwner and (self.is_(ZoneType.Battlefield) or self.is_(ZoneType.Hand)):
+            return cl
+
+        # Only check the top card of the library
+        if self.is_(ZoneType.Library):
+            cl = list(itertools.islice(cl, 1))
+
+        filterPredicate = self.OwnCardsActivationFilter(self) if checkingForOwner else PlayerZone.alienCardsActivationFilter(who)
+        return CardLists.filter(cl, filterPredicate)
 ```

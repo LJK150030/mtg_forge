@@ -51,3 +51,22 @@ public record GameEventDayTimeChanged(boolean daytime) implements GameEvent {
     }
 }
 ```
+
+## Python
+`forge/game/event/GameEventDayTimeChanged.py`
+
+```python
+from forge.game.event.GameEvent import GameEvent
+from forge.game.event.IGameEventVisitor import IGameEventVisitor
+
+
+class GameEventDayTimeChanged(GameEvent):
+    def __init__(self, daytime: bool):
+        self._daytime = daytime
+
+    def daytime(self) -> bool:
+        return self._daytime
+
+    def visit(self, visitor: IGameEventVisitor):
+        return visitor.visit(self)
+```

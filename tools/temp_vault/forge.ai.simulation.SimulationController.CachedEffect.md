@@ -36,12 +36,12 @@ classDiagram
 
 ## Design Description
 
-CachedEffect is a private static value-holder nested within SimulationController, used by the AI's simulation engine to memoize the outcome of evaluating a spell or ability. It captures a snapshot of a single cached evaluation: the host GameObject, a string rendering of the originating SpellAbility, the affected target GameObject, and two integer metrics—the target's score and the resulting score delta—that quantify the move's assessed value.
+CachedEffect is a private static value-holder nested within SimulationController, used by the AI's simulation engine to memoize the outcome of evaluating a spell or ability. It captures a snapshot of a single cached evaluation: the host GameObject, a string rendering of the originating SpellAbility, the affected target GameObject, and two integer metricsâ€”the target's score and the resulting score deltaâ€”that quantify the move's assessed value.
 
 As an immutable record (all fields are final and set once in the constructor), it collaborates with GameObject and SpellAbility purely as a passive data carrier rather than acting on them. Notably, the constructor stores `sa.toString()` instead of the live SpellAbility reference, deliberately decoupling the cache entry from mutable game state so the cached scoring remains stable and comparable across the controller's lookahead simulation passes.
 
 ## Source
-`forge-ai/src/main/java/forge/ai/simulation/SimulationController.java` â€” declaration excerpt
+`forge-ai/src/main/java/forge/ai/simulation/SimulationController.java` Ã¢â‚¬â€ declaration excerpt
 
 ```java
     private static class CachedEffect {
@@ -59,4 +59,21 @@ As an immutable record (all fields are final and set once in the constructor), i
             this.scoreDelta = scoreDelta;
         }
     }
+```
+
+## Python
+`forge/ai/simulation/SimulationController/CachedEffect.py`
+
+```python
+from forge.game.GameObject import GameObject
+from forge.game.spellability.SpellAbility import SpellAbility
+
+
+class CachedEffect:
+    def __init__(self, hostCard: GameObject, sa: SpellAbility, target: GameObject, targetScore: int, scoreDelta: int):
+        self.hostCard = hostCard
+        self.sa = str(sa)
+        self.target = target
+        self.targetScore = targetScore
+        self.scoreDelta = scoreDelta
 ```

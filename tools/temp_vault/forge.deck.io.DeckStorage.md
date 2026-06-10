@@ -52,7 +52,7 @@ classDiagram
 
 ## Design Description
 
-DeckStorage is the persistence gateway for `Deck` objects in Forge's `.dck` file format, mediating between in-memory decks and their on-disk representation within a folder tree. Extending `StorageReaderFolder<Deck>` gives it folder-based reading and name-keyed indexing (via the `DeckBase::getName` extractor passed to the superclass), while implementing `IItemSerializer<Deck>` supplies the write side—`save`, `erase`, and `makeFileFor`—so one type acts as both reader and writer. It delegates the actual `.dck` parsing and emission to `DeckSerializer`, staying focused on file location and lifecycle.
+DeckStorage is the persistence gateway for `Deck` objects in Forge's `.dck` file format, mediating between in-memory decks and their on-disk representation within a folder tree. Extending `StorageReaderFolder<Deck>` gives it folder-based reading and name-keyed indexing (via the `DeckBase::getName` extractor passed to the superclass), while implementing `IItemSerializer<Deck>` supplies the write sideâ€”`save`, `erase`, and `makeFileFor`â€”so one type acts as both reader and writer. It delegates the actual `.dck` parsing and emission to `DeckSerializer`, staying focused on file location and lifecycle.
 
 Notable design intent: `getReaderForFolder` recursively returns a new `DeckStorage` per child subfolder (guarding against non-child folders) to support nested deck collections, and the optional `moveWronglyNamedDecks` flag lets the reader self-heal by renaming or deleting files whose names diverge from their canonical best-file-name. `rootDir` is used to derive each deck's relative directory.
 
@@ -169,4 +169,75 @@ public class DeckStorage extends StorageReaderFolder<Deck> implements IItemSeria
         return DCK_FILE_FILTER;
     }
 }
+```
+
+## Python
+`forge/deck/io/DeckStorage.py`
+
+```python
+from forge.deck.Deck import Deck
+from forge.deck.DeckBase import DeckBase
+from forge.util.FileSection import FileSection
+from forge.util.FileUtil import FileUtil
+from forge.util.IItemReader import IItemReader
+from forge.util.IItemSerializer import IItemSerializer
+from forge.util.storage.StorageReaderFolder import StorageReaderFolder
+from forge.deck.io.DeckSerializer import DeckSerializer
+
+import os
+
+
+class DeckStorage(StorageReaderFolder, IItemSerializer):
+    """This class knows how to make a file out of a deck object and vice versa."""
+
+    FILE_EXTENSION = ".dck"
+
+    # Constant DCKFileFilter.
+    DCK_FILE_FILTER = staticmethod(lambda dir, name: name.endswith(FILE_EXTENSION))
+
+    def __init__(self, deckDir0, rootDir0, moveWrongDecks=False):
+        super().__init__(deckDir0, DeckBase.getName)
+        self.rootDir = rootDir0
+        self.moveWronglyNamedDecks = moveWrongDecks
+
+    def getReaderForFolder(self, subfolder):
+        if os.path.dirname(subfolder) != self.directory:
+            raise NotImplementedError("Only child folders of " + str(self.directory) + " may be processed")
+        return DeckStorage(subfolder, self.rootDir, False)
+
+    def save(self, unit):
+        DeckSerializer.writeDeck(unit, self.makeFileFor(unit))
+
+    def erase(self, unit):
+        file = self.makeFileFor(unit)
+        if os.path.exists(file):
+            os.remove(file)
+
+    def makeFileFor(self, deck):
+        return os.path.join(self.directory, deck.getBestFileName() + DeckStorage.FILE_EXTENSION)
+
+    def read(self, file):
+        sections = FileSection.parseSections(FileUtil.readFile(file))
+        result = DeckSerializer.fromSections(sections)
+
+        if self.moveWronglyNamedDecks:
+            DeckStorage.adjustFileLocation(file, result)
+
+        if result is not None:
+            result.setDirectory(os.path.dirname(file)[len(self.rootDir):])
+        return result
+
+    @staticmethod
+    def adjustFileLocation(file, result):
+        if result is None:
+            if os.path.exists(file):
+                os.remove(file)
+        else:
+            destFilename = result.getBestFileName() + DeckStorage.FILE_EXTENSION
+            if os.path.basename(file) != destFilename:
+                parentParent = os.path.dirname(os.path.dirname(file))
+                os.rename(file, os.path.join(parentParent, destFilename))
+
+    def getFileFilter(self):
+        return DeckStorage.DCK_FILE_FILTER
 ```

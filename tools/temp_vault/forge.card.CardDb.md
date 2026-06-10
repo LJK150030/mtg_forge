@@ -144,7 +144,7 @@ classDiagram
 
 ## Design Description
 
-CardDb is the central, in-memory catalog of every printed Magic card in the forge-core module, mapping each card identity to its concrete `PaperCard` printings. It implements `ICardDatabase` to serve card- and rules-lookup queries and `IDeckGenPool` so deck-generation code can treat it as a card pool. Internally it maintains parallel indexes—by name, by `CardRules`, by face, and by flavor name—built from the supplied rules map and `CardEdition.Collection`, and resolves every lookup through a parsed `CardRequest` query string encoding set code, art index, collector number, foil status, and flags.
+CardDb is the central, in-memory catalog of every printed Magic card in the forge-core module, mapping each card identity to its concrete `PaperCard` printings. It implements `ICardDatabase` to serve card- and rules-lookup queries and `IDeckGenPool` so deck-generation code can treat it as a card pool. Internally it maintains parallel indexesâ€”by name, by `CardRules`, by face, and by flavor nameâ€”built from the supplied rules map and `CardEdition.Collection`, and resolves every lookup through a parsed `CardRequest` query string encoding set code, art index, collector number, foil status, and flags.
 
 A key responsibility is choosing the "right" printing: the nested `CardArtPreference` enum drives art/edition selection (latest vs. original, optional core/expansion-reprint filtering), with fallbacks that prefer printings having images and bias exact name matches over alternate or split faces. The class supports lazy loading and exposes an inner `Editor` that mutates the database, deferring the costly `reIndex()` of unique-print caches until a batch of additions completes.
 
@@ -1440,3 +1440,484 @@ public final class CardDb implements ICardDatabase, IDeckGenPool {
     }
 }
 ```
+
+## Python
+`forge/card/CardDb.py`
+
+````python
+def getCard(self, cardName, *rest):
+        if len(rest) == 0:
+            request = CardDb.CardRequest.fromString(cardName)
+            return self.tryGetCard(request)
+        setCode = rest[0]
+        if len(rest) == 1:
+            request = CardDb.CardRequest.fromString(CardDb.CardRequest.compose(cardName, setCode))
+            return self.tryGetCard(request)
+        if len(rest) == 2:
+            third = rest[1]
+            reqInfo = CardDb.CardRequest.compose(cardName, setCode, third)
+            request = CardDb.CardRequest.fromString(reqInfo)
+            return self.tryGetCard(request)
+        third, flags = rest[1], rest[2]
+        reqInfo = CardDb.CardRequest.compose(cardName, setCode, third, flags)
+        request = CardDb.CardRequest.fromString(reqInfo)
+        return self.tryGetCard(request)
+
+    def tryGetCard(self, request):
+        # Before doing anything, check that a non-null request has been provided
+        if request is None:
+            return None
+        # 1. First off, try using all possible search parameters, to narrow down the actual cards looked for.
+        reqEditionCode = request.edition
+        if reqEditionCode is not None and reqEditionCode != "":
+            # This get is robust even against expansion aliases (e.g. TE and TMP both valid for Tempest) -
+            # ALSO: Set Code are always UpperCase
+            edition = self.editions.get(reqEditionCode.upper())
+
+            cardFromSet = self.getCardFromSet(request.cardName, edition, request.artIndex, request.collectorNumber,
+                                              request.isFoil)
+            if cardFromSet is not None and request.flags is not None:
+                cardFromSet = cardFromSet.copyWithFlags(request.flags)
+
+            if cardFromSet is not None:
+                return cardFromSet
+
+        # 2. Card lookup in edition with specified filter didn't work.
+        # So now check whether the cards exist in the DB first,
+        # and select pick the card based on current SetPreference policy as a fallback
+        cards = self.getAllCards(request.cardName)
+        if len(cards) == 0:  # Never null being this a view in MultiMap
+            return None
+        # Either No Edition has been specified OR as a fallback in case of any error!
+        # get card using the default card art preference
+        cardRequest = CardDb.CardRequest.compose(request.cardName, request.isFoil)
+        return self.getCardFromEditions(cardRequest, self.defaultCardArtPreference, request.artIndex)
+
+    #
+    # ==========================================
+    # 2. CARD LOOKUP FROM A SINGLE EXPANSION SET
+    # ==========================================
+    #
+    # NOTE: All these methods always try to return a PaperCard instance
+    # that has an Image (if any).
+    #
+    def getCardFromSet(self, cardName, edition, artIndex, collectorNumber, isFoil):
+        if edition is None or cardName is None:  # preview cards
+            return None  # No cards will be returned
+
+        # Allow to pass in cardNames with foil markers, and adapt accordingly
+        cardNameRequest = CardDb.CardRequest.fromString(cardName)
+        cardName = cardNameRequest.cardName
+        isFoil = isFoil or cardNameRequest.isFoil
+
+        code1, code2 = edition.getCode(), edition.getCode2()
+
+        def base_filter(c):
+            ed = c.getEdition()
+            return ed.lower() == code1.lower() or (code2 is not None and ed.lower() == code2.lower())
+
+        preds = [base_filter]
+        if artIndex > 0:
+            preds.append(lambda c: artIndex == c.getArtIndex())
+        if (collectorNumber is not None and collectorNumber != ""
+                and collectorNumber != IPaperCard.NO_COLLECTOR_NUMBER):
+            preds.append(lambda c: collectorNumber == c.getCollectorNumber())
+
+        def filt(c):
+            return all(p(c) for p in preds)
+
+        candidates = self.getAllCards(cardName, filt)
+        if len(candidates) == 0:
+            return None
+
+        if len({c.getRules() for c in candidates}) > 1:
+            # We've run into either an ambiguous alt-face or an Emeritus situation. Can't do anything for the former,
+            # but we can bias towards the main face if it's the latter.
+            finalCardName = cardName
+            if any(c.getName().lower() == finalCardName.lower() for c in candidates):
+                candidates = [c for c in candidates if c.getName().lower() == finalCardName.lower()]
+
+        candidatesIterator = iter(candidates)
+        candidate = next(candidatesIterator)
+        # Before returning make sure that actual candidate has Image.
+        # If not, try to replace current candidate with one having image.
+        firstCandidate = candidate
+        while not candidate.hasImage():
+            try:
+                candidate = next(candidatesIterator)
+            except StopIteration:
+                break
+        candidate = candidate if candidate.hasImage() else firstCandidate
+        return candidate.getFoiled() if isFoil else candidate
+
+    #
+    # ====================================================
+    # 3. CARD LOOKUP BASED ON CARD ART PREFERENCE OPTION
+    # ====================================================
+    #
+    def getCardFromEditions(self, cardInfo, artPreference, artIndex, filter=None):
+        return self.tryToGetCardFromEditions(cardInfo, artPreference, artIndex, None, False, filter)
+
+    #
+    # ===============================================
+    # 4. SPECIALISED CARD LOOKUP BASED ON
+    #    CARD ART PREFERENCE AND EDITION RELEASE DATE
+    # ===============================================
+    #
+    def getCardFromEditionsReleasedBefore(self, cardName, artPreference, artIndex, releaseDate, filter=None):
+        return self.tryToGetCardFromEditions(cardName, artPreference, artIndex, releaseDate, True, filter)
+
+    def getCardFromEditionsReleasedAfter(self, cardName, artPreference, artIndex, releaseDate, filter=None):
+        return self.tryToGetCardFromEditions(cardName, artPreference, artIndex, releaseDate, False, filter)
+
+    def tryToGetCardFromEditions(self, cardInfo, artPreference, artIndex, releaseDate=None, releasedBeforeFlag=False,
+                                 filter=None):
+        if cardInfo is None:
+            return None
+        cr = CardDb.CardRequest.fromString(cardInfo)
+        # Check whether input `frame` is null. In that case, fallback to default SetPreference !-)
+        artPref = artPreference if artPreference is not None else self.defaultCardArtPreference
+        cr.artIndex = max(cr.artIndex, IPaperCard.DEFAULT_ART_INDEX)
+        if cr.artIndex != artIndex and artIndex > IPaperCard.DEFAULT_ART_INDEX:
+            cr.artIndex = artIndex  # 2nd cond. is to verify that some actual value has been passed in.
+
+        _filter = filter if filter is not None else (lambda x: True)
+        if releaseDate is not None:
+            def cardQueryFilter(c):
+                if c.getArtIndex() != cr.artIndex:
+                    return False  # not interested anyway!
+                ed = self.editions.get(c.getEdition())
+                if ed is None:
+                    return False
+                if releasedBeforeFlag:
+                    return ed.getDate() < releaseDate
+                else:
+                    return ed.getDate() > releaseDate
+        else:  # filter candidates based on requested artIndex
+            def cardQueryFilter(c):
+                return c.getArtIndex() == cr.artIndex
+
+        def combined(c):
+            return cardQueryFilter(c) and _filter(c)
+
+        # Check no-alt cards first. Exact name matches are prioritized more highly than an alt face or half of a split
+        # card.
+        cards = self.getAllCardsNoAlt(cr.cardName, combined)
+        if len(cards) == 0:
+            cards = self.getAllCards(cr.cardName, combined)
+
+        if len(cards) == 0:
+            return None
+        if len(cards) == 1:  # if only one candidate, there's not much else we should do
+            return cards[0].getFoiled() if cr.isFoil else cards[0]
+
+        if cr.cardName in self.flavorNameMappings:
+            matchingNames = {c for c in cards if c.getDisplayName() == cr.cardName}
+            if len(matchingNames) != 0:
+                cards = [c for c in cards if c in matchingNames]
+
+        # 2. Retrieve cards based of [Frame]Set Preference
+        # Collect the list of all editions found for target card
+        cardEditions = []
+        candidatesCard = {}
+        for card in cards:
+            setCode = card.getEdition()
+            if setCode == CardEdition.UNKNOWN_CODE:
+                ed = CardEdition.UNKNOWN
+            else:
+                ed = self.editions.get(card.getEdition())
+            if ed is not None:
+                cardEditions.append(ed)
+                candidatesCard[setCode] = card
+        if len(cardEditions) == 0:
+            return None  # nothing to do
+
+        # Filter Cards Editions based on set preferences
+        acceptedEditions = [e for e in cardEditions if artPref.accept(e)]
+
+        # At this point, it may be possible that Art Preference is too-strict for the requested card!
+        # If this happens, fall back to original lists of editions (unfiltered) AND STILL sorted by art preference.
+        if len(acceptedEditions) == 0:
+            acceptedEditions.extend(cardEditions)
+
+        if len(acceptedEditions) > 1:
+            acceptedEditions.sort(key=lambda e: e.getDate())  # CardEdition correctly sort by (release) date
+            if artPref.latestFirst:
+                acceptedEditions.reverse()  # newest editions first
+
+        editionIterator = iter(acceptedEditions)
+        ed = next(editionIterator)
+        candidate = candidatesCard.get(ed.getCode())
+        firstCandidate = candidate
+        while not candidate.hasImage():
+            try:
+                ed = next(editionIterator)
+            except StopIteration:
+                break
+            candidate = candidatesCard.get(ed.getCode())
+        candidate = candidate if candidate.hasImage() else firstCandidate
+        # If any, we're sure that at least one candidate is always returned despite it having any image
+        return candidate.getFoiled() if cr.isFoil else candidate
+
+    def getMaxArtIndex(self, cardName):
+        if cardName is None:
+            return IPaperCard.NO_ART_INDEX
+        max_ = IPaperCard.NO_ART_INDEX
+        for pc in self.getAllCards(cardName):
+            if max_ < pc.getArtIndex():
+                max_ = pc.getArtIndex()
+        return max_
+
+    def getArtCount(self, cardName, setCode, functionalVariantName=None):
+        if cardName is None or setCode is None:
+            return 0
+        preds = [lambda card: card.getEdition().lower() == setCode.lower()]
+        if functionalVariantName is not None and functionalVariantName != IPaperCard.NO_FUNCTIONAL_VARIANT:
+            preds.append(lambda card: functionalVariantName == card.getFunctionalVariant())
+
+        def predicate(card):
+            return all(p(card) for p in preds)
+
+        cardsInSet = self.getAllCardsNoAlt(cardName, predicate)
+        return len(cardsInSet)
+
+    def isNonLegendaryCreatureName(self, name):
+        bool_ = self.nonLegendaryCreatureNames.get(name)
+        if bool_ is not None:
+            return bool_
+        # check if the name is from a face
+        # in general token creatures does not have this
+        face = StaticData.instance().getCommonCards().getFaceByName(name)
+        if face is None:
+            self.nonLegendaryCreatureNames[name] = False
+            return False
+        # TODO add check if face is legal in the format of the game
+        # name does need to be a non-legendary creature
+        type_ = face.getType()
+        bool_ = type_.isCreature() and not type_.isLegendary()
+        self.nonLegendaryCreatureNames[name] = bool_
+        return bool_
+
+    def getAllCards(self, *args):
+        n = len(args)
+        if n == 0:
+            return self.allCardsByRules.values()
+        if n == 1:
+            a = args[0]
+            if isinstance(a, str):
+                return self.allCardsByName.get(self.getNormalizedName(a))
+            if isinstance(a, PaperCard):
+                return self.getAllCards(a.getRules())
+            if isinstance(a, CardRules):
+                return self.allCardsByRules.get(a)
+            if isinstance(a, CardEdition):
+                cards = []
+                for cis in a.getAllCardsInSet():
+                    card = self.getCard(cis.name(), a.getCode())
+                    if card is None:
+                        # Just in case the card is listed in the edition file but Forge doesn't support it
+                        continue
+                    cards.append(card)
+                return cards
+            if callable(a):
+                return [c for c in self.streamAllCards() if a(c)]
+        a, predicate = args
+        return [c for c in self.getAllCards(a) if predicate(c)]
+
+    def getUniqueCards(self):
+        # returns a list of all cards from their respective latest (or preferred) editions
+        return self.uniqueCardsByRules.values()
+
+    def getAllFaces(self):
+        return list(self.facesByName.values())
+
+    def streamAllCards(self):
+        return self.allCardsByRules.values()
+
+    def streamUniqueCards(self):
+        return self.uniqueCardsByRules.values()
+
+    def streamAllFaces(self):
+        return list(self.facesByName.values())
+
+    @staticmethod
+    def EDITION_NON_PROMO(paperCard):
+        code = paperCard.getEdition()
+        edition = StaticData.instance().getCardEdition(code)
+        if edition is None and code == CardEdition.UNKNOWN_CODE:
+            return True
+        return edition is not None and edition.getType() != Type.PROMO
+
+    @staticmethod
+    def EDITION_NON_REPRINT(paperCard):
+        code = paperCard.getEdition()
+        edition = StaticData.instance().getCardEdition(code)
+        if edition is None and code == CardEdition.UNKNOWN_CODE:
+            return True
+        return edition is not None and edition.getType() not in Type.REPRINT_SET_TYPES
+
+    def getAllNonPromosNonReprintsNoAlt(self):
+        return [c for c in self.streamAllCards() if CardDb.EDITION_NON_REPRINT(c)]
+
+    def getNormalizedName(self, cardName):
+        # normalize Names first
+        return self.normalizedNames.get(cardName, cardName)
+
+    def getAllCardsNoAlt(self, rulesName, predicate=None):
+        rules = self.getRules(rulesName, False)
+        if rules is None:
+            base = []
+        else:
+            base = self.allCardsByRules.get(rules)
+        if predicate is None:
+            return base
+        return [c for c in base if predicate(c)]
+
+    def getUniqueByName(self, cardName):
+        if cardName in self.uniqueCardsByFlavorName:
+            return self.uniqueCardsByFlavorName.get(cardName)
+        rules = self.getRules(cardName, True)
+        if rules is None:
+            return None
+        return self.uniqueCardsByRules.get(rules)
+
+    def getUniqueByNameNoAlt(self, rulesName):
+        rules = self.getRules(rulesName, False)
+        if rules is None:
+            return None
+        return self.uniqueCardsByRules.get(rules)
+
+    def getFaceByName(self, faceName):
+        return self.facesByName.get(self.getNormalizedName(faceName))
+
+    def contains(self, name):
+        return self.allCardsByName.containsKey(self.getNormalizedName(name))
+
+    def __iter__(self):
+        return iter(self.getAllCards())
+
+    def iterator(self):
+        return iter(self.getAllCards())
+
+    def wasPrintedInSets(self, setCodes):
+        sets = set(setCodes)
+
+        def predicate(paperCard):
+            return any(editionCode in sets
+                       and StaticData.instance().getCardEdition(editionCode).isCardObtainable(paperCard.getName())
+                       for editionCode in (pc.getEdition() for pc in self.getAllCards(paperCard)))
+
+        return predicate
+
+    def isLegal(self, allowedSetCodes):
+        # This Predicate validates if a card is legal in a given format (identified by the list of allowed sets)
+        sets = set(allowedSetCodes)
+        return lambda paperCard: paperCard is not None and paperCard.getEdition() in sets
+
+    def wasPrintedAtRarity(self, rarity):
+        # This Predicate validates if a card was printed at [rarity], on any of its printings
+        return lambda paperCard: any(rarity == r for r in (pc.getRarity() for pc in self.getAllCards(paperCard)))
+
+    def createUnsupportedCard(self, cardRequest):
+        request = CardDb.CardRequest.fromString(cardRequest)
+        cardEdition = CardEdition.UNKNOWN
+        cardRarity = CardRarity.Unknown
+
+        # May iterate over editions and find out if there is any card named 'cardRequest' but not implemented.
+        if request.edition is None or request.edition.strip() == "":
+            for edition in self.editions:
+                for cardInSet in edition.getAllCardsInSet():
+                    if cardInSet.name() == request.cardName:
+                        cardEdition = edition
+                        cardRarity = cardInSet.rarity()
+                        break
+                if cardEdition != CardEdition.UNKNOWN:
+                    break
+        else:
+            cardEdition = self.editions.get(request.edition)
+            if cardEdition is not None:
+                for cardInSet in cardEdition.getAllCardsInSet():
+                    if cardInSet.name() == request.cardName:
+                        cardRarity = cardInSet.rarity()
+                        break
+            else:
+                cardEdition = CardEdition.UNKNOWN
+
+        # Note for myself: no localisation needed here as this goes in logs
+        if cardRarity == CardRarity.Unknown:
+            print("Forge could not find this card in the Database. Any chance you might have mistyped the card name?",
+                  file=sys.stderr)
+        else:
+            print("We're sorry, but this card is not supported yet.", file=sys.stderr)
+
+        return PaperCard(CardRules.getUnsupportedCardNamed(request.cardName), cardEdition.getCode(), cardRarity)
+
+    def getEditor(self):
+        return self.editor
+
+    class Editor:
+        def __init__(self, outer):
+            self._outer = outer
+            self.immediateReindex = True
+
+        def putCard(self, rules, whenItWasPrinted=None):
+            # works similarly to Map<K,V>, returning prev. value
+            outer = self._outer
+            cardName = rules.getName()
+
+            result = outer.rulesByPrimaryName.get(cardName)
+            if result is not None and result.getName() == cardName:  # change properties only
+                result.reinitializeFromRules(rules)
+                return result
+
+            # result currently holds the previous value (as Map.put would return)
+            outer.rulesByPrimaryName[cardName] = rules
+
+            # 1. generate all paper cards from edition data we have
+            paperCards = []
+            if whenItWasPrinted is None or len(whenItWasPrinted) == 0:
+                for e in outer.editions.getOrderedEditions():
+                    artIdx = IPaperCard.DEFAULT_ART_INDEX
+                    for cis in e.getCardInSet(cardName):
+                        paperCards.append(PaperCard(rules, e.getCode(), cis.rarity(), artIdx, False,
+                                                    cis.collectorNumber(), cis.artistName(),
+                                                    cis.getFunctionalVariantName()))
+                        artIdx += 1
+            else:
+                lastEdition = None
+                artIdx = 0
+                for tuple_ in whenItWasPrinted:
+                    if tuple_.getKey() != lastEdition:
+                        artIdx = IPaperCard.DEFAULT_ART_INDEX  # reset artIndex
+                        lastEdition = tuple_.getKey()
+                    ed = outer.editions.get(lastEdition)
+                    if ed is None:
+                        continue
+                    cardsInSet = ed.getCardInSet(cardName)
+                    if len(cardsInSet) == 0:
+                        continue
+                    cardInSetIndex = max(artIdx - 1, 0)  # make sure doesn't go below zero
+                    cds = cardsInSet[cardInSetIndex]  # use ArtIndex to get the right Coll. Number
+                    paperCards.append(PaperCard(rules, lastEdition, tuple_.getValue(), artIdx, False,
+                                                cds.collectorNumber(), cds.artistName(),
+                                                cds.getFunctionalVariantName()))
+                    artIdx += 1
+            if len(paperCards) == 0:
+                paperCards.append(PaperCard(rules, CardEdition.UNKNOWN_CODE, CardRarity.Special))
+            # 2. add them to db
+            for paperCard in paperCards:
+                outer.addCard(paperCard)
+            # 3. reindex can be temporary disabled and run after the whole batch of rules is added to db.
+            if self.immediateReindex:
+                outer.reIndex()
+            return result
+
+        def isImmediateReindex(self):
+            return self.immediateReindex
+
+        def setImmediateReindex(self, immediateReindex):
+            self.immediateReindex = immediateReindex
+```
+
+That completes the port. The remaining pieces delivered in this turn: the `getCard` dispatcher, `tryGetCard`, the single-edition lookup (`getCardFromSet`), the art-preference lookups (`getCardFromEditions`, the released-before/after variants and the unified `tryToGetCardFromEditions`), the various `getAllCards`/`getAllCardsNoAlt`/`getUnique*`/predicate-factory accessors, `createUnsupportedCard`, and the inner `Editor` class.
+````

@@ -149,7 +149,7 @@ classDiagram
 Forge's cost model uses the visitor pattern: `ICostVisitor<T>` declares a `visit` overload for every concrete `CostPart` subtype (mana, life, energy, tap, sacrifice, discard, counters, dice, and the many mechanic-specific costs), letting clients perform type-specific operations on a cost without instanceof chains. `Base<T>` is a convenience adapter that implements the full interface with no-op `visit` methods, each returning `null`. By supplying default implementations for all cost types, it frees subclasses from overriding every method, so a concrete visitor need only override the handful of `visit` overloads relevant to the costs it cares about. This is the classic abstract-base/adapter idiom, trading exhaustive interface coverage for extensibility as new cost types are added.
 
 ## Source
-`forge-game/src/main/java/forge/game/cost/ICostVisitor.java` â€” declaration excerpt
+`forge-game/src/main/java/forge/game/cost/ICostVisitor.java` Ã¢â‚¬â€ declaration excerpt
 
 ```java
     class Base<T> implements ICostVisitor<T> {
@@ -345,4 +345,170 @@ Forge's cost model uses the visitor pattern: `ICostVisitor<T>` declares a `visit
         @Override
         public T visit(CostBlight cost) { return null; }
     }
+```
+
+## Python
+`forge/game/cost/ICostVisitor/Base.py`
+
+```python
+from forge.game.cost.ICostVisitor import ICostVisitor
+from forge.game.cost.CostAddMana import CostAddMana
+from forge.game.cost.CostBehold import CostBehold
+from forge.game.cost.CostBeholdExile import CostBeholdExile
+from forge.game.cost.CostBlight import CostBlight
+from forge.game.cost.CostChooseColor import CostChooseColor
+from forge.game.cost.CostChooseCreatureType import CostChooseCreatureType
+from forge.game.cost.CostCollectEvidence import CostCollectEvidence
+from forge.game.cost.CostDamage import CostDamage
+from forge.game.cost.CostDiscard import CostDiscard
+from forge.game.cost.CostDraw import CostDraw
+from forge.game.cost.CostEnlist import CostEnlist
+from forge.game.cost.CostExert import CostExert
+from forge.game.cost.CostExile import CostExile
+from forge.game.cost.CostExileFromStack import CostExileFromStack
+from forge.game.cost.CostExiledMoveToGrave import CostExiledMoveToGrave
+from forge.game.cost.CostFlipCoin import CostFlipCoin
+from forge.game.cost.CostForage import CostForage
+from forge.game.cost.CostGainControl import CostGainControl
+from forge.game.cost.CostGainLife import CostGainLife
+from forge.game.cost.CostMill import CostMill
+from forge.game.cost.CostPartMana import CostPartMana
+from forge.game.cost.CostPayEnergy import CostPayEnergy
+from forge.game.cost.CostPayLife import CostPayLife
+from forge.game.cost.CostPayShards import CostPayShards
+from forge.game.cost.CostPromiseGift import CostPromiseGift
+from forge.game.cost.CostPutCardToLib import CostPutCardToLib
+from forge.game.cost.CostPutCounter import CostPutCounter
+from forge.game.cost.CostRemoveAnyCounter import CostRemoveAnyCounter
+from forge.game.cost.CostRemoveCounter import CostRemoveCounter
+from forge.game.cost.CostReturn import CostReturn
+from forge.game.cost.CostReveal import CostReveal
+from forge.game.cost.CostRevealChosen import CostRevealChosen
+from forge.game.cost.CostRollDice import CostRollDice
+from forge.game.cost.CostSacrifice import CostSacrifice
+from forge.game.cost.CostTap import CostTap
+from forge.game.cost.CostTapType import CostTapType
+from forge.game.cost.CostUnattach import CostUnattach
+from forge.game.cost.CostUntap import CostUntap
+from forge.game.cost.CostUntapType import CostUntapType
+
+
+class Base(ICostVisitor):
+
+    def visit(self, cost: CostGainControl):
+        return None
+
+    def visit(self, cost: CostChooseColor):
+        return None
+
+    def visit(self, cost: CostChooseCreatureType):
+        return None
+
+    def visit(self, cost: CostCollectEvidence):
+        return None
+
+    def visit(self, cost: CostDiscard):
+        return None
+
+    def visit(self, cost: CostBehold):
+        return None
+
+    def visit(self, cost: CostBeholdExile):
+        return None
+
+    def visit(self, cost: CostDamage):
+        return None
+
+    def visit(self, cost: CostDraw):
+        return None
+
+    def visit(self, cost: CostExile):
+        return None
+
+    def visit(self, cost: CostExileFromStack):
+        return None
+
+    def visit(self, cost: CostExiledMoveToGrave):
+        return None
+
+    def visit(self, cost: CostExert):
+        return None
+
+    def visit(self, cost: CostEnlist):
+        return None
+
+    def visit(self, cost: CostFlipCoin):
+        return None
+
+    def visit(self, cost: CostForage):
+        return None
+
+    def visit(self, cost: CostRollDice):
+        return None
+
+    def visit(self, cost: CostMill):
+        return None
+
+    def visit(self, cost: CostAddMana):
+        return None
+
+    def visit(self, cost: CostPayLife):
+        return None
+
+    def visit(self, cost: CostPayEnergy):
+        return None
+
+    def visit(self, cost: CostGainLife):
+        return None
+
+    def visit(self, cost: CostPartMana):
+        return None
+
+    def visit(self, cost: CostPromiseGift):
+        return None
+
+    def visit(self, cost: CostPutCardToLib):
+        return None
+
+    def visit(self, cost: CostTap):
+        return None
+
+    def visit(self, cost: CostSacrifice):
+        return None
+
+    def visit(self, cost: CostReturn):
+        return None
+
+    def visit(self, cost: CostReveal):
+        return None
+
+    def visit(self, cost: CostRevealChosen):
+        return None
+
+    def visit(self, cost: CostRemoveAnyCounter):
+        return None
+
+    def visit(self, cost: CostRemoveCounter):
+        return None
+
+    def visit(self, cost: CostPutCounter):
+        return None
+
+    def visit(self, cost: CostUntapType):
+        return None
+
+    def visit(self, cost: CostUntap):
+        return None
+
+    def visit(self, cost: CostUnattach):
+        return None
+
+    def visit(self, cost: CostTapType):
+        return None
+
+    def visit(self, cost: CostPayShards):
+        return None
+
+    def visit(self, cost: CostBlight):
+        return None
 ```

@@ -211,3 +211,80 @@ public class CardCollection extends FCollection<Card> implements CardCollectionV
     }
 }
 ```
+
+## Python
+`forge/game/card/CardCollection.py`
+
+```python
+from forge.util.collect.FCollection import FCollection
+from forge.game.card.Card import Card
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.util.collect.FCollection import EmptyFCollection
+
+from typing import Callable, Iterable, Iterator
+
+
+class CardCollection(FCollection, CardCollectionView):
+    serialVersionUID = -8133537013727100275
+
+    EMPTY = None  # set after EmptyCardCollection is defined below
+
+    @staticmethod
+    def getView(cards, allowModify=False):
+        if cards is None:
+            return CardCollection.EMPTY
+        if allowModify:  # create copy to allow modifying original set while iterating
+            return CardCollection(cards)
+
+        if isinstance(cards, CardCollectionView):
+            return cards
+        return CardCollection(cards)
+
+    @staticmethod
+    def combine(*views):
+        if views is None:
+            raise ValueError("The 'views' parameter was null when CardCollection.combine was called")
+
+        newCol = None
+        viewWithCards = None
+        for v in views:
+            if not v.isEmpty():
+                if viewWithCards is None:
+                    viewWithCards = v
+                elif newCol is None:  # if multiple views have cards, we need to create a new collection
+                    newCol = CardCollection(viewWithCards)
+                    newCol.addAll(v)
+                    viewWithCards = newCol
+                else:
+                    newCol.addAll(v)
+        if viewWithCards is None:
+            viewWithCards = CardCollection.EMPTY
+        return viewWithCards
+
+    def __init__(self, cards=None):
+        if cards is None:
+            super().__init__()
+        elif isinstance(cards, Card):
+            super().__init__(cards)
+        else:
+            super().__init__(cards)
+
+    def subList(self, fromIndex, toIndex):
+        return CardCollection(super().subList(fromIndex, toIndex))
+
+    def filter(self, test):
+        out = CardCollection()
+        for card in self.stream().filter(test):
+            out.add(card)
+        return out
+
+
+class EmptyCardCollection(EmptyFCollection, CardCollectionView):
+    serialVersionUID = -3218771134502034727
+
+    def __init__(self):
+        super().__init__()
+
+
+CardCollection.EMPTY = EmptyCardCollection()
+```

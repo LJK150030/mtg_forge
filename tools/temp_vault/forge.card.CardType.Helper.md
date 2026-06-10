@@ -29,7 +29,7 @@ The `Helper` class is a static nested utility within `CardType` that parses raw 
 As a stateless, package-level helper it collaborates exclusively with `CardType.Constant`, acting as the loader that translates external configuration text into the in-memory type vocabulary the rest of `CardType` relies on. The all-static, side-effecting design and silent no-op on unrecognized sections reflect its intent as a one-time initialization routine driven by data files rather than a reusable object.
 
 ## Source
-`forge-core/src/main/java/forge/card/CardType.java` â€” declaration excerpt
+`forge-core/src/main/java/forge/card/CardType.java` Ã¢â‚¬â€ declaration excerpt
 
 ```java
     public static class Helper {
@@ -102,4 +102,66 @@ As a stateless, package-level helper it collaborates exclusively with `CardType.
             }
         }
     }
+```
+
+## Python
+`forge/card/CardType/Helper.py`
+
+```python
+from typing import List
+
+from forge.card.CardType import CardType
+
+
+class Helper:
+    @staticmethod
+    def parseTypes(sectionName: str, content: List[str]) -> None:
+        addToSection = None
+
+        if sectionName == "BasicTypes":
+            addToSection = CardType.Constant.BASIC_TYPES
+        elif sectionName == "LandTypes":
+            addToSection = CardType.Constant.LAND_TYPES
+        elif sectionName == "CreatureTypes":
+            addToSection = CardType.Constant.CREATURE_TYPES
+        elif sectionName == "SpellTypes":
+            addToSection = CardType.Constant.SPELL_TYPES
+        elif sectionName == "EnchantmentTypes":
+            addToSection = CardType.Constant.ENCHANTMENT_TYPES
+        elif sectionName == "ArtifactTypes":
+            addToSection = CardType.Constant.ARTIFACT_TYPES
+        elif sectionName == "WalkerTypes":
+            addToSection = CardType.Constant.WALKER_TYPES
+        elif sectionName == "DungeonTypes":
+            addToSection = CardType.Constant.DUNGEON_TYPES
+        elif sectionName == "BattleTypes":
+            addToSection = CardType.Constant.BATTLE_TYPES
+        elif sectionName == "PlanarTypes":
+            addToSection = CardType.Constant.PLANAR_TYPES
+
+        if addToSection is None:
+            return
+
+        for line in content:
+            if len(line) == 0:
+                continue
+
+            if ":" in line:
+                k = line.split(":")
+
+                if k[0] in addToSection:
+                    continue
+
+                addToSection.add(k[0])
+                CardType.Constant.pluralTypes[k[0]] = k[1]
+
+                if " " in k[0]:
+                    CardType.Constant.MultiwordTypes.add(k[0])
+            else:
+                if line in addToSection:
+                    continue
+
+                addToSection.add(line)
+                if " " in line:
+                    CardType.Constant.MultiwordTypes.add(line)
 ```

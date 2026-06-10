@@ -36,6 +36,12 @@ classDiagram
 - [[forge.game.card.Card|Card]]
 - [[forge.game.spellability.SpellAbility|SpellAbility]]
 
+## Design Description
+
+ReplacePlanarDiceResult is a concrete replacement effect that intercepts the outcome of a planar die roll, allowing card definitions to substitute or react to a specific result. Extending ReplacementEffect, it overrides the framework's two key hooks: canReplace gates the effect by matching the rolled outcome against the card's "ValidRoll" parameter (read from the run parameters under AbilityKey.Result), and setReplacingObjects exposes that result to the resolving SpellAbility so downstream effects can reference it. It collaborates with AbilityKey to key into the typed run-parameter map, Card as its host, and SpellAbility as the replacing ability. The class is deliberately minimal, delegating construction and the broader replacement-matching machinery to its superclass and contributing only the planechase-specific roll-validation logic.
+
+That's ~130 words. Good.ReplacePlanarDiceResult is a concrete replacement effect that intercepts the outcome of a planar die roll, letting card scripts validate or react to a specific result. Extending ReplacementEffect, it overrides the framework's two key hooks: canReplace gates the effect by matching the rolled outcome (read from the run-parameter map under AbilityKey.Result) against the card's configured "ValidRoll" parameter, while setReplacingObjects publishes that result onto the resolving SpellAbility so downstream effects can reference it. It collaborates with AbilityKey to index the typed parameter map, Card as its host, and SpellAbility as the replacing ability. The class is deliberately minimal, delegating construction and the general replacement-matching machinery to its superclass and contributing only the planechase-specific roll-validation logic, keeping each replacement subtype focused on a single triggering condition.
+
 ## Source
 `forge-game/src/main/java/forge/game/replacement/ReplacePlanarDiceResult.java`
 
@@ -96,4 +102,28 @@ public class ReplacePlanarDiceResult extends ReplacementEffect {
         sa.setReplacingObject(AbilityKey.Result, runParams.get(AbilityKey.Result));
     }
 }
+```
+
+## Python
+`forge/game/replacement/ReplacePlanarDiceResult.py`
+
+```python
+from forge.game.replacement.ReplacementEffect import ReplacementEffect
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.spellability.SpellAbility import SpellAbility
+
+
+class ReplacePlanarDiceResult(ReplacementEffect):
+
+    def __init__(self, params: dict[str, str], host: Card, intrinsic: bool):
+        super().__init__(params, host, intrinsic)
+
+    def canReplace(self, runParams: dict[AbilityKey, object]) -> bool:
+        if not self.matchesValidParam("ValidRoll", runParams.get(AbilityKey.Result)):
+            return False
+        return True
+
+    def setReplacingObjects(self, runParams: dict[AbilityKey, object], sa: SpellAbility) -> None:
+        sa.setReplacingObject(AbilityKey.Result, runParams.get(AbilityKey.Result))
 ```

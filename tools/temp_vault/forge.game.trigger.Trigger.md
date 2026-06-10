@@ -110,6 +110,12 @@ classDiagram
 - [[forge.game.zone.CostPaymentStack|CostPaymentStack]]
 - [[forge.util.ITranslatable|ITranslatable]]
 
+## Design Description
+
+Trigger is the abstract base for all event-driven abilities in the engine, modeling a Magic card's triggered ability ("when/whenever..."). Constructed only by reflection from a parameter map, host Card, and an intrinsic flag, each instance carries a unique id, a TriggerType mode, optional valid PhaseTypes, and a list of remembered objects. It extends TriggerReplacementBase to share parameter handling and overriding-ability plumbing, and defines the contract subclasses must implementâ€”performTest, setTriggeringObjects, and getImportantStackObjectsâ€”so each concrete trigger decides whether a game event matches.
+
+Its concrete responsibilities center on gating and presentation: phasesCheck and requirementsCheck enforce timing and CR-based conditions, checkResolvedLimit/checkActivationLimit bound repeats, and meetsRequirementsOnTriggeredObjects evaluates keyword- and condition-specific rules against runParams. toString and replaceAbilityText render translated, Charm-aware descriptions. Identity is id-based (equals/hashCode), and Cloneable copy methods reissue ids for non-LKI clones, reflecting careful separation of original versus copied game objects.
+
 ## Source
 `forge-game/src/main/java/forge/game/trigger/Trigger.java`
 
@@ -802,4 +808,462 @@ public abstract class Trigger extends TriggerReplacementBase {
                         StringUtils.containsAny(getParam("Destination"), "Library", "Hand")));
     }
 }
+```
+
+## Python
+`forge/game/trigger/Trigger.py`
+
+```python
+from forge.game.Game import Game
+from forge.game.GameEntity import GameEntity
+from forge.game.GameStage import GameStage
+from forge.game.IHasSVars import IHasSVars
+from forge.game.TriggerReplacementBase import TriggerReplacementBase
+from forge.game.ability.AbilityFactory import AbilityFactory
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.ability.ApiType import ApiType
+from forge.game.ability.effects.CharmEffect import CharmEffect
+from forge.game.card.Card import Card
+from forge.game.card.CardState import CardState
+from forge.game.cost.IndividualCostPaymentInstance import IndividualCostPaymentInstance
+from forge.game.keyword.Keyword import Keyword
+from forge.game.phase.PhaseHandler import PhaseHandler
+from forge.game.phase.PhaseType import PhaseType
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.trigger.TriggerType import TriggerType
+from forge.game.trigger.WrappedAbility import WrappedAbility
+from forge.game.zone.CostPaymentStack import CostPaymentStack
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.CardTranslation import CardTranslation
+from forge.util.ITranslatable import ITranslatable
+from forge.util.Lang import Lang
+from forge.util.TextUtil import TextUtil
+
+
+class Trigger(TriggerReplacementBase):
+    """
+    Abstract Trigger class. Constructed by reflection only
+    """
+
+    maxId = 0
+
+    @staticmethod
+    def nextId():
+        Trigger.maxId += 1
+        return Trigger.maxId
+
+    @staticmethod
+    def resetIDs():
+        Trigger.maxId = 50000
+
+    def __init__(self, params: dict[str, str], host: Card, intrinsic: bool):
+        super().__init__()
+        self.id = Trigger.nextId()
+        self.mode = None
+        self.triggerRemembered: list = []
+        self.validPhases = None
+        self.spawningAbility = None
+
+        self.intrinsic = intrinsic
+
+        self.originalMapParams.update(params)
+        self.mapParams.update(params)
+        self.setHostCard(host)
+
+        triggerZones = self.getParam("TriggerZones")
+        if triggerZones is not None:
+            self.setActiveZone(set(ZoneType.listValueOf(triggerZones)))
+
+        triggerPhases = self.getParam("Phase")
+        if triggerPhases is not None:
+            self.setTriggerPhases(PhaseType.parseRange(triggerPhases))
+
+    def toString(self, active=False):
+        if not self.hasParam("TriggerDescription") or self.isSuppressed():
+            return ""
+        sb = []
+        nameSource = self.getHostName(self)
+        desc = self.getParam("TriggerDescription")
+        if "ABILITY" not in desc:
+            desc = CardTranslation.translateSingleDescriptionText(self.getParam("TriggerDescription"), nameSource)
+            translatedName = nameSource.getTranslatedName()
+            desc = TextUtil.fastReplace(desc, "CARDNAME", translatedName)
+            desc = TextUtil.fastReplace(desc, "NICKNAME", Lang.getInstance().getNickName(translatedName))
+            if "ORIGINALHOST" in desc and self.getOriginalHost() is not None:
+                desc = TextUtil.fastReplace(desc, "ORIGINALHOST", self.getOriginalHost().getDisplayName())
+        if self.getHostCard().getEffectSource() is not None:
+            if active:
+                desc = TextUtil.fastReplace(desc, "EFFECTSOURCE", self.getHostCard().getEffectSource().toString())
+            else:
+                desc = TextUtil.fastReplace(desc, "EFFECTSOURCE", self.getHostCard().getEffectSource().getDisplayName())
+        sb.append(desc)
+        return "".join(sb)
+
+    def replaceAbilityText(self, desc, arg=None, forStack=False):
+        # replaceAbilityText(desc, state: CardState)
+        if isinstance(arg, CardState):
+            # this function is for ABILITY
+            if "ABILITY" not in desc:
+                return desc
+            sa = self.ensureAbility()
+            return self.replaceAbilityText(desc, sa)
+
+        sa = arg
+        result = desc
+
+        # this function is for ABILITY
+        if "ABILITY" not in result:
+            return result
+        if sa is None:
+            sa = self.getOverridingAbility()
+        if sa is not None:
+            saDesc = ""
+            digMore = True
+            # if sa is a wrapper, get the Wrapped Ability
+            if sa.isWrapper():
+                wa = sa
+                sa = wa.getWrappedAbility()
+
+                # wrapped Charm spells are special, only get the selected abilities (if there are any yet)
+                if ApiType.Charm.equals(sa.getApi()):
+                    saDesc = sa.getStackDescription()
+                    digMore = False
+            if digMore:  # if ABILITY is used, there is probably Charm somewhere
+                trigSA = sa
+                while trigSA is not None:
+                    api = trigSA.getApi()
+                    if ApiType.Charm.equals(api):
+                        saDesc = CharmEffect.makeFormatedDescription(trigSA, not forStack)
+                        break
+                    if ApiType.ImmediateTrigger.equals(api) or ApiType.DelayedTrigger.equals(api):
+                        trigSA = trigSA.getAdditionalAbility("Execute")
+                    else:
+                        trigSA = trigSA.getSubAbility()
+            if len(saDesc) == 0:  # in case we haven't found anything better
+                saDesc = sa.toString()
+            # string might have leading whitespace
+            saDesc = saDesc.strip()
+            if len(saDesc) != 0:
+                # in case sa starts with CARDNAME, dont lowercase it
+                if not saDesc.startswith(sa.getHostCard().getName()):
+                    saDesc = saDesc[0:1].lower() + saDesc[1:]
+                if "ORIGINALHOST" in saDesc and sa.getOriginalHost() is not None:
+                    saDesc = TextUtil.fastReplace(saDesc, "ORIGINALHOST", sa.getOriginalHost().getDisplayName())
+            else:
+                saDesc = "<take no action>"  # printed in case nothing is chosen for the ability (e.g. Charm with Up to X)
+            result = TextUtil.fastReplace(result, "ABILITY", saDesc)
+
+            result = CardTranslation.translateMultipleDescriptionText(result, sa.getHostCard())
+            translatedName = sa.getHostCard().getTranslatedName()
+            result = TextUtil.fastReplace(result, "CARDNAME", translatedName)
+            result = TextUtil.fastReplace(result, "NICKNAME", Lang.getInstance().getNickName(translatedName))
+
+        return result
+
+    def phasesCheck(self, game: Game) -> bool:
+        phaseHandler = game.getPhaseHandler()
+        if self.validPhases is not None:
+            if phaseHandler.getPhase() not in self.validPhases:
+                return False
+            # add support for calculation if needed
+            if self.hasParam("PhaseCount") and phaseHandler.getNumMain() + 1 != 2:
+                return False
+
+        if self.hasParam("PlayerTurn"):
+            if not phaseHandler.isPlayerTurn(self.getHostCard().getController()):
+                return False
+
+        if self.hasParam("NotPlayerTurn"):
+            if phaseHandler.isPlayerTurn(self.getHostCard().getController()):
+                return False
+
+        if self.hasParam("OpponentTurn"):
+            if not self.getHostCard().getController().isOpponentOf(phaseHandler.getPlayerTurn()):
+                return False
+
+        if self.hasParam("FirstUpkeep"):
+            if not phaseHandler.isFirstUpkeep():
+                return False
+
+        if self.hasParam("FirstUpkeepThisGame"):
+            if not phaseHandler.isFirstUpkeepThisGame():
+                return False
+
+        if self.hasParam("FirstCombat"):
+            if not phaseHandler.isFirstCombat():
+                return False
+
+        if self.hasParam("TurnCount"):
+            turn = int(self.getParam("TurnCount"))
+            if phaseHandler.getTurn() != turn:
+                return False
+
+        return True
+
+    def requirementsCheck(self, game: Game) -> bool:
+        if self.hasParam("APlayerHasMoreLifeThanEachOther"):
+            highestLife = -2147483648  # Negative base just in case a few Lich's or Platinum Angels are running around
+            healthiest = []
+            for p in game.getPlayers():
+                if p.getLife() > highestLife:
+                    healthiest.clear()
+                    highestLife = p.getLife()
+                    healthiest.append(p)
+                elif p.getLife() == highestLife:
+                    highestLife = p.getLife()
+                    healthiest.append(p)
+
+            if len(healthiest) != 1:
+                # More than one player tied for most life
+                return False
+
+        if self.hasParam("APlayerHasMostCardsInHand"):
+            largestHand = 0
+            withLargestHand = []
+            for p in game.getPlayers():
+                if p.getCardsIn(ZoneType.Hand).size() > largestHand:
+                    withLargestHand.clear()
+                    largestHand = p.getCardsIn(ZoneType.Hand).size()
+                    withLargestHand.append(p)
+                elif p.getCardsIn(ZoneType.Hand).size() == largestHand:
+                    largestHand = p.getCardsIn(ZoneType.Hand).size()
+                    withLargestHand.append(p)
+
+            if len(withLargestHand) != 1:
+                # More than one player tied for most life
+                return False
+
+        # host controller will be null when adding card in a simulation game
+        if self.getHostCard().getController() is None or (game.getAge() != GameStage.Play and game.getAge() != GameStage.RestartedByKarn) or not self.meetsCommonRequirements(self.mapParams):
+            return False
+
+        if not self.checkResolvedLimit(self.getHostCard().getController()):
+            return False
+
+        return True
+
+    def checkResolvedLimit(self, activator: Player) -> bool:
+        # CR 603.2i
+        if self.hasParam("ResolvedLimit"):
+            if self.getHostCard().getAbilityResolvedThisTurnActivators(self.getOverridingAbility()).count(activator) >= int(self.getParam("ResolvedLimit")):
+                return False
+        return True
+
+    def checkActivationLimit(self) -> bool:
+        if self.hasParam("ActivationLimit") and self.getActivationsThisTurn() >= int(self.getParam("ActivationLimit")):
+            return False
+        if self.hasParam("GameActivationLimit") and self.getActivationsThisGame() >= int(self.getParam("GameActivationLimit")):
+            return False
+        return True
+
+    def meetsRequirementsOnTriggeredObjects(self, game: Game, runParams: dict[AbilityKey, object]) -> bool:
+        condition = self.getParam("Condition")
+
+        if self.isKeyword(Keyword.EVOLVE) or "Evolve" == condition:
+            moved = runParams.get(AbilityKey.Card)
+            if moved is None:
+                return False
+            # CR 702.100c
+            if not moved.isCreature() or not self.getHostCard().isCreature():
+                return False
+            if moved.getNetPower() <= self.getHostCard().getNetPower() and moved.getNetToughness() <= self.getHostCard().getNetToughness():
+                return False
+        if self.isKeyword(Keyword.INCREMENT):
+            if not self.getHostCard().isCreature():
+                return False
+            sp = runParams.get(AbilityKey.SpellAbility)
+            p = self.getHostCard().getController()
+            v = sum(1 for m in sp.getPayingMana() if m.getPlayer().equals(p))
+            if v <= self.getHostCard().getNetPower() and v <= self.getHostCard().getNetToughness():
+                return False
+
+        if condition is None:
+            return True
+
+        if "LifePaid" == condition:
+            trigSA = runParams.get(AbilityKey.SpellAbility)
+            if trigSA is not None and trigSA.getAmountLifePaid() <= 0:
+                return False
+        elif "NoOpponentHasMoreLifeThanAttacked" == condition:
+            attacked = runParams.get(AbilityKey.Attacked)
+            if attacked is None:
+                attacked = runParams.get(AbilityKey.Defender)
+            # we should not have gotten this far if planeswalker was attacked, but just to be safe
+            if not isinstance(attacked, Player):
+                return False
+            attackedP = attacked
+            life = attackedP.getLife()
+            found = False
+            for opp in self.getHostCard().getController().getOpponents():
+                if opp.equals(attackedP):
+                    continue
+                if opp.getLife() > life:
+                    found = True
+                    break
+            if found:
+                return False
+        elif "Sacrificed" == condition:
+            trigSA = runParams.get(AbilityKey.SpellAbility)
+            if trigSA is not None and not any(True for _ in trigSA.getPaidList("Sacrificed")):
+                return False
+        elif "AttackedPlayerWithMostLife" == condition:
+            attacked = runParams.get(AbilityKey.Attacked)
+            if attacked is None:
+                # Check "Defender" too because once triggering objects are set on TriggerAttacks, the value of Attacked
+                # ends up being in Defender at that point.
+                attacked = runParams.get(AbilityKey.Defender)
+            if attacked is None or not attacked.isValid("Player.withMostLife", self.getHostCard().getController(), self.getHostCard(), None):
+                return False
+        elif "AttackerHasUnattackedOpp" == condition:
+            attacker = runParams.get(AbilityKey.AttackingPlayer)
+            values = game.getCombat().getAttackersAndDefenders().values()
+            if all(o in values for o in attacker.getOpponents()):
+                return False
+
+        return True
+
+    def equals(self, o) -> bool:
+        if not isinstance(o, Trigger):
+            return False
+
+        return self.getId() == o.getId()
+
+    def hashCode(self) -> int:
+        return hash((Trigger, self.getId()))
+
+    def performTest(self, runParams: dict[AbilityKey, object]) -> bool:
+        raise NotImplementedError
+
+    def setTriggeringObjects(self, sa: SpellAbility, runParams: dict[AbilityKey, object]) -> None:
+        raise NotImplementedError
+
+    def getId(self) -> int:
+        return self.id
+
+    def setId(self, id: int) -> None:
+        self.id = id
+
+    def addRemembered(self, o):
+        if isinstance(o, (list, set, tuple, frozenset)):
+            self.triggerRemembered.extend(o)
+        else:
+            self.triggerRemembered.append(o)
+
+    def getTriggerRemembered(self) -> list:
+        return self.triggerRemembered
+
+    def getMode(self) -> TriggerType:
+        # TODO: Write javadoc for this method.
+        return self.mode
+
+    def setMode(self, triggerType: TriggerType) -> None:
+        self.mode = triggerType
+
+    def copy(self, newHost: Card, lki: bool, keepTextChanges: bool = False, spellAbility: SpellAbility = None) -> "Trigger":
+        copy = self.clone()
+
+        self.copyHelper(copy, newHost, lki or keepTextChanges)
+
+        if spellAbility is not None:
+            copy.setOverridingAbility(spellAbility)
+        elif self.getOverridingAbility() is not None:
+            copy.setOverridingAbility(self.getOverridingAbility().copy(newHost, lki))
+
+        if not lki:
+            copy.setId(Trigger.nextId())
+
+        if self.validPhases is not None:
+            copy.setTriggerPhases(set(self.validPhases))
+        copy.setActiveZone(self.validHostZones)
+        return copy
+
+    def isStatic(self) -> bool:
+        return self.hasParam("Static")  # && params.get("Static").equals("True") [always true if present]
+
+    def setTriggerPhases(self, phases: set[PhaseType]) -> None:
+        self.validPhases = phases
+
+    # def getImportantStackObjects(self, sa): return ""
+    def getImportantStackObjects(self, sa: SpellAbility) -> str:
+        raise NotImplementedError
+
+    def getSpawningAbility(self) -> SpellAbility:
+        return self.spawningAbility
+
+    def setSpawningAbility(self, ability: SpellAbility) -> None:
+        self.spawningAbility = ability
+
+    def getActivationsThisTurn(self) -> int:
+        return self.hostCard.getAbilityActivatedThisTurn(self.getOverridingAbility())
+
+    def getActivationsThisGame(self) -> int:
+        return self.hostCard.getAbilityActivatedThisGame(self.getOverridingAbility())
+
+    def triggerRun(self) -> None:
+        if self.getOverridingAbility() is not None:
+            self.hostCard.addAbilityActivated(self.getOverridingAbility())
+
+    def clone(self):
+        try:
+            return super().clone()
+        except Exception as ex:
+            raise RuntimeError("Trigger : clone() error, " + str(ex))
+
+    def ensureAbility(self, sVarHolder: IHasSVars = None) -> SpellAbility:
+        if sVarHolder is None:
+            sVarHolder = self
+        sa = self.getOverridingAbility()
+        if sa is None and self.hasParam("Execute"):
+            if self.isIntrinsic() and isinstance(sVarHolder, CardState):
+                state = sVarHolder
+                sa = state.getAbilityForTrigger(self.getParam("Execute"))
+            else:
+                sa = AbilityFactory.getAbility(self.getHostCard(), self.getParam("Execute"), sVarHolder)
+            self.setOverridingAbility(sa)
+        return sa
+
+    def setOverridingAbility(self, overridingAbility0: SpellAbility) -> None:
+        super().setOverridingAbility(overridingAbility0)
+        overridingAbility0.setTrigger(self)
+
+    def whileKeywordCheck(self, param: str, runParams: dict[AbilityKey, object]) -> bool:
+        currentPayment = runParams.get(AbilityKey.IndividualCostPaymentInstance)
+        if currentPayment is not None:
+            if self.matchesValidParam(param, currentPayment.getPayment().getAbility()):
+                return True
+
+        stack = runParams.get(AbilityKey.CostStack)
+        for individual in stack:
+            if self.matchesValidParam(param, individual.getPayment().getAbility()):
+                return True
+
+        return False
+
+    def isChapter(self) -> bool:
+        return self.hasParam("Chapter")
+
+    def getChapter(self):
+        if not self.isChapter():
+            return None
+        return int(self.getParam("Chapter"))
+
+    def isLastChapter(self) -> bool:
+        return self.isChapter() and self.getChapter() == self.getCardState().getFinalChapterNr()
+
+    def isManaAbility(self) -> bool:
+        if not TriggerType.TapsForMana.equals(self.getMode()) and not TriggerType.ManaAdded.equals(self.getMode()):
+            return False
+        return self.ensureAbility().isManaAbility()
+
+    def looksBackInTime(self) -> bool:
+        origin = self.getParam("Origin")
+        destination = self.getParam("Destination")
+        return TriggerType.Exploited.equals(self.getMode()) or \
+            TriggerType.Destroyed.equals(self.getMode()) or \
+            TriggerType.Sacrificed.equals(self.getMode()) or TriggerType.SacrificedOnce.equals(self.getMode()) or \
+            ((TriggerType.ChangesZone.equals(self.getMode()) or TriggerType.ChangesZoneAll.equals(self.getMode()))
+             and ((origin is not None and "Battlefield" in origin) or
+                  (origin is not None and "Graveyard" in origin and "Battlefield" != self.getParam("Destination")) or
+                  (destination is not None and ("Library" in destination or "Hand" in destination))))
 ```

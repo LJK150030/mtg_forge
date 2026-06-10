@@ -101,7 +101,7 @@ classDiagram
 
 ## Design Description
 
-`AiAttackController` is the AI's attack-phase planner: given the AI `Player`, it decides which creatures to declare as attackers, against which `GameEntity` defender (opponent, planeswalker, or battle), and how aggressively. It is constructed per evaluation — for the current turn, a hypothetical next turn, or a single candidate attacker — caching the AI's creatures, the opponent's potential `blockers`, and a chosen `defendingOpponent`. The central `declareAttackers` method orchestrates the decision, resolving forced/required attacks (in parallel via `CompletableFuture` under a game timeout), handling assault-for-lethal and card-specific cases (Lightmine Field, Revenge of Ravens, Exalted, banding), then computing an `aiAggression` score that drives per-creature `shouldAttack` choices.
+`AiAttackController` is the AI's attack-phase planner: given the AI `Player`, it decides which creatures to declare as attackers, against which `GameEntity` defender (opponent, planeswalker, or battle), and how aggressively. It is constructed per evaluation â€” for the current turn, a hypothetical next turn, or a single candidate attacker â€” caching the AI's creatures, the opponent's potential `blockers`, and a chosen `defendingOpponent`. The central `declareAttackers` method orchestrates the decision, resolving forced/required attacks (in parallel via `CompletableFuture` under a game timeout), handling assault-for-lethal and card-specific cases (Lightmine Field, Revenge of Ravens, Exalted, banding), then computing an `aiAggression` score that drives per-creature `shouldAttack` choices.
 
 Rather than implementing a combat interface, it serves as a stateless-per-use strategy collaborator for `PlayerControllerAi`/`AiController`, delegating rules math to `CombatUtil`/`ComputerUtilCombat` and tuning behavior through `AiProps` profile flags. The inner `SpellAbilityFactors` class pre-computes per-attacker risk/reward facts (can it be killed, can it kill blockers, trample-through), keeping the aggression-tier switch readable. The pervasive named-card special cases reflect MTG's mechanical breadth leaking into heuristic AI code.
 
@@ -1890,4 +1890,246 @@ public class AiAttackController {
     }
 
 }
+```
+
+## Python
+`forge/ai/AiAttackController.py`
+
+```python
+if attacker.hasSVar("NonCombatPriority") and not attacker.hasKeyword(Keyword.VIGILANCE):
+            if attacker.getCurrentPower() * int(attacker.getSVar("NonCombatPriority")) < self.ai.getOpponentsSmallestLifeTotal():
+                for sa in attacker.getSpellAbilities():
+                    # Do not attack if we can afford using the ability.
+                    if sa.isActivatedAbility() and sa.getPayCosts().hasTapCost():
+                        if ComputerUtilCost.canPayCost(sa, self.ai, False):
+                            return False
+                        # TODO Eventually The Ai will need to learn to predict if they have any use for the ability before next untap or not.
+                        # TODO abilities that tap enemy creatures should probably only be saved if the enemy has nonzero creatures?
+
+        if not self.isEffectiveAttacker(self.ai, attacker, combat, defender):
+            return False
+
+        saf = AiAttackController.SpellAbilityFactors(self, attacker)
+        if self.aiAggression != 5:
+            saf.calculate(defenders, combat)
+
+        # if the creature cannot block and can kill all opponents they might as
+        # well attack, they do nothing staying back
+        if saf.canKillAll and saf.isWorthLessThanAllKillers and not CombatUtil.canBlock(attacker):
+            if self.LOG_AI_ATTACKS:
+                print(attacker.getName() + " = attacking because they can't block, expecting to kill or damage player")
+            return True
+        if not saf.canBeKilled and not saf.dangerousBlockersPresent and saf.canTrampleOverDefenders:
+            if self.LOG_AI_ATTACKS:
+                print(attacker.getName() + " = expecting to survive and get some Trample damage through")
+            return True
+
+        # decide if the creature should attack based on the prevailing strategy choice in aiAggression
+        if self.aiAggression == 6:  # Exalted: expecting to at least kill a creature of equal value or not be blocked
+            if (saf.canKillAll and saf.isWorthLessThanAllKillers) or not saf.canBeBlocked():
+                if self.LOG_AI_ATTACKS:
+                    print(attacker.getName() + " = attacking expecting to kill creature, or is unblockable")
+                return True
+        elif self.aiAggression == 5:  # all out attacking
+            if self.LOG_AI_ATTACKS:
+                print(attacker.getName() + " = all out attacking")
+            return True
+        elif self.aiAggression == 4:  # expecting to at least trade with something, or can attack "for free"
+            if saf.canKillAll or (saf.dangerousBlockersPresent and saf.canKillAllDangerous and not saf.canBeKilledByOne) or not saf.canBeBlocked() \
+                    or saf.defPower == 0:
+                if self.LOG_AI_ATTACKS:
+                    print(attacker.getName() + " = attacking expecting to at least trade with something")
+                return True
+        elif self.aiAggression == 3:  # expecting to at least kill a creature of equal value or not be blocked
+            if (saf.canKillAll and saf.isWorthLessThanAllKillers) \
+                    or (((saf.dangerousBlockersPresent and saf.canKillAllDangerous) or saf.hasAttackEffect or saf.hasCombatEffect) and not saf.canBeKilledByOne) \
+                    or not saf.canBeBlocked():
+                if self.LOG_AI_ATTACKS:
+                    print(attacker.getName() + " = attacking expecting to kill creature or cause damage, or is unblockable")
+                return True
+        elif self.aiAggression == 2:  # attack expecting to attract a group block or destroying a single blocker and surviving
+            if not saf.canBeBlocked() or ((saf.canKillAll or saf.hasAttackEffect or saf.hasCombatEffect) and not saf.canBeKilledByOne and
+                                          ((saf.dangerousBlockersPresent and saf.canKillAllDangerous) or not saf.canBeKilled)):
+                if self.LOG_AI_ATTACKS:
+                    print(attacker.getName() + " = attacking expecting to survive or attract group block")
+                return True
+        elif self.aiAggression == 1:  # unblockable creatures only
+            if not saf.canBeBlocked() or (saf.numberOfPossibleBlockers == 1 and saf.canKillAll and not saf.canBeKilledByOne):
+                if self.LOG_AI_ATTACKS:
+                    print(attacker.getName() + " = attacking expecting not to be blocked")
+                return True
+        else:
+            pass
+        return False  # don't attack
+
+    @staticmethod
+    def exertAttackers(attackers, aggression):
+        exerters = []
+        for c in attackers:
+            shouldExert = False
+
+            if c.hasSVar("EndOfTurnLeavePlay"):
+                # creature would leave the battlefield
+                # no pain in exerting it
+                shouldExert = True
+            elif c.hasKeyword(Keyword.VIGILANCE) or ComputerUtilCard.willUntap(c.getController(), c):
+                # Free exert - why not?
+                shouldExert = True
+
+            # if card has a Exert Trigger which would target,
+            # but there are no creatures it can target, no need to exert with it
+            missTarget = False
+            for st in c.getStaticAbilities():
+                if not st.checkMode(StaticAbilityMode.OptionalAttackCost):
+                    continue
+                sa = st.getPayingTrigSA()
+                if sa is None:
+                    # not the delayed variant
+                    for t in c.getTriggers():
+                        if TriggerType.Exerted != t.getMode():
+                            continue
+                        sa = t.ensureAbility()
+                        if c.getController().isAI():
+                            aic = c.getController().getController()
+                            if not aic.getAi().doTrigger(sa, False):
+                                missTarget = True
+                                break
+                    break
+                if sa.usesTargeting():
+                    sa.setActivatingPlayer(c.getController())
+                    validTargets = CardUtil.getValidCardsToTarget(sa)
+                    if not validTargets:
+                        missTarget = True
+                        break
+                    elif sa.isCurse() and not any(CardPredicates.isControlledByAnyOf(c.getController().getOpponents())(tc) for tc in validTargets):
+                        # e.g. Ahn-Crop Crasher - the effect is only good when aimed at opponent's creatures
+                        missTarget = True
+                        break
+
+            if missTarget:
+                continue
+
+            if not shouldExert:
+                # TODO Improve when the AI wants to use Exert powers
+                shouldExert = aggression > 3
+
+            # A specific AI condition for Exert: if specified on the card, the AI will always
+            # exert creatures that meet this condition
+            if not shouldExert and c.hasSVar("AIExertCondition"):
+                if c.getSVar("AIExertCondition") != "":
+                    needsToExert = c.getSVar("AIExertCondition")
+                    sVar = needsToExert.split(" ")[0]
+                    comparator = needsToExert.split(" ")[1]
+                    compareTo = comparator[2:]
+
+                    x = AbilityUtils.calculateAmount(c, sVar, None)
+                    y = AbilityUtils.calculateAmount(c, compareTo, None)
+                    if Expressions.compare(x, comparator, y):
+                        shouldExert = True
+
+            if shouldExert:
+                exerters.append(c)
+
+        return exerters
+
+    def toProtectAttacker(self, sa):
+        # AiAttackController is created with the selected attacker as the only entry in "attackers"
+        if sa.getApi() != ApiType.Protection or self.oppList.isEmpty() or self.getPossibleBlockers(self.oppList, self.attackers, self.nextTurn).isEmpty():
+            return None  # not protection sa or attacker is already unblockable
+        choices = ProtectEffect.getProtectionList(sa)
+        color = ComputerUtilCard.getMostProminentColor(self.getPossibleBlockers(self.oppList, self.attackers, self.nextTurn))
+        artifact = None
+        if "artifacts" in choices:
+            artifact = "artifacts"  # flag to indicate that protection from artifacts is available
+        if color not in choices:
+            color = None
+        for c in self.oppList:  # find a blocker that ignores the currently selected protection
+            if artifact is not None and not c.isArtifact():
+                artifact = None
+            if color is not None:
+                if color == "black":
+                    if not c.isBlack():
+                        color = None
+                elif color == "blue":
+                    if not c.isBlue():
+                        color = None
+                elif color == "green":
+                    if not c.isGreen():
+                        color = None
+                elif color == "red":
+                    if not c.isRed():
+                        color = None
+                elif color == "white":
+                    if not c.isWhite():
+                        color = None
+            if color is None and artifact is None:  # nothing can make the attacker unblockable
+                return None
+        if color is not None:
+            return color
+        if artifact is not None:
+            return artifact
+        return None  # should never get here
+
+    def doLightmineFieldAttackLogic(self, attackersLeft, numForcedAttackers, playAggro):
+        attSorted = CardCollection(attackersLeft)
+        attUnsafe = CardCollection()
+        CardLists.sortByToughnessDesc(attSorted)
+
+        i = numForcedAttackers
+        refPowerValue = 0  # Aggro profiles do not account for the possible blockers' power, conservative profiles do.
+
+        if not playAggro and self.blockers.size() > 0:
+            # Conservative play: check to ensure that the card can't be killed off while damaged
+            # TODO: currently sorting a copy of this.blockers, but it looks safe to operate on this.blockers directly?
+            # Also, this should ideally somehow account for double blocks, unblockability, etc.
+            blkSorted = CardCollection(self.blockers)
+            CardLists.sortByPowerDesc(blkSorted)
+            refPowerValue += blkSorted.get(0).getCurrentPower()
+
+        for cre in attSorted:
+            i += 1
+            if i + refPowerValue >= cre.getCurrentToughness():
+                attUnsafe.add(cre)
+            else:
+                continue
+
+        for x in attUnsafe:
+            while x in attackersLeft:
+                attackersLeft.remove(x)
+
+    def doRevengeOfRavensAttackLogic(self, defender, attackersLeft, numForcedAttackers, maxAttack):
+        # TODO: detect Revenge of Ravens by the trigger instead of by name
+        revengeOfRavens = False
+        if isinstance(defender, Player):
+            revengeOfRavens = not CardLists.filter(defender.getCardsIn(ZoneType.Battlefield),
+                    CardPredicates.nameEquals("Revenge of Ravens")).isEmpty()
+        elif isinstance(defender, Card):
+            revengeOfRavens = not CardLists.filter(defender.getController().getCardsIn(ZoneType.Battlefield),
+                    CardPredicates.nameEquals("Revenge of Ravens")).isEmpty()
+
+        if not revengeOfRavens:
+            return True
+
+        life = self.ai.getLife() if (self.ai.canLoseLife() and not self.ai.cantLoseForZeroOrLessLife()) else INTEGER_MAX_VALUE
+        maxAttack = maxAttack if maxAttack is not None else (INTEGER_MAX_VALUE - 1)
+        if min(maxAttack, numForcedAttackers) >= life:
+            return False
+
+        # Remove all 1-power attackers since they usually only hurt the attacker
+        # TODO: improve to account for possible combat effects coming from attackers like that
+        attUnsafe = CardCollection()
+        for attacker in attackersLeft:
+            if attacker.getNetCombatDamage() <= 1:
+                attUnsafe.add(attacker)
+        for x in attUnsafe:
+            while x in attackersLeft:
+                attackersLeft.remove(x)
+        if min(maxAttack, len(attackersLeft)) >= life:
+            return False
+
+        return True
+
+    @staticmethod
+    def countExaltedBonus(p):
+        return CardLists.getAmountOfKeyword(p.getCardsIn(ZoneType.Battlefield), Keyword.EXALTED)
 ```

@@ -131,7 +131,7 @@ classDiagram
 
 ComputerUtilMana is a stateless utility class in the forge-ai module (all methods static, with only a private `DEBUG_MANA_PAYMENT` flag) that centralizes how the AI evaluates and pays mana costs. Its core responsibility is twofold: determining whether a given `SpellAbility` or `Cost` can be afforded by an AI `Player` (`canPayManaCost`, `hasEnoughManaSourcesToCast`, `getAvailableManaEstimate`) and, when it can, actually committing the payment (`payManaCost`). To do so it calculates a `ManaCostBeingPaid`, gathers and ranks the player's mana-producing abilities, maps each `ManaCostShard` to candidate sources, and pays them shard by shard while handling Phyrexian life, converge, combo/reflected mana, and replacement effects.
 
-Having no supertype, it acts as a pure helper layered over the game model—collaborating with `Player`, `Card`, `ManaPool`, the `Cost`/`CostPayment` hierarchy, and `forge.game.mana` types—and with sibling AI components like `AiController`, `AiCostDecision`, and `AiDeckStatistics`. Notable design intent appears in its unified `test`/production execution path (the same routines both predict feasibility and commit mana), heuristic source ordering that preserves access to flexible and deck-common colors, mana-reservation logic for holding sources across phases, and numerous card-specific special cases (Cavern of Souls, Treasure, Black Lotus) that sharpen the AI's payment choices.
+Having no supertype, it acts as a pure helper layered over the game modelâ€”collaborating with `Player`, `Card`, `ManaPool`, the `Cost`/`CostPayment` hierarchy, and `forge.game.mana` typesâ€”and with sibling AI components like `AiController`, `AiCostDecision`, and `AiDeckStatistics`. Notable design intent appears in its unified `test`/production execution path (the same routines both predict feasibility and commit mana), heuristic source ordering that preserves access to flexible and deck-common colors, mana-reservation logic for holding sources across phases, and numerous card-specific special cases (Cavern of Souls, Treasure, Black Lotus) that sharpen the AI's payment choices.
 
 ## Source
 `forge-ai/src/main/java/forge/ai/ComputerUtilMana.java`
@@ -1978,4 +1978,1544 @@ public class ComputerUtilMana {
         return convoke;
     }
 }
+```
+
+## Python
+`forge/ai/ComputerUtilMana.py`
+
+```python
+from functools import cmp_to_key
+
+from forge.ai.AiCardMemory import AiCardMemory
+from forge.ai.AiCardMemory.MemorySet import MemorySet
+from forge.ai.AiController import AiController
+from forge.ai.AiCostDecision import AiCostDecision
+from forge.ai.AiDeckStatistics import AiDeckStatistics
+from forge.ai.AiProps import AiProps
+from forge.ai.ComputerUtilAbility import ComputerUtilAbility
+from forge.ai.ComputerUtilCard import ComputerUtilCard
+from forge.ai.ComputerUtilCost import ComputerUtilCost
+from forge.ai.PlayerControllerAi import PlayerControllerAi
+from forge.ai.SpecialCardAi import SpecialCardAi
+from forge.ai.SpellApiToAi import SpellApiToAi
+from forge.ai.ability.AnimateAi import AnimateAi
+from forge.card.ColorSet import ColorSet
+from forge.card.MagicColor import MagicColor
+from forge.card.MagicColor.Color import Color
+from forge.card.mana.ManaAtom import ManaAtom
+from forge.card.mana.ManaCost import ManaCost
+from forge.card.mana.ManaCostShard import ManaCostShard
+from forge.game.CardTraitPredicates import CardTraitPredicates
+from forge.game.Game import Game
+from forge.game.GameActionUtil import GameActionUtil
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.ability.ApiType import ApiType
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CardPlayOption import CardPlayOption
+from forge.game.card.CardPredicates import CardPredicates
+from forge.game.card.CardUtil import CardUtil
+from forge.game.card.CounterEnumType import CounterEnumType
+from forge.game.combat.Combat import Combat
+from forge.game.combat.CombatUtil import CombatUtil
+from forge.game.cost.Cost import Cost
+from forge.game.cost.CostAdjustment import CostAdjustment
+from forge.game.cost.CostPart import CostPart
+from forge.game.cost.CostPartMana import CostPartMana
+from forge.game.cost.CostPayEnergy import CostPayEnergy
+from forge.game.cost.CostPayment import CostPayment
+from forge.game.cost.CostSacrifice import CostSacrifice
+from forge.game.keyword.Keyword import Keyword
+from forge.game.mana.Mana import Mana
+from forge.game.mana.ManaCostBeingPaid import ManaCostBeingPaid
+from forge.game.mana.ManaPool import ManaPool
+from forge.game.phase.PhaseType import PhaseType
+from forge.game.player.Player import Player
+from forge.game.player.PlayerPredicates import PlayerPredicates
+from forge.game.replacement.ReplacementEffect import ReplacementEffect
+from forge.game.replacement.ReplacementLayer import ReplacementLayer
+from forge.game.replacement.ReplacementType import ReplacementType
+from forge.game.spellability.AbilityManaPart import AbilityManaPart
+from forge.game.spellability.AbilitySub import AbilitySub
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.staticability.StaticAbilityManaConvert import StaticAbilityManaConvert
+from forge.game.trigger.Trigger import Trigger
+from forge.game.trigger.TriggerType import TriggerType
+from forge.game.zone.Zone import Zone
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.MyRandom import MyRandom
+from forge.util.TextUtil import TextUtil
+
+
+class ListMultimap:
+    """Minimal stand-in for Guava's ListMultimap used internally by this port."""
+    def __init__(self):
+        self._map = {}
+
+    @staticmethod
+    def create():
+        return ListMultimap()
+
+    def put(self, key, value):
+        self._map.setdefault(key, []).append(value)
+
+    def putAll(self, key, values):
+        self._map.setdefault(key, []).extend(list(values))
+
+    def get(self, key):
+        return self._map.setdefault(key, [])
+
+    def keySet(self):
+        return [k for k, v in self._map.items() if len(v) > 0]
+
+    def containsKey(self, key):
+        return key in self._map and len(self._map[key]) > 0
+
+    def isEmpty(self):
+        for v in self._map.values():
+            if len(v) > 0:
+                return False
+        return True
+
+    def replaceValues(self, key, values):
+        self._map[key] = list(values)
+
+    def removeIfValues(self, pred):
+        for k in list(self._map.keys()):
+            self._map[k] = [v for v in self._map[k] if not pred(v)]
+
+
+class ComputerUtilMana:
+    DEBUG_MANA_PAYMENT = False
+
+    @staticmethod
+    def canPayManaCost(*args):
+        if len(args) == 5:
+            cost, sa, ai, extraMana, effect = args
+            return ComputerUtilMana.payManaCost(cost, sa, ai, True, extraMana, True, effect)
+        a0 = args[0]
+        if isinstance(a0, ManaCostBeingPaid):
+            cost, sa, ai, effect = args
+            cost = ManaCostBeingPaid(cost)  # check copy of cost so it doesn't modify the exist cost being paid
+            return ComputerUtilMana.payManaCost(cost, sa, ai, True, True, effect)
+        else:
+            sa, ai, extraMana, effect = args
+            return ComputerUtilMana.canPayManaCost(sa.getPayCosts(), sa, ai, extraMana, effect)
+
+    @staticmethod
+    def payManaCost(*args):
+        n = len(args)
+        if n == 4:
+            if isinstance(args[0], ManaCostBeingPaid):
+                cost, sa, ai, effect = args
+                return ComputerUtilMana.payManaCost(cost, sa, ai, False, True, effect)
+            else:
+                cost, ai, sa, effect = args
+                return ComputerUtilMana.payManaCost(cost, sa, ai, False, 0, True, effect)
+        if n == 7:
+            cost, sa, ai, test, extraMana, checkPlayable, effect = args
+            manaCost = ComputerUtilMana.calculateManaCost(cost, sa, ai, test, extraMana, effect)
+            return ComputerUtilMana.payManaCost(manaCost, sa, ai, test, checkPlayable, effect)
+        # n == 6: private (ManaCostBeingPaid cost, sa, ai, test, checkPlayable, effect)
+        return ComputerUtilMana._payManaCostImpl(*args)
+
+    @staticmethod
+    def getConvergeCount(sa, ai):
+        """Return the number of colors used for payment for Converge"""
+        cost = ComputerUtilMana.calculateManaCost(sa.getPayCosts(), sa, ai, True, 0, False)
+        if ComputerUtilMana.payManaCost(cost, sa, ai, True, True, False):
+            return cost.getSunburst()
+        return 0
+
+    @staticmethod
+    def hasEnoughManaSourcesToCast(sa, ai):
+        # Does not check if mana sources can be used right now, just checks for potential chance.
+        if ai is None or sa is None:
+            return False
+        sa.setActivatingPlayer(ai)
+        return ComputerUtilMana.payManaCost(sa.getPayCosts(), sa, ai, True, 0, False, False)
+
+    @staticmethod
+    def scoreManaProducingCard(card):
+        score = 0
+
+        for ability in card.getSpellAbilities():
+            ability.setActivatingPlayer(card.getController())
+            if ability.isManaAbility():
+                score += ability.calculateScoreForManaAbility()
+                # TODO check TriggersWhenSpent
+            elif not ability.isTrigger() and ability.isPossible():
+                score += 13  # add 13 for any non-mana activated abilities
+
+        if card.isCreature():
+            # treat attacking and blocking as though they're non-mana abilities
+            if CombatUtil.canAttack(card):
+                score += 13
+            if CombatUtil.canBlock(card):
+                score += 13
+
+        return score
+
+    @staticmethod
+    def sortManaAbilities(manaAbilityMap, sa):
+        manaCardMap = {}
+        orderedCards = []
+
+        for shard in manaAbilityMap.keySet():
+            for ability in manaAbilityMap.get(shard):
+                hostCard = ability.getHostCard()
+                if hostCard not in manaCardMap:
+                    manaCardMap[hostCard] = ComputerUtilMana.scoreManaProducingCard(hostCard)
+                    orderedCards.append(hostCard)
+
+        # lower value means better choice
+        orderedCards.sort(key=lambda c: manaCardMap[c])
+
+        if ComputerUtilMana.DEBUG_MANA_PAYMENT:
+            print("Ordered Cards: " + str(len(orderedCards)), end="")
+            for card in orderedCards:
+                print(card.getName() + ", ", end="")
+            print()
+
+        if any(shard.isGeneric() for shard in manaAbilityMap.keySet()):
+            # early tempo is more important so we only look at hand here
+            hand = CardCollection(sa.getActivatingPlayer().getCardsIn(ZoneType.Hand))
+            hand.remove(sa.getHostCard())
+            stats = AiDeckStatistics.fromCards(hand)
+            orderedColorsIdx = [0, 1, 2, 3, 4]
+            # order common colors to the front, increases chance AI can play a second spell after
+            orderedColorsIdx.sort(key=lambda o: stats.maxPips[o], reverse=True)
+            colorsMostCommon = [MagicColor.toShortString(MagicColor.WUBRG[idx])
+                                for idx in orderedColorsIdx if stats.maxPips[idx] > 0]
+        else:
+            colorsMostCommon = None
+
+        def idxOf(card):
+            return orderedCards.index(card) if card in orderedCards else -1
+
+        for shard in manaAbilityMap.keySet():
+            abilities = manaAbilityMap.get(shard)
+            newAbilities = list(abilities)
+
+            if ComputerUtilMana.DEBUG_MANA_PAYMENT:
+                print("Unsorted Abilities: " + str(newAbilities))
+
+            def cmp(ability1, ability2, shard=shard):
+                preOrder = idxOf(ability1.getHostCard()) - idxOf(ability2.getHostCard())
+
+                if preOrder != 0:
+                    # if the score is identical (most likely basics) try keep access to more colors longer
+                    if shard.isGeneric() and manaCardMap.get(ability1.getHostCard()) == manaCardMap.get(ability2.getHostCard()):
+                        for col in colorsMostCommon:
+                            if ability1.canProduce(col) and not ability2.canProduce(col):
+                                return 1
+                            if not ability1.canProduce(col) and ability2.canProduce(col):
+                                return -1
+
+                    # sources were previously sorted, so add their index to connect those values to some degree
+                    # This has been disabled because it makes the AI more likely to sacrifice lands than use creatures for mana
+                    # preOrder += abilities.indexOf(ability1) - abilities.indexOf(ability2)
+
+                    return preOrder
+
+                # Mana abilities on the same card
+                shardMana = shard.toShortString()
+
+                payWithAb1 = shardMana in ability1.getManaPart().mana(ability1)
+                payWithAb2 = shardMana in ability2.getManaPart().mana(ability2)
+
+                if payWithAb1 and not payWithAb2:
+                    return -1
+                elif payWithAb2 and not payWithAb1:
+                    return 1
+
+                return ability1.compareTo(ability2)
+
+            newAbilities.sort(key=cmp_to_key(cmp))
+
+            if ComputerUtilMana.DEBUG_MANA_PAYMENT:
+                print("Sorted Abilities: " + str(newAbilities))
+
+            manaAbilityMap.replaceValues(shard, newAbilities)
+
+            # Sort the first N abilities so that the preferred shard is selected, e.g. Adamant
+            manaPref = sa.getParamOrDefault("AIManaPref", "")
+            if manaPref == "" and sa.getHostCard() is not None and sa.getHostCard().hasSVar("AIManaPref"):
+                manaPref = sa.getHostCard().getSVar("AIManaPref")
+
+            if manaPref != "":
+                prefShardInfo = manaPref.split(":")
+                preferredShard = prefShardInfo[0]
+                preferredShardAmount = int(prefShardInfo[1]) if len(prefShardInfo) > 1 else 3
+
+                if preferredShard != "":
+                    prefSortedAbilities = list(newAbilities)
+                    otherSortedAbilities = list(newAbilities)
+
+                    def pref_cmp(ability1, ability2):
+                        if preferredShard in ability1.getManaPart().mana(ability1):
+                            return -1
+                        elif preferredShard in ability2.getManaPart().mana(ability2):
+                            return 1
+                        return 0
+
+                    def other_cmp(ability1, ability2):
+                        if preferredShard in ability1.getManaPart().mana(ability1):
+                            return 1
+                        elif preferredShard in ability2.getManaPart().mana(ability2):
+                            return -1
+                        return 0
+
+                    prefSortedAbilities.sort(key=cmp_to_key(pref_cmp))
+                    otherSortedAbilities.sort(key=cmp_to_key(other_cmp))
+
+                    finalAbilities = []
+                    i = 0
+                    while i < preferredShardAmount and i < len(prefSortedAbilities):
+                        finalAbilities.append(prefSortedAbilities[i])
+                        i += 1
+                    for ab in otherSortedAbilities:
+                        if ab not in finalAbilities:
+                            finalAbilities.append(ab)
+
+                    manaAbilityMap.replaceValues(shard, finalAbilities)
+
+    @staticmethod
+    def chooseManaAbility(cost, sa, ai, toPay, maList, checkCosts):
+        saHost = sa.getHostCard()
+
+        # CastTotalManaSpent (AIPreference:ManaFrom$Type or AIManaPref$ Type)
+        manaSourceType = ""
+        if saHost.hasSVar("AIPreference"):
+            condition = saHost.getSVar("AIPreference")
+            if condition.startswith("ManaFrom"):
+                manaSourceType = TextUtil.split(condition, '$')[1]
+        elif sa.hasParam("AIManaPref"):
+            manaSourceType = sa.getParam("AIManaPref")
+        if manaSourceType != "":
+            filteredList = list(maList)
+            if manaSourceType == "Snow":
+                filteredList.sort(key=cmp_to_key(lambda ab1, ab2: -1 if (ab1.getHostCard() is not None and ab1.getHostCard().isSnow()
+                                                                         and ab2.getHostCard() is not None and not ab2.getHostCard().isSnow()) else 1))
+                maList = filteredList
+            elif manaSourceType == "Treasure":
+                # Try to spend only one Treasure if possible
+                filteredList.sort(key=cmp_to_key(lambda ab1, ab2: -1 if (ab1.getHostCard() is not None and ab1.getHostCard().getType().hasSubtype("Treasure")
+                                                                         and ab2.getHostCard() is not None and not ab2.getHostCard().getType().hasSubtype("Treasure")) else 1))
+                first = filteredList[0]
+                if first.getHostCard() is not None and first.getHostCard().getType().hasSubtype("Treasure"):
+                    maList.remove(first)
+                    updatedList = []
+                    updatedList.append(first)
+                    updatedList.extend(maList)
+                    maList = updatedList
+            elif manaSourceType == "TreasureMax":
+                # Ok to spend as many Treasures as possible
+                filteredList.sort(key=cmp_to_key(lambda ab1, ab2: -1 if (ab1.getHostCard() is not None and ab1.getHostCard().getType().hasSubtype("Treasure")
+                                                                         and ab2.getHostCard() is not None and not ab2.getHostCard().getType().hasSubtype("Treasure")) else 1))
+                maList = filteredList
+            elif manaSourceType == "NotSameCard":
+                hostName = sa.getHostCard().getName()
+                maList = [saPay for saPay in filteredList if saPay.getHostCard().getName() != hostName]
+            else:
+                pass
+
+        for ma in maList:
+            # this rarely seems like a good idea
+            if ma.getHostCard() == saHost:
+                continue
+
+            if ma.getPayCosts().hasTapCost() and AiCardMemory.isRememberedCard(ai, ma.getHostCard(), MemorySet.PAYS_TAP_COST):
+                continue
+
+            amount = AbilityUtils.calculateAmount(ma.getHostCard(), ma.getParam("Amount"), ma) if ma.hasParam("Amount") else 1
+            if amount <= 0:
+                # wrong gamestate for variable amount
+                continue
+
+            if sa.getApi() == ApiType.Animate:
+                # For abilities like Genju of the Cedars, make sure that we're not activating the aura ability by tapping the enchanted card for mana
+                if saHost.isAura() and sa.getParam("Defined") == "Enchanted" \
+                        and ma.getHostCard() == saHost.getEnchantingCard() \
+                        and ma.getPayCosts().hasTapCost():
+                    continue
+
+                # If a manland was previously animated this turn, do not tap it to animate another manland
+                if saHost.isLand() and ma.getHostCard().isLand() \
+                        and ai.getController().isAI() \
+                        and AnimateAi.isAnimatedThisTurn(ai, ma.getHostCard()):
+                    continue
+            elif sa.getApi() == ApiType.Pump:
+                if (saHost.isInstant() or saHost.isSorcery()) \
+                        and ma.getHostCard().isCreature() \
+                        and ai.getController().isAI() \
+                        and ma.getPayCosts().hasTapCost() \
+                        and ma.getHostCard() in sa.getTargets().getTargetCards():
+                    # do not activate pump instants/sorceries targeting creatures by tapping targeted
+                    # creatures for mana (for example, Servant of the Conduit)
+                    continue
+            elif sa.getApi() == ApiType.Attach \
+                    and saHost.getSVar("AIPaymentPreference") == "AvoidPayingWithAttachTarget":
+                # For cards like Genju of the Cedars, make sure we're not attaching to the same land that will
+                # be tapped to pay its own cost if there's another untapped land like that available
+                if ma.getHostCard() == sa.getTargetCard():
+                    if CardLists.count(ai.getCardsIn(ZoneType.Battlefield),
+                                       lambda c, name=ma.getHostCard().getName(): CardPredicates.nameEquals(name)(c) and CardPredicates.UNTAPPED(c)) > 1:
+                        continue
+
+            paymentChoice = ma
+
+            # Exception: when paying generic mana with Cavern of Souls, prefer the colored mana producing ability
+            # to attempt to make the spell uncounterable when possible.
+            if ComputerUtilAbility.getAbilitySourceName(ma) == "Cavern of Souls" \
+                    and saHost.getType().hasCreatureType(ma.getHostCard().getChosenType()):
+                if toPay == ManaCostShard.COLORLESS and ManaCostShard.GENERIC in cost.getUnpaidShards():
+                    # Deprioritize Cavern of Souls, try to pay generic mana with it instead to use the NoCounter ability
+                    continue
+                elif toPay == ManaCostShard.GENERIC or toPay == ManaCostShard.X:
+                    for ab in maList:
+                        if ab.isManaAbility() and ab.getManaPart().isAnyMana() and ab.hasParam("AddsNoCounter"):
+                            if not ab.getHostCard().isTapped():
+                                paymentChoice = ab
+                                break
+
+            if not ComputerUtilMana.canPayShardWithSpellAbility(toPay, ai, paymentChoice, sa, checkCosts, cost.getXManaCostPaidByColor()):
+                continue
+
+            # these should come last since they reserve the paying cards
+            # (this means if a mana ability has both parts it doesn't currently undo reservations if the second part fails)
+            if not ComputerUtilCost.checkForManaSacrificeCost(ai, ma.getPayCosts(), ma, ma.isTrigger()):
+                continue
+            if not ComputerUtilCost.checkTapTypeCost(ai, ma.getPayCosts(), ma.getHostCard(), sa, AiCardMemory.getMemorySet(ai, MemorySet.PAYS_TAP_COST)):
+                continue
+
+            return paymentChoice
+        return None
+
+    @staticmethod
+    def predictManaReplacement(saPayment, ai, toPay):
+        hostCard = saPayment.getHostCard()
+        game = hostCard.getGame()
+        manaProduced = "S" if (toPay.isSnow() and hostCard.isSnow()) else GameActionUtil.generatedTotalMana(saPayment)
+
+        repParams = AbilityKey.mapFromAffected(hostCard)
+        repParams[AbilityKey.Mana] = manaProduced
+        repParams[AbilityKey.Activator] = ai
+        repParams[AbilityKey.AbilityMana] = saPayment  # RootAbility
+
+        # TODO Damping Sphere might replace later?
+
+        # add flags to replacementEffects to filter better?
+        reList = game.getReplacementHandler().getReplacementList(ReplacementType.ProduceMana, repParams, ReplacementLayer.Other)
+
+        replaceMana = []
+        replaceType = []
+        replaceAmount = []  # currently only multi
+
+        # try to guess the color the mana gets replaced to
+        for re in reList:
+            o = re.getOverridingAbility()
+
+            if o is None or o.getApi() != ApiType.ReplaceMana:
+                continue
+
+            # this one does replace the amount too
+            if o.hasParam("ReplaceMana"):
+                replaceMana.append(o)
+            elif o.hasParam("ReplaceType") or o.hasParam("ReplaceColor"):
+                # this one replaces the color/type
+                # check if this one can be replaced into wanted mana shard
+                replaceType.append(o)
+            elif o.hasParam("ReplaceAmount"):
+                replaceAmount.append(o)
+
+        # it is better to apply these ones first
+        if len(replaceMana) != 0:
+            for saMana in replaceMana:
+                # one of then has to Any
+                # one of then has to C
+                # one of then has to B
+                m = saMana.getParam("ReplaceMana")
+                if m == "Any":
+                    rs = MagicColor.GREEN
+                    for c in MagicColor.WUBRGC:
+                        if toPay.canBePaidWithManaOfColor(c):
+                            rs = c
+                            break
+                    manaProduced = MagicColor.toShortString(rs)
+                else:
+                    manaProduced = m
+
+        # then apply this one
+        if len(replaceType) != 0:
+            for saMana in replaceAmount:
+                card = saMana.getHostCard()
+                if saMana.hasParam("ReplaceType"):
+                    # replace color and colorless
+                    color = saMana.getParam("ReplaceType")
+                    if color == "Any":
+                        rs = MagicColor.GREEN
+                        for c in MagicColor.WUBRGC:
+                            if toPay.canBePaidWithManaOfColor(c):
+                                rs = c
+                                break
+                        color = MagicColor.toShortString(rs)
+                    for c in MagicColor.WUBRGC:
+                        s = MagicColor.toShortString(c)
+                        manaProduced = manaProduced.replace(s, color)
+                elif saMana.hasParam("ReplaceColor"):
+                    color = saMana.getParam("ReplaceColor")
+                    if color == "Chosen":
+                        if card.hasChosenColor():
+                            color = MagicColor.toShortString(card.getChosenColor())
+                    if saMana.hasParam("ReplaceOnly"):
+                        manaProduced = manaProduced.replace(saMana.getParam("ReplaceOnly"), color)
+                    else:
+                        for c in MagicColor.WUBRG:
+                            s = MagicColor.toShortString(c)
+                            manaProduced = manaProduced.replace(s, color)
+
+        # then multiply if able
+        if len(replaceAmount) != 0:
+            totalAmount = 1
+            for saMana in replaceAmount:
+                totalAmount *= int(saMana.getParam("ReplaceAmount"))
+            manaProduced = " ".join([manaProduced] * totalAmount)
+
+        return manaProduced
+
+    @staticmethod
+    def predictManafromSpellAbility(saPayment, ai, toPay):
+        hostCard = saPayment.getHostCard()
+
+        manaProduced = ComputerUtilMana.predictManaReplacement(saPayment, ai, toPay)
+        originalProduced = manaProduced
+
+        if originalProduced == "":
+            return originalProduced
+
+        # Run triggers like Nissa
+        runParams = AbilityKey.mapFromCard(hostCard)
+        runParams[AbilityKey.Activator] = ai  # assuming AI would only ever gives itself mana
+        runParams[AbilityKey.AbilityMana] = saPayment
+        runParams[AbilityKey.Produced] = originalProduced
+        for tr in ai.getGame().getTriggerHandler().getActiveTrigger(TriggerType.TapsForMana, runParams):
+            trSA = tr.ensureAbility()
+            if trSA is None:
+                continue
+            if ApiType.Mana == trSA.getApi():
+                pAmount = AbilityUtils.calculateAmount(trSA.getHostCard(), trSA.getParamOrDefault("Amount", "1"), trSA)
+                produced = trSA.getParam("Produced")
+                if produced == "Chosen":
+                    produced = MagicColor.toShortString(trSA.getHostCard().getChosenColor())
+                manaProduced = manaProduced + " " + " ".join([produced] * pAmount)
+            elif ApiType.ManaReflected == trSA.getApi():
+                colorOrType = trSA.getParamOrDefault("ColorOrType", "Color")
+                # currently Color or Type, Type is colors + colorless
+                reflectProperty = trSA.getParam("ReflectProperty")
+
+                if reflectProperty == "Produced" and originalProduced != "":
+                    # check if a colorless shard can be paid from the trigger
+                    if toPay == ManaCostShard.COLORLESS and colorOrType == "Type" and "C" in originalProduced:
+                        manaProduced = manaProduced + " " + "C"
+                    elif len(originalProduced) == 1:
+                        # if length is only one, and it either is equal C == Type
+                        if colorOrType == "Type" or originalProduced != "C":
+                            manaProduced = manaProduced + " " + originalProduced
+                    else:
+                        # should it look for other shards too?
+                        found = False
+                        for s in originalProduced.split(" "):
+                            if colorOrType == "Type" or (s != "C" and toPay.canBePaidWithManaOfColor(MagicColor.fromName(s))):
+                                found = True
+                                manaProduced = manaProduced + " " + s
+                                break
+                        # no good mana found? just add the first generated color
+                        if not found:
+                            for s in originalProduced.split(" "):
+                                if colorOrType == "Type" or s != "C":
+                                    manaProduced = manaProduced + " " + s
+                                    break
+        return manaProduced
+
+    @staticmethod
+    def getManaSourcesToPayCost(cost, sa, ai):
+        # TODO ManaConvert
+
+        manaSources = CardCollection()
+
+        ComputerUtilMana.adjustManaCostToAvoidNegEffects(cost, sa.getHostCard(), ai)
+        manaSpentToPay = []
+
+        unpaidShards = cost.getUnpaidShards()
+        unpaidShards.sort()  # most difficult shards must come first
+        for part in unpaidShards:
+            if part != ManaCostShard.X:
+                if cost.isPaid():
+                    continue
+
+                # get a mana of this type from floating, bail if none available
+                mana = CostPayment.getMana(ai, part, sa, -1, cost.getXManaCostPaidByColor())
+                if mana is not None:
+                    if ai.getManaPool().tryPayCostWithMana(sa, cost, mana, False):
+                        manaSpentToPay.append(mana)
+
+        if cost.isPaid():
+            # refund any mana taken from mana pool when test
+            ai.getManaPool().refundMana(manaSpentToPay)
+            CostPayment.handleOfferings(sa, True, cost.isPaid())
+            return manaSources
+
+        # arrange all mana abilities by color produced.
+        manaAbilityMap = ComputerUtilMana.groupSourcesByManaColor(ai, True)
+        if manaAbilityMap.isEmpty():
+            ai.getManaPool().refundMana(manaSpentToPay)
+            CostPayment.handleOfferings(sa, True, cost.isPaid())
+            return manaSources
+
+        # select which abilities may be used for each shard
+        sourcesForShards = ComputerUtilMana.groupAndOrderToPayShards(ai, manaAbilityMap, cost)
+
+        ComputerUtilMana.sortManaAbilities(sourcesForShards, sa)
+
+        # Loop over mana needed
+        while not cost.isPaid():
+            toPay = ComputerUtilMana.getNextShardToPay(cost, sourcesForShards)
+
+            maList = sourcesForShards.get(toPay)
+            if maList is None:
+                break
+
+            saPayment = ComputerUtilMana.chooseManaAbility(cost, sa, ai, toPay, maList, True)
+            if saPayment is None:
+                lifeInsteadOfBlack = toPay.isBlack() and ai.hasKeyword("PayLifeInsteadOf:B")
+                if (not toPay.isPhyrexian() and not lifeInsteadOfBlack) or not ai.canPayLife(2, False, sa):
+                    break  # cannot pay
+
+                if toPay.isPhyrexian():
+                    cost.payPhyrexian()
+                elif lifeInsteadOfBlack:
+                    cost.decreaseShard(ManaCostShard.BLACK, 1)
+
+                continue
+
+            manaSources.add(saPayment.getHostCard())
+            ComputerUtilMana.setExpressColorChoice(sa, ai, cost, toPay, saPayment)
+
+            manaProduced = ComputerUtilMana.predictManafromSpellAbility(saPayment, ai, toPay)
+
+            ComputerUtilMana.payMultipleMana(cost, manaProduced, ai)
+
+            # remove from available lists
+            sourcesForShards.removeIfValues(CardTraitPredicates.isHostCard(saPayment.getHostCard()))
+
+        CostPayment.handleOfferings(sa, True, cost.isPaid())
+        ai.getManaPool().refundMana(manaSpentToPay)
+
+        return manaSources
+
+    @staticmethod
+    def _payManaCostImpl(cost, sa, ai, test, checkPlayable, effect):
+        if (sa.isOffering() and sa.getSacrificedAsOffering() is None) or (sa.isEmerge() and sa.getSacrificedAsEmerge() is None):
+            # nothing was chosen
+            return False
+
+        AiCardMemory.clearMemorySet(ai, MemorySet.PAYS_TAP_COST)
+        AiCardMemory.clearMemorySet(ai, MemorySet.PAYS_SAC_COST)
+        ComputerUtilMana.adjustManaCostToAvoidNegEffects(cost, sa.getHostCard(), ai)
+
+        manaSpentToPay = [] if test else sa.getPayingMana()
+        paymentList = []
+        manapool = ai.getManaPool()
+
+        # Apply color/type conversion matrix if necessary (already done via autopay)
+        if ai.getControllingPlayer() is None:
+            manapool.restoreColorReplacements()
+            mayPlay = sa.getMayPlayOption()
+            if not effect:
+                if sa.isSpell() and mayPlay is not None:
+                    mayPlay.applyManaConvert(manapool)
+                elif sa.isActivatedAbility() and sa.getGrantorStatic() is not None and sa.getGrantorStatic().hasParam("ManaConversion"):
+                    AbilityUtils.applyManaColorConversion(manapool, sa.getGrantorStatic().getParam("ManaConversion"))
+            if sa.hasParam("ManaConversion"):
+                AbilityUtils.applyManaColorConversion(manapool, sa.getParam("ManaConversion"))
+            StaticAbilityManaConvert.manaConvert(manapool, ai, sa.getHostCard(), None if (effect and not sa.isCastFromPlayEffect()) else sa)
+
+        # not worth checking if it makes sense to not spend floating first
+        if manapool.payManaCostFromPool(cost, sa, test, manaSpentToPay):
+            CostPayment.handleOfferings(sa, test, cost.isPaid())
+            # paid all from floating mana
+            return True
+
+        phyLifeToPay = 2
+        purePhyrexian = cost.containsOnlyPhyrexianMana()
+        hasConverge = sa.getHostCard().hasConverge()
+        sourcesForShards = ComputerUtilMana.getSourcesForShards(cost, sa, ai, test, checkPlayable, hasConverge)
+
+        testEnergyPool = ai.getCounters(CounterEnumType.ENERGY)
+        toPay = None
+        saExcludeList = []
+
+        # Loop over mana needed
+        while not cost.isPaid():
+            while not cost.isPaid() and not manapool.isEmpty():
+                found = False
+                for color in ManaAtom.MANATYPES:
+                    if manapool.tryPayCostWithColor(color, sa, cost, manaSpentToPay):
+                        found = True
+                        break
+                if not found:
+                    break
+            if cost.isPaid():
+                break
+
+            if sourcesForShards is None and not purePhyrexian:
+                # no mana abilities to use for paying
+                break
+
+            toPay = ComputerUtilMana.getNextShardToPay(cost, sourcesForShards)
+
+            saList = None
+            if hasConverge and (toPay == ManaCostShard.GENERIC or toPay == ManaCostShard.X):
+                unpaidColors = (cost.getUnpaidColors() + cost.getColorsPaid()) ^ ManaCostShard.COLORS_SUPERPOSITION
+                for b in ColorSet.fromMask(unpaidColors):
+                    # try and pay other colors for converge
+                    shard = ManaCostShard.valueOf(b.getColorMask())
+                    saList = sourcesForShards.get(shard)
+                    if saList is not None and len(saList) != 0:
+                        toPay = shard
+                        break
+                if saList is None or len(saList) == 0:
+                    # failed to converge, revert to paying generic
+                    saList = sourcesForShards.get(toPay)
+                    hasConverge = False
+            elif sourcesForShards is None and purePhyrexian:
+                # Phyrexian mana only: no valid mana sources, but can still pay life
+                saList = []
+            else:
+                saList = sourcesForShards.get(toPay)
+
+            saList[:] = [x for x in saList if x not in saExcludeList]
+
+            saPayment = None if len(saList) == 0 else ComputerUtilMana.chooseManaAbility(cost, sa, ai, toPay, saList, checkPlayable or not test)
+
+            if saPayment is not None and ComputerUtilCost.isSacrificeSelfCost(saPayment.getPayCosts()) and sa.isTargeting(saPayment.getHostCard()):
+                # not a good idea to sac a card that you're targeting with the SA you're paying for
+                saExcludeList.append(saPayment)
+                continue
+
+            if saPayment is not None and saPayment.getParam("AILogic") == "BlackLotus" and not SpecialCardAi.BlackLotus.consider(ai, sa, cost):
+                # since we checked this already, do not loop indefinitely checking again
+                saExcludeList.append(saPayment)
+                continue
+
+            if saPayment is None:
+                lifeInsteadOfBlack = toPay.isBlack() and ai.hasKeyword("PayLifeInsteadOf:B")
+                if (not toPay.isPhyrexian() and not lifeInsteadOfBlack) or not ai.canPayLife(phyLifeToPay, False, sa) \
+                        or (ai.getLife() <= phyLifeToPay and not ai.cantLoseForZeroOrLessLife()):
+                    # cannot pay
+                    break
+                if test:
+                    phyLifeToPay += 2
+
+                if sa.hasParam("AIPhyrexianPayment"):
+                    if sa.getParam("AIPhyrexianPayment") == "Never":
+                        break  # unwise to pay
+                    elif sa.getParam("AIPhyrexianPayment").startswith("OnFatalDamage."):
+                        dmg = int(sa.getParam("AIPhyrexianPayment")[14:])
+                        if not any(PlayerPredicates.lifeLessOrEqualTo(dmg)(p) for p in ai.getOpponents()):
+                            break  # no one to finish with the gut shot
+
+                if toPay.isPhyrexian():
+                    cost.payPhyrexian()
+                    if not test:
+                        sa.setSpendPhyrexianMana(True)
+                elif lifeInsteadOfBlack:
+                    cost.decreaseShard(ManaCostShard.BLACK, 1)
+
+                if not test:
+                    ai.payLife(2, sa, False)
+                continue
+            paymentList.append(saPayment)
+
+            ComputerUtilMana.setExpressColorChoice(sa, ai, cost, toPay, saPayment)
+
+            if saPayment.getPayCosts().hasTapCost():
+                AiCardMemory.rememberCard(ai, saPayment.getHostCard(), MemorySet.PAYS_TAP_COST)
+
+            if test:
+                # Check energy when testing
+                energyCost = saPayment.getPayCosts().getCostEnergy()
+                if energyCost is not None:
+                    testEnergyPool -= int(energyCost.getAmount())
+                    if testEnergyPool < 0:
+                        # Can't pay energy cost
+                        break
+
+                manaProduced = ComputerUtilMana.predictManafromSpellAbility(saPayment, ai, toPay)
+                ComputerUtilMana.payMultipleMana(cost, manaProduced, ai)
+
+                # remove to prevent re-usage since resources don't get consumed
+                sourcesForShards.removeIfValues(CardTraitPredicates.isHostCard(saPayment.getHostCard()))
+            else:
+                pay = CostPayment(saPayment.getPayCosts(), saPayment)
+                if not pay.payComputerCosts(AiCostDecision(ai, saPayment, effect, True)):
+                    saList.remove(saPayment)
+                    continue
+
+                ai.getGame().getStack().addAndUnfreeze(saPayment)
+                # subtract mana from mana pool
+                manapool.payManaFromAbility(sa, cost, saPayment)
+
+                # need to consider if another use is now prevented
+                if not cost.isPaid() and saPayment.isActivatedAbility() and not saPayment.getRestrictions().canPlay(saPayment.getHostCard(), saPayment):
+                    sourcesForShards.removeIfValues(lambda s, target=saPayment: s is target)
+
+                if hasConverge:
+                    # hack to prevent converge re-using sources
+                    sourcesForShards.removeIfValues(CardTraitPredicates.isHostCard(saPayment.getHostCard()))
+
+        CostPayment.handleOfferings(sa, test, cost.isPaid())
+
+        # if (DEBUG_MANA_PAYMENT) {
+        #     System.err.printf("%s > [%s] payment has %s (%s +%d) for (%s) %s:%n\t%s%n%n", ...)
+        # }
+
+        # The cost is still unpaid, so refund the mana and report
+        if not cost.isPaid():
+            manapool.refundMana(manaSpentToPay)
+            if test:
+                ComputerUtilMana.resetPayment(paymentList)
+            else:
+                print("ComputerUtilMana: payManaCost() cost was not paid for " + str(sa) + " (" + sa.getHostCard().getName() + "). Didn't find what to pay for " + str(toPay))
+                sa.setSkip(True)
+            return False
+
+        if test:
+            manapool.refundMana(manaSpentToPay)
+            ComputerUtilMana.resetPayment(paymentList)
+
+        return True
+
+    @staticmethod
+    def resetPayment(payments):
+        for sa in payments:
+            sa.getManaPart().clearExpressChoice()
+
+    @staticmethod
+    def getSourcesForShards(cost, sa, ai, test, checkPlayable, hasConverge):
+        """Creates a mapping between the required mana shards and the available spell abilities to pay for them"""
+        # arrange all mana abilities by color produced.
+        manaAbilityMap = ComputerUtilMana.groupSourcesByManaColor(ai, checkPlayable)
+        if manaAbilityMap.isEmpty():
+            # no mana abilities, bailing out
+            return None
+        if ComputerUtilMana.DEBUG_MANA_PAYMENT:
+            print("DEBUG_MANA_PAYMENT: manaAbilityMap = " + str(manaAbilityMap))
+
+        # select which abilities may be used for each shard
+        sourcesForShards = ComputerUtilMana.groupAndOrderToPayShards(ai, manaAbilityMap, cost)
+        if hasConverge:
+            # add extra colors for paying converge
+            unpaidColors = (cost.getUnpaidColors() + cost.getColorsPaid()) ^ ManaCostShard.COLORS_SUPERPOSITION
+            for color in ColorSet.fromMask(unpaidColors):
+                b = color.getColorMask()
+                shard = ManaCostShard.valueOf(b)
+                if not sourcesForShards.containsKey(shard):
+                    if ai.getManaPool().canPayForShardWithColor(shard, b):
+                        for saMana in manaAbilityMap.get(int(b)):
+                            sourcesForShards.get(shard).append(saMana)
+
+        ComputerUtilMana.sortManaAbilities(sourcesForShards, sa)
+        if ComputerUtilMana.DEBUG_MANA_PAYMENT:
+            print("DEBUG_MANA_PAYMENT: sourcesForShards = " + str(sourcesForShards))
+        return sourcesForShards
+
+    @staticmethod
+    def setExpressColorChoice(sa, ai, cost, toPay, saPayment):
+        m = saPayment.getManaPart()
+        if m.isComboMana():
+            # usually we'll want to produce color that matches the shard
+            shared = ColorSet.fromMask(toPay.getColorMask()).getSharedColors(ColorSet.fromNames(m.getComboColors(saPayment).split(" ")))
+            # but other effects might still lead to a more permissive payment
+            if not shared.isColorless():
+                m.setExpressChoice(next(iter(shared)).getShortName())
+            ComputerUtilMana.getComboManaChoice(ai, saPayment, sa, cost)
+        elif saPayment.getApi() == ApiType.ManaReflected:
+            reflected = CardUtil.getReflectableManaColors(saPayment)
+
+            for c in MagicColor.WUBRGC:
+                if ai.getManaPool().canPayForShardWithColor(toPay, c) and (MagicColor.toLongString(c) in reflected):
+                    m.setExpressChoice(MagicColor.toShortString(c))
+                    return
+        elif m.isAnyMana():
+            colorChoice = 0
+            if toPay.isOr2Generic():
+                colorChoice = toPay.getColorMask()
+            else:
+                for c in MagicColor.WUBRG:
+                    if ai.getManaPool().canPayForShardWithColor(toPay, c):
+                        colorChoice = c
+                        break
+            m.setExpressChoice(MagicColor.toShortString(colorChoice))
+
+    @staticmethod
+    def canPayShardWithSpellAbility(toPay, ai, ma, sa, checkCosts, xManaCostPaidByColor):
+        sourceCard = ma.getHostCard()
+
+        if ComputerUtilMana.isManaSourceReserved(ai, sourceCard, sa):
+            return False
+
+        if toPay.isSnow() and not sourceCard.isSnow():
+            return False
+
+        m = ma.getManaPart()
+        if not m.meetsManaRestrictions(sa):
+            return False
+
+        if checkCosts:
+            # Check if AI can still play this mana ability
+            ma.setActivatingPlayer(ai)
+            if not CostPayment.canPayAdditionalCosts(ma.getPayCosts(), ma, False):
+                return False
+            elif ma.getRestrictions() is not None and ma.getRestrictions().isInstantSpeed():
+                return False
+
+        if m.isComboMana():
+            for s in m.getComboColors(ma).split(" "):
+                if toPay == ManaCostShard.COLORED_X and not ManaCostBeingPaid.canColoredXShardBePaidByColor(s, xManaCostPaidByColor):
+                    continue
+
+                if not sa.allowsPayingWithShard(sourceCard, ManaAtom.fromName(s)):
+                    continue
+
+                if s == "Any" or ai.getManaPool().canPayForShardWithColor(toPay, ManaAtom.fromName(s)):
+                    return True
+            return False
+
+        if ma.getApi() == ApiType.ManaReflected:
+            reflected = CardUtil.getReflectableManaColors(ma)
+
+            for c in MagicColor.WUBRGC:
+                if toPay == ManaCostShard.COLORED_X and not ManaCostBeingPaid.canColoredXShardBePaidByColor(MagicColor.toShortString(c), xManaCostPaidByColor):
+                    continue
+
+                if not sa.allowsPayingWithShard(sourceCard, c):
+                    continue
+
+                if ai.getManaPool().canPayForShardWithColor(toPay, c) and (MagicColor.toLongString(c) in reflected):
+                    m.setExpressChoice(MagicColor.toShortString(c))
+                    return True
+            return False
+
+        if not sa.allowsPayingWithShard(sourceCard, MagicColor.fromName(m.getOrigProduced())):
+            return False
+
+        if toPay == ManaCostShard.COLORED_X:
+            for s in m.mana(ma).split(" "):
+                if ManaCostBeingPaid.canColoredXShardBePaidByColor(s, xManaCostPaidByColor):
+                    return True
+            return False
+
+        return True
+
+    @staticmethod
+    def isManaSourceReserved(ai, sourceCard, sa):
+        # isManaSourceReserved returns true if sourceCard is reserved as a mana source for payment
+        # for the future spell to be cast in another phase. However, if "sa" (the spell ability that is
+        # being considered for casting) is high priority, then mana source reservation will be ignored.
+        if sa is None:
+            return False
+        if not isinstance(ai.getController(), PlayerControllerAi):
+            return False
+
+        # Mana reserved for spell synchronization
+        if AiCardMemory.isRememberedCard(ai, sourceCard, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_NEXT_SPELL):
+            return True
+
+        curPhase = ai.getGame().getPhaseHandler().getPhase()
+        aic = ai.getController().getAi()
+        chanceToReserve = aic.getIntProperty(AiProps.RESERVE_MANA_FOR_MAIN2_CHANCE)
+
+        # For combat tricks, always obey mana reservation
+        if curPhase == PhaseType.COMBAT_DECLARE_BLOCKERS or curPhase == PhaseType.CLEANUP:
+            if not ai.getGame().getPhaseHandler().isPlayerTurn(ai):
+                AiCardMemory.clearMemorySet(ai, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_ENEMY_DECLBLK)
+                AiCardMemory.clearMemorySet(ai, AiCardMemory.MemorySet.CHOSEN_FOG_EFFECT)
+            else:
+                AiCardMemory.clearMemorySet(ai, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_DECLBLK)
+        else:
+            if AiCardMemory.isRememberedCard(ai, sourceCard, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_DECLBLK) or \
+                    AiCardMemory.isRememberedCard(ai, sourceCard, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_ENEMY_DECLBLK):
+                # This mana source is held elsewhere for a combat trick.
+                return True
+
+        # If it's a low priority spell (it's explicitly marked so elsewhere in the AI with a SVar), always
+        # obey mana reservations for Main 2; otherwise, obey mana reservations depending on the "chance to reserve"
+        # AI profile variable.
+        if sa.getSVar("LowPriorityAI") == "":
+            if chanceToReserve == 0 or MyRandom.getRandom().nextInt(100) >= chanceToReserve:
+                return False
+
+        if curPhase == PhaseType.MAIN2 or curPhase == PhaseType.CLEANUP:
+            AiCardMemory.clearMemorySet(ai, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_MAIN2)
+        else:
+            if AiCardMemory.isRememberedCard(ai, sourceCard, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_MAIN2):
+                # This mana source is held elsewhere for a Main Phase 2 spell.
+                return True
+
+        return False
+
+    @staticmethod
+    def getNextShardToPay(cost, sourcesForShards):
+        shardsToPay = list(cost.getDistinctShards())
+
+        def sizeOf(shard):
+            return len(sourcesForShards.get(shard)) if sourcesForShards is not None else 0
+
+        # optimize order so that the shards with less available sources are considered first
+        shardsToPay.sort(key=sizeOf)
+        # mind the priorities
+        # * Pay mono-colored first
+        # * Pay 2/C with matching colors
+        # * pay hybrids
+        # * pay phyrexian, keep mana for colorless
+        # * pay generic
+        return cost.getShardToPayByPriority(shardsToPay, ColorSet.WUBRG.getColor())
+
+    @staticmethod
+    def adjustManaCostToAvoidNegEffects(cost, card, ai):
+        # Make mana needed to avoid negative effect a mandatory cost for the AI
+        for manaPart in card.getSVar("ManaNeededToAvoidNegativeEffect").split(","):
+            # convert long color strings to short color strings
+            if manaPart == "":
+                continue
+
+            mask = ManaAtom.fromName(manaPart)
+
+            # make mana mandatory for AI
+            if not cost.needsColor(mask, ai.getManaPool()) and cost.getGenericManaAmount() > 0:
+                shard = ManaCostShard.valueOf(mask)
+                cost.increaseShard(shard, 1)
+                cost.decreaseGenericMana(1)
+
+    @staticmethod
+    def getComboManaChoice(ai, manaAb, saRoot, cost):
+        choiceString = ""
+        source = manaAb.getHostCard()
+        abMana = manaAb.getManaPart()
+
+        if abMana.isComboMana():
+            amount = AbilityUtils.calculateAmount(source, manaAb.getParam("Amount"), manaAb) if manaAb.hasParam("Amount") else 1
+            testCost = ManaCostBeingPaid(cost)
+            comboColors = abMana.getComboColors(manaAb).split(" ")
+            for nMana in range(1, amount + 1):
+                choice = ""
+                # Use expressChoice first
+                if abMana.getExpressChoice() != "":
+                    choice = abMana.getExpressChoice()
+                    abMana.clearExpressChoice()
+                    colorMask = ManaAtom.fromName(choice)
+                    if manaAb.canProduce(choice) and ComputerUtilMana.satisfiesColorChoice(abMana, choiceString, choice) and testCost.isAnyPartPayableWith(colorMask, ai.getManaPool()):
+                        choiceString += choice
+                        ComputerUtilMana.payMultipleMana(testCost, choice, ai)
+                        continue
+                # check colors needed for cost
+                if not testCost.isPaid():
+                    # Loop over combo colors
+                    for color in comboColors:
+                        if ComputerUtilMana.satisfiesColorChoice(abMana, choiceString, choice) and testCost.needsColor(ManaAtom.fromName(color), ai.getManaPool()):
+                            ComputerUtilMana.payMultipleMana(testCost, color, ai)
+                            if nMana != 1:
+                                choiceString += " "
+                            choiceString += color
+                            choice = color
+                            break
+                    if choice != "":
+                        continue
+                # check if combo mana can produce most common color in hand
+                commonColor = ComputerUtilCard.getMostProminentColor(ai.getCardsIn(ZoneType.Hand))
+                if commonColor != "" and ComputerUtilMana.satisfiesColorChoice(abMana, choiceString, MagicColor.toShortString(commonColor)) and (MagicColor.toShortString(commonColor) in abMana.getComboColors(manaAb)):
+                    choice = MagicColor.toShortString(commonColor)
+                else:
+                    # default to first available color
+                    for c in comboColors:
+                        if ComputerUtilMana.satisfiesColorChoice(abMana, choiceString, c):
+                            choice = c
+                            break
+                if nMana != 1:
+                    choiceString += " "
+                choiceString += choice
+        if choiceString == "":
+            choiceString = "0"
+
+        abMana.setExpressChoice(choiceString)
+
+    @staticmethod
+    def satisfiesColorChoice(abMana, choices, choice):
+        return ("Different" not in abMana.getOrigProduced()) or (choice not in choices)
+
+    @staticmethod
+    def payMultipleMana(testCost, mana, p):
+        unused = []
+        for manaPart in TextUtil.split(mana, ' '):
+            if manaPart.isdigit():
+                i = int(manaPart)
+                while i > 0:
+                    wasNeeded = testCost.ai_payMana("1", p.getManaPool())
+                    if not wasNeeded:
+                        unused.append(str(i))
+                        break
+                    i -= 1
+            else:
+                color = MagicColor.toShortString(manaPart)
+                wasNeeded = testCost.ai_payMana(color, p.getManaPool())
+                if not wasNeeded:
+                    unused.append(color)
+        return None if len(unused) == 0 else " ".join(unused)
+
+    @staticmethod
+    def groupAndOrderToPayShards(ai, manaAbilityMap, cost):
+        """Find all mana sources."""
+        res = ListMultimap.create()
+
+        if (cost.getGenericManaAmount() > 0 or cost.hasAnyKind(ManaAtom.OR_2_GENERIC)) and manaAbilityMap.containsKey(ManaAtom.GENERIC):
+            res.putAll(ManaCostShard.GENERIC, manaAbilityMap.get(ManaAtom.GENERIC))
+
+        # loop over cost parts
+        for shard in cost.getDistinctShards():
+            if ComputerUtilMana.DEBUG_MANA_PAYMENT:
+                print("DEBUG_MANA_PAYMENT: shard = " + str(shard))
+            if shard == ManaCostShard.S:
+                res.putAll(shard, manaAbilityMap.get(ManaAtom.IS_SNOW))
+                continue
+
+            if shard.isOr2Generic():
+                colorKey = int(shard.getColorMask())
+                if manaAbilityMap.containsKey(colorKey):
+                    res.putAll(shard, manaAbilityMap.get(colorKey))
+                if manaAbilityMap.containsKey(ManaAtom.GENERIC):
+                    res.putAll(shard, manaAbilityMap.get(ManaAtom.GENERIC))
+                continue
+
+            if shard == ManaCostShard.GENERIC:
+                continue
+
+            for colorint in manaAbilityMap.keySet():
+                # apply mana color change matrix here
+                if ai.getManaPool().canPayForShardWithColor(shard, colorint):
+                    for sa in manaAbilityMap.get(colorint):
+                        if sa not in res.get(shard):
+                            res.put(shard, sa)
+
+        return res
+
+    @staticmethod
+    def calculateManaCost(cost, sa, payer, test, extraMana, effect):
+        """Calculate the ManaCost for the given SpellAbility."""
+        host = sa.getHostCard()
+        castFromBackup = None
+        if test and sa.isSpell() and not host.isInZone(ZoneType.Stack):
+            castFromBackup = host.getCastFrom()
+            host.setCastFrom(host.getZone() if host.getZone() is not None else None)
+
+        if test:
+            payCosts = CostAdjustment.adjust(cost, sa, effect)
+            # prevent asking Human when only predicting
+            if not payer.getController().isAI():
+                sa.setMaxWaterbend(None)
+        else:
+            # when not testing CostPayment already handled raise
+            payCosts = cost
+        manapart = payCosts.getCostMana() if payCosts is not None else None
+        if payCosts is not None:
+            mana = ManaCost.ZERO if manapart is None else manapart.getManaCostFor(sa)
+        else:
+            mana = ManaCost.NO_COST
+
+        manaCost = ManaCostBeingPaid(mana)
+
+        # Tack xMana Payments into mana here if X is a set value
+        if manaCost.getXcounter() > 0 or extraMana > 0:
+            manaToAdd = 0
+            xCounter = manaCost.getXcounter()
+            if test and extraMana > 0:
+                multiplicator = max(xCounter, 1)
+                manaToAdd = extraMana * multiplicator
+            else:
+                manaToAdd = AbilityUtils.calculateAmount(host, sa.getParamOrDefault("XAlternative", "X"), sa) * xCounter
+
+            if manaToAdd < 1 and payCosts is not None and payCosts.getCostMana().getXMin() > 0:
+                # AI cannot really handle X costs properly but this keeps AI from violating rules
+                manaToAdd = 1
+
+            xColor = sa.getXColor()
+            if xColor is None:
+                xColor = "1"
+            if host.hasKeyword("Spend only colored mana on X. No more than one mana of each color may be spent this way."):
+                xColor = "WUBRGX"
+            if xCounter > 0:
+                manaCost.setXManaCostPaid(manaToAdd // xCounter, xColor)
+            else:
+                manaCost.increaseShard(ManaCostShard.parseNonGeneric(xColor), manaToAdd)
+
+            if not test:
+                sa.setXManaCostPaid(manaToAdd // xCounter)
+
+        CostAdjustment.adjust(manaCost, sa, payer, None, test, effect)
+
+        if sa.getParam("Announce") == "NumTimes":  # e.g. the Adversary cycle
+            mkCost = sa.getPayCosts().getTotalMana()
+            mCost = ManaCost.ZERO
+            for i in range(10):
+                mCost = ManaCost.combine(mCost, mkCost)
+                mcbp = ManaCostBeingPaid(mCost)
+                if not ComputerUtilMana.canPayManaCost(mcbp, sa, sa.getActivatingPlayer(), True):
+                    host.setSVar("NumTimes", "Number$" + str(i))
+                    break
+
+        if test and sa.isSpell() and not host.isInZone(ZoneType.Stack):
+            host.setCastFrom(castFromBackup)
+
+        return manaCost
+
+    @staticmethod
+    def getAvailableManaEstimate(*args):
+        # This method can be used to estimate the total amount of mana available to the player,
+        # including the mana available in that player's mana pool
+        if len(args) == 1:
+            p = args[0]
+            return ComputerUtilMana.getAvailableManaEstimate(p, True)
+
+        p, checkPlayable = args
+        availableMana = 0
+
+        srcs = CardLists.filter(p.getCardsIn(ZoneType.Battlefield), lambda c: len(c.getManaAbilities()) != 0)
+
+        producedWithCost = 0
+        hasSourcesWithNoManaCost = False
+
+        for src in srcs:
+            maxProduced = 0
+
+            for ma in src.getManaAbilities():
+                ma.setActivatingPlayer(p)
+                if (not checkPlayable) or ma.canPlay():
+                    costsToActivate = ma.getPayCosts().getCostMana().convertAmount() if ma.getPayCosts().getCostMana() is not None else 0
+                    producedMana = len(ma.getParamOrDefault("Produced", "").split(" "))
+                    producedAmount = AbilityUtils.calculateAmount(src, ma.getParamOrDefault("Amount", "1"), ma)
+
+                    producedTotal = producedMana * producedAmount - costsToActivate
+
+                    if costsToActivate > 0:
+                        producedWithCost += producedTotal
+                    elif not hasSourcesWithNoManaCost:
+                        hasSourcesWithNoManaCost = True
+
+                    if producedTotal > maxProduced:
+                        maxProduced = producedTotal
+
+            availableMana += maxProduced
+
+        availableMana += p.getManaPool().totalMana()
+
+        if producedWithCost > 0 and not hasSourcesWithNoManaCost:
+            availableMana -= producedWithCost  # probably can't activate them, no other mana available
+
+        return availableMana
+
+    @staticmethod
+    def getAvailableManaSources(ai, checkPlayable):
+        lst = CardCollection.combine(ai.getCardsIn(ZoneType.Battlefield), ai.getCardsIn(ZoneType.Hand))
+
+        def srcFilter(c):
+            for am in ComputerUtilMana.getAIPlayableMana(c):
+                am.setActivatingPlayer(ai)
+                if (not checkPlayable) or (am.canPlay() and am.checkRestrictions(ai)):
+                    return True
+            return False
+
+        manaSources = CardLists.filter(lst, srcFilter)
+
+        sortedManaSources = CardCollection()
+        otherManaSources = CardCollection()
+        useLastManaSources = CardCollection()
+        colorlessManaSources = CardCollection()
+        oneManaSources = CardCollection()
+        twoManaSources = CardCollection()
+        threeManaSources = CardCollection()
+        fourManaSources = CardCollection()
+        fiveManaSources = CardCollection()
+        anyColorManaSources = CardCollection()
+
+        # Sort mana sources
+        # 1. Use lands that can only produce colorless mana without
+        # drawback/cost first
+        # 2. Search for mana sources that have a certain number of abilities
+        # 3. Use lands that produce any color many
+        # 4. all other sources (creature, costs, drawback, etc.)
+        for card in manaSources:
+            # exclude creature sources that will tap as a part of an attack declaration
+            if card.isCreature():
+                if getattr(card.getGame().getPhaseHandler(), "is")(PhaseType.COMBAT_DECLARE_ATTACKERS, ai):
+                    combat = card.getGame().getCombat()
+                    if card in combat.getAttackers() and not card.hasKeyword(Keyword.VIGILANCE):
+                        continue
+            # exclude cards that will deal lethal damage when tapped
+            if ai.canLoseLife() and not ai.cantLoseForZeroOrLessLife():
+                dealsLethalOnTap = False
+                for t in card.getTriggers():
+                    if t.getMode() == TriggerType.Taps or t.getMode() == TriggerType.TapsForMana:
+                        trigSa = t.getOverridingAbility()
+                        if trigSa.getApi() == ApiType.DealDamage and trigSa.getParamOrDefault("Defined", "") == "You":
+                            numDamage = AbilityUtils.calculateAmount(card, trigSa.getParam("NumDmg"), None)
+                            numDamage = ai.staticReplaceDamage(numDamage, card, False)
+                            if ai.getLife() <= numDamage:
+                                dealsLethalOnTap = True
+                                break
+                if dealsLethalOnTap:
+                    continue
+
+            if card.isCreature() or card.isEnchanted():
+                otherManaSources.add(card)
+                continue  # don't use creatures before other permanents
+
+            usableManaAbilities = 0
+            needsLimitedResources = False
+            unpreferredCost = False
+            producesAnyColor = False
+            manaAbilities = ComputerUtilMana.getAIPlayableMana(card)
+
+            for m in manaAbilities:
+                if m.getManaPart().isAnyMana():
+                    producesAnyColor = True
+
+                cost = m.getPayCosts()
+
+                if cost is not None:
+                    # if the AI can't pay the additional costs skip the mana ability
+                    m.setActivatingPlayer(ai)
+                    if not CostPayment.canPayAdditionalCosts(m.getPayCosts(), m, False):
+                        continue
+
+                    if not cost.isReusuableResource():
+                        for part in cost.getCostParts():
+                            if isinstance(part, CostSacrifice) and not part.payCostFromSource():
+                                unpreferredCost = True
+                        needsLimitedResources = not unpreferredCost
+
+                sub = m.getSubAbility()
+                # We really shouldn't be hardcoding names here. ChkDrawback should just return true for them
+                if sub is not None and card.getName() != "Pristine Talisman" and card.getName() != "Zhur-Taa Druid":
+                    if not SpellApiToAi.Converter.get(sub).chkDrawbackWithSubs(ai, sub).willingToPlay():
+                        continue
+                    needsLimitedResources = True  # TODO: check for good drawbacks (gainLife)
+                usableManaAbilities += 1
+
+            if unpreferredCost:
+                useLastManaSources.add(card)
+            elif needsLimitedResources:
+                otherManaSources.add(card)
+            elif producesAnyColor:
+                anyColorManaSources.add(card)
+            elif usableManaAbilities == 1:
+                if manaAbilities[0].getManaPart().mana(manaAbilities[0]) == "C":
+                    colorlessManaSources.add(card)
+                else:
+                    oneManaSources.add(card)
+            elif usableManaAbilities == 2:
+                twoManaSources.add(card)
+            elif usableManaAbilities == 3:
+                threeManaSources.add(card)
+            elif usableManaAbilities == 4:
+                fourManaSources.add(card)
+            else:
+                fiveManaSources.add(card)
+        sortedManaSources.addAll(sortedManaSources.size(), colorlessManaSources)
+        sortedManaSources.addAll(sortedManaSources.size(), oneManaSources)
+        sortedManaSources.addAll(sortedManaSources.size(), twoManaSources)
+        sortedManaSources.addAll(sortedManaSources.size(), threeManaSources)
+        sortedManaSources.addAll(sortedManaSources.size(), fourManaSources)
+        sortedManaSources.addAll(sortedManaSources.size(), fiveManaSources)
+        sortedManaSources.addAll(sortedManaSources.size(), anyColorManaSources)
+        # use better creatures later
+        ComputerUtilCard.sortByEvaluateCreature(otherManaSources)
+        otherManaSources.reverse()
+        sortedManaSources.addAll(sortedManaSources.size(), otherManaSources)
+        # This should be things like sacrifice other stuff.
+        ComputerUtilCard.sortByEvaluateCreature(useLastManaSources)
+        useLastManaSources.reverse()
+        sortedManaSources.addAll(sortedManaSources.size(), useLastManaSources)
+
+        if ComputerUtilMana.DEBUG_MANA_PAYMENT:
+            print("DEBUG_MANA_PAYMENT: sortedManaSources = " + str(sortedManaSources))
+        return sortedManaSources
+
+    @staticmethod
+    def groupSourcesByManaColor(ai, checkPlayable):
+        manaMap = ListMultimap.create()
+        game = ai.getGame()
+
+        # Loop over all current available mana sources
+        for sourceCard in ComputerUtilMana.getAvailableManaSources(ai, checkPlayable):
+            if ComputerUtilMana.DEBUG_MANA_PAYMENT:
+                print("DEBUG_MANA_PAYMENT: groupSourcesByManaColor sourceCard = " + str(sourceCard))
+            for m in ComputerUtilMana.getAIPlayableMana(sourceCard):
+                if ComputerUtilMana.DEBUG_MANA_PAYMENT:
+                    print("DEBUG_MANA_PAYMENT: groupSourcesByManaColor m = " + str(m))
+                m.setActivatingPlayer(ai)
+                if checkPlayable and not m.canPlay():
+                    continue
+
+                # don't kill yourself
+                abCost = m.getPayCosts()
+                if not ComputerUtilCost.checkLifeCost(ai, abCost, sourceCard, 1, m):
+                    continue
+
+                # don't use abilities with dangerous drawbacks
+                # TODO this has already been checked earlier
+                sub = m.getSubAbility()
+                if sub is not None and not SpellApiToAi.Converter.get(sub).chkDrawbackWithSubs(ai, sub).willingToPlay():
+                    continue
+
+                manaMap.put(ManaAtom.GENERIC, m)  # add to generic source list
+
+                tail = m
+                while tail is not None:
+                    mp = m.getManaPart()
+                    if mp is not None and tail.metConditions():
+                        # TODO Replacement Check currently doesn't work for reflected colors
+
+                        # setup produce mana replacement effects
+                        origin = mp.getOrigProduced()
+                        repParams = AbilityKey.mapFromAffected(sourceCard)
+                        repParams[AbilityKey.Mana] = origin
+                        repParams[AbilityKey.Activator] = ai
+                        repParams[AbilityKey.AbilityMana] = m  # RootAbility
+
+                        reList = game.getReplacementHandler().getReplacementList(ReplacementType.ProduceMana, repParams, ReplacementLayer.Other)
+
+                        if len(reList) == 0:
+                            reflectedColors = CardUtil.getReflectableManaColors(m)
+                            # find possible colors
+                            for color in MagicColor.WUBRG:
+                                if tail.canThisProduce(MagicColor.toShortString(color)) or (MagicColor.toLongString(color) in reflectedColors):
+                                    manaMap.put(int(color), m)
+                            if m.canThisProduce("C") or (MagicColor.Constant.COLORLESS in reflectedColors):
+                                manaMap.put(ManaAtom.COLORLESS, m)
+                        else:
+                            # try to guess the color the mana gets replaced to
+                            for re in reList:
+                                o = re.getOverridingAbility()
+                                replaced = origin
+                                if o is None or o.getApi() != ApiType.ReplaceMana:
+                                    continue
+                                if o.hasParam("ReplaceMana"):
+                                    replaced = o.getParam("ReplaceMana")
+                                elif o.hasParam("ReplaceType"):
+                                    color = o.getParam("ReplaceType")
+                                    for c in MagicColor.WUBRGC:
+                                        s = MagicColor.toShortString(c)
+                                        replaced = replaced.replace(s, color)
+                                elif o.hasParam("ReplaceColor"):
+                                    color = o.getParam("ReplaceColor")
+                                    if o.hasParam("ReplaceOnly"):
+                                        replaced = replaced.replace(o.getParam("ReplaceOnly"), color)
+                                    else:
+                                        for c in MagicColor.WUBRG:
+                                            s = MagicColor.toShortString(c)
+                                            replaced = replaced.replace(s, color)
+
+                                for color in MagicColor.WUBRG:
+                                    if replaced == "Any" or (MagicColor.toShortString(color) in replaced):
+                                        manaMap.put(int(color), m)
+
+                                if "C" in replaced:
+                                    manaMap.put(ManaAtom.COLORLESS, m)
+                    tail = tail.getSubAbility()
+
+                if m.getHostCard().isSnow():
+                    manaMap.put(ManaAtom.IS_SNOW, m)
+                if ComputerUtilMana.DEBUG_MANA_PAYMENT:
+                    print("DEBUG_MANA_PAYMENT: groupSourcesByManaColor manaMap  = " + str(manaMap))
+            # end of mana abilities loop
+        # end of mana sources loop
+
+        return manaMap
+
+    @staticmethod
+    def determineLeftoverMana(*args):
+        if len(args) == 3:
+            sa, player, effect = args
+            max = 99
+            if sa.hasParam("XMax"):
+                max = min(max, AbilityUtils.calculateAmount(sa.getHostCard(), sa.getParam("XMax"), sa))
+            if sa.hasParam("AIXMax"):
+                # when maximum depends on X calculate once before to avoid running more expensive checks for higher limit
+                sa.setXManaCostPaid(max)
+                max = min(max, AbilityUtils.calculateAmount(sa.getHostCard(), sa.getParam("AIXMax"), sa))
+            for i in range(1, max + 1):
+                if not ComputerUtilMana.canPayManaCost(sa.getRootAbility(), player, i, effect):
+                    return i - 1
+            return max
+
+        sa, player, shardColor, effect = args
+        origCost = sa.getRootAbility().getPayCosts().getTotalMana()
+
+        shardSurplus = shardColor
+        for i in range(1, 100):
+            extra = ManaCost(shardSurplus)
+            if not ComputerUtilMana.canPayManaCost(ManaCostBeingPaid(ManaCost.combine(origCost, extra)), sa, player, effect):
+                return i - 1
+            shardSurplus += " " + shardColor
+        return 99
+
+    @staticmethod
+    def getAIPlayableMana(c):
+        # Returns basic mana abilities plus "reflected mana" abilities
+        res = []
+        for a in c.getManaAbilities():
+            # if a mana ability has a mana cost the AI will miscalculate
+            # if there is a parent ability the AI can't use it
+            cost = a.getPayCosts()
+            if cost.hasManaCost() or (a.getApi() != ApiType.Mana and a.getApi() != ApiType.ManaReflected):
+                continue
+
+            if a.getRestrictions() is not None and a.getRestrictions().isInstantSpeed():
+                continue
+
+            if a not in res:
+                if cost.isReusuableResource():
+                    res.insert(0, a)
+                else:
+                    res.append(a)
+        return res
+
+    @staticmethod
+    def getConvokeOrImproviseFromList(cost, list, artifacts, creatures):
+        """Matches list of creatures to shards in mana cost for convoking."""
+        convoke = {}
+        convoked = None
+        if creatures and not artifacts:
+            # Run for convoke but not improvise or waterbending
+            for toPay in cost:
+                if toPay.isSnow() or toPay.isColorless():
+                    continue
+                for c in list:
+                    mask = c.getColor().getColor() & toPay.getColorMask()
+                    if mask != 0:
+                        convoked = c
+                        convoke[c] = toPay
+                        break
+                if convoked is not None:
+                    list.remove(convoked)
+                convoked = None
+        i = 0
+        while i < len(list) and i < cost.getGenericCost():
+            convoke[list[i]] = ManaCostShard.GENERIC
+            i += 1
+        return convoke
 ```

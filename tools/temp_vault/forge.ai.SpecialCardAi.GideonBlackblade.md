@@ -37,10 +37,10 @@ classDiagram
 
 GideonBlackblade is a stateless AI helper, nested as a static inner class of `SpecialCardAi`, that encapsulates the decision logic for casting the card Gideon Blackblade. Its sole `consider` method evaluates a `SpellAbility` for a given `Player`, selecting the best legal target among the AI's own battlefield permanents and returning an `AiAbilityDecision` that signals the engine to play the ability.
 
-The class collaborates with the game model through `Player` and `SpellAbility`, queries the AI's controlled permanents as a `CardCollectionView`, and delegates target-quality ranking to `ComputerUtilCard`. By resetting targets and re-filtering for targetability before choosing, it ensures a valid selection each evaluation, and it always returns a maximum-confidence `WillPlay` verdict—reflecting an intent to encapsulate per-card AI behavior in small, self-contained, side-effect-light units invoked by the broader ability-decision framework.
+The class collaborates with the game model through `Player` and `SpellAbility`, queries the AI's controlled permanents as a `CardCollectionView`, and delegates target-quality ranking to `ComputerUtilCard`. By resetting targets and re-filtering for targetability before choosing, it ensures a valid selection each evaluation, and it always returns a maximum-confidence `WillPlay` verdictâ€”reflecting an intent to encapsulate per-card AI behavior in small, self-contained, side-effect-light units invoked by the broader ability-decision framework.
 
 ## Source
-`forge-ai/src/main/java/forge/ai/SpecialCardAi.java` â€” declaration excerpt
+`forge-ai/src/main/java/forge/ai/SpecialCardAi.java` Ã¢â‚¬â€ declaration excerpt
 
 ```java
     // Gideon Blackblade
@@ -54,4 +54,29 @@ The class collaborates with the game model through `Player` and `SpellAbility`, 
             return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
         }
     }
+```
+
+## Python
+`forge/ai/SpecialCardAi/GideonBlackblade.py`
+
+```python
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.ai.ComputerUtilCard import ComputerUtilCard
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CardPredicates import CardPredicates
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+
+
+class GideonBlackblade:
+    @staticmethod
+    def consider(ai: Player, sa: SpellAbility) -> AiAbilityDecision:
+        sa.resetTargets()
+        otb: CardCollectionView = CardLists.filter(ai.getCardsIn(ZoneType.Battlefield), CardPredicates.isTargetableBy(sa))
+        if not otb.isEmpty():
+            sa.getTargets().add(ComputerUtilCard.getBestAI(otb))
+        return AiAbilityDecision(100, AiPlayDecision.WillPlay)
 ```

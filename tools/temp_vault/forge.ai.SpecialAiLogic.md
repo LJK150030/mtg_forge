@@ -48,9 +48,9 @@ classDiagram
 
 ## Design Description
 
-Stateless utility class in `forge.ai` that centralizes AI decision routines shared by cards whose effects span different ability types (ChangeZone, Destroy, PutCounter, Counter). Per the convention in its header comment, each `doXXXLogic` method takes a `Player` and `SpellAbility`, performs the full evaluation, and configures the ability's targets before returning its verdict—either a `boolean` or, for the counter-based aristocrat routine, a richer `AiAbilityDecision` carrying a score and play rationale.
+Stateless utility class in `forge.ai` that centralizes AI decision routines shared by cards whose effects span different ability types (ChangeZone, Destroy, PutCounter, Counter). Per the convention in its header comment, each `doXXXLogic` method takes a `Player` and `SpellAbility`, performs the full evaluation, and configures the ability's targets before returning its verdictâ€”either a `boolean` or, for the counter-based aristocrat routine, a richer `AiAbilityDecision` carrying a score and play rationale.
 
-Holding no instance state, it collaborates broadly with the game model: querying `Game`, `PhaseHandler`, and `Combat` for context and filtering `Card`/`CardCollection` candidates, while leaning on helpers like `ComputerUtilCard`, `ComputerUtilCombat`, and `TokenAi` to evaluate creatures and simulate outcomes. The intent is to consolidate intricate, reusable heuristics—threat avoidance, lethal-damage and aristocrat sacrifice math, branch counterspell handling, and Riot haste-versus-counter choice—so individual card AI hooks can delegate rather than duplicate them.
+Holding no instance state, it collaborates broadly with the game model: querying `Game`, `PhaseHandler`, and `Combat` for context and filtering `Card`/`CardCollection` candidates, while leaning on helpers like `ComputerUtilCard`, `ComputerUtilCombat`, and `TokenAi` to evaluate creatures and simulate outcomes. The intent is to consolidate intricate, reusable heuristicsâ€”threat avoidance, lethal-damage and aristocrat sacrifice math, branch counterspell handling, and Riot haste-versus-counter choiceâ€”so individual card AI hooks can delegate rather than duplicate them.
 
 ## Source
 `forge-ai/src/main/java/forge/ai/SpecialAiLogic.java`
@@ -481,4 +481,393 @@ public class SpecialAiLogic {
         return false;
     }
 }
+```
+
+## Python
+`forge/ai/SpecialAiLogic.py`
+
+```python
+from forge.ai.ability.TokenAi import TokenAi
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.ai.ComputerUtil import ComputerUtil
+from forge.ai.ComputerUtilAbility import ComputerUtilAbility
+from forge.ai.ComputerUtilCard import ComputerUtilCard
+from forge.ai.ComputerUtilCombat import ComputerUtilCombat
+from forge.ai.ComputerUtilMana import ComputerUtilMana
+from forge.ai.SpellApiToAi import SpellApiToAi
+from forge.game.Game import Game
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.ability.ApiType import ApiType
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardCopyService import CardCopyService
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CardPredicates import CardPredicates
+from forge.game.card.CardUtil import CardUtil
+from forge.game.card.CounterEnumType import CounterEnumType
+from forge.game.combat.Combat import Combat
+from forge.game.keyword.Keyword import Keyword
+from forge.game.phase.PhaseHandler import PhaseHandler
+from forge.game.phase.PhaseType import PhaseType
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.Aggregates import Aggregates
+from forge.util.Expressions import Expressions
+
+import math
+import sys
+
+
+# This class contains logic which is shared by several cards with different ability types (e.g. AF ChangeZone / AF Destroy)
+# Ideally, the naming scheme for methods in this class should be doXXXLogic, where XXX is the name of the logic,
+# and the signature of the method should be "public static boolean doXXXLogic(final Player ai, final SpellAbility sa),
+# possibly followed with any additional necessary parameters. These AI logic routines generally do all the work, so returning
+# true from them should indicate that the AI has made a decision and configured the spell ability (targeting, etc.) as it
+# deemed necessary.
+class SpecialAiLogic:
+    # A logic for cards like Pongify, Crib Swap, Angelic Ascension
+    @staticmethod
+    def doPongifyLogic(ai, sa):
+        source = sa.getHostCard()
+        game = source.getGame()
+        ph = game.getPhaseHandler()
+        isDestroy = ApiType.Destroy == sa.getApi()
+        tokenSA = sa.findSubAbilityByType(ApiType.Token)
+        if tokenSA is None:
+            # Used wrong AI logic?
+            return False
+
+        targetable = CardUtil.getValidCardsToTarget(sa)
+
+        listOpp = CardLists.filterControlledBy(targetable, ai.getOpponents())
+        if isDestroy:
+            listOpp = CardLists.getNotKeyword(listOpp, Keyword.INDESTRUCTIBLE)
+            # TODO add handling for cards like targeting dies
+
+        choice = None
+        if not listOpp.isEmpty():
+            choice = ComputerUtilCard.getMostExpensivePermanentAI(listOpp)
+            # can choice even be null?
+
+            if choice is not None:
+                token = TokenAi.spawnToken(choice.getController(), tokenSA)
+                if not token.isCreature() or token.getNetToughness() < 1:
+                    sa.resetTargets()
+                    sa.getTargets().add(choice)
+                    return True
+                if choice.isPlaneswalker():
+                    if choice.getCurrentLoyalty() * 35 > ComputerUtilCard.evaluateCreature(token):
+                        sa.resetTargets()
+                        sa.getTargets().add(choice)
+                        return True
+                    else:
+                        return False
+                if ((not choice.isCreature() or choice.isTapped()) and ph.getPhase().isBefore(PhaseType.COMBAT_DECLARE_BLOCKERS) and ph.isPlayerTurn(ai)  # prevent surprise combatant
+                        or ComputerUtilCard.evaluateCreature(choice) < 1.5 * ComputerUtilCard.evaluateCreature(token)):
+                    choice = None
+
+        # See if we have anything we can upgrade
+        if choice is None:
+            listOwn = CardLists.filterControlledBy(targetable, ai)
+            token = TokenAi.spawnToken(ai, tokenSA)
+
+            bestOwnCardToUpgrade = None
+            if isDestroy:
+                # just choose any Indestructible
+                # TODO maybe filter something that doesn't like to be targeted, or does something benefit by targeting
+                bestOwnCardToUpgrade = next(iter(CardLists.getKeyword(listOwn, Keyword.INDESTRUCTIBLE)), None)
+            if bestOwnCardToUpgrade is None:
+                bestOwnCardToUpgrade = ComputerUtilCard.getWorstCreatureAI(CardLists.filter(listOwn, lambda card: card.isCreature()
+                        and (ComputerUtilCard.isUselessCreature(ai, card)
+                        or ComputerUtilCard.evaluateCreature(token) > 2 * ComputerUtilCard.evaluateCreature(card))
+                ))
+            if bestOwnCardToUpgrade is not None:
+                if ComputerUtilCard.isUselessCreature(ai, bestOwnCardToUpgrade) or (ph.getPhase().isAfter(PhaseType.COMBAT_END) or not ph.isPlayerTurn(ai)):
+                    choice = bestOwnCardToUpgrade
+
+        if choice is not None:
+            sa.resetTargets()
+            sa.getTargets().add(choice)
+            return True
+
+        return False
+
+    # A logic for cards that say "Sacrifice a creature: CARDNAME gets +X/+X until EOT"
+    @staticmethod
+    def doAristocratLogic(ai, sa):
+        game = ai.getGame()
+        combat = game.getCombat()
+        source = sa.getHostCard()
+        numOtherCreats = max(0, ai.getCreaturesInPlay().size() - 1)
+        powerBonus = AbilityUtils.calculateAmount(source, sa.getParam("NumAtt"), sa) if sa.hasParam("NumAtt") else 0
+        toughnessBonus = AbilityUtils.calculateAmount(source, sa.getParam("NumDef"), sa) if sa.hasParam("NumDef") else 0
+        indestructible = sa.hasParam("KW") and "Indestructible" in sa.getParam("KW")
+        selfEval = ComputerUtilCard.evaluateCreature(source)
+        isThreatened = source in ComputerUtil.predictThreatenedObjects(ai, None, True)
+
+        if numOtherCreats == 0:
+            return False
+
+        # Try to save the card from death by pumping it if it's threatened with a damage spell
+        if isThreatened and (toughnessBonus > 0 or indestructible):
+            saTop = game.getStack().peekAbility()
+
+            if saTop.getApi() == ApiType.DealDamage or saTop.getApi() == ApiType.DamageAll:
+                dmg = AbilityUtils.calculateAmount(saTop.getHostCard(), saTop.getParam("NumDmg"), saTop) + source.getDamage()
+                numCreatsToSac = 1 if indestructible else max(1, int(math.ceil((dmg - source.getNetToughness() + 1) / toughnessBonus)))
+
+                if numCreatsToSac > 1:  # probably not worth sacrificing too much
+                    return False
+
+                if indestructible or (source.getNetToughness() <= dmg and source.getNetToughness() + toughnessBonus * numCreatsToSac > dmg):
+                    sacFodder = CardLists.filter(ai.getCreaturesInPlay(),
+                            lambda card: ComputerUtilCard.isUselessCreature(ai, card)
+                                    or card.hasSVar("SacMe")
+                                    or ComputerUtilCard.evaluateCreature(card) < selfEval  # Maybe around 150 is OK?
+                    )
+                    return sacFodder.size() >= numCreatsToSac
+
+            return False
+
+        if combat is None:
+            return False
+
+        if combat.isAttacking(source):
+            if combat.getBlockers(source).isEmpty():
+                # Unblocked. Check if able to deal lethal, then sac'ing everything is fair game if
+                # the opponent is tapped out or if we're willing to risk it (will currently risk it
+                # in case it sacs less than half its creatures to deal lethal damage)
+
+                # TODO: also teach the AI to account for Trample, but that's trickier (needs to account fully
+                # for potential damage prevention, various effects like reducing damage to 0, etc.)
+
+                defPlayer = combat.getDefendingPlayerRelatedTo(source)
+                defTappedOut = ComputerUtilMana.getAvailableManaEstimate(defPlayer) == 0
+
+                isInfect = source.hasKeyword(Keyword.INFECT)  # Flesh-Eater Imp
+                lethalDmg = 10 - defPlayer.getPoisonCounters() if isInfect else defPlayer.getLife()
+
+                if isInfect and not combat.getDefenderByAttacker(source).canReceiveCounters(CounterEnumType.POISON):
+                    lethalDmg = sys.maxsize  # won't be able to deal poison damage to kill the opponent
+
+                numCreatsToSac = 1 if indestructible else (lethalDmg - source.getNetCombatDamage()) // (powerBonus if powerBonus != 0 else 1)
+
+                if defTappedOut or numCreatsToSac < numOtherCreats // 2:
+                    return (source.getNetCombatDamage() < lethalDmg
+                            and source.getNetCombatDamage() + numOtherCreats * powerBonus >= lethalDmg)
+                else:
+                    return False
+            else:
+                # We have already attacked. Thus, see if we have a creature to sac that is worse to lose
+                # than the card we attacked with.
+                sacTgts = CardLists.filter(ai.getCreaturesInPlay(),
+                        lambda card: ComputerUtilCard.isUselessCreature(ai, card)
+                                or ComputerUtilCard.evaluateCreature(card) < selfEval
+                )
+
+                if sacTgts.isEmpty():
+                    return False
+
+                minDefT = Aggregates.min(combat.getBlockers(source), Card.getNetToughness)
+                DefP = 0 if indestructible else Aggregates.sum(combat.getBlockers(source), Card.getNetPower)
+
+                # Make sure we don't over-sacrifice, only sac until we can survive and kill a creature
+                return source.getNetToughness() - source.getDamage() <= DefP or source.getNetCombatDamage() < minDefT
+        else:
+            # We can't deal lethal, check if there's any sac fodder than can be used for other circumstances
+            sacFodder = CardLists.filter(ai.getCreaturesInPlay(),
+                    lambda card: ComputerUtilCard.isUselessCreature(ai, card)
+                            or card.hasSVar("SacMe")
+                            or ComputerUtilCard.evaluateCreature(card) < selfEval  # Maybe around 150 is OK?
+            )
+
+            return not sacFodder.isEmpty()
+
+    # A logic for cards that say "Sacrifice a creature: put X +1/+1 counters on CARDNAME" (e.g. Falkenrath Aristocrat)
+    @staticmethod
+    def doAristocratWithCountersLogic(ai, sa):
+        source = sa.getHostCard()
+        logic = sa.getParam("AILogic")  # should not even get here unless there's an Aristocrats logic applied
+        isDeclareBlockers = getattr(ai.getGame().getPhaseHandler(), "is")(PhaseType.COMBAT_DECLARE_BLOCKERS)
+
+        numOtherCreats = max(0, ai.getCreaturesInPlay().size() - 1)
+        if numOtherCreats == 0:
+            # Cut short if there's nothing to sac at all
+            return AiAbilityDecision(0, AiPlayDecision.CantAfford)
+
+        # Check if the standard Aristocrats logic applies first (if in the right conditions for it)
+        isThreatened = source in ComputerUtil.predictThreatenedObjects(ai, None, True)
+        if isDeclareBlockers or isThreatened:
+            if SpecialAiLogic.doAristocratLogic(ai, sa):
+                return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+        # Check if anything is to be gained from the PutCounter subability
+        countersSa = None
+        if sa.getSubAbility() is None or sa.getSubAbility().getApi() != ApiType.PutCounter:
+            if sa.getApi() == ApiType.PutCounter:
+                # called directly from CountersPutAi
+                countersSa = sa
+        else:
+            countersSa = sa.getSubAbility()
+
+        if countersSa is None:
+            # Shouldn't get here if there is no PutCounter subability (wrong AI logic specified?)
+            sys.stderr.write("Warning: AILogic AristocratCounters was specified on " + str(source) + ", but there was no PutCounter SA in chain!\n")
+            return AiAbilityDecision(0, AiPlayDecision.CantPlaySa)
+
+        game = ai.getGame()
+        combat = game.getCombat()
+        selfEval = ComputerUtilCard.evaluateCreature(source)
+
+        typeToGainCtr = ""
+        if "." in logic:
+            typeToGainCtr = logic[logic.index(".") + 1:]
+        relevantCreats = ai.getCreaturesInPlay() if typeToGainCtr == "" \
+            else CardLists.filter(ai.getCreaturesInPlay(), CardPredicates.isType(typeToGainCtr))
+        relevantCreats.remove(source)
+        if relevantCreats.isEmpty():
+            # No relevant creatures to sac
+            return AiAbilityDecision(0, AiPlayDecision.MissingNeededCards)
+
+        numCtrs = AbilityUtils.calculateAmount(source, countersSa.getParam("CounterNum"), countersSa)
+
+        if combat is not None and combat.isAttacking(source) and isDeclareBlockers:
+            if combat.getBlockers(source).isEmpty():
+                # Unblocked. Check if we can deal lethal after receiving counters.
+                defPlayer = combat.getDefendingPlayerRelatedTo(source)
+                defTappedOut = ComputerUtilMana.getAvailableManaEstimate(defPlayer) == 0
+
+                isInfect = source.hasKeyword(Keyword.INFECT)
+                lethalDmg = 10 - defPlayer.getPoisonCounters() if isInfect else defPlayer.getLife()
+
+                if isInfect and not combat.getDefenderByAttacker(source).canReceiveCounters(CounterEnumType.POISON):
+                    lethalDmg = sys.maxsize  # won't be able to deal poison damage to kill the opponent
+
+                # Check if there's anything that will die anyway that can be eaten to gain a perma-bonus
+                forcedSacTgts = CardLists.filter(relevantCreats,
+                        lambda card: card in ComputerUtil.predictThreatenedObjects(ai, None, True)
+                                or (combat.isAttacking(card) and combat.isBlocked(card) and ComputerUtilCombat.combatantWouldBeDestroyed(ai, card, combat))
+                )
+                if not forcedSacTgts.isEmpty():
+                    return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+                numCreatsToSac = max(0, (lethalDmg - source.getNetCombatDamage()) // numCtrs)
+
+                if defTappedOut or numCreatsToSac < relevantCreats.size() // 2:
+                    if (source.getNetCombatDamage() < lethalDmg
+                            and source.getNetCombatDamage() + relevantCreats.size() * numCtrs >= lethalDmg):
+                        return AiAbilityDecision(100, AiPlayDecision.ImpactCombat)
+
+                    return AiAbilityDecision(0, AiPlayDecision.DoesntImpactCombat)
+                else:
+                    return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+            else:
+                # We have already attacked. Thus, see if we have a creature to sac that is worse to lose
+                # than the card we attacked with. Since we're getting a permanent bonus, consider sacrificing
+                # things that are also threatened to be destroyed anyway.
+                sacTgts = CardLists.filter(relevantCreats,
+                        lambda card: ComputerUtilCard.isUselessCreature(ai, card)
+                                or ComputerUtilCard.evaluateCreature(card) < selfEval
+                                or card in ComputerUtil.predictThreatenedObjects(ai, None, True)
+                )
+
+                if sacTgts.isEmpty():
+                    return AiAbilityDecision(0, AiPlayDecision.TargetingFailed)
+
+                sourceCantDie = ComputerUtilCombat.combatantCantBeDestroyed(ai, source)
+                minDefT = Aggregates.min(combat.getBlockers(source), Card.getNetToughness)
+                DefP = 0 if sourceCantDie else Aggregates.sum(combat.getBlockers(source), Card.getNetPower)
+
+                # Make sure we don't over-sacrifice, only sac until we can survive and kill a creature
+                if source.getNetToughness() - source.getDamage() <= DefP or source.getNetCombatDamage() < minDefT:
+                    return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+                return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+        else:
+            # We can't deal lethal, check if there's any sac fodder than can be used for other circumstances
+            isBlocking = combat is not None and combat.isBlocking(source)
+            sacFodder = CardLists.filter(relevantCreats,
+                    lambda card: ComputerUtilCard.isUselessCreature(ai, card)
+                            or card.hasSVar("SacMe")
+                            or (isBlocking and ComputerUtilCard.evaluateCreature(card) < selfEval)
+                            or card in ComputerUtil.predictThreatenedObjects(ai, None, True)
+            )
+
+            if sacFodder.isEmpty():
+                return AiAbilityDecision(0, AiPlayDecision.MissingNeededCards)
+
+            return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+    # AF Branch Counterspell with UnlessCost logic (Bring the Ending, Anticognition)
+    @staticmethod
+    def doBranchCounterspellLogic(ai, sa):
+        # TODO: this is an ugly hack that needs a rewrite if more cards are added with different SA setups or
+        # if this is to be made more generic in the future.
+        top = ComputerUtilAbility.getTopSpellAbilityOnStack(ai.getGame(), sa)
+        if top is None or not sa.canTarget(top):
+            return False
+        host = sa.getHostCard()
+
+        # pre-target the object to calculate the branch condition SVar, then clean up before running the real check
+        sa.getTargets().add(top)
+        value = AbilityUtils.calculateAmount(sa.getHostCard(), sa.getParam("BranchConditionSVar"), sa)
+        sa.resetTargets()
+
+        branchCompare = sa.getParamOrDefault("BranchConditionSVarCompare", "GE1")
+        operator = branchCompare[0:2]
+        operand = branchCompare[2:]
+        operandValue = AbilityUtils.calculateAmount(host, operand, sa)
+        conditionMet = Expressions.compare(value, operator, operandValue)
+
+        falseSub = sa.getAdditionalAbility("FalseSubAbility")  # this ability has the UnlessCost part
+        willPlay = False
+        if not conditionMet and falseSub.hasParam("UnlessCost"):
+            # FIXME: We're emulating the UnlessCost on the SA to run the proper checks.
+            # This is hacky, but it works. Perhaps a cleaner way exists?
+            sa.getMapParams().put("UnlessCost", falseSub.getParam("UnlessCost"))
+            willPlay = SpellApiToAi.Converter.get(ApiType.Counter).canPlayWithSubs(ai, sa).willingToPlay()
+            sa.getMapParams().remove("UnlessCost")
+        else:
+            willPlay = SpellApiToAi.Converter.get(ApiType.Counter).canPlayWithSubs(ai, sa).willingToPlay()
+        return willPlay
+
+    @staticmethod
+    def preferHasteForRiot(sa, player):
+        # returning true means preferring Haste, returning false means preferring a +1/+1 counter
+        host = sa.getHostCard()
+        game = host.getGame()
+        copy = CardCopyService.getLKICopy(host)
+        copy.setLastKnownZone(player.getZone(ZoneType.Battlefield))
+
+        # check state it would have on the battlefield
+        preList = CardCollection(copy)
+        game.getAction().checkStaticAbilities(False, {copy}, preList)
+        # reset again?
+        game.getAction().checkStaticAbilities(False)
+
+        # can't gain counters, use Haste
+        if not copy.canReceiveCounters(CounterEnumType.P1P1):
+            return True
+
+        # already has Haste, use counter
+        if copy.hasKeyword(Keyword.HASTE):
+            return False
+
+        # not AI turn
+        if not game.getPhaseHandler().isPlayerTurn(player):
+            return False
+
+        # not before Combat
+        if not game.getPhaseHandler().getPhase().isBefore(PhaseType.COMBAT_DECLARE_ATTACKERS):
+            return False
+
+        # TODO check other opponents too if able
+        opp = player.getWeakestOpponent()
+        if opp is not None:
+            # TODO add predict Combat Damage?
+            return opp.getLife() < copy.getNetPower()
+
+        # haste might not be good enough?
+        return False
 ```

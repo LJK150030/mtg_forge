@@ -31,7 +31,7 @@ classDiagram
 
 ## Design Description
 
-A `PerpetualInterface` defines the contract for perpetual effects—continuous modifications applied to a `Card` that persist for the remainder of a game regardless of normal duration or layer rules. Implementations expose two operations: `getTimestamp()`, which returns the timestamp marking when the effect was established (used to order overlapping perpetual effects deterministically), and `applyEffect(Card)`, which mutates the supplied card to realize the effect.
+A `PerpetualInterface` defines the contract for perpetual effectsâ€”continuous modifications applied to a `Card` that persist for the remainder of a game regardless of normal duration or layer rules. Implementations expose two operations: `getTimestamp()`, which returns the timestamp marking when the effect was established (used to order overlapping perpetual effects deterministically), and `applyEffect(Card)`, which mutates the supplied card to realize the effect.
 
 As a minimal interface, it decouples the card-state machinery from the concrete varieties of perpetual modification, letting diverse implementations be stored and replayed uniformly through a common type. Its sole collaborator is `Card`, the target of every effect, reflecting a deliberately narrow responsibility: encapsulate one timestamped, idempotently re-applicable change to a card.
 
@@ -47,4 +47,23 @@ public interface PerpetualInterface {
     long getTimestamp();
     void applyEffect(Card c);
 }
+```
+
+## Python
+`forge/game/card/perpetual/PerpetualInterface.py`
+
+```python
+from abc import ABC, abstractmethod
+
+from forge.game.card.Card import Card
+
+
+class PerpetualInterface(ABC):
+    @abstractmethod
+    def getTimestamp(self) -> int:
+        ...
+
+    @abstractmethod
+    def applyEffect(self, c: Card) -> None:
+        ...
 ```

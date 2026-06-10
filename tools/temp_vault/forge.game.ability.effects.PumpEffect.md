@@ -57,7 +57,7 @@ classDiagram
 
 ## Design Description
 
-PumpEffect resolves the broad family of MTG "pump" effects, applying temporary or lasting power/toughness boosts and keyword grants to creatures and players. Extending `SpellAbilityEffect`, it overrides `resolve` to read the host `SpellAbility`'s extensive parameters — NumAtt/NumDef (including Double/Triple), KW choices, durations, pump zones, radiance, keyword substitution (chosen type/color/player, mana-cost placeholders, shared and random keywords), and bookkeeping flags — and `getStackDescription` to render readable stack text.
+PumpEffect resolves the broad family of MTG "pump" effects, applying temporary or lasting power/toughness boosts and keyword grants to creatures and players. Extending `SpellAbilityEffect`, it overrides `resolve` to read the host `SpellAbility`'s extensive parameters â€” NumAtt/NumDef (including Double/Triple), KW choices, durations, pump zones, radiance, keyword substitution (chosen type/color/player, mana-cost placeholders, shared and random keywords), and bookkeeping flags â€” and `getStackDescription` to render readable stack text.
 
 Actual mutation is delegated to two private `applyPump` overloads, for `Card` and `Player` targets, which stamp boosts and keyword changes with a `timestamp` so they can be layered and removed. Non-permanent effects register a `GameCommand` to undo themselves at end of turn, while `Perpetual` durations persist via `PerpetualPTBoost`/`PerpetualKeywords`; each change fires `GameEventCardStatsChanged`. This data-driven design lets one class implement countless distinct cards through parameterization rather than per-card code.
 
@@ -573,4 +573,429 @@ public class PumpEffect extends SpellAbilityEffect {
         replaceDying(sa);
     }
 }
+```
+
+## Python
+`forge/game/ability/effects/PumpEffect.py`
+
+```python
+from forge.GameCommand import GameCommand
+from forge.game.Game import Game
+from forge.game.GameEntity import GameEntity
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.card.CardFactoryUtil import CardFactoryUtil
+from forge.game.card.CardUtil import CardUtil
+from forge.game.card.perpetual.PerpetualKeywords import PerpetualKeywords
+from forge.game.card.perpetual.PerpetualPTBoost import PerpetualPTBoost
+from forge.game.event.GameEventCardStatsChanged import GameEventCardStatsChanged
+from forge.game.player.Player import Player
+from forge.game.player.PlayerCollection import PlayerCollection
+from forge.game.spellability.AbilitySub import AbilitySub
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.Lang import Lang
+from forge.util.TextUtil import TextUtil
+from forge.util.Localizer import Localizer
+from forge.util.Aggregates import Aggregates
+
+
+class PumpEffect(SpellAbilityEffect):
+
+    @staticmethod
+    def applyPumpCard(sa, applyTo, a, d, keywords, timestamp):
+        host = sa.getHostCard()
+        game = host.getGame()
+        duration = sa.getParam("Duration")
+        perpetual = "Perpetual" == duration
+
+        # do Game Check there in case of LKI
+        gameCard = game.getCardState(applyTo, None)
+        if gameCard is None or not applyTo.equalsWithGameTimestamp(gameCard):
+            return
+        kws = []
+        hiddenKws = []
+
+        redrawPT = False
+        for kw in keywords:
+            if kw.startswith("HIDDEN"):
+                hiddenKws.append(kw[7:])
+                redrawPT |= "CARDNAME's power and toughness are switched" in kw
+            else:
+                kws.append(kw)
+
+        if a != 0 or d != 0:
+            if perpetual:
+                gameCard.addPerpetual(PerpetualPTBoost(timestamp, a, d))
+            gameCard.addPTBoost(a, d, timestamp, 0)
+            redrawPT = True
+
+        if kws:
+            if perpetual:
+                gameCard.addPerpetual(PerpetualKeywords(timestamp, kws, [], False))
+            gameCard.addChangedCardKeywords(kws, [], False, timestamp, None)
+        if hiddenKws:
+            gameCard.addHiddenExtrinsicKeywords(timestamp, 0, hiddenKws)
+        if redrawPT:
+            gameCard.updatePTforView()
+
+        if sa.hasParam("CanBlockAny"):
+            gameCard.addCanBlockAny(timestamp)
+        if sa.hasParam("CanBlockAmount"):
+            v = AbilityUtils.calculateAmount(host, sa.getParam("CanBlockAmount"), sa, True)
+            gameCard.addCanBlockAdditional(v, timestamp)
+
+        if sa.hasParam("LeaveBattlefield"):
+            SpellAbilityEffect.addLeaveBattlefieldReplacement(gameCard, sa, sa.getParam("LeaveBattlefield"))
+
+        if sa.hasParam("RememberPumped"):
+            host.addRemembered(gameCard)
+
+        if "Permanent" != duration and not perpetual:
+            # If not Permanent, remove Pumped at EOT
+            class UntilEOT(GameCommand):
+                serialVersionUID = -42244224
+
+                def run(self):
+                    host.removeGainControlTargets(gameCard)
+
+                    gameCard.removePTBoost(timestamp, 0)
+                    updateText = gameCard.removeCanBlockAny(timestamp)
+                    updateText |= gameCard.removeCanBlockAdditional(timestamp)
+
+                    if len(keywords) > 0:
+                        gameCard.removeHiddenExtrinsicKeywords(timestamp, 0)
+                        gameCard.removeChangedCardKeywords(timestamp, 0)
+                    gameCard.updatePTforView()
+                    if updateText:
+                        gameCard.updateAbilityTextForView()
+
+                    game.fireEvent(GameEventCardStatsChanged(gameCard))
+
+            untilEOT = UntilEOT()
+            if "UntilUntaps" == duration:
+                host.addGainControlTarget(gameCard)
+            SpellAbilityEffect.addUntilCommand(sa, untilEOT)
+        game.fireEvent(GameEventCardStatsChanged(gameCard))
+
+    @staticmethod
+    def applyPumpPlayer(sa, p, keywords, timestamp):
+        duration = sa.getParam("Duration")
+
+        if keywords:
+            p.addChangedKeywords(keywords, [], timestamp, 0)
+
+        if "Permanent" != duration:
+            # If not Permanent, remove Pumped at EOT
+            class UntilEOT(GameCommand):
+                serialVersionUID = -32453460
+
+                def run(self):
+                    p.removeChangedKeywords(timestamp, 0)
+
+            untilEOT = UntilEOT()
+            SpellAbilityEffect.addUntilCommand(sa, untilEOT)
+
+    #
+    # (non-Javadoc)
+    # @see forge.game.ability.SpellAbilityEffect#getStackDescription(forge.game.spellability.SpellAbility)
+    #
+    def getStackDescription(self, sa):
+        sb = []
+        tgts = []
+        tgts.extend(self.getCardsfromTargets(sa))
+        if (sa.usesTargeting() and sa.getTargetRestrictions().canTgtPlayer()) or sa.hasParam("Defined"):
+            tgts.extend(self.getTargetPlayers(sa))
+
+        if len(tgts) > 0:
+            keywords = []
+            if sa.hasParam("KW"):
+                if sa.getParam("KW") == "HIDDEN This card doesn't untap during your next untap step.":
+                    if isinstance(sa, AbilitySub):
+                        sb.append("It doesn't " if len(tgts) == 1 else "They don't ")
+                    else:
+                        sb.append(Lang.joinHomogenous(tgts))
+                        sb.append(" doesn't " if len(tgts) == 1 else " don't ")
+                    sb.append("untap during ")
+                    whose = "your"
+                    for t in tgts:
+                        c = t
+                        if not (c.getOwner() == sa.getActivatingPlayer()):
+                            whose = "its controller's" if len(tgts) == 1 else "their controller's"
+                            break
+                    sb.append(whose)
+                    sb.append(" next untap step.")
+                    return "".join(sb)
+                keywords.extend(sa.getParam("KW").split(" & "))
+
+            if sa.hasParam("IfDesc"):
+                if sa.getParam("IfDesc") == "True" and sa.hasParam("SpellDescription"):
+                    ifDesc = sa.getParam("SpellDescription")
+                    sb.append(ifDesc[0:ifDesc.find(",") + 1])
+                else:
+                    sb.append(sa.getParam("IfDesc"))
+                sb.append(" ")
+
+            if isinstance(sa, AbilitySub) and sa.getRootAbility().getTargets().containsAll(tgts):
+                # try to avoid having the same long list of targets twice in a StackDescription
+                sb.append("It " if len(tgts) == 1 and isinstance(tgts[0], Card) else "They ")
+            else:
+                sb.append(Lang.joinHomogenous(tgts))
+                sb.append(" ")
+
+            if sa.hasParam("Radiance"):
+                sb.append("and each other ")
+                sb.append(sa.getParam("ValidTgts"))
+                sb.append(" that shares a color with ")
+                sb.append("them " if len(tgts) > 1 else "it ")
+
+            atk = AbilityUtils.calculateAmount(sa.getHostCard(), sa.getParam("NumAtt"), sa, True)
+            df = AbilityUtils.calculateAmount(sa.getHostCard(), sa.getParam("NumDef"), sa, True)
+
+            gets = sa.hasParam("NumAtt") or sa.hasParam("NumDef")
+            gains = bool(keywords)
+
+            if gets:
+                sb.append("gets ")
+                if atk != 0:
+                    sb.append("+" if atk > 0 else "")
+                    sb.append(str(atk))
+                    sb.append("/")
+                else:
+                    sb.append("-" if df < 0 else "+")
+                    sb.append(str(atk))
+                    sb.append("/")
+                if df != 0:
+                    sb.append("+" if df > 0 else "")
+                    sb.append(str(df))
+                    sb.append(" ")
+                else:
+                    sb.append("-" if atk < 0 else "+")
+                    sb.append(str(df))
+                    sb.append(" ")
+                sb.append("and gains " if gains else "")
+            elif gains:
+                sb.append("gains ")
+
+            for i in range(len(keywords)):
+                sb.append(keywords[i].lower())
+                sb.append(", " if len(keywords) > 2 and i + 1 != len(keywords) else "")
+                sb.append(" " if len(keywords) == 2 and i == 0 else "")
+                sb.append("and " if i + 2 == len(keywords) else "")
+
+            if sa.hasParam("CanBlockAny"):
+                if gets or gains:
+                    sb.append(" and ")
+                sb.append("can block any number of creatures")
+            elif sa.hasParam("CanBlockAmount"):
+                if gets or gains:
+                    sb.append(" and ")
+                n = sa.getParam("CanBlockAmount")
+                sb.append("can block an additional ")
+                sb.append("creature" if "1" == n else Lang.nounWithNumeral(n, "creature"))
+                sb.append(" each combat")
+
+            duration = sa.getParam("Duration")
+            if "Permanent" != duration:
+                if "UntilUntaps" == duration:
+                    sb.append(" for as long as CARDNAME remains tapped.")
+                else:
+                    sb.append(" until end of turn.")
+            else:
+                sb.append(".")
+
+        return "".join(sb)
+
+    def resolve(self, sa):
+        if not self.checkValidDuration(sa.getParam("Duration"), sa):
+            return
+
+        activator = sa.getActivatingPlayer()
+        game = activator.getGame()
+        host = sa.getHostCard()
+        timestamp = game.getNextTimestamp()
+        tgtCards = self.getCardsfromTargets(sa)
+        tgtPlayers = self.getTargetPlayers(sa)
+
+        if sa.hasParam("Optional"):
+            targets = Lang.joinHomogenous(tgtCards)
+            message = (TextUtil.fastReplace(sa.getParam("OptionQuestion"), "TARGETS", targets)
+                       if sa.hasParam("OptionQuestion")
+                       else Localizer.getInstance().getMessage("lblApplyPumpToTarget", targets))
+
+            if not activator.getController().confirmAction(sa, None, message, None):
+                return
+
+        keywords = []
+        if sa.hasParam("KW"):
+            keywords.extend(sa.getParam("KW").split(" & "))
+        elif sa.hasParam("KWChoice"):
+            options = sa.getParam("KWChoice").split(",")
+            chosen = activator.getController().chooseKeywordForPump(
+                options, sa, Localizer.getInstance().getMessage("lblChooseKeyword"), tgtCards[0])
+            keywords.append(chosen)
+
+        a = 0
+        d = 0
+        if sa.hasParam("NumAtt") and sa.getParam("NumAtt") != "Double" and sa.getParam("NumAtt") != "Triple":
+            a = AbilityUtils.calculateAmount(host, sa.getParam("NumAtt"), sa, True)
+        if sa.hasParam("NumDef") and sa.getParam("NumDef") != "Double" and sa.getParam("NumDef") != "Triple":
+            d = AbilityUtils.calculateAmount(host, sa.getParam("NumDef"), sa, True)
+
+        if sa.hasParam("SharedKeywordsZone"):
+            zones = ZoneType.listValueOf(sa.getParam("SharedKeywordsZone"))
+            restrictions = sa.getParam("SharedRestrictions").split(",") if sa.hasParam("SharedRestrictions") else ["Card"]
+            keywords = CardFactoryUtil.sharedKeywords(keywords, restrictions, zones, host, sa)
+
+        if sa.hasParam("DefinedKW"):
+            defined = sa.getParam("DefinedKW")
+            if defined == "ChosenType":
+                if not host.hasChosenType():
+                    return
+                replaced = host.getChosenType()
+                for i in range(len(keywords)):
+                    s = keywords[i]
+                    s = s.replace(defined, replaced)
+                    keywords[i] = s
+            elif defined == "ChosenPlayer":
+                if not host.hasChosenPlayer():
+                    return
+                cp = host.getChosenPlayer()
+                for i in range(len(keywords)):
+                    s = keywords[i]
+                    s = s.replace("ChosenPlayerUID", str(cp.getId()))
+                    s = s.replace("ChosenPlayerName", cp.getName())
+                    keywords[i] = s
+            elif defined == "ChosenColor":
+                if not host.hasChosenColor():
+                    return
+                for i in range(len(keywords)):
+                    s = keywords[i]
+                    chosenColor = host.getChosenColor()
+                    s = s.replace("ChosenColor", chosenColor[:1].upper() + chosenColor[1:])
+                    s = s.replace("chosenColor", host.getChosenColor().lower())
+                    keywords[i] = s
+            else:  # anything else needs to be defined players?
+                players = AbilityUtils.getDefinedPlayers(host, defined, sa)
+                if players.isEmpty():
+                    return
+                newKeywords = []
+
+                def shouldRemove(input):
+                    if "ChosenPlayerUID" not in input and "ChosenPlayerName" not in input:
+                        return False
+                    for p in players:
+                        replacedID = str(p.getId())
+                        replacedName = p.getName()
+
+                        s = input.replace("ChosenPlayerUID", replacedID)
+                        s = s.replace("ChosenPlayerName", replacedName)
+                        newKeywords.append(s)
+                    return True
+
+                keywords = [kw for kw in keywords if not shouldRemove(kw)]
+                keywords.extend(newKeywords)
+        if sa.hasParam("DefinedLandwalk"):
+            landtype = sa.getParam("DefinedLandwalk")
+            for c in AbilityUtils.getDefinedCards(host, landtype, sa):
+                for type in c.getType().getLandTypes():
+                    keywords.append("Landwalk:" + type)
+        if sa.hasParam("RandomKeyword"):
+            num = sa.getParamOrDefault("RandomKWNum", "1")
+            numkw = AbilityUtils.calculateAmount(host, num, sa)
+            choice = []
+            total = list(keywords)
+            if sa.hasParam("NoRepetition"):
+                for kw in keywords:
+                    if tgtCards[0].hasKeyword(kw):
+                        total.remove(kw)
+            min_ = min(len(total), numkw)
+            for i in range(min_):
+                random = Aggregates.random(total)
+                choice.append(random)
+                total.remove(random)
+            keywords = choice
+
+        if sa.hasParam("RememberObjects"):
+            host.addRemembered(AbilityUtils.getDefinedObjects(host, sa.getParam("RememberObjects"), sa))
+
+        if sa.hasParam("NoteCardsFor"):
+            for c in AbilityUtils.getDefinedCards(host, sa.getParam("NoteCards"), sa):
+                for p in tgtPlayers:
+                    p.addNoteForName(sa.getParam("NoteCardsFor"), "Id:" + str(c.getId()))
+        if sa.hasParam("ClearNotedCardsFor"):
+            for p in tgtPlayers:
+                for s in sa.getParam("ClearNotedCardsFor").split(","):
+                    p.clearNotesForName(s)
+
+        if sa.hasParam("NoteNumber"):
+            num = AbilityUtils.calculateAmount(host, sa.getParam("NoteNumber"), sa)
+            for p in tgtPlayers:
+                p.noteNumberForName(host.getName(), num)
+
+        if sa.hasParam("ForgetObjects"):
+            host.removeRemembered(AbilityUtils.getDefinedObjects(host, sa.getParam("ForgetObjects"), sa))
+
+        if sa.hasParam("ImprintCards"):
+            host.addImprintedCards(AbilityUtils.getDefinedCards(host, sa.getParam("ImprintCards"), sa))
+
+        if sa.hasParam("ForgetImprinted"):
+            host.removeImprintedCards(AbilityUtils.getDefinedCards(host, sa.getParam("ForgetImprinted"), sa))
+
+        pumpZones = (ZoneType.listValueOf(sa.getParam("PumpZone")) if sa.hasParam("PumpZone")
+                     else ZoneType.listValueOf("Battlefield"))
+
+        for tgtC in tgtCards:
+            # CR 702.26e
+            if tgtC.isPhasedOut():
+                continue
+
+            # only pump things in PumpZones
+            if not tgtC.isInZones(pumpZones):
+                continue
+
+            # substitute specific tgtC mana cost for keyword placeholder CardManaCost
+            affectedKeywords = list(keywords)
+
+            if affectedKeywords:
+                def substitute(input):
+                    if "CardManaCost" in input:
+                        input = input.replace("CardManaCost", tgtC.getManaCost().getShortString())
+                    elif "ConvertedManaCost" in input:
+                        costcmc = str(tgtC.getCMC())
+                        input = input.replace("ConvertedManaCost", costcmc)
+                    return input
+
+                affectedKeywords = [substitute(kw) for kw in affectedKeywords]
+
+            if sa.hasParam("NumAtt") and sa.getParam("NumAtt") == "Double":
+                a = tgtC.getNetPower()
+            if sa.hasParam("NumDef") and sa.getParam("NumDef") == "Double":
+                d = tgtC.getNetToughness()
+
+            if sa.hasParam("NumAtt") and sa.getParam("NumAtt") == "Triple":
+                a = tgtC.getNetPower() * 2
+            if sa.hasParam("NumDef") and sa.getParam("NumDef") == "Triple":
+                d = tgtC.getNetToughness() * 2
+
+            PumpEffect.applyPumpCard(sa, tgtC, a, d, affectedKeywords, timestamp)
+
+        if sa.hasParam("AtEOT") and tgtCards:
+            self.registerDelayedTrigger(sa, sa.getParam("AtEOT"), tgtCards)
+
+        for tgtC in CardUtil.getRadiance(sa):
+            # only pump things in PumpZone
+            if not tgtC.isInZones(pumpZones):
+                continue
+
+            PumpEffect.applyPumpCard(sa, tgtC, a, d, keywords, timestamp)
+
+        for p in tgtPlayers:
+            if not p.isInGame():
+                continue
+
+            PumpEffect.applyPumpPlayer(sa, p, keywords, timestamp)
+
+        self.replaceDying(sa)
 ```

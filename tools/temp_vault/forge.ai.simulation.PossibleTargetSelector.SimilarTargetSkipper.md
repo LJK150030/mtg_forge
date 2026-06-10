@@ -38,12 +38,12 @@ classDiagram
 
 ## Design Description
 
-`SimilarTargetSkipper` is a private static helper used by `PossibleTargetSelector` within Forge's AI simulation layer to prune redundant targeting choices during move evaluation. Its sole responsibility, exposed through `shouldSkipTarget(GameObject)`, is to recognize when a candidate `Card` target is functionally equivalent to one already accepted, so the simulator can avoid re-exploring branches that would yield identical outcomes. Equivalence is judged by name, controller/owner, spell-ability count, type string, and—for creatures—combat-evaluated score plus combat state queried from `Combat`.
+`SimilarTargetSkipper` is a private static helper used by `PossibleTargetSelector` within Forge's AI simulation layer to prune redundant targeting choices during move evaluation. Its sole responsibility, exposed through `shouldSkipTarget(GameObject)`, is to recognize when a candidate `Card` target is functionally equivalent to one already accepted, so the simulator can avoid re-exploring branches that would yield identical outcomes. Equivalence is judged by name, controller/owner, spell-ability count, type string, andâ€”for creaturesâ€”combat-evaluated score plus combat state queried from `Combat`.
 
 The design is deliberately performance-minded: it caches type strings and creature scores in per-instance maps, indexes accepted targets by name via an `ArrayListMultimap` to limit comparisons, and orders equality checks cheapest-first as documented in the inline comments. It collaborates with `Card`, `Combat`, and `GameObject` purely as read-only inputs, and a TODO notes that non-card targets such as stack spells are not yet handled, signaling intentionally narrow current scope.
 
 ## Source
-`forge-ai/src/main/java/forge/ai/simulation/PossibleTargetSelector.java` â€” declaration excerpt
+`forge-ai/src/main/java/forge/ai/simulation/PossibleTargetSelector.java` Ã¢â‚¬â€ declaration excerpt
 
 ```java
     private static class SimilarTargetSkipper {
@@ -124,4 +124,78 @@ The design is deliberately performance-minded: it caches type strings and creatu
             return false;
         }
     }
+```
+
+## Python
+`forge/ai/simulation/PossibleTargetSelector/SimilarTargetSkipper.py`
+
+```python
+from forge.game.GameObject import GameObject
+from forge.game.card.Card import Card
+from forge.game.combat.Combat import Combat
+from forge.ai.ComputerUtilCard import ComputerUtilCard
+
+
+class SimilarTargetSkipper:
+    def __init__(self):
+        self.validTargetsMap: dict[str, list[Card]] = {}
+        self.cardTypeStrings: dict[Card, str] = {}
+        self.creatureScores: dict[Card, int] = None
+
+    def getCreatureScore(self, c: Card) -> int:
+        if self.creatureScores is not None:
+            score = self.creatureScores.get(c)
+            if score is not None:
+                return score
+        else:
+            self.creatureScores = {}
+
+        score = ComputerUtilCard.evaluateCreature(c)
+        self.creatureScores[c] = score
+        return score
+
+    def getTypeString(self, c: Card) -> str:
+        str_ = self.cardTypeStrings.get(c)
+        if str_ is not None:
+            return str_
+        str_ = c.getType().toString()
+        self.cardTypeStrings[c] = str_
+        return str_
+
+    def shouldSkipTarget(self, o: GameObject) -> bool:
+        # TODO: Support non-card targets, such as spells on the stack.
+        if not isinstance(o, Card):
+            return False
+        c = o
+
+        combat = c.getGame().getCombat()
+        for existingTarget in self.validTargetsMap.get(c.getName(), []):
+            # Note: Checks are ordered from cheapest to more expensive ones. For example, type equals()
+            # ends up calling toString() on the type object and is more expensive than the checks above it.
+            if c.getController() != existingTarget.getController() or c.getOwner() != existingTarget.getOwner():
+                continue
+            if c.getSpellAbilities().size() != existingTarget.getSpellAbilities().size():
+                continue
+            # Note: This doesn't just do equals() on the types because a) it doesn't exist and b) if
+            # it existed and just used toString() comparison it would be less efficient than doing it
+            # in this class, which caches the strings.
+            if self.getTypeString(existingTarget) != self.getTypeString(c):
+                continue
+            if c.isCreature():
+                if not existingTarget.isCreature():
+                    continue
+                if self.getCreatureScore(c) != self.getCreatureScore(existingTarget):
+                    continue
+                if combat is not None:
+                    if combat.getDefenderByAttacker(c) != combat.getDefenderByAttacker(existingTarget):
+                        # Either attacking different entities or one is attacking and the other is not.
+                        continue
+
+                    if (combat.isBlocked(c) or combat.isBlocked(existingTarget) or
+                            combat.isBlocking(c) or combat.isBlocking(existingTarget)):
+                        # If either is blocked or blocking, consider them separately as well.
+                        continue
+            return True
+        self.validTargetsMap.setdefault(c.getName(), []).append(c)
+        return False
 ```

@@ -91,3 +91,43 @@ public class AscendEffect extends SpellAbilityEffect {
     }
 }
 ```
+
+## Python
+`forge/game/ability/effects/AscendEffect.py`
+
+```python
+from typing import List
+
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.Lang import Lang
+
+
+class AscendEffect(SpellAbilityEffect):
+
+    # (non-Javadoc)
+    # @see forge.game.ability.SpellAbilityEffect#getStackDescription(forge.game.spellability.SpellAbility)
+    def getStackDescription(self, sa: SpellAbility) -> str:
+        sb = []
+
+        tgt: List[Player] = self.getTargetPlayers(sa)
+
+        sb.append(Lang.joinHomogenous(tgt))
+        sb.append(" ")
+        sb.append("ascend" if len(tgt) > 1 else "ascends")
+        sb.append(". ")
+
+        return "".join(sb)
+
+    # (non-Javadoc)
+    # @see forge.game.ability.SpellAbilityEffect#resolve(forge.game.spellability.SpellAbility)
+    def resolve(self, sa: SpellAbility) -> None:
+        for p in self.getTargetPlayers(sa):
+            if not p.isInGame():
+                continue
+            # Player need 10+ permanents on the battlefield
+            if p.getZone(ZoneType.Battlefield).size() >= 10:
+                p.setBlessing(True, sa.getOriginalHost().getSetCode())
+```

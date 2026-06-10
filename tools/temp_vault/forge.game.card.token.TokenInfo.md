@@ -67,9 +67,9 @@ classDiagram
 
 ## Design Description
 
-TokenInfo is an immutable value object that captures the defining attributes of a Magic token—name, image, mana cost, types, intrinsic keywords, base power/toughness, and color—decoupled from any live game instance. It can be built directly from an existing `Card` or parsed from a comma-delimited script string (with a symmetric `toString()` for serialization), and it acts as a factory that materializes concrete `Card` instances into a given `Game` via `toCard`, `makeOneToken`, and the static `getProtoType`.
+TokenInfo is an immutable value object that captures the defining attributes of a Magic tokenâ€”name, image, mana cost, types, intrinsic keywords, base power/toughness, and colorâ€”decoupled from any live game instance. It can be built directly from an existing `Card` or parsed from a comma-delimited script string (with a symmetric `toString()` for serialization), and it acts as a factory that materializes concrete `Card` instances into a given `Game` via `toCard`, `makeOneToken`, and the static `getProtoType`.
 
-As a standalone class (no supertype), it serves as the bridge between static token definitions and runtime game state, collaborating with `Card`, `Game`, `Player`, `SpellAbility`, `CardType`/`CoreType`, `ColorSet`, `ManaCost`, `KeywordInterface`, and `PaperToken`. Notable design intent includes a per-`Game` edition-pin map using weak keys so finished games are garbage-collected while same-type tokens share consistent art, and `protoTypeApplyTextChange`, which applies spell-driven color and type text substitutions—rewriting colors, subtypes, modifiable keywords, and generated names—so tokens reflect copy-effect text changes.
+As a standalone class (no supertype), it serves as the bridge between static token definitions and runtime game state, collaborating with `Card`, `Game`, `Player`, `SpellAbility`, `CardType`/`CoreType`, `ColorSet`, `ManaCost`, `KeywordInterface`, and `PaperToken`. Notable design intent includes a per-`Game` edition-pin map using weak keys so finished games are garbage-collected while same-type tokens share consistent art, and `protoTypeApplyTextChange`, which applies spell-driven color and type text substitutionsâ€”rewriting colors, subtypes, modifiable keywords, and generated namesâ€”so tokens reflect copy-effect text changes.
 
 ## Source
 `forge-game/src/main/java/forge/game/card/token/TokenInfo.java`
@@ -422,4 +422,318 @@ public class TokenInfo {
         return result;
     }
 }
+```
+
+## Python
+`forge/game/card/token/TokenInfo.py`
+
+```python
+from forge.ImageKeys import ImageKeys
+from forge.StaticData import StaticData
+from forge.card.CardType import CardType
+from forge.card.CardType.CoreType import CoreType
+from forge.card.ColorSet import ColorSet
+from forge.card.GamePieceType import GamePieceType
+from forge.card.MagicColor import MagicColor
+from forge.card.mana.ManaCost import ManaCost
+from forge.game.Game import Game
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.card.Card import Card
+from forge.game.card.CardFactory import CardFactory
+from forge.game.card.CardFactoryUtil import CardFactoryUtil
+from forge.game.card.CardUtil import CardUtil
+from forge.game.keyword.KeywordInterface import KeywordInterface
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.item.PaperToken import PaperToken
+
+import re
+import weakref
+
+
+class TokenInfo:
+    # Per-game pin so same-type tokens share art. Weak keys GC finished games.
+    TOKEN_EDITION_PINS = weakref.WeakKeyDictionary()
+
+    @staticmethod
+    def getPinsFor(game):
+        pins = TokenInfo.TOKEN_EDITION_PINS.get(game)
+        if pins is None:
+            pins = {}
+            TokenInfo.TOKEN_EDITION_PINS[game] = pins
+        return pins
+
+    def __init__(self, arg):
+        if isinstance(arg, Card):
+            self._initFromCard(arg)
+        else:
+            self._initFromString(arg)
+
+    def _initFromCard(self, c):
+        # TODO: Figure out how to handle legacy images?
+        self.name = c.getName()
+        self.imageName = ImageKeys.getTokenImageName(c.getImageKey())
+        self.manaCost = c.getManaCost().toString()
+        self.color = c.getCurrentState().getColor()
+        self.types = TokenInfo.getCardTypes(c)
+
+        list = []
+        for inst in c.getKeywords():
+            list.append(inst.getOriginal())
+
+        self.intrinsicKeywords = list
+        self.basePower = c.getBasePower()
+        self.baseToughness = c.getBaseToughness()
+
+    def _initFromString(self, str):
+        tokenInfo = str.split(",")
+        power = 0
+        toughness = 0
+        manaCost = "0"
+        types = None
+        keywords = None
+        imageName = None
+        color = None
+        for info in tokenInfo:
+            index = info.find(':')
+            if index == -1:
+                continue
+            remainder = info[index + 1:]
+            if info.startswith("P:"):
+                power = int(remainder)
+            elif info.startswith("T:"):
+                toughness = int(remainder)
+            elif info.startswith("Cost:"):
+                manaCost = remainder
+            elif info.startswith("Types:"):
+                types = remainder.split("-")
+            elif info.startswith("Keywords:"):
+                keywords = remainder.split("-")
+            elif info.startswith("Image:"):
+                imageName = remainder
+            elif info.startswith("Color:"):
+                color = ColorSet.fromNames(remainder)
+
+        self.name = tokenInfo[0]
+        self.imageName = imageName
+        self.manaCost = manaCost
+        self.types = types
+        self.intrinsicKeywords = keywords
+        self.basePower = power
+        self.baseToughness = toughness
+        self.color = color
+
+    @staticmethod
+    def getCardTypes(c):
+        relevantTypes = []
+        for t in c.getType().getCoreTypes():
+            relevantTypes.append(t.name())
+        for st in c.getType().getSubtypes():
+            relevantTypes.append(st)
+        if c.getType().isLegendary():
+            relevantTypes.append("Legendary")
+        return relevantTypes
+
+    def toCard(self, game, id=None):
+        if id is None:
+            return self.toCard(game, game.nextCardId())
+        c = Card(id, game)
+        c.setName(self.name)
+        c.setImageKey(ImageKeys.getTokenKey(self.imageName))
+
+        c.setColor(ColorSet.fromManaCost(ManaCost(self.manaCost)) if self.color is None else self.color)
+        c.setGamePieceType(GamePieceType.TOKEN)
+
+        for t in self.types:
+            c.addType(t)
+
+        c.setBasePower(self.basePower)
+        c.setBaseToughness(self.baseToughness)
+        return c
+
+    def toString(self):
+        sb = []
+        sb.append(self.name)
+        sb.append(',')
+        sb.append("P:")
+        sb.append(str(self.basePower))
+        sb.append(',')
+        sb.append("T:")
+        sb.append(str(self.baseToughness))
+        sb.append(',')
+        sb.append("Cost:")
+        sb.append(self.manaCost)
+        sb.append(',')
+        sb.append("Color:")
+        sb.append(str(self.color))
+        sb.append(",")
+        sb.append("Types:")
+        sb.append('-'.join(self.types))
+        sb.append(',')
+        sb.append("Keywords:")
+        sb.append('-'.join(self.intrinsicKeywords))
+        sb.append(',')
+        sb.append("Image:")
+        sb.append(self.imageName)
+        return ''.join(sb)
+
+    def __str__(self):
+        return self.toString()
+
+    def makeOneToken(self, controller, id=None):
+        if id is None:
+            return self.makeOneToken(controller, controller.getGame().nextCardId())
+        game = controller.getGame()
+        c = self.toCard(game, id)
+
+        c.setOwner(controller)
+        c.setGamePieceType(GamePieceType.TOKEN)
+        CardFactoryUtil.setupKeywordedAbilities(c)
+        # add them later to prevent setupKeywords from adding them multiple times
+        for kw in self.intrinsicKeywords:
+            c.addIntrinsicKeyword(kw)
+        return c
+
+    @staticmethod
+    def protoTypeApplyTextChange(result, sa):
+        # update Token with CardTextChanges
+        colorMap = sa.getChangedTextColors()
+        typeMap = sa.getChangedTextTypes()
+        if colorMap:
+            if not result.isColorless():
+                # change Token Colors
+                color = result.getColor().getColor()
+
+                for key, value in colorMap.items():
+                    v = MagicColor.fromName(value)
+                    # Any used by Swirl the Mists
+                    if "Any" == key:
+                        for c in MagicColor.WUBRG:
+                            # try to replace color flips
+                            if (color & c) != 0:
+                                color &= ~c
+                                color |= v
+                    else:
+                        c = MagicColor.fromName(key)
+                        # try to replace color flips
+                        if (color & c) != 0:
+                            color &= ~c
+                            color |= v
+
+                result.setColor(ColorSet.fromMask(color))
+        if typeMap:
+            type = CardType(result.getType())
+            nameGenerated = result.getName().endswith(" Token")
+            typeChanged = False
+
+            if list(type.getSubtypes()):
+                for key, value in typeMap.items():
+                    if type.hasSubtype(key):
+                        type.remove(key)
+                        type.add(value)
+                        typeChanged = True
+
+            if typeChanged:
+                result.setType(type)
+
+                # update generated Name
+                if nameGenerated:
+                    result.setName(" ".join(type.getSubtypes()) + " Token")
+
+        # replace Intrinsic Keyword
+        toRemove = []
+        toAdd = []
+        for k in result.getCurrentState().getIntrinsicKeywords():
+            o = k.getOriginal()
+            # only Modifiable should go there
+            if not CardUtil.isKeywordModifiable(o):
+                continue
+            r = o
+            # replace types
+            for key, value in typeMap.items():
+                pkey = CardType.getPluralType(key)
+                pvalue = CardType.getPluralType(value)
+                r = re.sub(pkey, pvalue, r)
+                r = re.sub(key, value, r)
+            # replace color words
+            for key, value in colorMap.items():
+                vName = value
+                vCaps = vName[:1].upper() + vName[1:] if vName else vName
+                vLow = vName.lower()
+                if "Any" == key:
+                    for c in MagicColor.WUBRG:
+                        cName = MagicColor.toLongString(c)
+                        cNameCaps = cName[:1].upper() + cName[1:] if cName else cName
+                        cNameLow = cName.lower()
+                        r = re.sub(cNameCaps, vCaps, r)
+                        r = re.sub(cNameLow, vLow, r)
+                else:
+                    cName = key
+                    cNameCaps = cName[:1].upper() + cName[1:] if cName else cName
+                    cNameLow = cName.lower()
+                    r = re.sub(cNameCaps, vCaps, r)
+                    r = re.sub(cNameLow, vLow, r)
+            if r != o:
+                toRemove.append(k)
+                toAdd.append(r)
+        for k in toRemove:
+            result.getCurrentState().removeIntrinsicKeyword(k)
+        result.addIntrinsicKeywords(toAdd)
+
+        result.getCurrentState().changeTextIntrinsic(colorMap, typeMap)
+
+    @staticmethod
+    def getProtoType(script, sa, owner, applyTextChange=None):
+        if applyTextChange is None:
+            applyTextChange = not sa.hasParam("LockTokenScript")
+        # script might be null, or sa might be null
+        if script is None or sa is None:
+            return None
+        host = sa.getHostCard()
+        game = host.getGame()
+
+        editionHost = sa.getOriginalHost()
+        if sa.getKeyword() is not None and sa.getKeyword().getStatic() is not None:
+            editionHost = sa.getKeyword().getStatic().getHostCard()
+        edition = (editionHost if editionHost is not None else host).getSetCode()
+        tokenSet = StaticData.instance().getCardEdition(edition).getTokenSet(script)
+        edition = tokenSet if tokenSet is not None else edition
+        pins = TokenInfo.getPinsFor(game)
+        pinned = pins.get(script)
+        if pinned is not None:
+            edition = pinned
+        token = StaticData.instance().getAllTokens().getToken(script, edition)
+        if token is not None and pinned is None:
+            pins[script] = token.getEdition()
+
+        if token is None:
+            return None
+        result = CardFactory.getCard(token, owner, game)
+
+        if sa.hasParam("TokenPower"):
+            str_ = sa.getParam("TokenPower")
+            result.setBasePowerString(str_)
+            result.setBasePower(AbilityUtils.calculateAmount(host, str_, sa))
+
+        if sa.hasParam("TokenToughness"):
+            str_ = sa.getParam("TokenToughness")
+            result.setBaseToughnessString(str_)
+            result.setBaseToughness(AbilityUtils.calculateAmount(host, str_, sa))
+
+        if applyTextChange:
+            TokenInfo.protoTypeApplyTextChange(result, sa)
+
+        # need to be done after text change so it isn't affected by that
+        if sa.hasParam("TokenTypes"):
+            types = sa.getParam("TokenTypes")
+            types = types.replace("ChosenType", host.getChosenType())
+            result.addType(types)
+            result.setName(types)
+
+        if sa.hasParam("TokenColors"):
+            colors = sa.getParam("TokenColors")
+            colors = colors.replace("ChosenColor", host.getChosenColor())
+            result.setColor(colors.split(","))
+
+        return result
 ```

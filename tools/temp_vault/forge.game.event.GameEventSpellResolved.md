@@ -72,3 +72,30 @@ public record GameEventSpellResolved(SpellAbilityView spell, boolean hasFizzled,
     }
 }
 ```
+
+## Python
+`forge/game/event/GameEventSpellResolved.py`
+
+```python
+package forge.game.event
+
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.spellability.SpellAbilityView import SpellAbilityView
+from forge.game.event.GameEvent import GameEvent
+from forge.game.event.IGameEventVisitor import IGameEventVisitor
+
+
+class GameEventSpellResolved(GameEvent):
+    def __init__(self, spell: SpellAbility, hasFizzled: bool):
+        self.spell: SpellAbilityView = SpellAbilityView.get(spell)
+        self.hasFizzled: bool = hasFizzled
+        self.stackDescription: str = spell.getStackDescription()
+
+    def visit(self, visitor: IGameEventVisitor):
+        return visitor.visit(self)
+
+    # (non-Javadoc)
+    # @see java.lang.Object#toString()
+    def __str__(self) -> str:
+        return "Stack resolved " + str(self.spell) + (" (fizzled)" if self.hasFizzled else "")
+```

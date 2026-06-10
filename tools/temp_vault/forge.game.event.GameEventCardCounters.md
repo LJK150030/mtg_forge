@@ -71,3 +71,34 @@ public record GameEventCardCounters(CardView card, CounterType type, int oldValu
     }
 }
 ```
+
+## Python
+`forge/game/event/GameEventCardCounters.py`
+
+```python
+from forge.game.card.Card import Card
+from forge.game.card.CardView import CardView
+from forge.game.card.CounterType import CounterType
+from forge.game.event.GameEvent import GameEvent
+from forge.game.event.IGameEventVisitor import IGameEventVisitor
+
+
+class GameEventCardCounters(GameEvent):
+    def __init__(self, card, type, oldValue: int, newValue: int):
+        if isinstance(card, Card):
+            self.card = CardView.get(card)
+        else:
+            self.card = card
+        self.type = type
+        self.oldValue = oldValue
+        self.newValue = newValue
+
+    def visit(self, visitor: IGameEventVisitor):
+        return visitor.visit(self)
+
+    def toString(self) -> str:
+        return "" + str(self.card) + " " + str(self.type) + " counters: " + str(self.oldValue) + " -> " + str(self.newValue)
+
+    def __str__(self) -> str:
+        return self.toString()
+```

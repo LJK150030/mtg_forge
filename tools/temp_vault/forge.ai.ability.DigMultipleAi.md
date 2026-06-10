@@ -144,3 +144,82 @@ public class DigMultipleAi extends SpellAbilityAi {
     }
 }
 ```
+
+## Python
+`forge/ai/ability/DigMultipleAi.py`
+
+```python
+from forge.ai.SpellAbilityAi import SpellAbilityAi
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.ai.AiAttackController import AiAttackController
+from forge.ai.ComputerUtil import ComputerUtil
+from forge.game.Game import Game
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.card.Card import Card
+from forge.game.phase.PhaseType import PhaseType
+from forge.game.player.Player import Player
+from forge.game.player.PlayerActionConfirmMode import PlayerActionConfirmMode
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+
+
+class DigMultipleAi(SpellAbilityAi):
+    # (non-Javadoc)
+    # @see forge.card.abilityfactory.SpellAiLogic#canPlayAI(forge.game.player.Player, java.util.Map, forge.card.spellability.SpellAbility)
+    def checkApiLogic(self, ai: Player, sa: SpellAbility) -> AiAbilityDecision:
+        game = ai.getGame()
+        opp = AiAttackController.choosePreferredDefenderPlayer(ai)
+        host = sa.getHostCard()
+        libraryOwner = ai
+
+        if sa.usesTargeting():
+            sa.resetTargets()
+            if not opp.canBeTargetedBy(sa):
+                return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+            sa.getTargets().add(opp)
+            libraryOwner = opp
+
+        # return false if nothing to dig into
+        if libraryOwner.getCardsIn(ZoneType.Library).isEmpty():
+            return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+        # don't deck yourself
+        if sa.hasParam("DestinationZone2") and "Library" != sa.getParam("DestinationZone2"):
+            numToDig = AbilityUtils.calculateAmount(host, sa.getParam("DigNum"), sa)
+            if libraryOwner == ai and ai.getCardsIn(ZoneType.Library).size() <= numToDig + 2:
+                return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+        # Don't use draw abilities before main 2 if possible
+        if (game.getPhaseHandler().getPhase().isBefore(PhaseType.MAIN2) and not sa.hasParam("ActivationPhases")
+                and not sa.hasParam("DestinationZone") and not ComputerUtil.castSpellInMain1(ai, sa)):
+            return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+        if self.playReusable(ai, sa):
+            return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+        if ((not game.getPhaseHandler().getNextTurn().equals(ai)
+                or game.getPhaseHandler().getPhase().isBefore(PhaseType.END_OF_TURN))
+                and not sa.hasParam("PlayerTurn") and not self.isSorcerySpeed(sa, ai)
+                and (ai.getCardsIn(ZoneType.Hand).size() > 1 or game.getPhaseHandler().getPhase().isBefore(PhaseType.DRAW))
+                and not ComputerUtil.activateForCost(sa, ai)):
+            return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+        return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+    def doTriggerNoCost(self, ai: Player, sa: SpellAbility, mandatory: bool) -> AiAbilityDecision:
+        opp = AiAttackController.choosePreferredDefenderPlayer(ai)
+        if sa.usesTargeting():
+            sa.resetTargets()
+            if mandatory and sa.canTarget(opp):
+                sa.getTargets().add(opp)
+            elif mandatory and sa.canTarget(ai):
+                sa.getTargets().add(ai)
+
+        return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+    # (non-Javadoc)
+    # @see forge.card.ability.SpellAbilityAi#confirmAction(forge.card.spellability.SpellAbility, forge.game.player.PlayerActionConfirmMode, java.lang.String)
+    def confirmAction(self, player: Player, sa: SpellAbility, mode: PlayerActionConfirmMode, message: str, params: dict[str, object]) -> bool:
+        return True
+```

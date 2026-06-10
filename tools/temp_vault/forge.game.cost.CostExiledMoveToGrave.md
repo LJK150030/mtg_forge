@@ -155,3 +155,72 @@ public class CostExiledMoveToGrave extends CostPartWithList {
     }
 }
 ```
+
+## Python
+`forge/game/cost/CostExiledMoveToGrave.py`
+
+```python
+from forge.game.cost.CostPartWithList import CostPartWithList
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.card.CardLists import CardLists
+from forge.game.cost.ICostVisitor import ICostVisitor
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+
+
+class CostExiledMoveToGrave(CostPartWithList):
+    """
+    This is for the "ExiledMoveToGrave" Cost.
+    """
+    # Serializables need a version ID.
+    serialVersionUID = 1
+
+    # ExiledMoveToGrave<Num/Type{/TypeDescription}>
+    def __init__(self, amount: str, type: str, description: str):
+        super().__init__(amount, type, description)
+
+    def paymentOrder(self) -> int:
+        return 15
+
+    def getMaxAmountX(self, ability: SpellAbility, payer: Player, effect: bool):
+        source = ability.getHostCard()
+        typeList = payer.getGame().getCardsIn(ZoneType.Exile)
+
+        typeList = CardLists.getValidCards(typeList, self.getType().split(";"), payer, source, ability)
+
+        return typeList.size()
+
+    def toString(self) -> str:
+        sb = []
+        i = self.convertAmount()
+        sb.append("Put ")
+
+        desc = self.getType() if self.getTypeDescription() is None else self.getTypeDescription()
+        sb.append(Cost.convertAmountTypeToWords(i, self.getAmount(), desc))
+
+        sb.append(" from exile into that player's graveyard")
+
+        return "".join(sb)
+
+    def getHashForLKIList(self) -> str:
+        return "MovedToGrave"
+
+    def getHashForCardList(self) -> str:
+        return "MovedToGraveCards"
+
+    def canPay(self, ability: SpellAbility, payer: Player, effect: bool) -> bool:
+        i = self.getAbilityAmount(ability)
+
+        return self.getMaxAmountX(ability, payer, effect) >= i
+
+    def doPayment(self, payer: Player, ability: SpellAbility, targetCard: Card, effect: bool) -> Card:
+        moveParams: dict[AbilityKey, object] = AbilityKey.newMap()
+        AbilityKey.addCardZoneTableParams(moveParams, self.table)
+        return targetCard.getGame().getAction().moveToGraveyard(targetCard, None, moveParams)
+
+    def accept(self, visitor: ICostVisitor):
+        return visitor.visit(self)
+```

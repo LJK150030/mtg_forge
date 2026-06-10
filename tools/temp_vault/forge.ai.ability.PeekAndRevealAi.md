@@ -134,3 +134,71 @@ public class PeekAndRevealAi extends SpellAbilityAi {
 
 }
 ```
+
+## Python
+`forge/ai/ability/PeekAndRevealAi.py`
+
+```python
+from forge.ai.SpellAbilityAi import SpellAbilityAi
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.ai.AiAttackController import AiAttackController
+from forge.ai.ComputerUtilCost import ComputerUtilCost
+from forge.ai.SpellApiToAi import SpellApiToAi
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.phase.PhaseType import PhaseType
+from forge.game.player.Player import Player
+from forge.game.player.PlayerActionConfirmMode import PlayerActionConfirmMode
+from forge.game.spellability.AbilitySub import AbilitySub
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+
+
+# TODO: Write javadoc for this type.
+#
+class PeekAndRevealAi(SpellAbilityAi):
+
+    # (non-Javadoc)
+    # @see forge.card.abilityfactory.SpellAiLogic#canPlayAI(forge.game.player.Player, forge.card.spellability.SpellAbility)
+    def checkApiLogic(self, aiPlayer: Player, sa: SpellAbility) -> AiAbilityDecision:
+        logic = sa.getParamOrDefault("AILogic", "")
+        if "Main2" == logic:
+            if aiPlayer.getGame().getPhaseHandler().getPhase().isBefore(PhaseType.MAIN2):
+                return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+        # So far this only appears on Triggers, but will expand
+        # once things get converted from Dig + NoMove
+        opp = AiAttackController.choosePreferredDefenderPlayer(aiPlayer)
+        libraryOwner = aiPlayer
+
+        if sa.usesTargeting():
+            sa.resetTargets()
+            # todo: evaluate valid targets
+            if not sa.canTarget(opp):
+                return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+            sa.getTargets().add(opp)
+            libraryOwner = opp
+
+        if libraryOwner.getCardsIn(ZoneType.Library).isEmpty():
+            return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+        if "X" == sa.getParam("PeekAmount") and sa.getSVar("X") == "Count$xPaid":
+            xPay = ComputerUtilCost.setMaxXValue(sa, aiPlayer, sa.isTrigger())
+            if xPay == 0:
+                return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+            sa.getRootAbility().setXManaCostPaid(xPay)
+
+        return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+    # (non-Javadoc)
+    # @see forge.card.ability.SpellAbilityAi#confirmAction(forge.game.player.Player, forge.card.spellability.SpellAbility, forge.game.player.PlayerActionConfirmMode, java.lang.String)
+    def confirmAction(self, player: Player, sa: SpellAbility, mode: PlayerActionConfirmMode, message: str, params: dict[str, object]) -> bool:
+        if "InstantOrSorcery" == sa.getParam("AILogic"):
+            revealed = params.get("Revealed")
+            for c in revealed:
+                if not c.isInstant() and not c.isSorcery():
+                    return False
+
+        subAb = sa.getSubAbility()
+        return subAb is not None and SpellApiToAi.Converter.get(subAb).chkDrawbackWithSubs(player, subAb).willingToPlay()
+```

@@ -147,3 +147,89 @@ public class ChooseColorAi extends SpellAbilityAi {
 
 }
 ```
+
+## Python
+`forge/ai/ability/ChooseColorAi.py`
+
+```python
+from forge.ai.SpellAbilityAi import SpellAbilityAi
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.ai.ComputerUtilAbility import ComputerUtilAbility
+from forge.ai.ComputerUtilCard import ComputerUtilCard
+from forge.ai.ComputerUtilCost import ComputerUtilCost
+from forge.ai.SpecialCardAi import SpecialCardAi
+from forge.card.MagicColor import MagicColor
+from forge.game.Game import Game
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CardPredicates import CardPredicates
+from forge.game.phase.PhaseHandler import PhaseHandler
+from forge.game.phase.PhaseType import PhaseType
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+
+
+class ChooseColorAi(SpellAbilityAi):
+
+    def checkApiLogic(self, ai: Player, sa: SpellAbility) -> AiAbilityDecision:
+        game = ai.getGame()
+        sourceName = ComputerUtilAbility.getAbilitySourceName(sa)
+        ph = game.getPhaseHandler()
+
+        if not sa.hasParam("AILogic"):
+            return AiAbilityDecision(0, AiPlayDecision.MissingLogic)
+        logic = sa.getParam("AILogic")
+
+        if "Nykthos, Shrine to Nyx" == sourceName:
+            if SpecialCardAi.NykthosShrineToNyx.consider(ai, sa):
+                return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+            return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+        if "Oona, Queen of the Fae" == sourceName:
+            if ph.isPlayerTurn(ai) or ph.getPhase().isBefore(PhaseType.COMBAT_DECLARE_ATTACKERS):
+                return AiAbilityDecision(0, AiPlayDecision.AnotherTime)
+            ComputerUtilCost.setMaxXValue(sa, ai, False)
+            return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+        if "Addle" == sourceName:
+            # TODO Why is this not in the AI logic?
+            # Why are we specifying the weakest opponent?
+            if not ph.getPhase().isBefore(PhaseType.COMBAT_DECLARE_ATTACKERS) and not ai.getWeakestOpponent().getCardsIn(ZoneType.Hand).isEmpty():
+                return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+            else:
+                return AiAbilityDecision(0, AiPlayDecision.AnotherTime)
+
+        if logic == "MostExcessOpponentControls":
+            for color in MagicColor.WUBRG:
+                ailist = ai.getColoredCardsInPlay(color)
+                opplist = ai.getStrongestOpponent().getColoredCardsInPlay(color)
+
+                excess = ComputerUtilCard.evaluatePermanentList(opplist) - ComputerUtilCard.evaluatePermanentList(ailist)
+                if excess > 4:
+                    return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+            return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+        elif logic == "MostProminentInComputerDeck":
+            if "Astral Cornucopia" == sourceName:
+                # activate in Main 2 hoping that the extra mana surplus will make a difference
+                # if there are some nonland permanents in hand
+                permanents = CardLists.filter(ai.getCardsIn(ZoneType.Hand),
+                        CardPredicates.NONLAND_PERMANENTS)
+
+                if not permanents.isEmpty() and ph.is_(PhaseType.MAIN2, ai):
+                    return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+                else:
+                    return AiAbilityDecision(0, AiPlayDecision.WaitForMain2)
+        elif logic == "HighestDevotionToColor":
+            # currently only works more or less reliably in Main2 to cast own spells
+            if not ph.is_(PhaseType.MAIN2, ai):
+                return AiAbilityDecision(0, AiPlayDecision.WaitForMain2)
+
+        return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+    def doTriggerNoCost(self, ai: Player, sa: SpellAbility, mandatory: bool) -> AiAbilityDecision:
+        if mandatory:
+            return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+        return self.canPlay(ai, sa)
+```

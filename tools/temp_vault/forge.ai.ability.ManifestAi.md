@@ -38,7 +38,7 @@ classDiagram
 
 ManifestAi is the AI decision component for the "manifest" mechanic, determining whether the computer player should manifest a given card face-down. As a concrete subclass of ManifestBaseAi, it supplies the abstract `shouldApply` hook, leaving the broader manifest-ability evaluation and execution to its parent while focusing solely on per-card suitability checks. It collaborates with Card, Player, and SpellAbility to reason about a candidate, using CardCopyService to build a lightweight last-known-information copy that is turned face-down and flagged as manifested so it can probe for replacement effects (e.g., Grafdigger's Cage) that would block the creature from entering the battlefield.
 
-The design intent is conservative, value-preserving play: when the card is visible to the AI it avoids manifesting non-permanents, X-cost cards, creatures with non-positive toughness, and cards whose entry triggers or replacements would be wasted face-down—manifesting only when doing so is genuinely advantageous.
+The design intent is conservative, value-preserving play: when the card is visible to the AI it avoids manifesting non-permanents, X-cost cards, creatures with non-positive toughness, and cards whose entry triggers or replacements would be wasted face-downâ€”manifesting only when doing so is genuinely advantageous.
 
 ## Source
 `forge-ai/src/main/java/forge/ai/ability/ManifestAi.java`
@@ -87,4 +87,48 @@ public class ManifestAi extends ManifestBaseAi {
         return true;
     }
 }
+```
+
+## Python
+`forge/ai/ability/ManifestAi.py`
+
+```python
+from forge.ai.ComputerUtil import ComputerUtil
+from forge.game.card.Card import Card
+from forge.game.card.CardCopyService import CardCopyService
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.ai.ability.ManifestBaseAi import ManifestBaseAi
+
+
+class ManifestAi(ManifestBaseAi):
+
+    def shouldApply(self, card: Card, ai: Player, sa: SpellAbility) -> bool:
+        # check to ensure that there are no replacement effects that prevent creatures ETBing from library
+        # (e.g. Grafdigger's Cage)
+        topCopy = CardCopyService.getLKICopy(card)
+        topCopy.turnFaceDownNoUpdate()
+        topCopy.setManifested(sa)
+
+        if ComputerUtil.isETBprevented(topCopy):
+            return False
+
+        if card.getView().canBeShownTo(ai.getView()):
+            # try to avoid manifest a non Permanent
+            if not card.isPermanent():
+                return False
+
+            # do not manifest a card with X in its cost
+            if card.getManaCost().countX() > 0:
+                return False
+
+            # try to avoid manifesting a creature with zero or less toughness
+            if card.isCreature() and card.getNetToughness() <= 0:
+                return False
+
+            # card has ETBTrigger or ETBReplacement
+            if card.hasETBTrigger(False) or card.hasETBReplacement():
+                return False
+
+        return True
 ```

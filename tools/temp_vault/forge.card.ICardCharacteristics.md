@@ -50,7 +50,7 @@ classDiagram
 
 ICardCharacteristics defines the read-only contract for the intrinsic, printed attributes of a Magic card face, exposing accessors for its type line, mana cost, color identity, power/toughness (as both raw strings and parsed ints), planeswalker loyalty, battle defense, Unfinity attraction lights, and oracle text. By extending IHasName, it folds the card's name into the same characteristic abstraction.
 
-As a pure interface it declares no state or behavior beyond getters, allowing any card representation—printed card data, in-game card state, or alternate faces—to supply these values uniformly so consumers can query characteristics without depending on a concrete implementation. It collaborates with the domain value types CardType, ManaCost, and ColorSet, delegating the modeling of those compound concepts to dedicated classes. The mix of typed (getIntPower) and string (getPower) accessors reflects MTG's need to represent both numeric values and special cases such as `*` or variable characteristics.
+As a pure interface it declares no state or behavior beyond getters, allowing any card representationâ€”printed card data, in-game card state, or alternate facesâ€”to supply these values uniformly so consumers can query characteristics without depending on a concrete implementation. It collaborates with the domain value types CardType, ManaCost, and ColorSet, delegating the modeling of those compound concepts to dedicated classes. The mix of typed (getIntPower) and string (getPower) accessors reflects MTG's need to represent both numeric values and special cases such as `*` or variable characteristics.
 
 ## Source
 `forge-core/src/main/java/forge/card/ICardCharacteristics.java`
@@ -78,4 +78,66 @@ public interface ICardCharacteristics extends IHasName {
 
     String getOracleText();
 }
+```
+
+## Python
+`forge/card/ICardCharacteristics.py`
+
+```python
+package = "forge.card"
+
+from forge.card.mana.ManaCost import ManaCost
+from forge.util.IHasName import IHasName
+
+from abc import abstractmethod
+from typing import Set
+
+from forge.card.CardType import CardType
+from forge.card.ColorSet import ColorSet
+
+
+class ICardCharacteristics(IHasName):
+    @abstractmethod
+    def getType(self) -> CardType:
+        ...
+
+    @abstractmethod
+    def getManaCost(self) -> ManaCost:
+        ...
+
+    @abstractmethod
+    def getColor(self) -> ColorSet:
+        ...
+
+    @abstractmethod
+    def getIntPower(self) -> int:
+        ...
+
+    @abstractmethod
+    def getIntToughness(self) -> int:
+        ...
+
+    @abstractmethod
+    def getPower(self) -> str:
+        ...
+
+    @abstractmethod
+    def getToughness(self) -> str:
+        ...
+
+    @abstractmethod
+    def getInitialLoyalty(self) -> str:
+        ...
+
+    @abstractmethod
+    def getDefense(self) -> str:
+        ...
+
+    @abstractmethod
+    def getAttractionLights(self) -> Set[int]:
+        ...
+
+    @abstractmethod
+    def getOracleText(self) -> str:
+        ...
 ```

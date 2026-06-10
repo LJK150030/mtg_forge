@@ -58,7 +58,7 @@ classDiagram
 
 CostDiscard models the "discard cards" component of a payable cost in the Forge game engine, representing requirements such as discarding a number of cards of a given type, the whole hand, the last drawn card, or cards with same/different names. As a concrete subclass of CostPartWithList, it slots into Forge's composite cost framework: it reports a payment order, computes the maximum payable amount (getMaxAmountX), validates feasibility (canPay), and executes the discard one card at a time via doPayment, which routes through Player.discard.
 
-The design centers on flexible type-string parsing — suffixes like `+WithDifferentNames`/`+WithSameName` and tokens like `Hand`, `LastDrawn`, `Random`, and `ChosenColor` branch its amount, validation, and display logic. It collaborates with Card/CardCollection(View) for hand inspection and with AbilityKey-keyed parameter maps to fire DiscardedAll triggers, snapshotting prior discards in handleBeforePayment. Its accept method participates in an ICostVisitor double-dispatch scheme, and getHash* methods expose stable identifiers for last-known-information tracking.
+The design centers on flexible type-string parsing â€” suffixes like `+WithDifferentNames`/`+WithSameName` and tokens like `Hand`, `LastDrawn`, `Random`, and `ChosenColor` branch its amount, validation, and display logic. It collaborates with Card/CardCollection(View) for hand inspection and with AbilityKey-keyed parameter maps to fire DiscardedAll triggers, snapshotting prior discards in handleBeforePayment. Its accept method participates in an ICostVisitor double-dispatch scheme, and getHash* methods expose stable identifiers for last-known-information tracking.
 
 ## Source
 `forge-game/src/main/java/forge/game/cost/CostDiscard.java`
@@ -313,4 +313,173 @@ public class CostDiscard extends CostPartWithList {
         }
     }
 }
+```
+
+## Python
+`forge/game/cost/CostDiscard.py`
+
+```python
+from forge.game.cost.CostPartWithList import CostPartWithList
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.cost.ICostVisitor import ICostVisitor
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.trigger.TriggerType import TriggerType
+from forge.game.zone.ZoneType import ZoneType
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CardPredicates import CardPredicates
+from forge.game.cost.Cost import Cost
+from forge.util.TextUtil import TextUtil
+from typing import TypeVar
+
+T = TypeVar("T")
+
+
+class CostDiscard(CostPartWithList):
+    # Discard<Num/Type{/TypeDescription}>
+
+    # Inputs
+
+    serialVersionUID = 1
+
+    def __init__(self, amount: str, type: str, description: str):
+        super().__init__(amount, type, description)
+        self.discardedBefore: list[Card] = None
+
+    def paymentOrder(self) -> int:
+        return 10
+
+    def getMaxAmountX(self, ability: SpellAbility, payer: Player, effect: bool):
+        source = ability.getHostCard()
+        type = self.getType()
+
+        differentNames = False
+        if "+WithDifferentNames" in type:
+            type = type.replace("+WithDifferentNames", "")
+            differentNames = True
+        handList = payer.getCardsIn(ZoneType.Hand) if payer.canDiscardBy(ability, effect) else CardCollection.EMPTY
+
+        if type != "Random":
+            handList = CardLists.getValidCards(handList, type.split(";"), payer, source, ability)
+        if differentNames:
+            return CardLists.getDifferentNamesCount(handList)
+        return handList.size()
+
+    def toString(self) -> str:
+        sb = []
+        sb.append("Discard ")
+
+        i = self.convertAmount()
+
+        if self.payCostFromSource():
+            sb.append(self.getType())
+        elif self.getType() == "Hand":
+            sb.append("your hand")
+        elif self.getType() == "LastDrawn":
+            sb.append("the last card you drew this turn")
+        elif "+WithDifferentNames" in self.getType():
+            sb.append(Cost.convertAmountTypeToWords(i, self.getAmount(), "Card"))
+            sb.append(" with different names")
+        else:
+            desc = []
+
+            if self.getType() == "Card" or self.getType() == "Random":
+                desc.append("card")
+            else:
+                desc.append(self.getDescriptiveType())
+                desc.append(" card")
+
+            sb.append(Cost.convertAmountTypeToWords(i, self.getAmount(), "".join(desc)))
+
+            if self.getType() == "Random":
+                sb.append(" at random")
+        return "".join(sb)
+
+    def canPay(self, ability: SpellAbility, payer: Player, effect: bool) -> bool:
+        source = ability.getHostCard()
+
+        handList = payer.getCardsIn(ZoneType.Hand) if payer.canDiscardBy(ability, effect) else CardCollection.EMPTY
+        type = self.getType()
+        amount = self.getAbilityAmount(ability)
+
+        if self.payCostFromSource():
+            return source.canBeDiscardedBy(ability, effect)
+        elif type == "Hand":
+            # trying to discard an empty hand always work even with Tamiyo
+            if payer.getZone(ZoneType.Hand).isEmpty():
+                return True
+            return payer.canDiscardBy(ability, effect)
+            # this will always work
+        elif type == "LastDrawn":
+            c = payer.getLastDrawnCard()
+            return handList.contains(c)
+        else:
+            sameName = False
+            differentNames = False
+            if "+WithSameName" in type:
+                sameName = True
+                type = TextUtil.fastReplace(type, "+WithSameName", "")
+            if "+WithDifferentNames" in type:
+                type = type.replace("+WithDifferentNames", "")
+                differentNames = True
+            if "ChosenColor" in type and not source.hasChosenColor():
+                # color hasn't been chosen yet, so skip getValidCards
+                pass
+            elif type != "Random" and "X" not in type:
+                # Knollspine Invocation fails to activate without the above conditional
+                handList = CardLists.getValidCards(handList, type.split(";"), payer, source, ability)
+            if sameName:
+                for c in handList:
+                    if CardLists.count(handList, CardPredicates.nameEquals(c.getName())) > 1:
+                        return True
+                return False
+            elif differentNames:
+                if CardLists.getDifferentNamesCount(handList) < amount:
+                    return False
+            adjustment = 0
+            if source.isInZone(ZoneType.Hand) and payer.equals(source.getOwner()):
+                # If this card is in my hand, I can't use it to pay for it's own cost
+                if handList.contains(source):
+                    adjustment = 1
+
+            if amount > handList.size() - adjustment:
+                # not enough cards in hand to pay
+                return False
+        return True
+
+    def doPayment(self, payer: Player, ability: SpellAbility, targetCard: Card, effect: bool) -> Card:
+        runParams = AbilityKey.newMap()
+        AbilityKey.addCardZoneTableParams(runParams, self.table)
+
+        if ability.isCycling() and targetCard.equals(ability.getHostCard()):
+            # discard itself for cycling cost
+            runParams[AbilityKey.Cycling] = True
+        # if this is caused by 118.12 it's also an effect
+        cause = ability if targetCard.getGame().getStack().isResolving(ability.getHostCard()) else None
+        return payer.discard(targetCard, cause, effect, runParams)
+
+    def getHashForLKIList(self) -> str:
+        return "Discarded"
+
+    def getHashForCardList(self) -> str:
+        return "DiscardedCards"
+
+    def accept(self, visitor: ICostVisitor[T]) -> T:
+        return visitor.visit(self)
+
+    def handleBeforePayment(self, ai: Player, ability: SpellAbility, targetCards: CardCollectionView) -> None:
+        self.discardedBefore = Lists.newArrayList(ai.getDiscardedThisTurn())
+
+    def handleChangeZoneTrigger(self, payer: Player, ability: SpellAbility, targetCards: CardCollectionView) -> None:
+        super().handleChangeZoneTrigger(payer, ability, targetCards)
+
+        if not self.cardList.isEmpty():
+            runParams = AbilityKey.mapFromPlayer(payer)
+            runParams[AbilityKey.Cards] = CardCollection(self.cardList)
+            runParams[AbilityKey.Cause] = ability
+            runParams[AbilityKey.DiscardedBefore] = self.discardedBefore
+            payer.getGame().getTriggerHandler().runTrigger(TriggerType.DiscardedAll, runParams, False)
 ```

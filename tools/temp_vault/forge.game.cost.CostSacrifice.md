@@ -55,7 +55,7 @@ classDiagram
 
 ## Design Description
 
-CostSacrifice models the Magic: the Gathering "sacrifice" cost — the requirement that a player put one or more of their own permanents into the graveyard to activate an ability or cast a spell. As a concrete subclass of CostPartWithList, it slots into Forge's composite cost system, contributing a fixed payment order (15) and reusing the base class's list-oriented payment machinery. It interprets its `amount`/`type` specification against the payer's battlefield, counting sacrificeable candidates (with support for `X`, `All`, `OriginalHost`, and `+WithDifferentNames` variants) to validate affordability via canPay/getMaxAmountX and to render human-readable cost text in toString.
+CostSacrifice models the Magic: the Gathering "sacrifice" cost â€” the requirement that a player put one or more of their own permanents into the graveyard to activate an ability or cast a spell. As a concrete subclass of CostPartWithList, it slots into Forge's composite cost system, contributing a fixed payment order (15) and reusing the base class's list-oriented payment machinery. It interprets its `amount`/`type` specification against the payer's battlefield, counting sacrificeable candidates (with support for `X`, `All`, `OriginalHost`, and `+WithDifferentNames` variants) to validate affordability via canPay/getMaxAmountX and to render human-readable cost text in toString.
 
 Its design intent favors batch resolution: it overrides canPayListAtOnce to sacrifice all targeted Cards in a single Game action call rather than card-by-card, routing the move through AbilityKey zone-change parameters. It also participates in the visitor pattern via accept(ICostVisitor) and exposes stable hash keys ("Sacrificed"/"SacrificedCards") so resolved sacrifices can be referenced later in ability processing.
 
@@ -245,4 +245,135 @@ public class CostSacrifice extends CostPartWithList {
     }
 
 }
+```
+
+## Python
+`forge/game/cost/CostSacrifice.py`
+
+```python
+from forge.card.CardType import CardType
+from forge.game.Game import Game
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CardPredicates import CardPredicates
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.Lang import Lang
+from forge.game.cost.CostPartWithList import CostPartWithList
+from forge.game.cost.ICostVisitor import ICostVisitor
+
+
+class CostSacrifice(CostPartWithList):
+    """The Class CostSacrifice."""
+
+    serialVersionUID = 1
+
+    def __init__(self, amount: str, type: str, description: str):
+        """
+        Instantiates a new cost sacrifice.
+
+        :param amount: the amount
+        :param type: the type
+        :param description: the description
+        """
+        super().__init__(amount, type, description)
+
+    def paymentOrder(self) -> int:
+        return 15
+
+    def getMaxAmountX(self, ability: SpellAbility, payer: Player, effect: bool):
+        source = ability.getHostCard()
+
+        type = self.getType()
+        differentNames = False
+        if "+WithDifferentNames" in type:
+            type = type.replace("+WithDifferentNames", "")
+            differentNames = True
+
+        typeList = payer.getCardsIn(ZoneType.Battlefield)
+        if "X" not in type:
+            typeList = CardLists.getValidCards(typeList, type.split(";"), payer, source, ability)
+        typeList = CardLists.filter(typeList, CardPredicates.canBeSacrificedBy(ability, effect))
+        if differentNames:
+            return CardLists.getDifferentNamesCount(typeList)
+        return typeList.size()
+
+    def toString(self) -> str:
+        sb = []
+        if self.getAmount() == "X":
+            sb.append("You may sacrifice ")
+        else:
+            sb.append("Sacrifice ")
+
+        if self.payCostFromSource():
+            sb.append(self.getType() if (self.getTypeDescription() is None or not self.getTypeDescription().startswith("this"))
+                      else self.getTypeDescription())
+        elif self.getAmount() == "X":
+            typeDesc = self.getType().lower().replace(";", "s and/or ")
+            sb.append("any number of ")
+            sb.append(typeDesc)
+            sb.append("s")
+        else:
+            if self.getTypeDescription() is None:
+                typeS = self.getType()
+                desc = typeS.lower() if (typeS == "Permanent" or CardType.CoreType.isValidEnum(typeS)) else typeS
+            else:
+                desc = self.getTypeDescription()
+
+            if desc.startswith("another"):
+                sb.append(desc)
+            else:
+                sb.append(Lang.nounWithNumeralExceptOne(self.getAmount(), desc) if self.convertAmount() is None
+                          else Lang.nounWithNumeralExceptOne(self.convertAmount(), desc))
+        return "".join(sb)
+
+    def canPay(self, ability: SpellAbility, activator: Player, effect: bool) -> bool:
+        source = ability.getHostCard()
+
+        if self.getType() == "OriginalHost":
+            originalEquipment = ability.getOriginalHost()
+            return originalEquipment.isEquipping() and originalEquipment.canBeSacrificedBy(ability, effect)
+
+        if self.payCostFromSource():
+            return source.canBeSacrificedBy(ability, effect)
+
+        # You can always sac all
+        if "All".lower() == self.getAmount().lower():
+            typeList = activator.getCardsIn(ZoneType.Battlefield)
+            typeList = CardLists.getValidCards(typeList, self.getType().split(";"), activator, source, ability)
+            # it needs to check if everything can be sacrificed
+            return typeList.allMatch(CardPredicates.canBeSacrificedBy(ability, effect))
+
+        amount = self.getAbilityAmount(ability)
+
+        # If amount is null, it's either "ALL" or "X"
+        # if X is defined, it needs to be calculated and checked, if X is
+        # choice, it can be Paid even if it's 0
+        return self.getMaxAmountX(ability, activator, effect) >= amount
+
+    def doPayment(self, payer: Player, ability: SpellAbility, targetCard: Card, effect: bool) -> Card:
+        return None
+
+    def canPayListAtOnce(self) -> bool:
+        return True
+
+    def doListPayment(self, payer: Player, ability: SpellAbility, targetCards: CardCollectionView, effect: bool) -> CardCollectionView:
+        game = ability.getHostCard().getGame()
+        moveParams = AbilityKey.newMap()
+        AbilityKey.addCardZoneTableParams(moveParams, self.table)
+
+        return game.getAction().sacrifice(targetCards, ability, effect, moveParams)
+
+    def getHashForLKIList(self) -> str:
+        return "Sacrificed"
+
+    def getHashForCardList(self) -> str:
+        return "SacrificedCards"
+
+    # Inputs
+    def accept(self, visitor: ICostVisitor):
+        return visitor.visit(self)
 ```

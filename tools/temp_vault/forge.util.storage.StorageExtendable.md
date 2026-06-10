@@ -32,6 +32,10 @@ classDiagram
 **Uses:**
 - [[forge.util.IItemReader|IItemReader]]
 
+## Design Description
+
+StorageExtendable is a concrete, generic storage implementation that specializes its parent `StorageBase<T>` to permit mutation. Inheriting both the reader-backed and pre-populated-map constructors, it simply delegates each to `super`, while overriding `add` to insert named items directly into the inherited backing map. This override is the class's whole reason for existing: it turns the otherwise read-oriented base storage into an extendable collection that callers can grow at runtime. It collaborates with `IItemReader<T>` only indirectly, passing it through to the superclass to source initial contents, and keeps its own footprint deliberately minimalâ€”adding write capability without duplicating the lookup, naming, or path-handling logic already provided by `StorageBase`.
+
 ## Source
 `forge-core/src/main/java/forge/util/storage/StorageExtendable.java`
 
@@ -83,4 +87,36 @@ public class StorageExtendable<T> extends StorageBase<T> {
         map.put(name, item);
     }
 }
+```
+
+## Python
+`forge/util/storage/StorageExtendable.py`
+
+```python
+from forge.util.storage.StorageBase import StorageBase
+from forge.util.IItemReader import IItemReader
+
+import typing
+
+T = typing.TypeVar("T")
+
+
+class StorageExtendable(StorageBase[T]):
+
+    @typing.overload
+    def __init__(self, name0: str, io: IItemReader[T]): ...
+
+    @typing.overload
+    def __init__(self, name0: str, fullPath0: str, map0: dict[str, T]): ...
+
+    def __init__(self, name0, *args):
+        if len(args) == 1:
+            io = args[0]
+            super().__init__(name0, io)
+        else:
+            fullPath0, map0 = args
+            super().__init__(name0, fullPath0, map0)
+
+    def add(self, name: str, item: T) -> None:
+        self.map[name] = item
 ```

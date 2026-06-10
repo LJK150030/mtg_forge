@@ -37,6 +37,12 @@ classDiagram
 - [[forge.game.card.Card|Card]]
 - [[forge.game.spellability.SpellAbility|SpellAbility]]
 
+## Design Description
+
+TriggerTapsForMana is a concrete trigger that fires when a permanent is tapped to produce mana. Extending the abstract Trigger base class, it overrides the framework's template-method hooks rather than defining its own lifecycle: performTest gates firing by matching the tapping Card and Activator against the trigger's Valid parameters and, optionally, checking the produced mana against a configured color (including the host's ChosenColor); setTriggeringObjects populates the SpellAbility with the Card, Produced, and Activator values pulled from the run parameters; and getImportantStackObjects builds a localized stack description.
+
+The design keeps trigger conditions data-driven through the inherited params map and AbilityKey-keyed run parameters, so behavior is configured by card scripts rather than hard-coded. Collaboration with MagicColor for color normalization and Localizer for user-facing text reflects a clean separation between matching logic and presentation.
+
 ## Source
 `forge-game/src/main/java/forge/game/trigger/TriggerTapsForMana.java`
 
@@ -139,4 +145,50 @@ public class TriggerTapsForMana extends Trigger {
     }
 
 }
+```
+
+## Python
+`forge/game/trigger/TriggerTapsForMana.py`
+
+```python
+from forge.game.trigger.Trigger import Trigger
+from forge.card.MagicColor import MagicColor
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Localizer import Localizer
+from forge.util.TextUtil import toManaString
+
+
+class TriggerTapsForMana(Trigger):
+
+    def __init__(self, params: dict[str, str], host: Card, intrinsic: bool):
+        super().__init__(params, host, intrinsic)
+
+    def performTest(self, runParams: dict[AbilityKey, object]) -> bool:
+        if not self.matchesValidParam("ValidCard", runParams.get(AbilityKey.Card)):
+            return False
+        if not self.matchesValidParam("Activator", runParams.get(AbilityKey.Activator)):
+            return False
+
+        if self.hasParam("Produced"):
+            prod = runParams.get(AbilityKey.Produced)
+            if not isinstance(prod, str):
+                return False
+            produced = prod
+            if "ChosenColor" == self.getParam("Produced"):
+                if not self.getHostCard().hasChosenColor() or MagicColor.toShortString(self.getHostCard().getChosenColor()) not in produced:
+                    return False
+            elif MagicColor.toShortString(self.getParam("Produced")) not in produced:
+                return False
+
+        return True
+
+    def setTriggeringObjects(self, sa: SpellAbility, runParams: dict[AbilityKey, object]) -> None:
+        sa.setTriggeringObjectsFrom(runParams, AbilityKey.Card, AbilityKey.Produced, AbilityKey.Activator)
+
+    def getImportantStackObjects(self, sa: SpellAbility) -> str:
+        return Localizer.getInstance().getMessage("lblTappedForMana") + ": " + \
+            str(sa.getTriggeringObject(AbilityKey.Card)) + " " + Localizer.getInstance().getMessage("lblProduced") + \
+            ": " + toManaString(str(sa.getTriggeringObject(AbilityKey.Produced)))
 ```

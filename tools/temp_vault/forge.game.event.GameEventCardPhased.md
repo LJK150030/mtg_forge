@@ -64,3 +64,27 @@ public record GameEventCardPhased(CardView card, boolean phaseState) implements 
     }
 }
 ```
+
+## Python
+`forge/game/event/GameEventCardPhased.py`
+
+```python
+from forge.game.event.GameEvent import GameEvent
+from forge.game.card.CardView import CardView
+from forge.game.event.IGameEventVisitor import IGameEventVisitor
+
+
+class GameEventCardPhased(GameEvent):
+
+    def __init__(self, card: CardView, phaseState: bool):
+        self.card = card
+        self.phaseState = phaseState
+
+    def visit(self, visitor: IGameEventVisitor):
+        return visitor.visit(self)
+
+    # (non-Javadoc)
+    # @see java.lang.Object#toString()
+    def __str__(self) -> str:
+        return self.card.__str__() if self.card is not None else "(unknown)" + " changed its phased-out state to " + str(self.phaseState)
+```

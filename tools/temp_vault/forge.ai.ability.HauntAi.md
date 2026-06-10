@@ -42,7 +42,7 @@ classDiagram
 
 HauntAi is the AI decision-maker for spell abilities driven by the "Haunt" keyword mechanic. As a concrete subclass of `SpellAbilityAi`, it overrides `doTriggerNoCost` to determine whether and how the computer player should resolve a haunt-related `SpellAbility`. Its core responsibility is target selection: when the ability targets and its host is not a token, it surveys all creatures on the battlefield via `Game`, prefers the worst opponent-controlled creature (falling back to any creature) using `ComputerUtilCard.getWorstCreatureAI`, and declines to act when no creatures exist.
 
-It collaborates with `Player`, `Card`, `SpellAbility`, and `Game` to inspect game state, returning an `AiAbilityDecision` paired with an `AiPlayDecision` to signal intent. The design reflects a conservative heuristic — haunting a low-value enemy creature when possible — and otherwise commits eagerly (score 100, `WillPlay`), keeping the keyword-specific logic narrowly focused while delegating evaluation to shared AI utilities.
+It collaborates with `Player`, `Card`, `SpellAbility`, and `Game` to inspect game state, returning an `AiAbilityDecision` paired with an `AiPlayDecision` to signal intent. The design reflects a conservative heuristic â€” haunting a low-value enemy creature when possible â€” and otherwise commits eagerly (score 100, `WillPlay`), keeping the keyword-specific logic narrowly focused while delegating evaluation to shared AI utilities.
 
 ## Source
 `forge-ai/src/main/java/forge/ai/ability/HauntAi.java`
@@ -85,4 +85,39 @@ public class HauntAi extends SpellAbilityAi {
         return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
     }
 }
+```
+
+## Python
+`forge/ai/ability/HauntAi.py`
+
+```python
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.ai.ComputerUtilCard import ComputerUtilCard
+from forge.ai.SpellAbilityAi import SpellAbilityAi
+from forge.game.Game import Game
+from forge.game.card.Card import Card
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CardPredicates import CardPredicates
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+
+
+class HauntAi(SpellAbilityAi):
+
+    def doTriggerNoCost(self, ai: Player, sa: SpellAbility, mandatory: bool) -> AiAbilityDecision:
+        card = sa.getHostCard()
+        game = ai.getGame()
+        if sa.usesTargeting() and not card.isToken():
+            creats = CardLists.filter(game.getCardsIn(ZoneType.Battlefield),
+                    CardPredicates.CREATURES)
+
+            # nothing to haunt
+            if not creats:
+                return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+            oppCreats = CardLists.filterControlledBy(creats, ai.getOpponents())
+            sa.getTargets().add(ComputerUtilCard.getWorstCreatureAI(creats if not oppCreats else oppCreats))
+        return AiAbilityDecision(100, AiPlayDecision.WillPlay)
 ```

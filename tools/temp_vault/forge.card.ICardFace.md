@@ -38,7 +38,7 @@ classDiagram
 
 ## Design Description
 
-ICardFace defines the read-only contract for a single playable face of a Magic card, composing characteristic data (`ICardCharacteristics`), raw rules and ability text (`ICardRawAbilites`), and natural ordering (`Comparable<ICardFace>`) into one abstraction the engine uses to treat any face—normal card, split half, or transformed side—uniformly.
+ICardFace defines the read-only contract for a single playable face of a Magic card, composing characteristic data (`ICardCharacteristics`), raw rules and ability text (`ICardRawAbilites`), and natural ordering (`Comparable<ICardFace>`) into one abstraction the engine uses to treat any faceâ€”normal card, split half, or transformed sideâ€”uniformly.
 
 Beyond the inherited data, it layers in presentation and variant concerns. `getDisplayName()` is a default method that prefers a flavor name over the Oracle name, centralizing that fallback. The functional-variant accessors (`hasFunctionalVariants`, `getFunctionalVariant`, `getFunctionalVariants`) let a single face resolve to alternate, name-keyed versions; the wildcard `Map<String, ? extends ICardFace>` return type lets implementations expose their own concrete face subtype while honoring the interface contract.
 
@@ -70,4 +70,37 @@ public interface ICardFace extends ICardCharacteristics, ICardRawAbilites, Compa
     ICardFace getFunctionalVariant(String variant);
     Map<String, ? extends ICardFace> getFunctionalVariants();
 }
+```
+
+## Python
+`forge/card/ICardFace.py`
+
+```python
+from typing import Optional
+
+from forge.card.ICardCharacteristics import ICardCharacteristics
+from forge.card.ICardRawAbilites import ICardRawAbilites
+
+
+# TODO: Write javadoc for this type.
+class ICardFace(ICardCharacteristics, ICardRawAbilites):
+    def getFlavorName(self) -> str:
+        ...
+
+    def getDisplayName(self) -> str:
+        """
+        :return: this card's flavor name if it has one. Otherwise, the card's Oracle name.
+        """
+        if self.getFlavorName() is not None:
+            return self.getFlavorName()
+        return self.getName()
+
+    def hasFunctionalVariants(self) -> bool:
+        ...
+
+    def getFunctionalVariant(self, variant: str) -> "ICardFace":
+        ...
+
+    def getFunctionalVariants(self) -> dict[str, "ICardFace"]:
+        ...
 ```

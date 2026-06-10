@@ -34,7 +34,7 @@ classDiagram
 
 ## Design Description
 
-CostBlight is a specialized cost type representing the payment of placing -1/-1 (M1M1) counters on a creature the player controls, used in Magic: The Gathering's "Blight" mechanic. It extends `CostPutCounter`, supplying fixed arguments to its supertype's constructor—the counter type, the target restriction (`Creature.YouCtrl`), and a human-readable description—so it functions as a thin, preconfigured convenience subclass rather than introducing new behavior.
+CostBlight is a specialized cost type representing the payment of placing -1/-1 (M1M1) counters on a creature the player controls, used in Magic: The Gathering's "Blight" mechanic. It extends `CostPutCounter`, supplying fixed arguments to its supertype's constructorâ€”the counter type, the target restriction (`Creature.YouCtrl`), and a human-readable descriptionâ€”so it functions as a thin, preconfigured convenience subclass rather than introducing new behavior.
 
 Its only customizations are a `toString()` that renders the cost as "Blight N" and an `accept` override implementing the visitor pattern, dispatching to `ICostVisitor.visit(this)` so cost-processing logic can be applied polymorphically across the cost hierarchy without type-checking.
 
@@ -60,4 +60,24 @@ public class CostBlight extends CostPutCounter {
         return visitor.visit(this);
     }
 }
+```
+
+## Python
+`forge/game/cost/CostBlight.py`
+
+```python
+from forge.game.card.CounterEnumType import CounterEnumType
+from forge.game.cost.CostPutCounter import CostPutCounter
+from forge.game.cost.ICostVisitor import ICostVisitor
+
+
+class CostBlight(CostPutCounter):
+    def __init__(self, counters: str):
+        super().__init__(counters, CounterEnumType.M1M1, "Creature.YouCtrl", "a creature you control")
+
+    def toString(self) -> str:
+        return "Blight " + str(self.getAmount())
+
+    def accept(self, visitor: ICostVisitor):
+        return visitor.visit(self)
 ```

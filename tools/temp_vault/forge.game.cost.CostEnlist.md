@@ -173,3 +173,63 @@ public class CostEnlist extends CostPartWithTrigger {
 
 }
 ```
+
+## Python
+`forge/game/cost/CostEnlist.py`
+
+```python
+from forge.game.cost.CostPartWithTrigger import CostPartWithTrigger
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardLists import CardLists
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.trigger.TriggerType import TriggerType
+from forge.game.cost.ICostVisitor import ICostVisitor
+
+
+class CostEnlist(CostPartWithTrigger):
+
+    serialVersionUID = 1
+
+    def __init__(self, amount: str, type: str, description: str):
+        super().__init__(amount, type, description)
+
+    def toString(self) -> str:
+        sb = []
+        sb.append("Enlist " + self.getType())
+        return "".join(sb)
+
+    def canPay(self, ability: SpellAbility, payer: Player, effect: bool) -> bool:
+        return not CostEnlist.getCardsForEnlisting(payer).isEmpty()
+
+    def doPayment(self, payer: Player, ability: SpellAbility, targetCard: Card, effect: bool) -> Card:
+        if targetCard.tap(True, ability, payer):
+            ability.getHostCard().setEnlistedThisCombat(True)
+            runParams = AbilityKey.newMap()
+            runParams[AbilityKey.Cards] = CardCollection(targetCard)
+            payer.getGame().getTriggerHandler().runTrigger(TriggerType.TapAll, runParams, False)
+
+        # need to transfer info
+        self.payTrig.addRemembered(targetCard)
+
+        runParams = AbilityKey.mapFromCard(self.payTrig.getHostCard())
+        runParams[AbilityKey.Enlisted] = targetCard
+        targetCard.getGame().getTriggerHandler().runTrigger(TriggerType.Enlisted, runParams, False)
+        return targetCard
+
+    def getHashForLKIList(self) -> str:
+        return "Enlisted"
+
+    def getHashForCardList(self) -> str:
+        return "EnlistedCards"
+
+    # Inputs
+    def accept(self, visitor: ICostVisitor):
+        return visitor.visit(self)
+
+    @staticmethod
+    def getCardsForEnlisting(active: Player) -> CardCollection:
+        return CardLists.filter(active.getCreaturesInPlay(), lambda c: c.canTap() and not c.isSick() and not c.isAttacking())
+```

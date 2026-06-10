@@ -64,7 +64,7 @@ classDiagram
 
 CostReveal models a "reveal cards" cost component in Forge's cost framework, representing requirements like "Reveal a green card from your hand." It extends CostPartWithList, inheriting the machinery for costs paid by selecting and processing a list of cards, and contributes reveal-specific payment logic. By default it reveals from the hand, but a constructor overload lets it draw from arbitrary zones via ZoneType.listValueOf.
 
-The class collaborates with SpellAbility and Player to compute payability—getMaxAmountX and canPay filter the payer's cards (using CardLists/CardPredicates) against the cost's type, with special handling for "Hand", "SameColor", and pay-from-source cases. Payment (doPayment/doListPayment) delegates to the game's reveal action and logs a GameEventAddLog entry. It declares itself reusable and renewable, supports batch payment via canPayListAtOnce, accepts an ICostVisitor for double-dispatch, and orders payment early when revealing from non-hand zones.
+The class collaborates with SpellAbility and Player to compute payabilityâ€”getMaxAmountX and canPay filter the payer's cards (using CardLists/CardPredicates) against the cost's type, with special handling for "Hand", "SameColor", and pay-from-source cases. Payment (doPayment/doListPayment) delegates to the game's reveal action and logs a GameEventAddLog entry. It declares itself reusable and renewable, supports batch payment via canPayListAtOnce, accepts an ICostVisitor for double-dispatch, and orders payment early when revealing from non-hand zones.
 
 ## Source
 `forge-game/src/main/java/forge/game/cost/CostReveal.java`
@@ -257,4 +257,145 @@ public class CostReveal extends CostPartWithList {
         return 5;
     }
 }
+```
+
+## Python
+`forge/game/cost/CostReveal.py`
+
+```python
+from forge.game.GameLogEntryType import GameLogEntryType
+from forge.game.event.GameEventAddLog import GameEventAddLog
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CardPredicates import CardPredicates
+from forge.game.cost.CostPartWithList import CostPartWithList
+from forge.game.cost.Cost import Cost
+from forge.game.cost.ICostVisitor import ICostVisitor
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+
+
+class CostReveal(CostPartWithList):
+    """The Class CostReveal."""
+    # Reveal<Num/Type/TypeDescription>
+
+    serialVersionUID = 1
+
+    def __init__(self, amount: str, type: str, description: str, zoneType: str = None):
+        super().__init__(amount, type, description)
+        self.revealFrom: list[ZoneType] = [ZoneType.Hand]
+        if zoneType is not None:
+            self.revealFrom = ZoneType.listValueOf(zoneType)
+
+    def isReusable(self) -> bool:
+        return True
+
+    def isRenewable(self) -> bool:
+        return True
+
+    def getRevealFrom(self) -> list[ZoneType]:
+        return self.revealFrom
+
+    def getMaxAmountX(self, ability: SpellAbility, payer: Player, effect: bool):
+        source = ability.getHostCard()
+        handList = payer.getCardsIn(self.revealFrom)
+        if ability.isSpell():
+            modifiedHand = CardCollection(handList)
+            modifiedHand.remove(source)  # can't pay for itself
+            handList = modifiedHand
+        handList = CardLists.getValidCards(handList, self.getType().split(";"), payer, source, ability)
+
+        return handList.size()
+
+    def canPay(self, ability: SpellAbility, payer: Player, effect: bool) -> bool:
+        source = ability.getHostCard()
+
+        handList = payer.getCardsIn(self.revealFrom)
+        amount = self.getAbilityAmount(ability)
+
+        if self.payCostFromSource():
+            return source.getLastKnownZone().getZoneType() in self.revealFrom
+        if self.getType() == "Hand":
+            return True
+        if self.getType() == "SameColor":
+            for card in handList:
+                if CardLists.count(handList, CardPredicates.sharesColorWith(card)) >= amount:
+                    return True
+            return False
+        return amount <= self.getMaxAmountX(ability, payer, effect)
+
+    def toString(self) -> str:
+        sb = []
+        sb.append("Reveal ")
+
+        i = self.convertAmount()
+
+        if self.payCostFromSource():
+            sb.append(self.getType())
+        elif self.getType() == "Hand":
+            return "Reveal your hand"
+        elif self.getType() == "SameColor":
+            return "Reveal " + str(i) + " cards from your hand that share a color"
+        else:
+            desc = []
+
+            if self.getType() == "Card":
+                desc.append("Card")
+            else:
+                desc.append((self.getType() if self.getTypeDescription() is None else self.getTypeDescription()))
+                desc.append(" card")
+
+            sb.append(Cost.convertAmountTypeToWords(i, self.getAmount(), "".join(desc)))
+
+        sb.append(" from your ")
+        sb.append(self.revealFrom[0].getTranslatedName())
+
+        if len(self.revealFrom) > 1:
+            desc = []
+            desc.append(self.getType() if self.getTypeDescription() is None else self.getTypeDescription())
+            sb.append(" or choose ")
+            sb.append(Cost.convertAmountTypeToWords(i, self.getAmount(), "".join(desc)))
+            sb.append(" you control")
+
+        return "".join(sb)
+
+    def doPayment(self, payer: Player, ability: SpellAbility, targetCard: Card, effect: bool) -> Card:
+        targetCard.getGame().getAction().reveal(CardCollection(targetCard), payer)
+        sb = []
+        sb.append(str(ability.getActivatingPlayer()))
+        if targetCard.isInZone(ZoneType.Hand):
+            sb.append(" reveals ")
+        else:
+            sb.append(" chooses ")
+        sb.append(str(targetCard))
+        sb.append(" to pay a cost for ")
+        sb.append(str(ability))
+        targetCard.getGame().fireEvent(new_event := GameEventAddLog(GameLogEntryType.INFORMATION, "".join(sb)))
+        return targetCard
+
+    def canPayListAtOnce(self) -> bool:
+        return True
+
+    def doListPayment(self, payer: Player, ability: SpellAbility, targetCards: CardCollectionView, effect: bool) -> CardCollectionView:
+        ability.getActivatingPlayer().getGame().getAction().reveal(targetCards, payer)
+        return targetCards
+
+    def getHashForLKIList(self) -> str:
+        return "Revealed"
+
+    def getHashForCardList(self) -> str:
+        return "RevealedCards"
+
+    # Inputs
+    def accept(self, visitor: ICostVisitor):
+        return visitor.visit(self)
+
+    def paymentOrder(self) -> int:
+        # Caller of the Untamed needs the reveal to happen before the mana cost
+        if not self.revealFrom[0] == ZoneType.Hand:
+            return -1
+        return 5
 ```

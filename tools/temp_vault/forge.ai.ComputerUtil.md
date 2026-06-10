@@ -181,9 +181,9 @@ classDiagram
 
 ## Design Description
 
-ComputerUtil is a stateless utility class in the `forge.ai` package — a collection of `public static` methods, with no instance state, supertype, or interface — that centralizes the heuristics an AI player uses to make Magic: The Gathering decisions. It is invoked by the AI controller layer (PlayerControllerAi/AiController) and per-ability handlers to put spells on the stack and pay their costs (handlePlayingSpellAbility, playStack, playNoStack via CostPayment and AiCostDecision), choose which permanents to sacrifice, exile, tap, untap, return, or discard, predict threatened objects and combat lethality, score opening hands for mulligans, and decide main-phase casting timing.
+ComputerUtil is a stateless utility class in the `forge.ai` package â€” a collection of `public static` methods, with no instance state, supertype, or interface â€” that centralizes the heuristics an AI player uses to make Magic: The Gathering decisions. It is invoked by the AI controller layer (PlayerControllerAi/AiController) and per-ability handlers to put spells on the stack and pay their costs (handlePlayingSpellAbility, playStack, playNoStack via CostPayment and AiCostDecision), choose which permanents to sacrifice, exile, tap, untap, return, or discard, predict threatened objects and combat lethality, score opening hands for mulligans, and decide main-phase casting timing.
 
-It collaborates broadly with the game model — Player, Card, SpellAbility, Cost, Combat, Game, ZoneType — but holds no references, reading all state through its parameters. Notable design intent includes card-scripted hints via SVars (SacMe, DiscardMe, AIPreference), profile-driven tuning through AiProfileUtil/AiProps, memoization via AiCache, and protectRecursion, a reentrancy guard that breaks the evaluation loops these mutually-referential predictions can otherwise cause.
+It collaborates broadly with the game model â€” Player, Card, SpellAbility, Cost, Combat, Game, ZoneType â€” but holds no references, reading all state through its parameters. Notable design intent includes card-scripted hints via SVars (SacMe, DiscardMe, AIPreference), profile-driven tuning through AiProfileUtil/AiProps, memoization via AiCache, and protectRecursion, a reentrancy guard that breaks the evaluation loops these mutually-referential predictions can otherwise cause.
 
 ## Source
 `forge-ai/src/main/java/forge/ai/ComputerUtil.java`
@@ -3410,4 +3410,2618 @@ public class ComputerUtil {
         return result;
     }
 }
+```
+
+## Python
+`forge/ai/ComputerUtil.py`
+
+```python
+import sys
+
+from forge.ai.AiBlockController import AiBlockController
+from forge.ai.AiCache import AiCache
+from forge.ai.AiController import AiController
+from forge.ai.AiCostDecision import AiCostDecision
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.ai.PlayerControllerAi import PlayerControllerAi
+from forge.ai.AiCardMemory import AiCardMemory
+from forge.ai.AiCardMemory.MemorySet import MemorySet
+from forge.ai.ability.ProtectAi import ProtectAi
+from forge.ai.ability.TokenAi import TokenAi
+from forge.ai.AiAttackController import AiAttackController
+from forge.ai.AiProfileUtil import AiProfileUtil
+from forge.ai.AiProps import AiProps
+from forge.ai.ComputerUtilAbility import ComputerUtilAbility
+from forge.ai.ComputerUtilCard import ComputerUtilCard
+from forge.ai.ComputerUtilCombat import ComputerUtilCombat
+from forge.ai.ComputerUtilCost import ComputerUtilCost
+from forge.ai.ComputerUtilMana import ComputerUtilMana
+from forge.ai.SpecialAiLogic import SpecialAiLogic
+from forge.ai.SpecialCardAi import SpecialCardAi
+from forge.ai.SpellApiToAi import SpellApiToAi
+from forge.card.CardStateName import CardStateName
+from forge.card.CardType import CardType
+from forge.card.CardType.CoreType import CoreType
+from forge.card.ColorSet import ColorSet
+from forge.card.MagicColor import MagicColor
+from forge.card.mana.ManaAtom import ManaAtom
+from forge.game.Game import Game
+from forge.game.GameActionUtil import GameActionUtil
+from forge.game.GameEntity import GameEntity
+from forge.game.GameEntityCounterTable import GameEntityCounterTable
+from forge.game.GameObject import GameObject
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.ability.ApiType import ApiType
+from forge.game.ability.effects.CharmEffect import CharmEffect
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.card.CardCopyService import CardCopyService
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CardPredicates import CardPredicates
+from forge.game.card.CardState import CardState
+from forge.game.card.CardTraitPredicates import CardTraitPredicates
+from forge.game.card.CardUtil import CardUtil
+from forge.game.card.CounterAiCategory import CounterAiCategory
+from forge.game.card.CounterEnumType import CounterEnumType
+from forge.game.card.CounterType import CounterType
+from forge.game.combat.Combat import Combat
+from forge.game.combat.CombatUtil import CombatUtil
+from forge.game.cost.Cost import Cost
+from forge.game.cost.CostCollectEvidence import CostCollectEvidence
+from forge.game.cost.CostDiscard import CostDiscard
+from forge.game.cost.CostExile import CostExile
+from forge.game.cost.CostPart import CostPart
+from forge.game.cost.CostPayment import CostPayment
+from forge.game.cost.CostPutCounter import CostPutCounter
+from forge.game.cost.CostSacrifice import CostSacrifice
+from forge.game.keyword.Keyword import Keyword
+from forge.game.phase.PhaseHandler import PhaseHandler
+from forge.game.phase.PhaseType import PhaseType
+from forge.game.player.GameLossReason import GameLossReason
+from forge.game.player.Player import Player
+from forge.game.replacement.ReplacementEffect import ReplacementEffect
+from forge.game.replacement.ReplacementLayer import ReplacementLayer
+from forge.game.replacement.ReplacementType import ReplacementType
+from forge.game.spellability.AbilitySub import AbilitySub
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.spellability.SpellAbilityStackInstance import SpellAbilityStackInstance
+from forge.game.spellability.TargetRestrictions import TargetRestrictions
+from forge.game.staticability.StaticAbility import StaticAbility
+from forge.game.staticability.StaticAbilityMode import StaticAbilityMode
+from forge.game.trigger.Trigger import Trigger
+from forge.game.trigger.TriggerType import TriggerType
+from forge.game.trigger.WrappedAbility import WrappedAbility
+from forge.game.zone.Zone import Zone
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.Aggregates import Aggregates
+from forge.util.MyRandom import MyRandom
+from forge.util.StreamUtil import StreamUtil
+from forge.util.collect.FCollection import FCollection
+from org.apache.commons.lang3.StringUtils import StringUtils
+
+INTEGER_MAX_VALUE = 2147483647
+INTEGER_MIN_VALUE = -2147483648
+
+
+class ComputerUtil:
+
+    @staticmethod
+    def handlePlayingSpellAbility(ai, sa, chooseTargets):
+        source = sa.getHostCard()
+        game = source.getGame()
+        host = sa.getHostCard()
+        hz = None if host.isCopiedSpell() else host.getZone()
+        source.setSplitStateToPlayAbility(sa)
+
+        if sa.isSpell() and not source.isCopiedSpell():
+            sa = AbilityUtils.addSpliceEffects(sa)
+            if sa.getSplicedCards() is not None and not sa.getSplicedCards().isEmpty() and ai.getController().isAI():
+                # we need to reconsider and retarget the SA after additional SAs have been added onto it via splice,
+                # otherwise the AI will fail to add the card to stack and that'll knock it out of the game
+                sa.resetTargets()
+                if ai.getController().getAi().canPlaySa(sa) != AiPlayDecision.WillPlay:
+                    # for whatever reason the AI doesn't want to play the thing with the spliced subs anymore,
+                    # proceeding past this point may result in an illegal play
+                    return False
+
+            sa.setHostCard(game.getAction().moveToStack(source, sa))
+
+        if not sa.isCopied():
+            sa.resetPaidHash()
+            sa.setPaidLife(0)
+
+        sa = GameActionUtil.addExtraKeywordCost(sa)
+
+        if sa.getApi() == ApiType.Charm and not CharmEffect.makeChoices(sa):
+            # 603.3c If no mode is chosen, the ability is removed from the stack.
+            return False
+        if chooseTargets is not None:
+            chooseTargets.run()
+            if not sa.isTargetNumberValid():
+                return False
+        # Spell Permanents inherit their cost from Mana Cost
+        cost = sa.getPayCosts()
+
+        game.getStack().freezeStack(sa)
+
+        pay = CostPayment(cost, sa)
+        if pay.payComputerCosts(AiCostDecision(ai, sa, False)):
+            game.getStack().addAndUnfreeze(sa)
+            if sa.getSplicedCards() is not None and not sa.getSplicedCards().isEmpty():
+                game.getAction().reveal(sa.getSplicedCards(), ai, True, "Computer reveals spliced cards from ")
+            return True
+        # FIXME: Should not arrive here, though the card seems to be stuck on stack zone and invalidated and nowhere to be found, try to put back to original zone and maybe try to cast again if possible at later time?
+        print("[" + str(sa.getActivatingPlayer()) + "] AI failed to play " + str(sa.getHostCard()) + " [" + str(sa.getHostCard().getZone()) + "]")
+        sa.setSkip(True)
+        if host is not None and hz is not None and hz.is_(ZoneType.Stack):
+            c = game.getAction().moveTo(hz.getZoneType(), host, None, None)
+            for csa in c.getSpellAbilities():
+                csa.setSkip(True)
+        return False
+
+    @staticmethod
+    def hasDiscardHandCost(cost):
+        if cost is None:
+            return False
+        for part in cost.getCostParts():
+            if isinstance(part, CostDiscard):
+                disc = part
+                if disc.getType() == "Hand":
+                    return True
+        return False
+
+    @staticmethod
+    def counterSpellRestriction(ai, sa):
+        # Restriction Level is Based off a handful of factors
+
+        restrict = 0
+
+        source = sa.getHostCard()
+        tgt = sa.getTargetRestrictions()
+
+        # Play higher costing spells first?
+        cost = sa.getPayCosts()
+
+        # Consider the costs here for relative "scoring"
+        if ComputerUtil.hasDiscardHandCost(cost):
+            # Null Brooch aid
+            restrict -= ai.getCardsIn(ZoneType.Hand).size() * 20
+
+        # Abilities before Spells (card advantage)
+        if sa.isActivatedAbility():
+            restrict += 40
+
+        # TargetValidTargeting gets biggest bonus
+        if tgt.getSAValidTargeting() is not None:
+            restrict += 35
+
+        # Unless Cost gets significant bonus + 10-Payment Amount
+        unless = sa.getParam("UnlessCost")
+        if unless is not None and not unless.endswith(">"):
+            amount = AbilityUtils.calculateAmount(source, unless, sa)
+
+            # this is enough as long as the AI is only smart enough to target top of stack
+            usableManaSources = ComputerUtilMana.getAvailableManaSources(ComputerUtilAbility.getTopSpellAbilityOnStack(ai.getGame(), sa).getActivatingPlayer(), True).size()
+
+            # If the Unless isn't enough, this should be less likely to be used
+            if amount > usableManaSources:
+                restrict += 20 - (2 * amount)
+            else:
+                restrict -= (10 - (2 * amount))
+
+        # Then base on Targeting Restriction
+        validTgts = tgt.getValidTgts()
+        if len(validTgts) != 1 or validTgts[0] != "Card":
+            restrict += 10
+
+        # And lastly give some bonus points to least restrictive TargetType
+        # (Spell,Ability,Triggered)
+        tgtType = sa.getParam("TargetType")
+        if tgtType is not None:
+            restrict -= 5 * len(tgtType.split(","))
+        return restrict
+
+    @staticmethod
+    def playStack(sa, ai, game):
+        sa.setActivatingPlayer(ai)
+        if not ComputerUtilCost.canPayCost(sa, ai, False):
+            return False
+
+        source = sa.getHostCard()
+
+        fromZone = game.getZoneOf(source)
+        zonePosition = 0
+        if fromZone is not None:
+            zonePosition = fromZone.getCards().indexOf(source)
+
+        if sa.isSpell() and not source.isCopiedSpell():
+            sa.setHostCard(game.getAction().moveToStack(source, sa))
+            sa = GameActionUtil.addExtraKeywordCost(sa)
+
+        cost = sa.getPayCosts()
+        pay = CostPayment(cost, sa)
+
+        # do this after card got added to stack
+        if not sa.checkRestrictions(ai):
+            GameActionUtil.rollbackAbility(sa, fromZone, zonePosition, pay, source)
+            return False
+
+        if pay.payComputerCosts(AiCostDecision(ai, sa, False)):
+            game.getStack().add(sa)
+            return True
+        return False
+
+    @staticmethod
+    def playNoStack(ai, sa, game, effect):
+        sa.setActivatingPlayer(ai)
+        # TODO: We should really restrict what doesn't use the Stack
+        if not ComputerUtilCost.canPayCost(sa, ai, effect):
+            return False
+
+        source = sa.getHostCard()
+        if not effect and sa.isSpell() and not source.isCopiedSpell():
+            sa.setHostCard(game.getAction().moveToStack(source, sa))
+            sa = GameActionUtil.addExtraKeywordCost(sa)
+
+        cost = sa.getPayCosts()
+        pay = CostPayment(cost, sa)
+        if pay.payComputerCosts(AiCostDecision(ai, sa, effect)):
+            AbilityUtils.resolve(sa)
+            return True
+
+        return False
+
+    @staticmethod
+    def getCardPreference(ai, activate, pref, typeList, sa=None):
+        game = ai.getGame()
+        prefDef = ""
+        if activate is not None:
+            prefDef = activate.getSVar("AIPreference")
+            prefGroups = prefDef.split("|")
+            for prefGroup in prefGroups:
+                prefValid = prefGroup.strip().split("$")
+                if prefValid[0] == pref and not prefValid[1].startswith("Special:"):
+                    overrideList = None
+                    if activate.hasSVar("AIPreferenceOverride"):
+                        overrideList = CardLists.getValidCards(typeList, activate.getSVar("AIPreferenceOverride"), activate.getController(), activate, None)
+
+                    for validItem in prefValid[1].split(","):
+                        prefList = CardLists.getValidCards(typeList, validItem, activate.getController(), activate, None)
+                        threshold = ComputerUtil.getAIPreferenceParameter(activate, "CreatureEvalThreshold", sa)
+                        minNeeded = ComputerUtil.getAIPreferenceParameter(activate, "MinCreaturesBelowThreshold", sa)
+
+                        if threshold != -1:
+                            toRemove = []
+                            for c in prefList:
+                                if c.isCreature():
+                                    if ComputerUtilCard.isUselessCreature(ai, c) or ComputerUtilCard.evaluateCreature(c) <= threshold:
+                                        continue
+                                    if ComputerUtilCard.hasActiveUndyingOrPersist(c):
+                                        continue
+                                    toRemove.append(c)
+                            prefList.removeAll(toRemove)
+                        if minNeeded != -1:
+                            if prefList.size() < minNeeded:
+                                return None
+
+                        if not prefList.isEmpty() or (overrideList is not None and not overrideList.isEmpty()):
+                            if activate.getSVar("AIPreferBestCard").lower() == "true":
+                                return ComputerUtilCard.getBestAI(prefList if overrideList is None else overrideList)
+                            return ComputerUtilCard.getWorstAI(prefList if overrideList is None else overrideList)
+
+        if "SacCost" in pref:
+            # search for permanents with SacMe. priority 1 is the lowest, priority 5 the highest
+            for ip in range(6):
+                priority = 6 - ip
+                if priority == 2 and ai.isCardInPlay("Crucible of Worlds"):
+                    landsInPlay = CardLists.getType(typeList, "Land")
+                    if not landsInPlay.isEmpty():
+                        # Don't need more land.
+                        return ComputerUtilCard.getWorstLand(landsInPlay)
+                sacMeList = CardLists.filter(typeList, lambda c: (c.hasSVar("SacMe") and int(c.getSVar("SacMe")) == priority)
+                        or (priority == 1 and ComputerUtil.shouldSacrificeThreatenedCard(ai, c, sa)))
+                if not sacMeList.isEmpty():
+                    CardLists.shuffle(sacMeList)
+                    return sacMeList.getFirst()
+
+            if AiProfileUtil.getBoolProperty(ai, AiProps.SACRIFICE_DEFAULT_PREF_ENABLE):
+                minCMC = AiProfileUtil.getIntProperty(ai, AiProps.SACRIFICE_DEFAULT_PREF_MIN_CMC)
+                maxCMC = AiProfileUtil.getIntProperty(ai, AiProps.SACRIFICE_DEFAULT_PREF_MAX_CMC)
+                maxCreatureEval = AiProfileUtil.getIntProperty(ai, AiProps.SACRIFICE_DEFAULT_PREF_MAX_CREATURE_EVAL)
+                allowTokens = AiProfileUtil.getBoolProperty(ai, AiProps.SACRIFICE_DEFAULT_PREF_ALLOW_TOKENS)
+                dontSac = ["Black Lotus", "Mox Pearl", "Mox Jet", "Mox Emerald", "Mox Ruby", "Mox Sapphire", "Lotus Petal"]
+
+                def _allow(card):
+                    if card.isCreature() and ComputerUtilCard.evaluateCreature(card) > maxCreatureEval:
+                        return False
+                    if card.hasKeyword(Keyword.DISTURB) or card.hasKeyword(Keyword.ESCAPE) or card.hasKeyword(Keyword.DISTURB):
+                        return True
+                    return (allowTokens and card.isToken()) \
+                        or (card.getCMC() >= minCMC and card.getCMC() <= maxCMC and card.getName() not in dontSac)
+
+                allowList = CardLists.filter(typeList, _allow)
+                if not allowList.isEmpty():
+                    CardLists.sortByCmcDesc(allowList)
+                    return allowList.getLast()
+
+            # Sac lands
+            landsInPlay = CardLists.getType(typeList, "Land")
+            if not landsInPlay.isEmpty():
+                landsInHand = min(2, CardLists.getType(ai.getCardsIn(ZoneType.Hand), "Land").size())
+                nonLandsInHand = CardLists.getNotType(ai.getCardsIn(ZoneType.Hand), "Land")
+                nonLandsInHand.addAll(ai.getCardsIn(ZoneType.Library))
+                highestCMC = max(6, Aggregates.max(nonLandsInHand, lambda c: c.getCMC()))
+                if landsInPlay.size() + landsInHand >= highestCMC:
+                    # Don't need more land.
+                    return ComputerUtilCard.getWorstLand(landsInPlay)
+
+            # try everything when about to die
+            if game.getPhaseHandler().getPhase() == PhaseType.COMBAT_DECLARE_BLOCKERS and ComputerUtil.protectRecursion(sa,
+                        lambda: ComputerUtilCombat.lifeInSeriousDanger(ai, game.getCombat()), False):
+                nonCreatures = CardLists.getNotType(typeList, "Creature")
+                if not nonCreatures.isEmpty():
+                    return ComputerUtilCard.getWorstAI(nonCreatures)
+                elif not typeList.isEmpty():
+                    # TODO make sure survival is possible in case the creature blocks a trampler
+                    return ComputerUtilCard.getWorstAI(typeList)
+        elif "DiscardCost" in pref:  # search for permanents with DiscardMe
+            for ip in range(6):  # priority 0 is the lowest, priority 5 the highest
+                priority = 6 - ip
+                for c in typeList:
+                    if priority == 3 and c.isLand() and ai.isCardInPlay("Crucible of Worlds"):
+                        return c
+                    if c.hasSVar("DiscardMe") and int(c.getSVar("DiscardMe")) == priority:
+                        return c
+
+            if activate is not None and ComputerUtilCost.isFreeCastAllowedByPermanent(ai, "Discard"):
+                # Dream Halls allows to discard 1 worthless card to cast 1 expensive for free
+                # Do it even if nothing marked for discard in hand, if it's worth doing!
+                mana = ComputerUtilMana.getAvailableManaEstimate(ai, False)
+
+                cantAffordSoon = activate.getCMC() > mana + 1
+                wrongColor = not activate.getColor().hasNoColorsExcept(ColorSet.fromNames(ComputerUtilCost.getAvailableManaColors(ai, [])).getColor())
+
+                # Only do this for spells, not activated abilities
+                # We can't pay for this spell even if we play another land, or have wrong colors
+                if not activate.isInPlay() and (cantAffordSoon or wrongColor):
+                    options = CardCollection()
+                    for c in typeList:
+                        # Try to avoid stupidity by playing cheap spells and paying for them with expensive spells
+                        # while the intention was to do things the other way around
+                        if c.isCreature() and activate.isCreature():
+                            if ComputerUtilCard.evaluateCreature(c) < ComputerUtilCard.evaluateCreature(activate):
+                                options.add(c)
+                        elif c.getCMC() <= activate.getCMC():
+                            options.add(c)
+                    if not options.isEmpty():
+                        return ComputerUtilCard.getWorstAI(options)
+
+            if "DiscardCost$Special:SurvivalOfTheFittest" in prefDef:
+                return SpecialCardAi.SurvivalOfTheFittest.considerDiscardTarget(ai)
+
+            # Discard lands
+            landsInHand = CardLists.getType(typeList, "Land")
+            if not landsInHand.isEmpty():
+                numLandsInPlay = CardLists.count(ai.getCardsIn(ZoneType.Battlefield), CardPredicates.LANDS_PRODUCING_MANA)
+                nonLandsInHand = CardLists.getNotType(ai.getCardsIn(ZoneType.Hand), "Land")
+                highestCMC = max(6, Aggregates.max(nonLandsInHand, lambda c: c.getCMC()))
+                if numLandsInPlay >= highestCMC \
+                        or (numLandsInPlay + landsInHand.size() > 6 and landsInHand.size() > 1):
+                    # Don't need more land
+                    return ComputerUtilCard.getWorstLand(landsInHand)
+
+            replayKW = typeList.filter(lambda c: c.hasKeyword(Keyword.DISTURB) or c.hasKeyword(Keyword.ESCAPE) or c.hasKeyword(Keyword.DISTURB)
+                    or c.hasKeyword(Keyword.FLASHBACK))
+            if not replayKW.isEmpty():
+                return Aggregates.random(replayKW)
+
+            # try everything when about to die
+            if activate is not None and "Reality Smasher" == activate.getName() or \
+                    game.getPhaseHandler().getPhase() == PhaseType.COMBAT_DECLARE_BLOCKERS \
+                    and ComputerUtilCombat.lifeInSeriousDanger(ai, game.getCombat()):
+                if not typeList.isEmpty():
+                    return ComputerUtilCard.getWorstAI(typeList)
+        elif "DonateMe" in pref:
+            # search for permanents with DonateMe. priority 1 is the lowest, priority 5 the highest
+            for ip in range(6):
+                priority = 6 - ip
+                for c in typeList:
+                    if c.hasSVar("DonateMe") and int(c.getSVar("DonateMe")) == priority:
+                        return c
+        return None
+
+    @staticmethod
+    def getAIPreferenceParameter(c, paramName, sa):
+        if not c.hasSVar("AIPreferenceParams"):
+            return -1
+
+        params = StringUtils.split(c.getSVar("AIPreferenceParams"), '|')
+        for param in params:
+            props = StringUtils.split(param, "$")
+            parName = props[0].strip()
+            parValue = props[1].strip()
+
+            if parName == "CreatureEvalThreshold":
+                # Threshold of 150 is just below the level of a 1/1 mana dork or a 2/2 baseline creature with no keywords
+                if paramName == parName:
+                    num = 0
+                    try:
+                        num = int(parValue)
+                    except ValueError:
+                        valParts = StringUtils.split(parValue, "/")
+                        foundCards = AbilityUtils.getDefinedCards(c, valParts[0], sa)
+                        if not foundCards.isEmpty():
+                            num = ComputerUtilCard.evaluateCreature(foundCards.get(0))
+                        valParts[0] = str(num)
+                        if len(valParts) > 1:
+                            num = AbilityUtils.doXMath(num, valParts[1], c, sa)
+                    return num
+            elif parName == "MinCreaturesBelowThreshold":
+                if paramName == parName:
+                    return int(parValue)
+            else:
+                print("Warning: unknown parameter " + parName + " in AIPreferenceParams for card " + str(c), file=sys.stderr)
+
+        return -1
+
+    @staticmethod
+    def chooseSacrificeType(ai, type, ability, target, effect, amount, exclude):
+        source = ability.getHostCard()
+        differentNames = False
+        if "+WithDifferentNames" in type:
+            differentNames = True
+            type = type.replace("+WithDifferentNames", "")
+
+        typeList = CardLists.getValidCards(ai.getCardsIn(ZoneType.Battlefield), type.split(";"), source.getController(), source, ability)
+        if differentNames:
+            uniqueNameCards = set()
+            for card in typeList:
+                # CR 201.2b Those objects have different names only if each of them has at least one name and no two objects in that group have a name in common
+                if not card.hasNoName():
+                    uniqueNameCards.add(card)
+            typeList.clear()
+            typeList.addAll(uniqueNameCards)
+
+        if exclude is not None:
+            typeList.removeAll(exclude)
+
+        typeList = CardLists.filter(typeList, CardPredicates.canBeSacrificedBy(ability, effect))
+
+        # don't sacrifice the card we're pumping
+        typeList = ComputerUtilCost.paymentChoicesWithoutTargets(typeList, ability, ai)
+
+        # if the source has "Casualty", don't sacrifice cards that may have granted the effect
+        # TODO: is there a surefire way to determine which card added Casualty?
+        if source.hasKeyword(Keyword.CASUALTY):
+            typeList = CardLists.filter(typeList, CardPredicates.hasSVar("AIDontSacToCasualty").negate())
+
+        if typeList.size() < amount:
+            return None
+
+        sacList = CardCollection()
+        count = 0
+
+        while count < amount:
+            prefCard = ComputerUtil.getCardPreference(ai, source, "SacCost", typeList, ability)
+            if prefCard is None:
+                prefCard = ComputerUtilCard.getWorstAI(typeList)
+            if prefCard is None:
+                return None
+            sacList.add(prefCard)
+            typeList.remove(prefCard)
+            count += 1
+        return sacList
+
+    @staticmethod
+    def chooseCollectEvidence(ai, cost, activate, amount, sa, effect):
+        typeList = CardLists.filter(ai.getCardsIn(ZoneType.Graveyard), CardPredicates.canExiledBy(sa, effect))
+
+        if CardLists.getTotalCMC(typeList) < amount:
+            return None
+
+        typeList.sort(CardLists.CmcComparator)
+
+        # TODO AI needs some improvements here
+        # What's the best way to choose evidence to collect?
+        # Probably want to filter out cards that have graveyard abilities/castable from graveyard
+        # Ideally we remove as few cards as possible "Don't overspend"
+
+        exileList = CardCollection()
+        while amount > 0:
+            c = typeList.remove(0)
+
+            amount -= c.getCMC()
+
+            exileList.add(c)
+
+        return exileList
+
+    @staticmethod
+    def chooseExileFrom(ai, cost, activate, amount, sa, effect):
+        if cost.zoneRestriction != 1:
+            typeList = CardCollection(ai.getGame().getCardsIn(cost.from_))
+        else:
+            typeList = CardCollection(ai.getCardsIn(cost.from_))
+        typeList = CardLists.getValidCards(typeList, cost.getType().split(";"), activate.getController(), activate, sa)
+
+        return ComputerUtil.chooseExileFromList(ai, typeList, activate, amount, sa, effect)
+
+    @staticmethod
+    def chooseExileFromList(ai, typeList, activate, amount, sa, effect):
+        typeList = CardLists.filter(typeList, CardPredicates.canExiledBy(sa, effect))
+
+        # don't exile the card we're pumping
+        typeList = ComputerUtilCost.paymentChoicesWithoutTargets(typeList, sa, ai)
+
+        if typeList.size() < amount:
+            return None
+
+        CardLists.sortByPowerAsc(typeList)
+        if sa.isCraft():
+            # remove anything above 3 CMC so that high tier stuff doesn't get exiled with this
+            toRemove = CardCollection()
+            for exileTgt in typeList:
+                if exileTgt.isInPlay() and exileTgt.getCMC() >= 3:
+                    toRemove.add(exileTgt)
+            typeList.removeAll(toRemove)
+
+            # TODO sort flashback and the like to end
+
+            if typeList.size() < amount:
+                return None
+
+            # FIXME: This is suboptimal, maybe implement a single comparator that'll take care of all of this?
+            CardLists.sortByCmcDesc(typeList)
+            typeList.reverse()
+            typeList.sort(lambda a, b: -1 if (not a.isInPlay() and b.isInPlay()) else (1 if (not b.isInPlay() and a.isInPlay()) else 0))  # something that's not on the battlefield should come first
+
+        return typeList.subList(0, amount)
+
+    @staticmethod
+    def choosePutToLibraryFrom(ai, zone, type, activate, target, amount, sa):
+        typeList = CardLists.getValidCards(ai.getCardsIn(zone), type.split(";"), activate.getController(), activate, sa)
+
+        # don't move the card we're pumping
+        typeList = ComputerUtilCost.paymentChoicesWithoutTargets(typeList, sa, ai)
+
+        if typeList.size() < amount:
+            return None
+
+        CardLists.sortByPowerAsc(typeList)
+        list = CardCollection()
+
+        if zone != ZoneType.Hand:
+            typeList.reverse()
+
+        for i in range(amount):
+            list.add(typeList.get(i))
+        return list
+
+    @staticmethod
+    def chooseTapType(ai, type, activate, tap, amount, exclude, sa):
+        all = CardCollection(ai.getCardsIn(ZoneType.Battlefield))
+        all.removeAll(exclude)
+        typeList = CardLists.getValidCards(all, type.split(";"), activate.getController(), activate, sa)
+
+        typeList = CardLists.filter(typeList, CardPredicates.CAN_TAP)
+
+        if tap:
+            typeList.remove(activate)
+
+        if typeList.size() < amount:
+            return None
+
+        if sa.isKeyword(Keyword.STATION):
+            typeList.removeAll(CardLists.filter(typeList, lambda c: c.getNetPower() <= 0))
+
+        CardLists.sortByPowerAsc(typeList)
+        # TODO prefer noncreatures without tap abilities
+
+        tapList = CardCollection()
+
+        for i in range(amount):
+            tapList.add(typeList.get(i))
+        return tapList
+
+    @staticmethod
+    def chooseTapTypeAccumulatePower(ai, type, sa, tap, amount, exclude):
+        # Used for Crewing vehicles, ideally we sort by useless creatures. Can't Attack/Defender
+        totalPower = 0
+        activate = sa.getHostCard()
+
+        all = CardCollection(ai.getCardsIn(ZoneType.Battlefield))
+        all.removeAll(exclude)
+        typeList = CardLists.getValidCards(all, type.split(";"), activate.getController(), activate, sa)
+
+        typeList = CardLists.filter(typeList, CardPredicates.CAN_CREW if sa.isCrew() else CardPredicates.CAN_TAP)
+
+        if tap:
+            typeList.remove(activate)
+        ComputerUtilCard.sortByEvaluateCreature(typeList)
+        typeList.reverse()
+
+        tapList = CardCollection()
+
+        # Accumulate from "worst" creature
+        for next in typeList:
+            pow = next.getNetPower()
+            if pow <= 0:
+                continue
+            if pow >= amount:
+                # If the power of this creature matches the totalPower needed
+                # Might as well only use this creature?
+                tapList.clear()
+            tapList.add(next)
+            totalPower = CardLists.getTotalPower(tapList, sa)
+            if totalPower >= amount:
+                break
+
+        if totalPower < amount:
+            return None
+        return tapList
+
+    @staticmethod
+    def chooseUntapType(ai, type, activate, untap, amount, sa):
+        typeList = CardLists.getValidCards(ai.getCardsIn(ZoneType.Battlefield), type.split(";"), activate.getController(), activate, sa)
+
+        typeList = CardLists.filter(typeList, lambda c: c.canUntap(None, False) and
+                (c.getCounters(CounterEnumType.STUN) == 0 or c.canRemoveCounters(CounterEnumType.STUN)))
+
+        if untap:
+            typeList.remove(activate)
+
+        if typeList.size() < amount:
+            return None
+
+        CardLists.sortByPowerDesc(typeList)
+
+        return typeList.subList(0, amount)
+
+    @staticmethod
+    def chooseReturnType(ai, type, activate, target, amount, sa):
+        typeList = CardLists.getValidCards(ai.getCardsIn(ZoneType.Battlefield), type.split(";"), activate.getController(), activate, sa)
+
+        # don't bounce the card we're pumping
+        # TODO unless it can be used as a save
+        typeList = ComputerUtilCost.paymentChoicesWithoutTargets(typeList, sa, ai)
+
+        if typeList.size() < amount:
+            return CardCollection()
+
+        CardLists.sortByPowerAsc(typeList)
+        returnList = CardCollection()
+
+        for i in range(amount):
+            returnList.add(typeList.get(i))
+        return returnList
+
+    @staticmethod
+    def choosePermanentsToSacrifice(ai, cardlist, amount, source, destroy, isOptional):
+        remaining = CardCollection(cardlist)
+        sacrificed = CardCollection()
+        host = source.getHostCard()
+        considerSacThreshold = ComputerUtil.getAIPreferenceParameter(host, "CreatureEvalThreshold", source)
+
+        if "OpponentOnly" == source.getParam("AILogic"):
+            if not source.getActivatingPlayer().isOpponentOf(ai):
+                return sacrificed  # sacrifice none
+        elif "DesecrationDemon" == source.getParam("AILogic"):
+            if not SpecialCardAi.DesecrationDemon.considerSacrificingCreature(ai, source):
+                return sacrificed  # don't sacrifice unless in special conditions specified by DesecrationDemon AI
+        elif "Lethal" == source.getParam("AILogic"):
+            for c in cardlist:
+                isLethal = False
+                for opp in ai.getOpponents():
+                    if opp.canLoseLife() and not opp.cantLoseForZeroOrLessLife() and c.getNetPower() >= opp.getLife():
+                        isLethal = True
+                        break
+                for creature in ai.getOpponents().getCreaturesInPlay():
+                    if creature.canBeDestroyed() and c.getNetPower() >= creature.getNetToughness():
+                        isLethal = True
+                        break
+                if c.hasSVar("SacMe") or isLethal:
+                    sacrificed.add(c)
+                    if sacrificed.size() == amount:
+                        return sacrificed
+            if sacrificed.size() < amount:
+                print("Warning: AILogic Lethal could not meaningfully select enough cards for the AF Sacrifice on " + str(source.getHostCard()), file=sys.stderr)
+        elif isOptional and source.getActivatingPlayer().isOpponentOf(ai):
+            # Check if not sacrificing would result in lethal life loss
+            wouldDieFromNotSacrificing = False
+            if ai.canLoseLife() and not ai.cantLoseForZeroOrLessLife():
+                # Look for a SubAbility that causes life loss to players who don't sacrifice
+                sub = source.getSubAbility()
+                while sub is not None:
+                    if sub.getApi() == ApiType.LoseLife:
+                        defined = sub.getParamOrDefault("Defined", "")
+                        # Check if this targets the AI (e.g., OppNonRememberedController, TriggeredPlayer)
+                        if "OppNon" in defined or "Opponent" in defined or "TriggeredPlayer" in defined:
+                            lifeAmount = AbilityUtils.calculateAmount(host, sub.getParamOrDefault("LifeAmount", "0"), sub)
+                            if lifeAmount >= ai.getLife():
+                                wouldDieFromNotSacrificing = True
+                        break
+                    sub = sub.getSubAbility()
+            if not wouldDieFromNotSacrificing:
+                return sacrificed  # sacrifice none since we won't die from it
+            # Otherwise, continue to choose permanents to sacrifice to avoid dying
+
+        exceptSelf = "ExceptSelf" == source.getParam("AILogic")
+        removedSelf = False
+
+        if isOptional and (source.isKeyword(Keyword.DEVOUR) or source.isKeyword(Keyword.EXPLOIT)):
+            if source.isKeyword(Keyword.EXPLOIT):
+                for t in host.getTriggers():
+                    if t.getMode() == TriggerType.Exploited:
+                        exSA = t.ensureAbility().copy(ai)
+
+                        exSA.setTrigger(t)
+
+                        # Run non-mandatory trigger.
+                        # These checks only work if the Executing SpellAbility is an Ability_Sub.
+                        if isinstance(exSA, AbilitySub) and not SpellApiToAi.Converter.get(exSA).doTrigger(ai, exSA, False):
+                            # AI would not run this trigger if given the chance
+                            return sacrificed
+
+            def _remFilter(c):
+                sacThreshold = 190
+
+                logic = source.getParamOrDefault("AILogic", "")
+                if logic.startswith("SacForDamage"):
+                    damageAmt = c.getManaCost().getCMC() if "cmc" in logic else c.getNetPower()
+                    if damageAmt <= 0:
+                        return False
+                    elif damageAmt >= ai.getOpponentsSmallestLifeTotal():
+                        return True
+                    elif logic.endswith(".GiantX2") and c.getType().hasCreatureType("Giant") \
+                            and damageAmt * 2 >= ai.getOpponentsSmallestLifeTotal():
+                        return True  # TODO: generalize this for any type and actually make the AI prefer giants?
+
+                if "DesecrationDemon" == logic:
+                    sacThreshold2 = SpecialCardAi.DesecrationDemon.getSacThreshold()
+                elif considerSacThreshold != -1:
+                    sacThreshold2 = considerSacThreshold
+                else:
+                    sacThreshold2 = sacThreshold
+
+                if c.hasSVar("SacMe") or ComputerUtilCard.evaluateCreature(c) < sacThreshold2:
+                    return True
+
+                if ComputerUtilCard.hasActiveUndyingOrPersist(c):
+                    return True
+
+                return False
+
+            remaining = CardLists.filter(remaining, _remFilter)
+
+        max = min(remaining.size(), amount)
+
+        if exceptSelf and max < remaining.size():
+            removedSelf = remaining.remove(host)
+
+        for i in range(max):
+            c = ComputerUtil.chooseCardToSacrifice(source, remaining, ai, destroy)
+            remaining.remove(c)
+            if c is not None:
+                sacrificed.add(c)
+
+        if sacrificed.isEmpty() and removedSelf:
+            sacrificed.add(host)
+
+        return sacrificed
+
+    # Precondition it wants: remaining are reverse-sorted by CMC
+    @staticmethod
+    def chooseCardToSacrifice(source, remaining, ai, destroy):
+        # If somehow ("Drop of Honey") they suggest to destroy opponent's card - use the chance!
+        for c in remaining:  # first compare is fast, second is precise
+            if ai.isOpponentOf(c.getController()):
+                return c
+
+        if destroy:
+            indestructibles = CardLists.getKeyword(remaining, Keyword.INDESTRUCTIBLE)
+            if not indestructibles.isEmpty():
+                return indestructibles.get(0)
+
+        for prio in range(6, 0, -1):
+            for card in remaining:
+                if card.hasSVar("SacMe") and int(card.getSVar("SacMe")) == prio:
+                    return card
+
+        if source.isEmerge() or source.isOffering():
+            # don't sac when cost wouldn't be reduced
+            remaining = CardLists.filter(remaining, CardPredicates.greaterCMC(1))
+
+        c = None
+        if CardLists.getNotType(remaining, "Creature").isEmpty():
+            c = ComputerUtilCard.getWorstCreatureAI(remaining)
+        elif CardLists.getNotType(remaining, "Land").isEmpty():
+            c = ComputerUtilCard.getWorstLand(CardLists.filter(remaining, CardPredicates.LANDS))
+        else:
+            c = ComputerUtilCard.getWorstPermanentAI(remaining, False, False, False, False)
+
+        if c is not None and c.isEnchanted():
+            # TODO: choose "worst" controlled enchanting Aura
+            for aura in c.getEnchantedBy():
+                if aura.getController() == c.getController() and remaining.contains(aura):
+                    return aura
+        return c
+
+    @staticmethod
+    def canRegenerate(ai, card):
+        if not card.canBeShielded():
+            return False
+
+        controller = card.getController()
+        game = controller.getGame()
+        l = controller.getCardsIn(ZoneType.Battlefield)
+        for c in l:
+            for sa in c.getSpellAbilities():
+                if not sa.isActivatedAbility() or sa.getApi() != ApiType.Regenerate:
+                    continue  # Not a Regenerate ability
+                sa.setActivatingPlayer(controller)
+                if not (sa.canPlay() and ComputerUtilCost.canPayCost(sa, controller, False)):
+                    continue  # Can't play ability
+
+                if controller == ai:
+                    abCost = sa.getPayCosts()
+                    if abCost is not None:
+                        if not ComputerUtilCost.checkLifeCost(controller, abCost, c, 4, sa):
+                            continue  # Won't play ability
+
+                        if ComputerUtil.protectRecursion(sa, lambda: not ComputerUtilCost.checkSacrificeCost(controller, abCost, c, sa)
+                                or not ComputerUtilCost.checkCreatureSacrificeCost(controller, abCost, c, sa), True):
+                            continue  # Won't play ability
+
+                tgt = sa.getTargetRestrictions()
+                if tgt is not None:
+                    if CardLists.getValidCards(game.getCardsIn(ZoneType.Battlefield), tgt.getValidTgts(), controller, sa.getHostCard(), sa).contains(card):
+                        return True
+                elif AbilityUtils.getDefinedCards(sa.getHostCard(), sa.getParam("Defined"), sa).contains(card):
+                    return True
+
+        return False
+
+    @staticmethod
+    def possibleDamagePrevention(card):
+        prevented = 0
+
+        controller = card.getController()
+        game = controller.getGame()
+
+        l = controller.getCardsIn(ZoneType.Battlefield)
+        for c in l:
+            for sa in c.getSpellAbilities():
+                # if SA is from AF_Counter don't add to getPlayable
+                if not sa.isActivatedAbility() or sa.getApi() != ApiType.PreventDamage:
+                    continue
+
+                if not (sa.canPlay() and ComputerUtilCost.canPayCost(sa, controller, False)):
+                    continue
+
+                if AbilityUtils.getDefinedCards(sa.getHostCard(), sa.getParam("Defined"), sa).contains(card):
+                    prevented += AbilityUtils.calculateAmount(sa.getHostCard(), sa.getParam("Amount"), sa)
+                tgt = sa.getTargetRestrictions()
+                if tgt is not None:
+                    if CardLists.getValidCards(game.getCardsIn(ZoneType.Battlefield), tgt.getValidTgts(), controller, sa.getHostCard(), sa).contains(card):
+                        prevented += AbilityUtils.calculateAmount(sa.getHostCard(), sa.getParam("Amount"), sa)
+        return prevented
+
+    # Is it OK to cast this for less than the Max Targets?
+    @staticmethod
+    def shouldCastLessThanMax(ai, source):
+        if source.getXManaCostPaid() > 0:
+            # If TargetMax is MaxTgts (i.e., an "X" cost), this is fine because AI is limited by payment resources available.
+            return True
+        if ComputerUtil.aiLifeInDanger(ai, False, 0):
+            # Otherwise, if life is possibly in danger, then this is fine.
+            return True
+        # do not play now.
+        return False
+
+    # Is this discard probably worse than a random draw?
+    @staticmethod
+    def isWorseThanDraw(ai, discard):
+        if discard.hasSVar("DiscardMe"):
+            return True
+
+        game = ai.getGame()
+        landsInPlay = CardLists.filter(ai.getCardsIn(ZoneType.Battlefield), CardPredicates.LANDS_PRODUCING_MANA)
+        landsInHand = CardLists.filter(ai.getCardsIn(ZoneType.Hand), CardPredicates.LANDS)
+        nonLandsInHand = CardLists.getNotType(ai.getCardsIn(ZoneType.Hand), "Land")
+        highestCMC = max(6, Aggregates.max(nonLandsInHand, lambda c: c.getCMC()))
+        discardCMC = discard.getCMC()
+        if discard.isLand():
+            if landsInPlay.size() >= highestCMC \
+                    or (landsInPlay.size() + landsInHand.size() > 6 and landsInHand.size() > 1) \
+                    or (landsInPlay.size() > 3 and nonLandsInHand.size() == 0):
+                # Don't need more land.
+                return True
+        else:  # non-land
+            if discardCMC > landsInPlay.size() + landsInHand.size() + 2:
+                # not castable for some time.
+                return True
+            elif not game.getPhaseHandler().isPlayerTurn(ai) \
+                    and game.getPhaseHandler().getPhase().isAfter(PhaseType.MAIN2) \
+                    and discardCMC > landsInPlay.size() + landsInHand.size() \
+                    and discardCMC > landsInPlay.size() + 1 \
+                    and nonLandsInHand.size() > 1:
+                # not castable for at least one other turn.
+                return True
+            elif landsInPlay.size() > 5 and discard.getCMC() <= 1 \
+                    and not discard.hasProperty("hasXCost", ai, None, None):
+                # Probably don't need small stuff now.
+                return True
+        return False
+
+    # returns true if it's better to wait until blockers are declared
+    @staticmethod
+    def waitForBlocking(sa):
+        game = sa.getActivatingPlayer().getGame()
+        ph = game.getPhaseHandler()
+
+        return sa.getHostCard().isCreature() \
+                and sa.getPayCosts().hasTapCost() \
+                and (ph.getPhase().isBefore(PhaseType.COMBAT_DECLARE_BLOCKERS)
+                        and not ph.getNextTurn() == sa.getActivatingPlayer()) \
+                and not sa.getHostCard().hasSVar("EndOfTurnLeavePlay") \
+                and not sa.hasParam("ActivationPhases")
+
+    @staticmethod
+    def castPermanentInMain1(ai, sa):
+        card = sa.getHostCard()
+        cardState = card.getState(CardStateName.Original) if card.isFaceDown() else card.getCurrentState()
+
+        if card.hasSVar("PlayMain1"):
+            if card.getSVar("PlayMain1") == "ALWAYS" or sa.getPayCosts().hasNoManaCost():
+                return True
+            elif card.getSVar("PlayMain1") == "OPPONENTCREATURES":
+                # Only play these main1 when the opponent has creatures (stealing and giving them haste)
+                if not ai.getOpponents().getCreaturesInPlay().isEmpty():
+                    return True
+            elif not card.getController().getCreaturesInPlay().isEmpty():
+                return True
+
+        # cast Backup creatures in main 1 to pump attackers
+        if cardState.hasKeyword(Keyword.BACKUP):
+            for potentialAtkr in ai.getCreaturesInPlay():
+                if ComputerUtilCard.doesCreatureAttackAI(ai, potentialAtkr):
+                    return True
+
+        # if AI has no speed, play start your engines on Main1
+        if ai.noSpeed() and cardState.hasKeyword(Keyword.START_YOUR_ENGINES):
+            return True
+
+        # cast Blitz in main 1 if the creature attacks
+        if sa.isBlitz() and ComputerUtilCard.doesSpecifiedCreatureAttackAI(ai, card):
+            return True
+
+        # try not to cast Raid creatures in main 1 if an attack is likely
+        if "Count$AttackersDeclared" == card.getSVar("RaidTest") and not cardState.hasKeyword(Keyword.HASTE):
+            for potentialAtkr in ai.getCreaturesInPlay():
+                if ComputerUtilCard.doesCreatureAttackAI(ai, potentialAtkr):
+                    return False
+
+        if card.getManaCost().isZero():
+            return True
+
+        if cardState.hasKeyword(Keyword.EXALTED) or cardState.hasKeyword(Keyword.EXTORT):
+            return True
+
+        if cardState.hasKeyword(Keyword.RIOT) and SpecialAiLogic.preferHasteForRiot(sa, ai):
+            # Planning to choose Haste for Riot, so do this in Main 1
+            return True
+
+        # if we have non-persistent mana in our pool, would be good to try to use it and not waste it
+        if ai.getManaPool().willManaBeLostAtEndOfPhase():
+            # TODO should check if some will be kept and skip those
+            canUseToPayCost = False
+            for color in ManaAtom.MANATYPES:
+                # tries to reuse any amount of colorless if cost only has generic
+                if ai.getManaPool().getAmountOfColor(color) > 0 and card.getManaCost().canBePaidWithAvailable(color):
+                    canUseToPayCost = True
+                    break
+
+            if canUseToPayCost:
+                return True
+
+        if card.isCreature() and not cardState.hasKeyword(Keyword.DEFENDER) \
+                and (cardState.hasKeyword(Keyword.HASTE) or ComputerUtil.hasACardGivingHaste(ai, True) or sa.isDash()):
+            return True
+
+        # cast equipment in Main1 when there are creatures to equip and no other unequipped equipment
+        if card.isEquipment():
+            playNow = False
+            for c in card.getController().getCardsIn(ZoneType.Battlefield):
+                if c.isEquipment() and not c.isEquipping():
+                    playNow = False
+                    break
+                if not playNow and c.isCreature() and ComputerUtilCombat.canAttackNextTurn(c) and c.canBeAttached(card, None):
+                    playNow = True
+            if playNow:
+                return True
+
+        # get all cards the computer controls with BuffedBy
+        buffed = ai.getCardsIn(ZoneType.Battlefield)
+        for buffedcard in buffed:
+            if buffedcard.hasSVar("BuffedBy"):
+                buffedby = buffedcard.getSVar("BuffedBy")
+                bffdby = buffedby.split(",")
+                if card.isValid(bffdby, buffedcard.getController(), buffedcard, sa):
+                    return True
+            if card.isCreature():
+                if buffedcard.hasKeyword(Keyword.SOULBOND) and not buffedcard.isPaired():
+                    return True
+                if buffedcard.hasKeyword(Keyword.EVOLVE):
+                    if buffedcard.getNetPower() < card.getNetPower() or buffedcard.getNetToughness() < card.getNetToughness():
+                        return True
+
+            if ApiType.PermanentNoncreature == sa.getApi() and buffedcard.hasKeyword(Keyword.PROWESS):
+                # non creature Permanent spell
+                return True
+
+            if cardState.hasKeyword(Keyword.SOULBOND) and buffedcard.isCreature() and not buffedcard.isPaired():
+                return True
+        # BuffedBy
+
+        # there's a good chance AI will attack weak target
+        antibuffed = ai.getWeakestOpponent().getCardsIn(ZoneType.Battlefield)
+        for buffedcard in antibuffed:
+            if buffedcard.hasSVar("AntiBuffedBy"):
+                buffedby = buffedcard.getSVar("AntiBuffedBy")
+                bffdby = buffedby.split(",")
+                if card.isValid(bffdby, buffedcard.getController(), buffedcard, sa):
+                    return True
+        # AntiBuffedBy
+
+        vengevines = ai.getCardsIn(ZoneType.Graveyard, "Vengevine")
+        if not vengevines.isEmpty():
+            creatures = ai.getCardsIn(ZoneType.Hand)
+            creatures2 = CardCollection()
+            for i in range(creatures.size()):
+                if creatures.get(i).isCreature() and creatures.get(i).getManaCost().getCMC() <= 3:
+                    creatures2.add(creatures.get(i))
+            if ((creatures2.size() + CardUtil.getThisTurnCast("Creature.YouCtrl", vengevines.get(0), None, ai).size()) > 1) \
+                    and card.isCreature() and card.getManaCost().getCMC() <= 3:
+                return True
+        return False
+
+    @staticmethod
+    def castSpellInMain1(ai, sa):
+        source = sa.getHostCard()
+        sub = sa.getSubAbility()
+
+        if source is not None and "ALWAYS" == source.getSVar("PlayMain1"):
+            return True
+
+        if sub is not None:
+            api = sub.getApi()
+            if ApiType.Encode == api and not ai.getCreaturesInPlay().isEmpty():
+                return True
+            if ApiType.PumpAll == api and not ai.getCreaturesInPlay().isEmpty():
+                return True
+            if ApiType.Pump == api:
+                return True
+
+        checkThreshold = sa.isSpell() and not ai.hasThreshold() and not source.isInZone(ZoneType.Graveyard)
+        buffed = ai.getCardsIn(ZoneType.Battlefield)
+        for buffedCard in buffed:
+            if buffedCard.hasSVar("BuffedBy"):
+                buffedby = buffedCard.getSVar("BuffedBy")
+                bffdby = buffedby.split(",")
+                if source.isValid(bffdby, buffedCard.getController(), buffedCard, sa):
+                    return True
+            if ApiType.PermanentNoncreature == sa.getApi() and buffedCard.hasKeyword(Keyword.PROWESS):
+                return True
+            # Fill the graveyard for Threshold
+            if checkThreshold:
+                for stAb in buffedCard.getStaticAbilities():
+                    if "Threshold" == stAb.getParam("Condition"):
+                        return True
+
+        # there's a good chance AI will attack weak target
+        antibuffed = ai.getWeakestOpponent().getCardsIn(ZoneType.Battlefield)
+        for buffedcard in antibuffed:
+            if buffedcard.hasSVar("AntiBuffedBy"):
+                buffedby = buffedcard.getSVar("AntiBuffedBy")
+                bffdby = buffedby.split(",")
+                if source.isValid(bffdby, buffedcard.getController(), buffedcard, sa):
+                    return True
+        # AntiBuffedBy
+
+        if sub is not None:
+            return ComputerUtil.castSpellInMain1(ai, sub)
+
+        return False
+
+    # returns true if the AI should stop using the ability
+    @staticmethod
+    def preventRunAwayActivations(sa):
+        if not sa.isActivatedAbility():
+            return False
+
+        activations = sa.getActivationsThisTurn()
+
+        # 10 activations should still be acceptable
+        if activations < 10:
+            return False
+
+        return MyRandom.getRandom().nextFloat() >= (0.95 ** activations)
+
+    @staticmethod
+    def activateForCost(sa, ai):
+        abCost = sa.getPayCosts()
+        source = sa.getHostCard()
+        if abCost is None:
+            return False
+        if abCost.hasTapCost() and source.hasSVar("AITapDown"):
+            return True
+        elif sa.getRootAbility().isPwAbility() and ai.getGame().getPhaseHandler().is_(PhaseType.MAIN2):
+            for part in sa.getRootAbility().getPayCosts().getCostParts():
+                if isinstance(part, CostPutCounter):
+                    return part.convertAmount() is None or part.convertAmount() > 0 or ai.isCardInPlay("Carth the Lion")
+        for part in abCost.getCostParts():
+            if isinstance(part, CostSacrifice):
+                sac = part
+                if sac.payCostFromSource():
+                    if source.getSVar("SacMe") == "6":
+                        return True
+                    elif ComputerUtil.shouldSacrificeThreatenedCard(ai, source, sa):
+                        return True
+                    continue
+
+                typeList = CardLists.getValidCards(ai.getCardsIn(ZoneType.Battlefield), sac.getType(), source.getController(), source, sa)
+                for c in typeList:
+                    if c.getSVar("SacMe") == "6":
+                        return True
+                    elif ComputerUtil.shouldSacrificeThreatenedCard(ai, c, sa):
+                        return True
+        return False
+
+    @staticmethod
+    def hasACardGivingHaste(ai, checkOpponentCards):
+        all = CardCollection(ai.getCardsIn([ZoneType.Battlefield, ZoneType.Command]))
+
+        # Special for Anger
+        if not ai.getGame().isCardInPlay("Yixlid Jailer") \
+                and not ai.getCardsIn(ZoneType.Graveyard, "Anger").isEmpty() \
+                and not CardLists.getType(all, "Mountain").isEmpty():
+            return True
+
+        # Special for Odric
+        if ai.isCardInPlay("Odric, Lunarch Marshal") \
+                and not CardLists.getKeyword(all, Keyword.HASTE).isEmpty():
+            return True
+
+        # check for Continuous abilities that grant Haste
+        for c in all:
+            for stAb in c.getStaticAbilities():
+                if stAb.checkMode(StaticAbilityMode.Continuous) and stAb.hasParam("AddKeyword") \
+                        and "Haste" in stAb.getParam("AddKeyword"):
+                    if c.isEquipment() and c.getEquipping() is None:
+                        return True
+
+                    affected = stAb.getParam("Affected")
+                    if affected.startswith("Creature") and ("YouCtrl" in affected or "." not in affected):
+                        return True
+                    if "Creature.PairedWith" in affected and not c.isPaired():
+                        return True
+
+            for t in c.getTriggers():
+                params = t.getMapParams()
+                if "ChangesZone" != params.get("Mode") \
+                        or "Battlefield" != params.get("Destination") \
+                        or not params.containsKey("ValidCard"):
+                    continue
+
+                valid = params.get("ValidCard")
+                if "Creature.YouCtrl" in valid or "Other+YouCtrl" in valid:
+
+                    sa = t.getOverridingAbility()
+                    if sa is not None and sa.getApi() == ApiType.Pump and sa.hasParam("KW") \
+                            and "Haste" in sa.getParam("KW"):
+                        return True
+
+        all.addAll(ai.getCardsActivatableInExternalZones(True))
+        all.addAll(ai.getCardsIn(ZoneType.Hand))
+
+        for c in all:
+            if c.getZone().getPlayer() is not None and c.getZone().getPlayer() is not ai and c.mayPlay(ai).isEmpty():
+                continue
+            for sa in c.getSpellAbilities():
+                if sa.getApi() == ApiType.Pump and sa.hasParam("KW") and "Haste" in sa.getParam("KW"):
+                    return True
+
+        if checkOpponentCards:
+            # Check if the opponents have any cards giving Haste to all creatures on the battlefield
+            opp = CardCollection()
+            opp.addAll(ai.getOpponents().getCardsIn(ZoneType.Battlefield))
+            opp.addAll(ai.getOpponents().getCardsIn(ZoneType.Command))
+
+            for c in opp:
+                for stAb in c.getStaticAbilities():
+                    if stAb.checkMode(StaticAbilityMode.Continuous) and stAb.hasParam("AddKeyword") \
+                            and "Haste" in stAb.getParam("AddKeyword"):
+
+                        affected = stAb.getParam("Affected").split(",")
+                        if "Creature" in affected:
+                            return True
+
+        return False
+
+    @staticmethod
+    def hasAFogEffect(defender, ai, checkingOther):
+        all = CardCollection(defender.getCardsIn(ZoneType.Battlefield))
+
+        all.addAll(defender.getCardsActivatableInExternalZones(True))
+        # TODO check if cards can be viewed instead
+        if not checkingOther:
+            all.addAll(defender.getCardsIn(ZoneType.Hand))
+
+        revealed = AiCardMemory.getMemorySet(ai, MemorySet.REVEALED_CARDS)
+        if revealed is not None:
+            for c in revealed:
+                # if the card moved to a hidden zone depending on the circumstances the AI could not have noticed...?
+                if c.isInZone(ZoneType.Hand) and c.getOwner() == defender:
+                    all.add(c)
+
+        for c in all:
+            # check if card is at least available to be played
+            # further improvements might consider if AI has options to steal the spell by making it playable first
+            if c.getZone() is not None and c.getZone().getPlayer() is not None and c.getZone().getPlayer() is not defender and c.mayPlay(defender).isEmpty():
+                continue
+            for sa in c.getSpellAbilities():
+                if sa.getApi() != ApiType.Fog:
+                    continue
+
+                if (c.hasKeyword(Keyword.CONVOKE) or c.hasKeyword(Keyword.IMPROVISE)) and sa.isSpell() and not c.getController().isAI():
+                    # TODO skipping for now else this will lead to GUI interaction
+                    continue
+
+                if not ComputerUtilCost.canPayCost(sa, defender, False):
+                    continue
+                return True
+        return False
+
+    @staticmethod
+    def possibleNonCombatDamage(ai, enemy):
+        damage = 0
+        all = CardCollection(ai.getCardsIn(ZoneType.Battlefield))
+        all.addAll(ai.getCardsActivatableInExternalZones(True))
+        all.addAll(CardLists.filter(ai.getCardsIn(ZoneType.Hand), CardPredicates.PERMANENTS.negate()))
+
+        for c in all:
+            if c.getZone().getPlayer() is not None and c.getZone().getPlayer() is not ai and c.mayPlay(ai).isEmpty():
+                continue
+            for sa in c.getSpellAbilities():
+                if sa.getApi() != ApiType.DealDamage:
+                    continue
+                sa.setActivatingPlayer(ai)
+                numDam = sa.getParam("NumDmg")
+                dmg = AbilityUtils.calculateAmount(sa.getHostCard(), numDam, sa)
+                if dmg <= damage:
+                    continue
+                if not sa.usesTargeting():
+                    continue
+                if not sa.canTarget(enemy):
+                    continue
+                if not ComputerUtilCost.canPayCost(sa, ai, False):
+                    continue
+                if not GameActionUtil.getOptionalCostValues(sa).isEmpty():
+                    continue  # we can't rely on the AI being always willing and able to pay the optional cost to deal extra damage
+                damage = dmg
+
+            if c.isCreature() and c.isInPlay() and CombatUtil.canAttack(c):
+                for t in c.getTriggers():
+                    if TriggerType.Attacks == t.getMode():
+                        sa = t.ensureAbility()
+                        if sa is None:
+                            continue
+                        if sa.getApi() == ApiType.LoseLife and "Opponent" in sa.getParamOrDefault("Defined", ""):
+                            damage += AbilityUtils.calculateAmount(sa.getHostCard(), sa.getParam("LifeAmount"), sa)
+
+        return damage
+
+    # Overload of predictThreatenedObjects that evaluates the full stack
+    @staticmethod
+    def predictThreatenedObjects(ai, sa, top=False):
+        game = ai.getGame()
+        objects = []
+        if game.getStack().isEmpty():
+            return objects
+
+        # check stack for something that will kill this
+        for si in game.getStack():
+            # iterate from top of stack to find SpellAbility, including sub-abilities,
+            # that does not match "sa"
+            spell = si.getSpellAbility()
+            sub = spell.getSubAbility()
+            if spell.isWrapper():
+                spell = spell.getWrappedAbility()
+            if spell.getOriginalAbility() is not None and spell.getOriginalAbility().getHostCard() == spell.getHostCard():
+                spell = spell.getOriginalAbility()
+            while sub is not None and sub is not sa:
+                sub = sub.getSubAbility()
+            if sa is None or (sa is not spell and sa is not sub):
+                for x in ComputerUtil._predictThreatenedObjects(ai, sa, spell):
+                    objects.append(x)
+            if top:
+                break  # only evaluate top-stack
+
+        # align threatened with resolve order
+        # matters if stack contains multiple activations (e.g. Temur Sabertooth)
+        objects.reverse()
+        return objects
+
+    @staticmethod
+    def _predictThreatenedObjects(aiPlayer, saviour, topStack):
+        objects = []
+        threatened = []
+        saviourApi = None if saviour is None else saviour.getApi()
+        toughness = 0
+        grantIndestructible = False
+        grantShroud = False
+
+        if topStack is None:
+            return objects
+
+        source = topStack.getHostCard()
+        threatApi = topStack.getApi()
+
+        # Can only Predict things from AFs
+        if threatApi is None:
+            return threatened
+
+        if not topStack.usesTargeting():
+            if topStack.hasParam("Defined"):
+                objects = AbilityUtils.getDefinedObjects(source, topStack.getParam("Defined"), topStack)
+            elif topStack.hasParam("ValidCards"):
+                battleField = aiPlayer.getCardsIn(ZoneType.Battlefield)
+                objects = CardLists.getValidCards(battleField, topStack.getParam("ValidCards"), source.getController(), source, topStack)
+            else:
+                return threatened
+        else:
+            canBeTargeted = []
+            for ge in topStack.getTargets().getTargetEntities():
+                if ge.canBeTargetedBy(topStack):
+                    canBeTargeted.append(ge)
+            if not canBeTargeted:
+                return threatened
+            objects = canBeTargeted
+
+        saviorWithSubs = saviour
+        saviorWithSubsApi = None if saviorWithSubs is None else saviorWithSubs.getApi()
+        while saviorWithSubs is not None:
+            curApi = saviorWithSubs.getApi()
+            if curApi == ApiType.Pump or curApi == ApiType.PumpAll:
+                toughness = AbilityUtils.calculateAmount(saviorWithSubs.getHostCard(), saviorWithSubs.getParam("NumDef"), saviour) if saviorWithSubs.hasParam("NumDef") else 0
+                keywords = saviorWithSubs.getParam("KW").split(" & ") if saviorWithSubs.hasParam("KW") else []
+                if "Indestructible" in keywords:
+                    grantIndestructible = True
+                if "Hexproof" in keywords or "Shroud" in keywords:
+                    grantShroud = True
+                break
+            # Consider pump in subabilities, e.g. Bristling Hydra hexproof subability
+            saviorWithSubs = saviorWithSubs.getSubAbility()
+
+        if saviourApi == ApiType.PutCounter or saviourApi == ApiType.PutCounterAll:
+            if saviour is not None and saviour.hasParam("CounterType") and saviour.getParam("CounterType") == "P1P1":
+                toughness = AbilityUtils.calculateAmount(saviour.getHostCard(), saviour.getParamOrDefault("CounterNum", "1"), saviour)
+            else:
+                return threatened
+
+        # Determine if Defined Objects are "threatened" will be destroyed
+        # due to this SA
+
+        # Lethal Damage => prevent damage/regeneration/bounce/shroud
+        if threatApi == ApiType.DealDamage or threatApi == ApiType.DamageAll:
+            # If PredictDamage is >= Lethal Damage
+            dmg = AbilityUtils.calculateAmount(source, topStack.getParam("NumDmg"), topStack)
+            sub = topStack.getSubAbility()
+            noRegen = False
+            if sub is not None and sub.getApi() == ApiType.Effect and sub.hasParam("AILogic") and sub.getParam("AILogic") == "CantRegenerate":
+                noRegen = True
+            for o in objects:
+                if isinstance(o, Card):
+                    c = o
+                    # indestructible
+                    if c.hasKeyword(Keyword.INDESTRUCTIBLE):
+                        continue
+
+                    if c.getCounters(CounterEnumType.SHIELD) > 0:
+                        continue
+
+                    # already regenerated
+                    if c.getShieldCount() > 0:
+                        continue
+
+                    # don't use it on creatures that can't be regenerated
+                    if (saviourApi == ApiType.Regenerate) and (not c.canBeShielded() or noRegen):
+                        continue
+
+                    if saviourApi == ApiType.Pump or saviourApi == ApiType.PumpAll:
+                        if saviour.usesTargeting() and not saviour.canTarget(c):
+                            continue
+                        elif (saviour.getPayCosts() is not None and saviour.getPayCosts().hasSpecificCostType(CostSacrifice)
+                                and (not ComputerUtilCost.isSacrificeSelfCost(saviour.getPayCosts()))) or c is source:
+                            continue
+
+                        canSave = ComputerUtilCombat.predictDamageTo(c, dmg - toughness, source, False) < ComputerUtilCombat.getDamageToKill(c, False)
+                        if (not topStack.usesTargeting() and not grantIndestructible and not canSave) \
+                                or (not grantIndestructible and not grantShroud and not canSave):
+                            continue
+
+                    if saviourApi == ApiType.PutCounter or saviourApi == ApiType.PutCounterAll:
+                        if saviour.usesTargeting() and not saviour.canTarget(c):
+                            continue
+                        elif (saviour.getPayCosts() is not None and saviour.getPayCosts().hasSpecificCostType(CostSacrifice)
+                                and (not ComputerUtilCost.isSacrificeSelfCost(saviour.getPayCosts()))) or c is source:
+                            continue
+
+                        canSave = ComputerUtilCombat.predictDamageTo(c, dmg - toughness, source, False) < ComputerUtilCombat.getDamageToKill(c, False)
+                        if not canSave:
+                            continue
+
+                    # cannot protect against source
+                    if saviourApi == ApiType.Protection and ProtectAi.toProtectFrom(source, saviour) is None:
+                        continue
+
+                    # don't bounce or blink a permanent that the human
+                    # player owns or is a token
+                    if saviourApi == ApiType.ChangeZone and (c.getOwner().isOpponentOf(aiPlayer) or c.isToken()):
+                        continue
+
+                    if ComputerUtilCombat.predictDamageTo(c, dmg, source, False) >= ComputerUtilCombat.getDamageToKill(c, False):
+                        threatened.append(c)
+                elif isinstance(o, Player):
+                    p = o
+                    if source.hasKeyword(Keyword.INFECT):
+                        if p.canReceiveCounters(CounterEnumType.POISON) and ComputerUtilCombat.predictDamageTo(p, dmg, source, False) >= 10 - p.getPoisonCounters():
+                            threatened.append(p)
+                    elif ComputerUtilCombat.predictDamageTo(p, dmg, source, False) >= p.getLife():
+                        threatened.append(p)
+        # -Toughness Curse
+        elif (threatApi == ApiType.Pump or (threatApi == ApiType.PumpAll and topStack.isCurse())) \
+                and (saviourApi == ApiType.ChangeZone or saviourApi == ApiType.Pump or saviourApi == ApiType.PumpAll
+                or saviourApi == ApiType.Protection or saviourApi == ApiType.PutCounter or saviourApi == ApiType.PutCounterAll
+                or saviourApi is None):
+            dmg = -AbilityUtils.calculateAmount(source, topStack.getParam("NumDef"), topStack)
+            for o in objects:
+                if isinstance(o, Card):
+                    c = o
+                    canRemove = (c.getNetToughness() <= dmg) \
+                            or (not c.hasKeyword(Keyword.INDESTRUCTIBLE) and c.getShieldCount() == 0 and dmg >= ComputerUtilCombat.getDamageToKill(c, False))
+                    if not canRemove:
+                        continue
+
+                    if saviourApi == ApiType.Pump or saviourApi == ApiType.PumpAll:
+                        cantSave = c.getNetToughness() + toughness <= dmg \
+                                or (not c.hasKeyword(Keyword.INDESTRUCTIBLE) and c.getShieldCount() == 0 and not grantIndestructible
+                                        and (dmg >= toughness + ComputerUtilCombat.getDamageToKill(c, False)))
+                        if cantSave and (not topStack.usesTargeting() or not grantShroud):
+                            continue
+
+                    if saviourApi == ApiType.PutCounter or saviourApi == ApiType.PutCounterAll:
+                        canSave = c.getNetToughness() + toughness > dmg
+                        if not canSave:
+                            continue
+
+                    if saviourApi == ApiType.Protection:
+                        if not topStack.usesTargeting() or ProtectAi.toProtectFrom(source, saviour) is None:
+                            continue
+
+                    # don't bounce or blink a permanent that the human
+                    # player owns or is a token
+                    if saviourApi == ApiType.ChangeZone and (c.getOwner().isOpponentOf(aiPlayer) or c.isToken()):
+                        continue
+                    threatened.append(c)
+        # Destroy => regeneration/bounce/shroud
+        elif (threatApi == ApiType.Destroy or threatApi == ApiType.DestroyAll) \
+                and ((saviourApi == ApiType.Regenerate
+                        and not topStack.hasParam("NoRegen")) or saviourApi == ApiType.ChangeZone
+                        or saviourApi == ApiType.Pump or saviourApi == ApiType.PumpAll
+                        or saviourApi == ApiType.Protection or saviourApi is None
+                        or saviorWithSubsApi == ApiType.Pump or saviorWithSubsApi == ApiType.PumpAll):
+            for o in objects:
+                if isinstance(o, Card):
+                    c = o
+                    if c.hasKeyword(Keyword.INDESTRUCTIBLE):
+                        continue
+
+                    if c.getCounters(CounterEnumType.SHIELD) > 0:
+                        continue
+
+                    # already regenerated
+                    if c.getShieldCount() > 0:
+                        continue
+
+                    if saviourApi == ApiType.Pump or saviourApi == ApiType.PumpAll \
+                            or saviorWithSubsApi == ApiType.Pump \
+                            or saviorWithSubsApi == ApiType.PumpAll:
+                        if (not topStack.usesTargeting() and not grantIndestructible) \
+                                or (not grantShroud and not grantIndestructible):
+                            continue
+                    if saviourApi == ApiType.Protection:
+                        if not topStack.usesTargeting() or ProtectAi.toProtectFrom(source, saviour) is None:
+                            continue
+
+                    # don't bounce or blink a permanent that the human
+                    # player owns or is a token
+                    if saviourApi == ApiType.ChangeZone and (c.getOwner().isOpponentOf(aiPlayer) or c.isToken()):
+                        continue
+
+                    # don't use it on creatures that can't be regenerated
+                    if saviourApi == ApiType.Regenerate and not c.canBeShielded():
+                        continue
+                    threatened.append(c)
+        # Exiling => bounce/shroud
+        elif (threatApi == ApiType.ChangeZone or threatApi == ApiType.ChangeZoneAll) \
+                and (saviourApi == ApiType.ChangeZone or saviourApi == ApiType.Pump or saviourApi == ApiType.PumpAll
+                or saviourApi == ApiType.Protection or saviourApi is None) \
+                and topStack.hasParam("Destination") \
+                and topStack.getParam("Destination") == "Exile":
+            for o in objects:
+                if isinstance(o, Card):
+                    c = o
+                    # give Shroud to targeted creatures
+                    if (saviourApi == ApiType.Pump or saviourApi == ApiType.PumpAll) and (not topStack.usesTargeting() or not grantShroud):
+                        continue
+                    if saviourApi == ApiType.Protection:
+                        if not topStack.usesTargeting() or ProtectAi.toProtectFrom(source, saviour) is None:
+                            continue
+
+                    # don't bounce or blink a permanent that the human
+                    # player owns or is a token
+                    if saviourApi == ApiType.ChangeZone and (c.getOwner().isOpponentOf(aiPlayer) or c.isToken()):
+                        continue
+
+                    threatened.append(c)
+        # GainControl
+        elif (threatApi == ApiType.GainControl
+                    or (threatApi == ApiType.Attach and topStack.hasParam("AILogic") and topStack.getParam("AILogic") == "GainControl")) \
+                and (saviourApi == ApiType.ChangeZone or saviourApi == ApiType.Pump or saviourApi == ApiType.PumpAll
+                or saviourApi == ApiType.Protection or saviourApi is None):
+            for o in objects:
+                if isinstance(o, Card):
+                    c = o
+                    # give Shroud to targeted creatures
+                    if (saviourApi == ApiType.Pump or saviourApi == ApiType.PumpAll) and (not topStack.usesTargeting() or not grantShroud):
+                        continue
+                    if saviourApi == ApiType.Protection:
+                        if not topStack.usesTargeting() or ProtectAi.toProtectFrom(source, saviour) is None:
+                            continue
+                    threatened.append(c)
+        # Generic curse auras
+        elif (threatApi == ApiType.Attach and (topStack.isCurse() or "Curse" == topStack.getParam("AILogic"))) \
+                and (saviourApi == ApiType.Pump or saviourApi == ApiType.PumpAll
+                or saviourApi == ApiType.Protection or saviourApi is None):
+            enableCurseAuraRemoval = AiProfileUtil.getBoolProperty(aiPlayer, AiProps.ACTIVELY_DESTROY_IMMEDIATELY_UNBLOCKABLE)
+            if enableCurseAuraRemoval:
+                for o in objects:
+                    if isinstance(o, Card):
+                        c = o
+                        # give Shroud to targeted creatures
+                        if (saviourApi == ApiType.Pump or saviourApi == ApiType.PumpAll) and (not topStack.usesTargeting() or not grantShroud):
+                            continue
+                        if saviourApi == ApiType.Protection:
+                            if not topStack.usesTargeting() or ProtectAi.toProtectFrom(source, saviour) is None:
+                                continue
+                        threatened.append(c)
+
+        for x in ComputerUtil._predictThreatenedObjects(aiPlayer, saviour, topStack.getSubAbility()):
+            threatened.append(x)
+        return threatened
+
+    @staticmethod
+    def predictCreatureWillDieThisTurn(ai, creature, excludeSa, nonCombatOnly=False):
+        game = ai.getGame()
+
+        # a creature will [hopefully] die from a spell on stack
+        willDieFromSpell = False
+        noStackCheck = False
+        if AiProfileUtil.getBoolProperty(ai, AiProps.DONT_EVAL_KILLSPELLS_ON_STACK_WITH_PERMISSION):
+            # See if permission is on stack and ignore this check if there is and the relevant AI flag is set
+            # TODO: improve this so that this flag is not needed and the AI can properly evaluate spells in presence of counterspells.
+            for si in game.getStack():
+                sa = si.getSpellAbility()
+                if sa.getApi() == ApiType.Counter:
+                    noStackCheck = True
+                    break
+        willDieFromSpell = not noStackCheck and creature in ComputerUtil.predictThreatenedObjects(creature.getController(), excludeSa)
+
+        if nonCombatOnly:
+            return willDieFromSpell
+
+        # a creature will die as a result of combat
+        willDieInCombat = not willDieFromSpell and game.getPhaseHandler().inCombat() \
+                and ComputerUtilCombat.combatantWouldBeDestroyed(creature.getController(), creature, game.getCombat())
+
+        return willDieInCombat or willDieFromSpell
+
+    @staticmethod
+    def filterCreaturesThatWillDieThisTurn(ai, list, excludeSa):
+        if AiProfileUtil.getBoolProperty(ai, AiProps.AVOID_TARGETING_CREATS_THAT_WILL_DIE):
+            # Try to avoid targeting creatures that are dead on board
+            willBeKilled = CardLists.filter(list, lambda card: card.isCreature() and ComputerUtil.predictCreatureWillDieThisTurn(ai, card, excludeSa))
+            list.removeAll(willBeKilled)
+        return list
+
+    @staticmethod
+    def playImmediately(ai, sa):
+        source = sa.getHostCard()
+        zone = source.getZone()
+        game = source.getGame()
+
+        if sa.isTrigger() or zone is None or sa.isCopied():
+            return True
+
+        if zone.getZoneType() == ZoneType.Battlefield:
+            if source in ComputerUtil.predictThreatenedObjects(ai, None):
+                return True
+            if game.getPhaseHandler().inCombat() and \
+                    ComputerUtilCombat.combatantWouldBeDestroyed(ai, source, game.getCombat()):
+                return True
+        elif zone.getZoneType() == ZoneType.Exile and sa.getMayPlay() is not None:
+            # play cards in exile that can only be played that turn
+            if game.getPhaseHandler().getPhase() == PhaseType.MAIN2:
+                if source.mayPlay(sa.getMayPlay()) is not None:
+                    return True
+        return False
+
+    @staticmethod
+    def scoreHand(handList, ai, cardsToReturn):
+        # TODO Improve hand scoring in relation to cards to return.
+        # If final hand size is 5, score a hand based on what that 5 would be.
+        # Or if this is really really fast, determine what the 5 would be based on scoring
+        # All of the possibilities
+
+        aic = ai.getController().getAi()
+        currentHandSize = handList.size()
+        finalHandSize = currentHandSize - cardsToReturn
+
+        # don't mulligan when already too low
+        if finalHandSize < aic.getIntProperty(AiProps.MULLIGAN_THRESHOLD):
+            return finalHandSize
+
+        library = ai.getCardsIn(ZoneType.Library)
+        landsInDeck = CardLists.count(library, CardPredicates.LANDS)
+
+        # no land deck, can't do anything better
+        if landsInDeck == 0:
+            return finalHandSize
+
+        lands = CardLists.filter(handList, lambda c: c.getManaCost().getCMC() <= 0 and not c.hasSVar("NeedsToPlay")
+                and (c.isLand() or c.isArtifact()))
+
+        handSize = handList.size()
+        landSize = lands.size()
+        score = handList.size()
+        # adjust score for Living End decks
+        livingEnd = CardLists.filter(handList, lambda c: "living end" == c.getName().lower())
+        if livingEnd.size() > 0:
+            score = -(livingEnd.size() * 10)
+
+        if handSize // 2 == landSize or handSize // 2 == landSize + 1:
+            score += 10
+
+        castables = CardLists.filter(handList, lambda c: c.getManaCost().getCMC() <= 0 or c.getManaCost().getCMC() <= landSize)
+
+        score += castables.size() * 2
+
+        # Improve score for perceived mana efficiency of the hand
+
+        # if at mulligan threshold, and we have any lands accept the hand
+        if handSize == aic.getIntProperty(AiProps.MULLIGAN_THRESHOLD) and landSize > 0:
+            return score
+
+        # otherwise, reject bad hands or return score
+        if landSize < 2:
+            # BAD Hands, 0 or 1 lands
+            if landsInDeck == 0 or library.size() // landsInDeck > 6:
+                # Heavy spell deck it's ok
+                return handSize
+            return 0
+        elif landSize == handSize:
+            if library.size() // landsInDeck < 2:
+                # Heavy land deck/Momir Basic it's ok
+                return handSize
+            return 0
+        elif handSize >= 7 and landSize >= handSize - 1:
+            # BAD Hands - Mana flooding
+            if library.size() // landsInDeck < 2:
+                # Heavy land deck/Momir Basic it's ok
+                return handSize
+            return 0
+        return score
+
+    # Computer mulligans if there are no cards with converted mana cost of 0 in its hand
+    @staticmethod
+    def wantMulligan(ai, cardsToReturn):
+        handList = ai.getCardsIn(ZoneType.Hand)
+        return not handList.isEmpty() and ComputerUtil.scoreHand(handList, ai, cardsToReturn) <= 0
+
+    @staticmethod
+    def getPartialParisCandidates(ai):
+        # Commander no longer uses partial paris.
+        candidates = CardCollection()
+        handList = ai.getCardsIn(ZoneType.Hand)
+
+        lands = CardLists.getValidCards(handList, "Card.Land", ai, None, None)
+        nonLands = CardLists.getValidCards(handList, "Card.nonLand", ai, None, None)
+        CardLists.sortByCmcDesc(nonLands)
+
+        if lands.size() >= 3 and lands.size() <= 4:
+            return candidates
+        if lands.size() < 3:
+            # Not enough lands!
+            tgtCandidates = max(abs(lands.size() - nonLands.size()), 3)
+            print("Partial Paris: " + ai.getName() + " lacks lands, aiming to exile " + str(tgtCandidates) + " cards.")
+
+            for i in range(tgtCandidates):
+                candidates.add(nonLands.get(i))
+        else:
+            # Too many lands!
+            # Init
+            cntColors = len(MagicColor.WUBRG)
+            numProducers = []
+            for col in MagicColor.WUBRG:
+                numProducers.insert(col, CardCollection())
+
+            for c in lands:
+                for sa in c.getManaAbilities():
+                    for col in MagicColor.WUBRG:
+                        if sa.canProduce(MagicColor.toLongString(col)):
+                            numProducers[col].add(c)
+
+        print("Partial Paris: " + ai.getName() + " may exile ", end="")
+        for c in candidates:
+            print(str(c) + ", ", end="")
+        print()
+
+        if candidates.size() < 2:
+            candidates.clear()
+        return candidates
+
+    @staticmethod
+    def scryWillMoveCardToBottomOfLibrary(player, c):
+        bottom = False
+
+        # AI profile-based toggles
+        maxLandsToScryLandsToTop = AiProfileUtil.getIntProperty(player, AiProps.SCRY_NUM_LANDS_TO_STILL_NEED_MORE)
+        minLandsToScryLandsAway = AiProfileUtil.getIntProperty(player, AiProps.SCRY_NUM_LANDS_TO_NOT_NEED_MORE)
+        minCreatsToScryCreatsAway = AiProfileUtil.getIntProperty(player, AiProps.SCRY_NUM_CREATURES_TO_NOT_NEED_SUBPAR_ONES)
+        minCreatEvalThreshold = AiProfileUtil.getIntProperty(player, AiProps.SCRY_EVALTHR_TO_SCRY_AWAY_LOWCMC_CREATURE)
+        lowCMCThreshold = AiProfileUtil.getIntProperty(player, AiProps.SCRY_EVALTHR_CMC_THRESHOLD)
+        maxCreatsToScryLowCMCAway = AiProfileUtil.getIntProperty(player, AiProps.SCRY_EVALTHR_CREATCOUNT_TO_SCRY_AWAY_LOWCMC)
+        uncastablesToBottom = AiProfileUtil.getBoolProperty(player, AiProps.SCRY_IMMEDIATELY_UNCASTABLE_TO_BOTTOM)
+        uncastableCMCThreshold = AiProfileUtil.getIntProperty(player, AiProps.SCRY_IMMEDIATELY_UNCASTABLE_CMC_DIFF)
+
+        allCards = player.getAllCards()
+        cardsInHand = player.getCardsIn(ZoneType.Hand)
+        cardsOTB = player.getCardsIn(ZoneType.Battlefield)
+
+        landsOTB = CardLists.filter(cardsOTB, CardPredicates.LANDS_PRODUCING_MANA)
+        thisLandOTB = CardLists.filter(cardsOTB, CardPredicates.nameEquals(c.getName()))
+        landsInHand = CardLists.filter(cardsInHand, CardPredicates.LANDS_PRODUCING_MANA)
+        # valuable mana-producing artifacts that may be equated to a land
+        manaArts = ["Mox Pearl", "Mox Sapphire", "Mox Jet", "Mox Ruby", "Mox Emerald"]
+
+        # evaluate creatures available in deck
+        allCreatures = CardLists.filter(allCards, CardPredicates.CREATURES, CardPredicates.isOwner(player))
+        numCards = allCreatures.size()
+
+        if landsOTB.size() < maxLandsToScryLandsToTop and landsInHand.isEmpty():
+            if (not c.isLand() and c.getName() not in manaArts) \
+                    or (c.getManaAbilities().isEmpty() and not c.hasABasicLandType()):
+                # scry away non-lands and non-manaproducing lands in situations when the land count
+                # on the battlefield is low, to try to improve the mana base early
+                bottom = True
+
+        if c.isLand():
+            if landsOTB.size() >= minLandsToScryLandsAway:
+                # probably enough lands not to urgently need another one, so look for more gas instead
+                bottom = True
+            elif landsInHand.size() >= max(cardsInHand.size() // 2, 2):
+                # scry lands to the bottom if we already have enough lands in hand
+                bottom = True
+
+            if c.isBasicLand():
+                if landsOTB.size() > 5 and thisLandOTB.size() >= 2:
+                    # if we control more than 5 lands, 2 or more of them of the basic type in question,
+                    # scry to the bottom if it's a basic land
+                    bottom = True
+        elif c.isCreature():
+            creaturesOTB = CardLists.filter(cardsOTB, CardPredicates.CREATURES)
+            avgCreatureValue = (ComputerUtilCard.evaluateCreatureList(allCreatures) // numCards) if numCards != 0 else 0
+            maxControlledCMC = Aggregates.max(creaturesOTB, lambda card: card.getCMC())
+
+            if ComputerUtilCard.evaluateCreature(c) < avgCreatureValue:
+                if creaturesOTB.size() > minCreatsToScryCreatsAway:
+                    # if there are more than five creatures and the creature is question is below average for
+                    # the deck, scry it to the bottom
+                    bottom = True
+                elif creaturesOTB.size() > maxCreatsToScryLowCMCAway and c.getCMC() <= lowCMCThreshold \
+                        and maxControlledCMC >= lowCMCThreshold + 1 and ComputerUtilCard.evaluateCreature(c) <= minCreatEvalThreshold:
+                    # if we are already at a stage when we have 4+ CMC creatures on the battlefield,
+                    # probably worth it to scry away very low value creatures with low CMC
+                    bottom = True
+
+        if uncastablesToBottom and not c.isLand():
+            cmc = min(c.getCMC(Card.SplitCMCMode.LeftSplitCMC), c.getCMC(Card.SplitCMCMode.RightSplitCMC)) if c.isSplitCard() \
+                    else c.getCMC()
+            maxCastable = ComputerUtilMana.getAvailableManaEstimate(player, False) + landsInHand.size()
+            if cmc - maxCastable >= uncastableCMCThreshold:
+                bottom = True
+
+        return bottom
+
+    @staticmethod
+    def getCardsToDiscardFromOpponent(chooser, discarder, sa, validCards, min_, max_):
+        goodChoices = CardLists.filter(validCards, lambda c: not c.hasSVar("DiscardMeByOpp") and not c.hasSVar("DiscardMe"))
+        if goodChoices.isEmpty():
+            goodChoices = validCards
+
+        if min_ == 1 and max_ == 1:
+            if sa.hasParam("DiscardValid"):
+                validString = sa.getParam("DiscardValid")
+                if "Creature" in validString and "nonCreature" not in validString:
+                    c = ComputerUtilCard.getBestCreatureAI(goodChoices)
+                    if c is not None:
+                        return CardCollection(c)
+
+        # not enough good choices, need to fill the rest
+        minDiff = min_ - goodChoices.size()
+        if minDiff > 0:
+            choices = StreamUtil.random(minDiff, [c for c in validCards if not goodChoices.contains(c)])
+            goodChoices.addAll(choices)
+            return goodChoices
+
+        goodChoices.sort(CardLists.TextLenComparator)
+
+        CardLists.sortByCmcDesc(goodChoices)
+
+        return goodChoices.subList(0, max_)
+
+    @staticmethod
+    def getCardsToDiscardFromFriend(aiChooser, p, sa, validCards, min_, max_):
+        if p == aiChooser:  # ask that ai player what he would like to discard
+            aic = p.getController().getAi()
+            return aic.getCardsToDiscard(min_, max_, validCards, sa)
+        # no special options for human or remote friends
+        return ComputerUtil.getCardsToDiscardFromOpponent(aiChooser, p, sa, validCards, min_, max_)
+
+    @staticmethod
+    def chooseSomeType(ai, kindOfType, sa, validTypes):
+        logic = sa.getParam("AILogic")
+
+        if validTypes is None:
+            validTypes = []
+
+        game = ai.getGame()
+        chosen = ""
+        if kindOfType == "Card":
+            # TODO
+            # computer will need to choose a type based on whether it needs a creature or land,
+            # otherwise, lib search for most common type left then, reveal chosenType to Human
+            if game.getPhaseHandler().is_(PhaseType.UNTAP) and logic is None:  # Storage Matrix
+                amount = 0
+                for type in validTypes:
+                    list = CardLists.filter(ai.getCardsIn(ZoneType.Battlefield), CardPredicates.isType(type), CardPredicates.TAPPED)
+                    i = list.size() * 1.5 if type == "Creature" else list.size()
+                    if i > amount:
+                        amount = i
+                        chosen = type
+            elif "ProtectionFromType" == logic:
+                evalList = ai.getOpponents().getCardsIn(ZoneType.Battlefield)
+
+                # TODO: protection vs. damage-dealing and milling instants/sorceries in low creature decks and the like?
+                # Maybe non-creature artifacts in certain cases?
+                # types that make sense to get protected against
+                chosenCore = ComputerUtilCard.getMostProminentCardType(evalList, [CardType.CoreType.Creature, CardType.CoreType.Planeswalker])
+                # if in doubt, choose Creature, I guess
+                chosen = "Creature" if chosenCore is None else chosenCore.toString()
+            else:
+                # Are we picking a type to reduce costs for that type?
+                reducingCost = False
+                for s in sa.getHostCard().getStaticAbilities():
+                    if s.checkMode(StaticAbilityMode.ReduceCost) and "Card.ChosenType" == s.getParam("ValidCard"):
+                        reducingCost = True
+                        break
+
+                if reducingCost:
+                    valid = [CardType.CoreType.valueOf(s) for s in validTypes]
+                    valid.remove(CardType.CoreType.Land)  # Lands don't have costs to reduce
+                    chosenCore = ComputerUtilCard.getMostProminentCardType(ai.getAllCards(), valid)
+                    # if in doubt, choose Creature, I guess
+                    chosen = "Creature" if chosenCore is None else chosenCore.toString()
+            if StringUtils.isEmpty(chosen):
+                chosen = "Creature" if not validTypes else Aggregates.random(validTypes)
+        elif kindOfType == "Creature":
+            if logic is not None:
+                if logic == "MostProminentOnBattlefield":
+                    chosen = ComputerUtilCard.getMostProminentType(game.getCardsIn(ZoneType.Battlefield), validTypes)
+                elif logic == "MostProminentComputerControls":
+                    chosen = ComputerUtilCard.getMostProminentType(ai.getCardsIn(ZoneType.Battlefield), validTypes)
+                elif logic == "MostProminentComputerControlsOrOwns":
+                    list = ai.getCardsIn([ZoneType.Battlefield, ZoneType.Hand])
+                    if list.isEmpty():
+                        list = ai.getCardsIn([ZoneType.Library])
+                    chosen = ComputerUtilCard.getMostProminentType(list, validTypes)
+                elif logic == "MostProminentOppControls":
+                    list = ai.getOpponents().getCardsIn(ZoneType.Battlefield)
+                    chosen = ComputerUtilCard.getMostProminentType(list, validTypes)
+                    if not CardType.isACreatureType(chosen):
+                        list = CardLists.filterControlledBy(game.getCardsInGame(), ai.getOpponents())
+                        chosen = ComputerUtilCard.getMostProminentType(list, validTypes)
+                elif logic.startswith("MostProminentInComputerDeck"):
+                    includeTokens = not logic.endswith("NonToken")
+                    chosen = ComputerUtilCard.getMostProminentType(ai.getAllCards(), validTypes, includeTokens)
+                elif logic == "MostProminentInComputerGraveyard":
+                    chosen = ComputerUtilCard.getMostProminentType(ai.getCardsIn(ZoneType.Graveyard), validTypes)
+
+            if not CardType.isACreatureType(chosen):
+                chosen = list(validTypes)[0] if len(validTypes) == 1 else \
+                        ComputerUtilCard.getMostProminentType(ai.getAllCards(), validTypes, False)
+                # chosen = "Sliver";
+        elif kindOfType == "Basic Land":
+            if logic is not None:
+                if logic == "MostProminentOppControls":
+                    list = ai.getOpponents().getCardsIn(ZoneType.Battlefield)
+                    chosen = ComputerUtilCard.getMostProminentType(list, validTypes)
+                elif logic == "MostNeededType":
+                    # Choose a type that is in the deck, but not in hand or on the battlefield
+                    basics = CardType.getBasicTypes()
+                    presentCards = CardCollection.combine(ai.getCardsIn(ZoneType.Battlefield), ai.getCardsIn(ZoneType.Hand))
+                    possibleCards = ai.getAllCards()
+
+                    for b in basics:
+                        if not presentCards.anyMatch(CardPredicates.isType(b)) and possibleCards.anyMatch(CardPredicates.isType(b)):
+                            chosen = b
+                    if chosen == "":
+                        for b in basics:
+                            if possibleCards.anyMatch(CardPredicates.isType(b)):
+                                chosen = b
+                elif logic == "ChosenLandwalk":
+                    for c in AiAttackController.choosePreferredDefenderPlayer(ai).getLandsInPlay():
+                        for t in c.getType().getLandTypes():
+                            if CardType.isABasicLandType(t):
+                                chosen = t
+                                break
+
+            if not CardType.isABasicLandType(chosen) or chosen not in validTypes:
+                chosen = "Island"
+        elif kindOfType == "Land":
+            if logic is not None:
+                if logic == "ChosenLandwalk":
+                    for c in AiAttackController.choosePreferredDefenderPlayer(ai).getLandsInPlay():
+                        for t in c.getType().getLandTypes():
+                            if t in validTypes:
+                                chosen = t
+                                break
+            if StringUtils.isEmpty(chosen):
+                chosen = "Island"
+        return chosen
+
+    @staticmethod
+    def vote(ai, options, sa, votes, forPlayer):
+        source = sa.getHostCard()
+        controller = source.getController()
+        game = controller.getGame()
+
+        opponent = controller.isOpponentOf(ai)
+
+        p1p1Type = CounterEnumType.P1P1
+
+        if not sa.hasParam("AILogic"):
+            return Aggregates.random(options)
+
+        logic = sa.getParam("AILogic")
+        if logic == "Torture":
+            return options[1]
+        elif logic == "GraceOrCondemnation":
+            graceZones = []
+            graceZones.append(ZoneType.Battlefield)
+            graceZones.append(ZoneType.Graveyard)
+            graceCreatures = CardLists.getType(game.getCardsIn(graceZones), "Creature")
+            humanGrace = CardLists.filterControlledBy(graceCreatures, ai.getOpponents()).size()
+            aiGrace = CardLists.filterControlledBy(graceCreatures, ai).size()
+            return options[0 if aiGrace > humanGrace else 1]
+        elif logic == "CarnageOrHomage":
+            cardsInPlay = CardLists.getNotType(game.getCardsIn(ZoneType.Battlefield), "Land")
+            humanlist = CardLists.filterControlledBy(cardsInPlay, ai.getOpponents())
+            computerlist = ai.getCreaturesInPlay()
+            return options[0 if ComputerUtilCard.evaluatePermanentList(computerlist) + 3 < ComputerUtilCard.evaluatePermanentList(humanlist) else 1]
+        elif logic == "Judgment":
+            if votes.isEmpty():
+                list = CardCollection()
+                for o in options:
+                    if isinstance(o, Card):
+                        list.add(o)
+                return ComputerUtilCard.getBestAI(list)
+            return next(iter(votes.keySet()), None)
+        elif logic == "Protection":
+            if votes.isEmpty():
+                restrictedToColors = {}
+                for o in options:
+                    if isinstance(o, SpellAbility):  # TODO check for Color Word Changes
+                        sp = o
+                        restrictedToColors[sp.getOriginalDescription()] = sp
+                lists = CardLists.filterControlledBy(game.getCardsInGame(), ai.getOpponents())
+                return restrictedToColors.get(StringUtils.capitalize(ComputerUtilCard.getMostProminentColor(lists, restrictedToColors.keys())))
+            return next(iter(votes.keySet()), None)
+        elif logic == "FeatherOrQuill":
+            feather = options[0]
+            quill = options[1]
+            # try to mill opponent with Quill vote
+            if opponent and not controller.cantLoseCheck(GameLossReason.Milled):
+                numQuill = votes.get(quill).size()
+                if numQuill + 1 >= controller.getCardsIn(ZoneType.Library).size():
+                    return feather if controller.isCardInPlay("Laboratory Maniac") else quill
+            # is it can't receive counters, choose +1/+1 ones
+            if not source.canReceiveCounters(p1p1Type):
+                return feather if opponent else quill
+            # if source is not on the battlefield anymore, choose +1/+1 ones
+            if not game.getCardState(source).isInPlay():
+                return feather if opponent else quill
+            # if no hand cards, try to mill opponent
+            if controller.getCardsIn(ZoneType.Hand).isEmpty():
+                return quill if opponent else feather
+
+            # AI has something to discard
+            if ai == controller:
+                aiCardsInHand = ai.getCardsIn(ZoneType.Hand)
+                if CardLists.count(aiCardsInHand, CardPredicates.hasSVar("DiscardMe")) >= 1:
+                    return quill
+
+            # default card draw and discard are better than +1/+1 counter
+            return feather if opponent else quill
+        elif logic == "StrengthOrNumbers":
+            strength = options[0]
+            numbers = options[1]
+            # similar to fabricate choose +1/+1 or Token
+            numStrength = votes.get(strength).size()
+            numNumbers = votes.get(numbers).size()
+
+            token = TokenAi.spawnToken(controller, numbers)
+
+            # is it can't receive counters, choose +1/+1 ones
+            if not source.canReceiveCounters(p1p1Type):
+                return strength if opponent else numbers
+
+            # if source is not on the battlefield anymore
+            if not game.getCardState(source).isInPlay():
+                return strength if opponent else numbers
+
+            # token would not survive
+            if token is None or not token.isCreature() or token.getNetToughness() < 1:
+                return numbers if opponent else strength
+
+            # TODO check for ETB to +1/+1 counters or over another trigger like lifegain
+
+            tokenScore = ComputerUtilCard.evaluateCreature(token)
+
+            # score check similar to Fabricate
+            sourceNumbers = CardCopyService.getLKICopy(source)
+            sourceStrength = CardCopyService.getLKICopy(source)
+
+            sourceNumbers.setCounters(p1p1Type, sourceNumbers.getCounters(p1p1Type) + numStrength)
+            sourceNumbers.setZone(source.getZone())
+
+            sourceStrength.setCounters(p1p1Type, sourceStrength.getCounters(p1p1Type) + numStrength + 1)
+            sourceStrength.setZone(source.getZone())
+
+            scoreStrength = ComputerUtilCard.evaluateCreature(sourceStrength) + tokenScore * numNumbers
+            scoreNumbers = ComputerUtilCard.evaluateCreature(sourceNumbers) + tokenScore * (numNumbers + 1)
+
+            return numbers if ((scoreNumbers >= scoreStrength) != opponent) else strength
+        elif logic == "SproutOrHarvest":
+            sprout = options[0]
+            harvest = options[1]
+            # lifegain would hurt or has no effect
+            if opponent:
+                if ComputerUtil.lifegainNegative(controller, source):
+                    return harvest
+            else:
+                if ComputerUtil.lifegainNegative(controller, source):
+                    return sprout
+
+            # is it can't receive counters, choose +1/+1 ones
+            if not source.canReceiveCounters(p1p1Type):
+                return sprout if opponent else harvest
+
+            # if source is not on the battlefield anymore
+            if not game.getCardState(source).isInPlay():
+                return sprout if opponent else harvest
+            # TODO add Lifegain to +1/+1 counters trigger
+
+            # for now +1/+1 counters are better
+            return harvest if opponent else sprout
+        elif logic == "DeathOrTaxes":
+            death = options[0]
+            taxes = options[1]
+
+            numDeath = votes.get(death).size()
+            numTaxes = votes.get(taxes).size()
+
+            if opponent:
+                aiCreatures = ai.getCreaturesInPlay()
+                aiCardsInHand = ai.getCardsIn(ZoneType.Hand)
+                # would need to sacrifice more creatures than AI has
+                # sacrifice even more
+                if aiCreatures.size() <= numDeath:
+                    return death
+                # would need to discard more cards than it has
+                if aiCardsInHand.size() <= numTaxes:
+                    return taxes
+
+                # has cards with SacMe or Token
+                if CardLists.count(aiCreatures, CardPredicates.hasSVar("SacMe").or_(CardPredicates.TOKEN)) >= numDeath:
+                    return death
+
+                # has cards with DiscardMe
+                if CardLists.count(aiCardsInHand, CardPredicates.hasSVar("DiscardMe")) >= numTaxes:
+                    return taxes
+
+                # discard is probably less worse than sacrifice
+                return taxes
+            else:
+                # ai is first voter or ally of controller
+                # both are not affected, but if opponents control creatures, sacrifice is worse
+                return taxes if controller.getOpponents().getCreaturesInPlay().isEmpty() else death
+        else:
+            return next(iter(options), None)
+
+    @staticmethod
+    def getSafeTargets(ai, sa, validCards):
+        safeCards = CardLists.filter(validCards, lambda c: (c.getSVar("Targeting") != "Dies" and c.getSVar("Targeting") != "Counter") if c.getController() == ai else True)
+        return safeCards
+
+    @staticmethod
+    def getKilledByTargeting(sa, validCards):
+        killables = CardLists.filter(validCards, lambda c: c.getController() != sa.getActivatingPlayer() and c.getSVar("Targeting") == "Dies")
+        return ComputerUtilCard.getBestCreatureAI(killables)
+
+    @staticmethod
+    def predictDamageFromSpell(ab, targetPlayer):
+        damage = -1  # returns -1 if the spell does not deal damage
+        card = ab.getHostCard()
+
+        while ab is not None and targetPlayer.canLoseLife():
+            if ab.getApi() == ApiType.DealDamage:
+                if damage == -1:
+                    damage = 0  # found a damage-dealing spell
+                if not ab.hasParam("NumDmg"):
+                    continue
+                damage += ComputerUtilCombat.predictDamageTo(targetPlayer,
+                        AbilityUtils.calculateAmount(card, ab.getParam("NumDmg"), ab), card, False)
+            elif ab.getApi() == ApiType.LoseLife:
+                if damage == -1:
+                    damage = 0  # found a damage-dealing spell
+                if not ab.hasParam("LifeAmount"):
+                    continue
+                damage += AbilityUtils.calculateAmount(card, ab.getParam("LifeAmount"), ab)
+            ab = ab.getSubAbility()
+
+        return damage
+
+    @staticmethod
+    def getDamageForPlaying(player, sa):
+        # check for bad spell cast triggers
+        damage = 0
+        game = player.getGame()
+        card = sa.getHostCard()
+        theTriggers = FCollection()
+
+        for c in game.getCardsIn(ZoneType.Battlefield):
+            theTriggers.addAll(c.getTriggers())
+        for trigger in theTriggers:
+            source = trigger.getHostCard()
+
+            if trigger.getMode() != TriggerType.SpellCast:
+                continue
+            if not trigger.zonesCheck(game.getZoneOf(source)):
+                continue
+            if not trigger.requirementsCheck(game):
+                continue
+
+            if not trigger.matchesValidParam("ValidCard", card):
+                continue
+            if not trigger.matchesValidParam("ValidActivatingPlayer", player):
+                continue
+
+            # fall back for OverridingAbility
+            trigSa = trigger.ensureAbility()
+            if trigSa is None:
+                continue
+            if trigSa.getApi() == ApiType.DealDamage:
+                if "TriggeredActivator" != trigSa.getParam("Defined"):
+                    continue
+                if not trigSa.hasParam("NumDmg"):
+                    continue
+                damage += ComputerUtilCombat.predictDamageTo(player,
+                        AbilityUtils.calculateAmount(source, trigSa.getParam("NumDmg"), trigSa), source, False)
+            elif trigSa.getApi() == ApiType.LoseLife:
+                if "TriggeredActivator" != trigSa.getParam("Defined"):
+                    continue
+                if not trigSa.hasParam("LifeAmount"):
+                    continue
+                damage += AbilityUtils.calculateAmount(source, trigSa.getParam("LifeAmount"), trigSa)
+
+        return damage
+
+    @staticmethod
+    def getDamageFromETB(player, permanent):
+        damage = 0
+        game = player.getGame()
+        theTriggers = FCollection()
+
+        for card in game.getCardsIn(ZoneType.Battlefield):
+            theTriggers.addAll(card.getTriggers())
+        for trigger in theTriggers:
+            source = trigger.getHostCard()
+
+            if trigger.getMode() != TriggerType.ChangesZone:
+                continue
+            if "Battlefield" != trigger.getParam("Destination"):
+                continue
+            if not trigger.zonesCheck(game.getZoneOf(source)):
+                continue
+            if not trigger.requirementsCheck(game):
+                continue
+            if trigger.hasParam("CheckOnTriggeredCard") \
+                    and AbilityUtils.getDefinedCards(permanent, source.getSVar(trigger.getParam("CheckOnTriggeredCard").split(" ")[0]), None).isEmpty():
+                continue
+            if not trigger.matchesValidParam("ValidCard", permanent):
+                continue
+            # fall back for OverridingAbility
+            trigSa = trigger.ensureAbility()
+            if trigSa is None:
+                continue
+            if trigSa.getApi() == ApiType.DealDamage:
+                if "TriggeredCardController" != trigSa.getParam("Defined"):
+                    continue
+                if not trigSa.hasParam("NumDmg"):
+                    continue
+                damage += ComputerUtilCombat.predictDamageTo(player,
+                        AbilityUtils.calculateAmount(source, trigSa.getParam("NumDmg"), trigSa), source, False)
+            elif trigSa.getApi() == ApiType.LoseLife:
+                if "TriggeredCardController" != trigSa.getParam("Defined"):
+                    continue
+                if not trigSa.hasParam("LifeAmount"):
+                    continue
+                damage += AbilityUtils.calculateAmount(source, trigSa.getParam("LifeAmount"), trigSa)
+        return damage
+
+    @staticmethod
+    def getCounterCategory(type, c):
+        if c.hasSVar("AICounterOverride" + type.toString()):
+            return CounterAiCategory.valueOf(c.getSVar("AICounterOverride" + type.toString()))
+        # keyword counters
+        if type.isKeywordCounter() and c.hasKeyword(type.toString()):
+            return CounterAiCategory.Neutral
+        if type.is_(CounterEnumType.TIME) and not c.isInPlay():
+            return CounterAiCategory.Negative
+        if type == CounterType.getType("BLAZE") and c.isLand():
+            return CounterAiCategory.Negative
+        # Quest counter on a card without MaxQuestEffect are useless
+        # this checks for over max quest to mark them negative
+        if type == CounterType.getType("QUEST") and c.hasSVar("MaxQuestEffect"):
+            if c.getCounters(type) > int(c.getSVar("MaxQuestEffect")):
+                return CounterAiCategory.Negative
+        return type.getAiCategory()
+
+    @staticmethod
+    def isNegativeCounter(type, c):
+        return ComputerUtil.getCounterCategory(type, c) == CounterAiCategory.Negative
+
+    # this countertypes has no effect
+    @staticmethod
+    def isUselessCounter(type, c):
+        return ComputerUtil.getCounterCategory(type, c) == CounterAiCategory.Neutral
+
+    @staticmethod
+    def evaluateBoardPosition(ai, opponent):
+        return AiCache.getCached("evaluateBoardPosition",
+                lambda: ComputerUtil.evaluateBoardPositionChanged(ai, opponent),
+                [AiCache.identity, AiCache.identity], ai, opponent)
+
+    @staticmethod
+    def evaluateBoardPositionChanged(ai, opponent):
+        rating = 0
+
+        rating += opponent.getCardsIn(ZoneType.Hand).size() * 15
+        rating += opponent.getLandsInPlay().size() * 8
+
+        if opponent.getCardsIn(ZoneType.Library).size() < 3:
+            rating //= 5
+
+        for c in opponent.getCardsIn(ZoneType.Battlefield):
+            if c.isCreature():
+                rating += ComputerUtilCard.evaluateCreature(c) // 2
+            elif c.isPlaneswalker():
+                rating += 50 + c.getCMC() * 20 + c.getCounters(CounterEnumType.LOYALTY) * 10
+            elif not c.isLand():
+                rating += 25 + c.getCMC() * 15
+
+        if ai is None:
+            # non combat check takes life into account here
+            rating += opponent.getLife() * 3
+        else:
+            # TODO: Consider whether the opponent is likely to attack a bigger threat instead.
+            # This is hard to predict for human players and multiplayer politics.
+            remainingLife = ComputerUtil.predictNextCombatsRemainingLife(ai, True, True, 0, None, [opponent])
+            if remainingLife < ai.getLife():
+                lifeLoss = abs(ai.getLife() - max(-20, remainingLife))
+                rating += lifeLoss * lifeLoss
+
+        return rating
+
+    @staticmethod
+    def hasReasonToPlayCardThisTurn(ai, c):
+        if not isinstance(ai.getController(), PlayerControllerAi):
+            print("Unexpected behavior: ComputerUtil::getReasonToPlayCard called with the non-AI player as a parameter.", file=sys.stderr)
+            return False
+
+        for sa in c.getAllPossibleAbilities(ai, True):
+            if sa.getApi() == ApiType.Counter:
+                # return true for counterspells so that the AI can take into account that it may need to cast it later in the opponent's turn
+                return True
+            decision = ai.getController().getAi().canPlaySa(sa)
+            if decision == AiPlayDecision.WillPlay or decision == AiPlayDecision.WaitForMain2:
+                return True
+
+        return False
+
+    @staticmethod
+    def lifegainPositive(player, source):
+        if not player.canGainLife():
+            return False
+
+        # Run any applicable replacement effects.
+        repParams = AbilityKey.mapFromAffected(player)
+        repParams.put(AbilityKey.LifeGained, 1)
+        repParams.put(AbilityKey.Source, source)
+
+        list = player.getGame().getReplacementHandler().getReplacementList(
+                ReplacementType.GainLife,
+                repParams,
+                ReplacementLayer.Other)
+
+        if any(CardTraitPredicates.hasParam("AILogic", "NoLife")(re) for re in list):
+            return False
+        elif any(CardTraitPredicates.hasParam("AILogic", "LoseLife")(re) for re in list):
+            return False
+        elif any(CardTraitPredicates.hasParam("AILogic", "LichDraw")(re) for re in list):
+            return False
+        return True
+
+    @staticmethod
+    def lifegainNegative(player, source, n=1):
+        if not player.canGainLife():
+            return False
+
+        # Run any applicable replacement effects.
+        repParams = AbilityKey.mapFromAffected(player)
+        repParams.put(AbilityKey.LifeGained, n)
+        repParams.put(AbilityKey.Source, source)
+
+        list = player.getGame().getReplacementHandler().getReplacementList(
+            ReplacementType.GainLife,
+            repParams,
+            ReplacementLayer.Other
+        )
+
+        if any(CardTraitPredicates.hasParam("AILogic", "NoLife")(re) for re in list):
+            # no life gain is not negative
+            return False
+        elif any(CardTraitPredicates.hasParam("AILogic", "LoseLife")(re) for re in list):
+            # lose life is only negative is the player can lose life
+            return player.canLoseLife()
+        elif any(CardTraitPredicates.hasParam("AILogic", "LichDraw")(re) for re in list):
+            # if it would draw more cards than player has, then its negative
+            return player.getCardsIn(ZoneType.Library).size() <= n
+
+        return False
+
+    @staticmethod
+    def targetPlayableSpellCard(ai, options, sa, withoutPayingManaCost, mandatory):
+        # determine and target a card with a SA that the AI can afford and will play
+        aic = ai.getController().getAi()
+        sa.resetTargets()
+
+        targets = CardCollection()
+        for c in options:
+            if withoutPayingManaCost and c.getManaCost() is not None and c.getManaCost().countX() > 0:
+                # The AI will otherwise cheat with the mana payment, announcing X > 0 for spells like Heat Ray when replaying them
+                # without paying their mana cost.
+                continue
+            for ab in c.getSpellAbilities():
+                if ab.getApi() is None:
+                    # only API-based SAs are supported, other things may lead to a NPE (e.g. Ancestral Vision Suspend SA)
+                    continue
+                elif ab.getApi() == ApiType.Mana and "ManaRitual" == ab.getParam("AILogic"):
+                    # TODO Mana Ritual cards are too complex for the AI to consider casting through a spell effect and will
+                    # lead to a stack overflow. Consider improving.
+                    continue
+                abTest = ab.copyWithNoManaCost() if withoutPayingManaCost else ab.copy()
+                # at this point, we're assuming that card will be castable from whichever zone it's in by the AI player.
+                abTest.setActivatingPlayer(ai)
+                abTest.getRestrictions().setZone(c.getZone().getZoneType())
+                if AiPlayDecision.WillPlay == aic.canPlaySa(abTest) and ComputerUtilCost.canPayCost(abTest, ai, False):
+                    targets.add(c)
+
+        if targets.isEmpty():
+            if mandatory and any(True for _ in options):
+                targets.addAll(options)
+            else:
+                return False
+
+        sa.getTargets().add(ComputerUtilCard.getBestAI(targets))
+        return True
+
+    @staticmethod
+    def countUsefulCreatures(p):
+        creats = p.getCreaturesInPlay()
+        count = 0
+
+        for c in creats:
+            if not ComputerUtilCard.isUselessCreature(p, c):
+                count += 1
+
+        return count
+
+    @staticmethod
+    def isPlayingReanimator(ai):
+        # TODO: either add SVars to other reanimator cards, or improve the prediction so that it avoids using a SVar
+        # at all but detects this effect from SA parameters (preferred, but difficult)
+        inHand = ai.getCardsIn(ZoneType.Hand)
+        inDeck = ai.getCardsIn(ZoneType.Library)
+
+        markedAsReanimator = lambda card: "true" == card.getSVar("IsReanimatorCard").lower()
+
+        numInHand = CardLists.count(inHand, markedAsReanimator)
+        numInDeck = CardLists.count(inDeck, markedAsReanimator)
+
+        return numInHand > 0 or numInDeck >= 3
+
+    # this function should be called by most API to give scripters the option of helping AI
+    @staticmethod
+    def filterAITgts(sa, ai, targetables, alwaysStrict):
+        # TODO support players
+        source = sa.getHostCard()
+        if source is None or not sa.hasParam("AITgts"):
+            return targetables
+
+        # TODO randomize the order, just so human can't predict in advance which of two equal cards AI might pick
+
+        aiTgts = sa.getParam("AITgts")
+        if aiTgts.startswith("BetterThan"):
+            value = 0
+            if aiTgts.endswith("Source"):
+                value = ComputerUtilCard.evaluateCreature(source)
+                if source.isEnchanted():
+                    for enc in source.getEnchantedBy():
+                        if enc.getController() == ai:
+                            value += 100  # is 100 per AI's own aura enough?
+            elif "EvalRating." in aiTgts:
+                value = AbilityUtils.calculateAmount(source, aiTgts[aiTgts.index(".") + 1:], sa)
+            else:
+                print("Warning: Unspecified AI target evaluation rating for SA " + str(sa), file=sys.stderr)
+                value = ComputerUtilCard.evaluateCreature(source)
+            totalValue = value
+            filtered = CardLists.filter(targetables, lambda c: ComputerUtilCard.evaluateCreature(c) > totalValue + 30)
+        else:
+            filtered = CardLists.getValidCards(targetables, aiTgts, sa.getActivatingPlayer(), source, sa)
+
+        if sa.hasParam("AITgtsStrict") or alwaysStrict:
+            return filtered
+        if not filtered.isEmpty():
+            # try to fill up with other regular targets to increase chance of playing
+            for tgt in targetables:
+                if filtered.size() >= sa.getMinTargets():
+                    break
+                if filtered.contains(tgt):
+                    continue
+                filtered.add(tgt)
+            return filtered
+        return targetables
+
+    # Check if AI life is in danger/serious danger based on next expected combat
+    # assuming a loss of "payment" life
+    # call this to determine if it's safe to use a life payment spell
+    # or trigger "emergency" strategies such as holding mana for Spike Weaver or Counterspell.
+    @staticmethod
+    def aiLifeInDanger(ai, serious, payment):
+        return INTEGER_MIN_VALUE == AiCache.getCached("aiLifeInDanger", lambda: ComputerUtil.predictNextCombatsRemainingLife(ai, serious, False, payment, None),
+                [AiCache.identity, lambda a, b: a == b, lambda a, b: a == b], ai, serious, payment)
+
+    @staticmethod
+    def predictNextCombatsRemainingLife(ai, serious, checkDiff, payment, excludedBlockers, opps=None):
+        if opps is None:
+            opps = ai.getOpponents()
+        # life won't change
+        remainingLife = INTEGER_MAX_VALUE
+
+        # performance shortcut
+        # TODO if checking upcoming turn it should be a permanent effect
+        if ai.cantLoseForZeroOrLessLife():
+            return remainingLife
+
+        # TODO should also consider them as teams (with increased likelihood to be attacked by multiple if ai is biggest threat)
+        # TODO worth it to sort by creature amount for chance to terminate earlier?
+        for opp in opps:
+            combat = Combat(opp)
+            containsAttacker = False
+            thisCombat = ai.getGame().getPhaseHandler().isPlayerTurn(opp) and ai.getGame().getPhaseHandler().getPhase().isBefore(PhaseType.COMBAT_BEGIN)
+
+            # TODO !thisCombat should include cards that will phase in
+            for att in opp.getCreaturesInPlay():
+                # TODO should be limited based on how much getAttackCost the opp can pay
+                if (thisCombat and CombatUtil.canAttack(att, ai)) or (not thisCombat and ComputerUtilCombat.canAttackNextTurn(att, ai)):
+                    # TODO need to copy the card
+                    # att = ComputerUtilCombat.applyPotentialAttackCloneTriggers(att);
+                    combat.addAttacker(att, ai)
+                    containsAttacker = True
+            if not containsAttacker:
+                continue
+            # TODO if it's next turn ignore mustBlockCards
+            block = AiBlockController(ai, False)
+            # TODO for performance skip ahead to safer blocking approach (though probably only when not in checkDiff mode as that could lead to inflated prediction)
+            block.assignBlockersForCombat(combat, excludedBlockers)
+
+            # TODO predict other, noncombat sources of damage and add them to the "payment" variable.
+            # examples : Black Vise, The Rack, known direct damage spells in enemy hand, etc
+            # If added, might need a parameter to define whether we want to check all threats or combat threats.
+
+            if serious and ComputerUtilCombat.lifeInSeriousDanger(ai, combat, payment):
+                return INTEGER_MIN_VALUE
+            if not serious and ComputerUtilCombat.lifeInDanger(ai, combat, payment):
+                return INTEGER_MIN_VALUE
+
+            if checkDiff and not ai.cantLoseForZeroOrLessLife():
+                # find out the worst possible outcome
+                remainingLife = min(ComputerUtilCombat.lifeThatWouldRemain(ai, combat), remainingLife)
+        return remainingLife
+
+    @staticmethod
+    def isETBprevented(c):
+        repParams = AbilityKey.mapFromAffected(c)
+        # don't need to bother with real LKI since this is a passive check and the card isn't going anywhere
+        repParams.put(AbilityKey.CardLKI, c)
+        repParams.put(AbilityKey.Origin, c.getLastKnownZone().getZoneType())
+        repParams.put(AbilityKey.Destination, ZoneType.Battlefield)
+        # add Params for AddCounter Replacements
+        table = GameEntityCounterTable()
+        repParams.put(AbilityKey.EffectOnly, True)
+        repParams.put(AbilityKey.CounterTable, table)
+        repParams.put(AbilityKey.CounterMap, table.column(c))
+        return c.getGame().getReplacementHandler().cantHappenCheck(ReplacementType.Moved, repParams)
+
+    @staticmethod
+    def shouldSacrificeThreatenedCard(ai, c, sa):
+        if not ai.getController().isAI():
+            return False  # only makes sense for actual AI decisions
+        elif sa is not None and sa.getApi() == ApiType.Regenerate and sa.getHostCard() == c:
+            return False  # no use in sacrificing a card in an attempt to regenerate it
+        combat = ai.getGame().getCombat()
+        isThreatened = (c.isCreature() and ComputerUtil.predictCreatureWillDieThisTurn(ai, c, sa, False)
+                and not ComputerUtilCombat.willOpposingCreatureDieInCombat(ai, c, combat) and not ComputerUtilCombat.isDangerousToSacInCombat(ai, c, combat)) \
+                or (not c.isCreature() and c in ComputerUtil.predictThreatenedObjects(ai, sa))
+        return isThreatened
+
+    # some AI checks can lead to loops depending on the boardstate
+    @staticmethod
+    def protectRecursion(sa, loopableMethod, fallback):
+        unskip = False
+        if sa is not None:
+            if sa.isSkip():
+                return fallback
+            else:
+                sa.setSkip(True)
+                unskip = True
+        result = loopableMethod()
+        if unskip:
+            sa.setSkip(False)
+        return result
 ```

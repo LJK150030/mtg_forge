@@ -70,7 +70,7 @@ import forge.game.zone.ZoneType;
 import java.util.*;
 
 public class ChaosEnsuesEffect extends SpellAbilityEffect {
-    /** 311.7. Each plane card has a triggered ability that triggers Ã¢â‚¬Å“Whenever chaos ensues.Ã¢â‚¬Â These are called
+    /** 311.7. Each plane card has a triggered ability that triggers ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œWhenever chaos ensues.ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â These are called
     chaos abilities. Each one is indicated by a chaos symbol to the left of the ability, though the symbol
     itself has no special rules meaning. This ability triggers if the chaos symbol is rolled on the planar
     die (see rule 901.9b), if a resolving spell or ability says that chaos ensues, or if a resolving spell or
@@ -124,4 +124,64 @@ public class ChaosEnsuesEffect extends SpellAbilityEffect {
         }
     }
 }
+```
+
+## Python
+`forge/game/ability/effects/ChaosEnsuesEffect.py`
+
+```python
+from forge.game.Game import Game
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.trigger.Trigger import Trigger
+from forge.game.trigger.TriggerType import TriggerType
+from forge.game.zone.ZoneType import ZoneType
+
+
+class ChaosEnsuesEffect(SpellAbilityEffect):
+    """ 311.7. Each plane card has a triggered ability that triggers "Whenever chaos ensues." These are called
+    chaos abilities. Each one is indicated by a chaos symbol to the left of the ability, though the symbol
+    itself has no special rules meaning. This ability triggers if the chaos symbol is rolled on the planar
+    die (see rule 901.9b), if a resolving spell or ability says that chaos ensues, or if a resolving spell or
+    ability states that chaos ensues for a particular object. In the last case, the chaos ability can trigger
+    even if that plane card is still in the planar deck but revealed. A chaos ability is controlled by the
+    current planar controller. """
+
+    def resolve(self, sa: SpellAbility) -> None:
+        host = sa.getHostCard()
+        activator = sa.getActivatingPlayer()
+        game = activator.getGame()
+
+        if game.getActivePlanes() is None:  # not a planechase game, nothing happens
+            return
+
+        runParams = AbilityKey.mapFromPlayer(activator)
+        tweakedTrigs = {}
+
+        affected = []
+        if sa.hasParam("Defined"):
+            for c in AbilityUtils.getDefinedCards(host, sa.getParam("Defined"), sa):
+                for t in c.getTriggers():
+                    if t.getMode() == TriggerType.ChaosEnsues:  # also allow current zone for any Defined
+                        zones = t.getActiveZone()
+                        tweakedTrigs[t.getId()] = set(zones)
+                        zones.add(c.getZone().getZoneType())
+                        affected.append(c)
+                        game.getTriggerHandler().registerOneTrigger(t)
+            runParams[AbilityKey.Affected] = affected
+            if not affected:  # if no Defined has chaos ability, don't trigger non Defined
+                return
+
+        game.getTriggerHandler().runTrigger(TriggerType.ChaosEnsues, runParams, False)
+
+        for key, value in tweakedTrigs.items():
+            for c in affected:
+                for t in c.getTriggers():
+                    if t.getId() == key:
+                        zones = value
+                        t.setActiveZone(zones)
 ```

@@ -82,9 +82,9 @@ classDiagram
 
 ## Design Description
 
-CardDamageHistory is a mutable per-card bookkeeping record that tracks every combat- and damage-related event in a creature's life, scoped across three time horizons: the current combat, the current turn, and the whole game. It records how many times the card attacked, which `GameEntity` defenders it struck, whether it blocked or was blocked, and—keyed per `Player`—attack/block status since each opponent's last upkeep, supporting the many individual cards (Kytheon, The Fallen, Glen Elendra) whose abilities query this history.
+CardDamageHistory is a mutable per-card bookkeeping record that tracks every combat- and damage-related event in a creature's life, scoped across three time horizons: the current combat, the current turn, and the whole game. It records how many times the card attacked, which `GameEntity` defenders it struck, whether it blocked or was blocked, andâ€”keyed per `Player`â€”attack/block status since each opponent's last upkeep, supporting the many individual cards (Kytheon, The Fallen, Glen Elendra) whose abilities query this history.
 
-Holding no reference to its owning `Card`, it acts as a pure state container manipulated by the combat and game systems. `registerDamage` is its hub, recording damage instances as `Pair<Integer,Boolean>`, propagating to the `GameEntity` target and the global damage log, while `newTurn` and `endCombat` reset the appropriate horizons—`newTurn` also dereferencing off-battlefield `Card`s to aid garbage collection on large board states.
+Holding no reference to its owning `Card`, it acts as a pure state container manipulated by the combat and game systems. `registerDamage` is its hub, recording damage instances as `Pair<Integer,Boolean>`, propagating to the `GameEntity` target and the global damage log, while `newTurn` and `endCombat` reset the appropriate horizonsâ€”`newTurn` also dereferencing off-battlefield `Card`s to aid garbage collection on large board states.
 
 ## Source
 `forge-game/src/main/java/forge/game/card/CardDamageHistory.java`
@@ -396,4 +396,195 @@ public class CardDamageHistory {
         setCreatureGotBlockedThisCombat(false);
     }
 }
+```
+
+## Python
+`forge/game/card/CardDamageHistory.py`
+
+```python
+from forge.game.CardTraitBase import CardTraitBase
+from forge.game.GameEntity import GameEntity
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardCopyService import CardCopyService
+from forge.game.player.Player import Player
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.collect.FCollection import FCollection
+
+
+# TODO: Write javadoc for this type.
+class CardDamageHistory:
+
+    def __init__(self):
+        self.attacksThisGame = 0
+        # amount only needed for Kytheon
+        self.creatureAttackedThisCombat = 0
+        self.creatureBlockedThisCombat = False
+        self.creatureGotBlockedThisCombat = False
+
+        self.attackedThisTurn: list[GameEntity] = []
+        self.attackedBattleThisTurn = False
+
+        self.creatureAttackedLastTurnOf: list[Player] = []
+        self.NotAttackedSinceLastUpkeepOf: list[Player] = []
+        self.NotBlockedSinceLastUpkeepOf: list[Player] = []
+        self.NotBeenBlockedSinceLastUpkeepOf: list[Player] = []
+
+        self.damageDoneThisTurn: list = []
+
+        # only needed for Glen Elendra (Plane)
+        self.damagedThisCombat: list[Player] = []
+        # only needed for The Fallen
+        self.damagedThisGame: FCollection[GameEntity] = FCollection()
+        self.hasdealtDamagetoAny = False
+
+    def getHasdealtDamagetoAny(self) -> bool:
+        return self.hasdealtDamagetoAny
+
+    # used to see if an attacking creature with a triggering attack ability
+    # triggered this phase:
+    def setCreatureAttackedThisCombat(self, defender: GameEntity, numOtherAttackers: int) -> None:
+        self.creatureAttackedThisCombat = 1 + numOtherAttackers
+
+        if defender is not None:
+            self.attacksThisGame += 1
+            self.attackedThisTurn.append(defender)
+            if isinstance(defender, Card):
+                de = defender
+                if de.isBattle():
+                    self.attackedBattleThisTurn = True
+
+    def getCreatureAttackedThisCombat(self) -> int:
+        return self.creatureAttackedThisCombat
+
+    def getCreatureAttacksThisTurn(self) -> int:
+        return len(self.attackedThisTurn)
+
+    def hasAttackedThisTurn(self, e: GameEntity) -> bool:
+        return e in self.attackedThisTurn
+
+    def hasAttackedBattleThisTurn(self) -> bool:
+        return self.attackedBattleThisTurn
+
+    def getAttacksThisGame(self) -> int:
+        return self.attacksThisGame
+
+    def setCreatureAttackedLastTurnOf(self, p: Player, value: bool) -> None:
+        if value and p not in self.creatureAttackedLastTurnOf:
+            self.creatureAttackedLastTurnOf.append(p)
+        # remove should return false once no player is found in collection
+        while not value and p in self.creatureAttackedLastTurnOf:
+            self.creatureAttackedLastTurnOf.remove(p)
+
+    def getCreatureAttackedLastTurnOf(self, p: Player) -> bool:
+        return p in self.creatureAttackedLastTurnOf
+
+    def setNotAttackedSinceLastUpkeepOf(self, p: Player) -> None:
+        self.NotAttackedSinceLastUpkeepOf.append(p)
+
+    def clearNotAttackedSinceLastUpkeepOf(self) -> None:
+        self.NotAttackedSinceLastUpkeepOf.clear()
+
+    def hasAttackedSinceLastUpkeepOf(self, p: Player) -> bool:
+        return p not in self.NotAttackedSinceLastUpkeepOf
+
+    def setNotBlockedSinceLastUpkeepOf(self, p: Player) -> None:
+        self.NotBlockedSinceLastUpkeepOf.append(p)
+
+    def clearNotBlockedSinceLastUpkeepOf(self) -> None:
+        self.NotBlockedSinceLastUpkeepOf.clear()
+
+    def hasBlockedSinceLastUpkeepOf(self, p: Player) -> bool:
+        return p not in self.NotBlockedSinceLastUpkeepOf
+
+    def setNotBeenBlockedSinceLastUpkeepOf(self, p: Player) -> None:
+        self.NotBeenBlockedSinceLastUpkeepOf.append(p)
+
+    def clearNotBeenBlockedSinceLastUpkeepOf(self) -> None:
+        self.NotBeenBlockedSinceLastUpkeepOf.clear()
+
+    def hasBeenBlockedSinceLastUpkeepOf(self, p: Player) -> bool:
+        return p not in self.NotBeenBlockedSinceLastUpkeepOf
+
+    def setCreatureBlockedThisCombat(self, b: bool) -> None:
+        self.creatureBlockedThisCombat = b
+
+    def getCreatureBlockedThisCombat(self) -> bool:
+        return self.creatureBlockedThisCombat
+
+    def setCreatureGotBlockedThisCombat(self, b: bool) -> None:
+        self.creatureGotBlockedThisCombat = b
+
+    def getCreatureGotBlockedThisCombat(self) -> bool:
+        return self.creatureGotBlockedThisCombat
+
+    def getThisCombatDamaged(self) -> list[Player]:
+        return self.damagedThisCombat
+
+    def getThisGameDamaged(self) -> FCollection[GameEntity]:
+        return self.damagedThisGame
+
+    def registerDamage(self, damage: int, isCombat: bool, sourceLKI: Card, target: GameEntity, lkiCache: dict[int, Card]) -> None:
+        if damage <= 0:
+            return
+        self.damagedThisGame.add(target)
+        self.hasdealtDamagetoAny = True
+        if isCombat and isinstance(target, Player):
+            pTgt = target
+            self.damagedThisCombat.append(pTgt)
+            if pTgt.getLastTurnNr() > 0 and not pTgt.getGame().getPhaseHandler().isPlayerTurn(pTgt):
+                pTgt.setBeenDealtCombatDamageSinceLastTurn(True)
+        dmg = (damage, isCombat)
+        self.damageDoneThisTurn.append(dmg)
+        target.receiveDamage(dmg)
+
+        sourceLKI.getGame().addGlobalDamageHistory(self, dmg, sourceLKI if sourceLKI.isLKI() else CardCopyService.getLKICopy(sourceLKI, lkiCache), CardCopyService.getLKICopy(target, lkiCache))
+
+    def getDamageDoneThisTurn(self, isCombat, anyIsEnough, *args):
+        if len(args) == 6:
+            validSourceCard, validTargetEntity, source, sourceController, ctb = args[1], args[2], args[3], args[4], args[5]
+            times = args[0]
+            return self._getDamageDoneThisTurn(isCombat, anyIsEnough, times, validSourceCard, validTargetEntity, source, sourceController, ctb)
+        validSourceCard, validTargetEntity, source, sourceController, ctb = args[0], args[1], args[2], args[3], args[4]
+        return self._getDamageDoneThisTurn(isCombat, anyIsEnough, False, validSourceCard, validTargetEntity, source, sourceController, ctb)
+
+    def _getDamageDoneThisTurn(self, isCombat, anyIsEnough: bool, times: bool, validSourceCard: str, validTargetEntity: str, source: Card, sourceController: Player, ctb: CardTraitBase) -> int:
+        sum = 0
+        for damage in self.damageDoneThisTurn:
+            sourceToTarget = sourceController.getGame().getDamageLKI(damage)
+
+            if isCombat is not None and damage[1] != isCombat:
+                continue
+            if sourceToTarget is not None:
+                if validSourceCard is not None and not sourceToTarget[0].isValid(validSourceCard.split(","), sourceController, sourceToTarget[0] if source is None else source, ctb):
+                    continue
+                if validTargetEntity is not None and not sourceToTarget[1].isValid(validTargetEntity.split(","), sourceController, source, ctb):
+                    continue
+            sum += 1 if times else damage[0]
+            if anyIsEnough:
+                break
+        return sum
+
+    def getAllDmgInstances(self) -> list:
+        return self.damageDoneThisTurn
+
+    def newTurn(self) -> None:
+        self.attackedThisTurn.clear()
+        self.attackedBattleThisTurn = False
+        self.damagedThisCombat.clear()
+        self.damageDoneThisTurn.clear()
+
+        # if card already LTB we can safely dereference (allows quite a few objects to be cleaned up earlier for bigger boardstates)
+        toRemove = CardCollection()
+        for e in self.damagedThisGame:
+            if isinstance(e, Card):
+                if e.getZone().getZoneType() != ZoneType.Battlefield:
+                    toRemove.add(e)
+        self.damagedThisGame.removeAll(toRemove)
+
+    def endCombat(self) -> None:
+        self.damagedThisCombat.clear()
+        self.setCreatureAttackedThisCombat(None, -1)
+        self.setCreatureBlockedThisCombat(False)
+        self.setCreatureGotBlockedThisCombat(False)
 ```

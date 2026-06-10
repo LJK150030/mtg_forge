@@ -51,6 +51,10 @@ classDiagram
 - [[forge.game.spellability.TargetChoices|TargetChoices]]
 - [[forge.util.collect.FCollection|FCollection]]
 
+## Design Description
+
+TriggerSpellAbilityCastOrCopy is a concrete trigger that fires when a spell or ability is cast or copied, encapsulating the conditions under which such an event should activate a card's triggered ability. Extending the abstract Trigger base class, it overrides performTest to evaluate a rich set of optional parametersâ€”validating the casting player, the cast card and spell ability, targets, mana spent (colorless, snow), X costs, single-target constraints, and per-turn cast countsâ€”returning whether the event qualifies. It collaborates with SpellAbility, Card, Player, and target/mana types (TargetChoices, Mana, GameEntity) drawn from the runtime parameter map keyed by AbilityKey. setTriggeringObjects then exposes the relevant game state (the cause, its targets, activator, storm count, life paid) for downstream effect resolution. The design reflects a data-driven pattern where script-supplied parameters declaratively gate trigger behavior rather than requiring bespoke subclasses.
+
 ## Source
 `forge-game/src/main/java/forge/game/trigger/TriggerSpellAbilityCastOrCopy.java`
 
@@ -318,4 +322,181 @@ public class TriggerSpellAbilityCastOrCopy extends Trigger {
         return sb.toString();
     }
 }
+```
+
+## Python
+`forge/game/trigger/TriggerSpellAbilityCastOrCopy.py`
+
+```python
+from forge.card.ColorSet import ColorSet
+from forge.game.GameEntity import GameEntity
+from forge.game.GameObject import GameObject
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CardUtil import CardUtil
+from forge.game.mana.Mana import Mana
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.spellability.TargetChoices import TargetChoices
+from forge.game.trigger.Trigger import Trigger
+from forge.util.Expressions import Expressions
+from forge.util.Localizer import Localizer
+from forge.util.collect.FCollection import FCollection
+
+
+class TriggerSpellAbilityCastOrCopy(Trigger):
+
+    def __init__(self, params: dict[str, str], host: Card, intrinsic: bool):
+        super().__init__(params, host, intrinsic)
+
+    def performTest(self, runParams: dict[AbilityKey, object]) -> bool:
+        spellAbility = runParams.get(AbilityKey.SpellAbility)
+        if spellAbility is None:
+            print("TriggerSpellAbilityCast performTest encountered spellAbility == null. runParams2 = " + str(runParams))
+            return False
+        cast = spellAbility.getHostCard()
+
+        if self.hasParam("ValidActivatingPlayer"):
+            activator = runParams.get(AbilityKey.Activator)
+
+            if not self.matchesValidParam("ValidActivatingPlayer", activator):
+                return False
+            if self.hasParam("ActivatorThisTurnCast"):
+                compare = self.getParam("ActivatorThisTurnCast")
+                valid = self.getParamOrDefault("ValidCard", "Card")
+                thisTurnCast = CardUtil.getThisTurnCast(valid, self.getHostCard(), self, self.getHostCard().getController())
+                thisTurnCast = CardLists.filterControlledByAsList(thisTurnCast, activator)
+                left = len(thisTurnCast)
+                right = int(compare[2:])
+                if not Expressions.compare(left, compare, right):
+                    return False
+            if self.hasParam("ActivatorThisTurnCastEach"):
+                compare = self.getParam("ActivatorThisTurnCastEach")
+                valid = self.getParamOrDefault("ValidCard", "Card")
+                found = False
+                right = int(compare[2:])
+                for v in valid.split(","):
+                    if not cast.isValid(v, self.getHostCard().getController(), self.getHostCard(), self):
+                        continue
+                    thisTurnCast = CardUtil.getThisTurnCast(v, self.getHostCard(), self, self.getHostCard().getController())
+                    thisTurnCast = CardLists.filterControlledByAsList(thisTurnCast, activator)
+                    left = len(thisTurnCast)
+                    if Expressions.compare(left, compare, right):
+                        found = True
+                        break
+                if not found:
+                    return False
+        if not self.matchesValidParam("ValidCard", cast):
+            return False
+        if not self.matchesValidParam("ValidSA", spellAbility):
+            return False
+        if not self.matchesValidParam("ValidSAonCard", spellAbility, cast):
+            return False
+
+        if self.hasParam("TargetsValid"):
+            sa = spellAbility
+
+            validTgtFound = False
+            while sa is not None and not validTgtFound:
+                for ge in sa.getTargets().getTargetEntities():
+                    if self.matchesValidParam("TargetsValid", ge):
+                        validTgtFound = True
+                        break
+                sa = sa.getSubAbility()
+            if not validTgtFound:
+                return False
+
+        if self.hasParam("CanTargetOtherCondition"):
+            candidates = CardCollection()
+            targetedSA = spellAbility
+            while targetedSA is not None:
+                if targetedSA.usesTargeting() and targetedSA.getTargets().size() != 0:
+                    break
+                targetedSA = targetedSA.getSubAbility()
+            if targetedSA is None:
+                return False
+            candidateTargets = targetedSA.getTargetRestrictions().getAllCandidates(targetedSA, True)
+            for card in candidateTargets:
+                if isinstance(card, Card):
+                    candidates.add(card)
+            candidates.removeAll(targetedSA.getTargets().getTargetCards())
+            valid = self.getParam("CanTargetOtherCondition")
+            if CardLists.getValidCards(candidates, valid, spellAbility.getActivatingPlayer(), spellAbility.getHostCard(), spellAbility).isEmpty():
+                return False
+
+        if self.hasParam("HasXManaCost"):
+            if spellAbility.isActivatedAbility():
+                numX = spellAbility.getPayCosts().getCostMana().getAmountOfX() if spellAbility.getPayCosts().hasManaCost() else 0
+            else:
+                numX = cast.getManaCost().countX()
+            if numX == 0:
+                return False
+
+        # use numTargets instead?
+        if self.hasParam("IsSingleTarget"):
+            targets = set()
+            for tc in spellAbility.getAllTargetChoices():
+                targets.update(tc)
+                if len(targets) > 1:
+                    return False
+            if len(targets) != 1:
+                return False
+
+        if self.hasParam("NoColoredMana"):
+            for m in spellAbility.getPayingMana():
+                if not m.isColorless():
+                    return False
+
+        if self.hasParam("SnowSpentForCardsColor"):
+            found = False
+            for m in spellAbility.getPayingMana():
+                if not m.isSnow():
+                    continue
+                if cast.getColor().sharesColorWith(ColorSet.fromMask(m.getColor())):
+                    found = True
+                    break
+            if not found:
+                return False
+
+        if self.getSpawningAbility() is not None and self.getSpawningAbility().hasParam("TriggersWhenSpent"):
+            if spellAbility not in self.getTriggerRemembered():
+                return False
+
+        return True
+
+    def setTriggeringObjects(self, sa: SpellAbility, runParams: dict[AbilityKey, object]) -> None:
+        cause = runParams.get(AbilityKey.SpellAbility)
+        sa.setTriggeringObject(AbilityKey.Card, cause.getHostCard())
+        sa.setTriggeringObject(AbilityKey.SpellAbility, cause)
+        allTgts = cause.getAllTargetChoices()
+        if not allTgts.isEmpty():
+            saTargets = FCollection()
+            for tc in allTgts:
+                saTargets.addAll(tc.getTargetEntities())
+            sa.setTriggeringObject(AbilityKey.SpellAbilityTargets, saTargets)
+        sa.setTriggeringObject(AbilityKey.LifeAmount, cause.getAmountLifePaid())
+        sa.setTriggeringObjectsFrom(
+            runParams,
+            AbilityKey.CardLKI,
+            AbilityKey.Activator,
+            AbilityKey.CurrentStormCount,
+            AbilityKey.CurrentCastSpells
+        )
+
+    def getImportantStackObjects(self, sa: SpellAbility) -> str:
+        sb = []
+        sb.append(Localizer.getInstance().getMessage("lblCard"))
+        sb.append(": ")
+        sb.append(str(sa.getTriggeringObject(AbilityKey.Card)))
+        sb.append(", ")
+        sb.append(Localizer.getInstance().getMessage("lblActivator"))
+        sb.append(": ")
+        sb.append(str(sa.getTriggeringObject(AbilityKey.Activator)))
+        sb.append(", ")
+        sb.append(Localizer.getInstance().getMessage("lblSpellAbility"))
+        sb.append(": ")
+        sb.append(str(sa.getTriggeringObject(AbilityKey.SpellAbility)))
+        return "".join(sb)
 ```

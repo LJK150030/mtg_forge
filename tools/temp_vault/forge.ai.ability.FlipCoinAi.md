@@ -39,7 +39,7 @@ classDiagram
 
 ## Design Description
 
-FlipCoinAi is the AI decision-maker for coin-flip abilities, extending `SpellAbilityAi` to plug into Forge's ability-handling framework. Its core responsibility is deciding whether and how the computer should activate such an ability, returning an `AiAbilityDecision` that pairs a numeric score with an `AiPlayDecision` verdict. Overriding `checkApiLogic`, it branches on a card-supplied `AILogic` parameter to handle special cases—phasing out a threatened host, or targeting opponents and their creatures for "Bangchuckers" and "KillOrcs" effects—while falling back to a simple valid-target check otherwise.
+FlipCoinAi is the AI decision-maker for coin-flip abilities, extending `SpellAbilityAi` to plug into Forge's ability-handling framework. Its core responsibility is deciding whether and how the computer should activate such an ability, returning an `AiAbilityDecision` that pairs a numeric score with an `AiPlayDecision` verdict. Overriding `checkApiLogic`, it branches on a card-supplied `AILogic` parameter to handle special casesâ€”phasing out a threatened host, or targeting opponents and their creatures for "Bangchuckers" and "KillOrcs" effectsâ€”while falling back to a simple valid-target check otherwise.
 
 The class collaborates with `Player`, `Card`, and `SpellAbility` to inspect game state, candidate targets, and phase timing, and delegates threat analysis to `ComputerUtil`. The design keeps per-card behavior data-driven through the `AILogic` string rather than subclassing, and `chkDrawback` simply reuses the inherited `canPlay`, reflecting that the ability is equally reasonable as a sub-effect of another spell.
 
@@ -115,4 +115,59 @@ public class FlipCoinAi extends SpellAbilityAi {
         return canPlay(ai, sa);
     }
 }
+```
+
+## Python
+`forge/ai/ability/FlipCoinAi.py`
+
+```python
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.ai.ComputerUtil import ComputerUtil
+from forge.ai.SpellAbilityAi import SpellAbilityAi
+from forge.game.card.Card import Card
+from forge.game.phase.PhaseType import PhaseType
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+
+
+class FlipCoinAi(SpellAbilityAi):
+
+    # (non-Javadoc)
+    # @see forge.card.abilityfactory.SpellAiLogic#checkApiLogic(forge.game.player.Player, java.util.Map, forge.card.spellability.SpellAbility)
+    def checkApiLogic(self, ai: Player, sa: SpellAbility) -> AiAbilityDecision:
+        if sa.hasParam("AILogic"):
+            ailogic = sa.getParam("AILogic")
+            if ailogic == "PhaseOut":
+                if not ComputerUtil.predictThreatenedObjects(sa.getActivatingPlayer(), sa).contains(sa.getHostCard()):
+                    return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+            elif ailogic == "Bangchuckers":
+                if ai.getGame().getPhaseHandler().getPhase().isBefore(PhaseType.END_OF_TURN):
+                    return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+                sa.resetTargets()
+                for o in ai.getOpponents():
+                    if sa.canTarget(o) and o.canLoseLife() and not o.cantLoseForZeroOrLessLife():
+                        sa.getTargets().add(o)
+                        return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+                for c in ai.getOpponents().getCreaturesInPlay():
+                    if sa.canTarget(c):
+                        sa.getTargets().add(c)
+                        return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+                return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+            elif ailogic == "KillOrcs":
+                if ai.getGame().getPhaseHandler().getPhase().isBefore(PhaseType.END_OF_TURN):
+                    return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+                sa.resetTargets()
+                for c in ai.getOpponents().getCreaturesInPlay():
+                    if sa.canTarget(c):
+                        sa.getTargets().add(c)
+                        return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+                return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+        if sa.isTargetNumberValid():
+            return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+        else:
+            return AiAbilityDecision(0, AiPlayDecision.TargetingFailed)
+
+    def chkDrawback(self, ai: Player, sa: SpellAbility) -> AiAbilityDecision:
+        return self.canPlay(ai, sa)
 ```

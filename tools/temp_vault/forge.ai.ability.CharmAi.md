@@ -52,7 +52,7 @@ classDiagram
 
 ## Design Description
 
-CharmAi is the AI decision-maker for "Charm"-style spells and abilities — cards offering a menu of modal sub-abilities from which a number must be selected. Extending `SpellAbilityAi`, it overrides `checkApiLogic` to compute how many modes are required (honoring Entwine, CharmNum/MinCharmNum, and Pawprint limits), then delegates to private heuristics that pick the best `AbilitySub` options via the `AiController`/`PlayerControllerAi`, evaluating candidates with `canPlaySa` and `doTrigger` and chaining dependent or unique-target modes.
+CharmAi is the AI decision-maker for "Charm"-style spells and abilities â€” cards offering a menu of modal sub-abilities from which a number must be selected. Extending `SpellAbilityAi`, it overrides `checkApiLogic` to compute how many modes are required (honoring Entwine, CharmNum/MinCharmNum, and Pawprint limits), then delegates to private heuristics that pick the best `AbilitySub` options via the `AiController`/`PlayerControllerAi`, evaluating candidates with `canPlaySa` and `doTrigger` and chaining dependent or unique-target modes.
 
 Notable design intent is its layered fallback strategy: a strict first pass selects only clearly good modes, with progressively more permissive passes for triggers to satisfy minimum-choice requirements. It special-cases complex cards (e.g. the elaborate Triskaidekaphobia life-total logic and Cryptic Command's multi-mode handling), caches the chosen list on the `SpellAbility` to avoid re-deciding, and pre-builds the ability chain for accurate cost calculation.
 
@@ -360,4 +360,259 @@ public class CharmAi extends SpellAbilityAi {
     }
 
 }
+```
+
+## Python
+`forge/ai/ability/CharmAi.py`
+
+```python
+from forge.ai.SpellAbilityAi import SpellAbilityAi
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiController import AiController
+from forge.ai.PlayerControllerAi import PlayerControllerAi
+from forge.game.card.Card import Card
+from forge.game.player.Player import Player
+from forge.game.spellability.AbilitySub import AbilitySub
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.collect.FCollection import FCollection
+
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.ai.ComputerUtilAbility import ComputerUtilAbility
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.ability.effects.CharmEffect import CharmEffect
+from forge.util.Aggregates import Aggregates
+
+import random
+
+
+class CharmAi(SpellAbilityAi):
+    def checkApiLogic(self, ai: Player, sa: SpellAbility) -> AiAbilityDecision:
+        source = sa.getHostCard()
+        choices = CharmEffect.makePossibleOptions(sa)
+
+        if sa.isEntwine():
+            num = min = len(choices)
+        else:
+            num = AbilityUtils.calculateAmount(source, sa.getParamOrDefault("CharmNum", "1"), sa)
+            min = AbilityUtils.calculateAmount(source, sa.getParam("MinCharmNum"), sa) if sa.hasParam("MinCharmNum") else num
+
+        timingRight = sa.isTrigger()  # is there a reason to play the charm now?
+        choiceForOpp = not ai == sa.getActivatingPlayer()
+
+        # Reset the chosen list otherwise it will be locked in forever by earlier calls
+        sa.setChosenList(None)
+        sa.setSubAbility(None)
+
+        if choiceForOpp:
+            # This branch is for "An Opponent chooses" Charm spells from Alliances
+            # Current just choose the first available spell, which seem generally less disastrous for the AI.
+            chosenList = choices[1:len(choices)]
+        elif "Triskaidekaphobia" == ComputerUtilAbility.getAbilitySourceName(sa):
+            chosenList = self.chooseTriskaidekaphobia(choices, ai)
+        else:
+            # only randomize if not all possible together
+            if num < len(choices):
+                random.shuffle(choices)
+
+            #
+            # The generic chooseOptionsAi uses canPlayAi() to determine good choices
+            # which means most "bonus" effects like life-gain and random pumps will
+            # usually not be chosen. This is designed to force the AI to only select
+            # the best choice(s) since it does not actually know if it can pay for
+            # "bonus" choices (eg. Entwine/Escalate).
+            # chooseMultipleOptionsAi() uses "AILogic$Good" tags to manually identify
+            # bonus choice(s) for the AI otherwise it might be too hard to ever fulfil
+            # minimum choice requirements with canPlayAi() alone.
+            #
+            chosenList = self.chooseMultipleOptionsAi(sa, choices, ai, min) if min > 1 \
+                else self.chooseOptionsAi(sa, choices, ai, timingRight, num, min)
+
+        if len(chosenList) == 0:
+            if timingRight:
+                # Set minimum choices for triggers where chooseMultipleOptionsAi() returns null
+                chosenList = self.chooseOptionsAi(sa, choices, ai, True, num, min)
+                if len(chosenList) == 0 and min != 0:
+                    return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+            else:
+                return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+        # store the choices so they'll get reused
+        sa.setChosenList(chosenList)
+
+        if choiceForOpp:
+            return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+        if sa.isSpell():
+            # prebuild chain to improve cost calculation accuracy
+            CharmEffect.chainAbilities(sa, chosenList)
+
+        return super().checkApiLogic(ai, sa)
+
+    def chooseOptionsAi(self, sa: SpellAbility, choices: list[AbilitySub], ai: Player, isTrigger: bool, num: int, min: int) -> list[AbilitySub]:
+        chosen = []
+        aic = ai.getController().getAi()
+        # TODO unused for now, the AI doesn't know how to effectively handle repeated choices
+        allowRepeat = sa.hasParam("CanRepeatModes")
+
+        pawprintLimit = AbilityUtils.calculateAmount(sa.getHostCard(), sa.getParam("Pawprint"), sa) if sa.hasParam("Pawprint") else 0
+        if pawprintLimit > 0:
+            # try to pay for the more expensive subs first
+            choices.reverse()
+        pawprintAmount = 0
+
+        # First pass using standard canPlayAi() for good choices
+        for sub in choices:
+            self.handleDependentModes(sa, chosen, sub)
+            sub.setActivatingPlayer(ai)
+            # TODO refactor to obtain the AiAbilityDecision instead, then we can check all to sort by value
+            if AiPlayDecision.WillPlay == aic.canPlaySa(sub):
+                if pawprintLimit > 0:
+                    curPawprintAmount = AbilityUtils.calculateAmount(sub.getHostCard(), sub.getParamOrDefault("Pawprint", "0"), sub)
+                    if pawprintAmount + curPawprintAmount > pawprintLimit:
+                        continue
+                    pawprintAmount += curPawprintAmount
+                chosen.append(sub)
+                if len(chosen) == num:
+                    # maximum choices reached
+                    break
+        if isTrigger and len(chosen) < min:
+            # Second pass using doTrigger(false) to fulfill minimum choice
+            for c in chosen:
+                if c in choices:
+                    choices.remove(c)
+            for sub in choices:
+                self.handleDependentModes(sa, chosen, sub)
+                if aic.doTrigger(sub, False):
+                    chosen.append(sub)
+                    if len(chosen) == min:
+                        break
+            # Third pass using doTrigger(true) to force fill minimum choices
+            if len(chosen) < min:
+                for c in chosen:
+                    if c in choices:
+                        choices.remove(c)
+                for sub in choices:
+                    self.handleDependentModes(sa, chosen, sub)
+                    if aic.doTrigger(sub, True):
+                        chosen.append(sub)
+                        if len(chosen) == min:
+                            break
+        if len(chosen) < min:
+            # not enough choices
+            chosen.clear()
+        sa.setSubAbility(None)
+        return chosen
+
+    def chooseTriskaidekaphobia(self, choices: list[AbilitySub], ai: Player) -> list[AbilitySub]:
+        chosenList = []
+        if choices is None or len(choices) == 0:
+            return chosenList
+
+        gain = choices[0]
+        lose = choices[1]
+        opponents = ai.getOpponents()
+
+        oppTainted = False
+        allyTainted = ai.isCardInPlay("Tainted Remedy")
+        aiLife = ai.getLife()
+
+        # Check if Opponent controls Tainted Remedy
+        for p in opponents:
+            if p.isCardInPlay("Tainted Remedy"):
+                oppTainted = True
+                break
+        # if ai or ally of ai does control Tainted Remedy, prefer gain life instead of lose
+        if not allyTainted:
+            for p in ai.getAllies():
+                if p.isCardInPlay("Tainted Remedy"):
+                    allyTainted = True
+                    break
+
+        if not ai.canLoseLife() or ai.cantLose():
+            # ai can't lose life, or can't lose the game, don't think about others
+            chosenList.append(gain if allyTainted else lose)
+        elif oppTainted or ai.getGame().isCardInPlay("Rain of Gore"):
+            # Rain of Gore does negate lifegain, so don't benefit the others
+            # same for if a opponent does control Tainted Remedy
+            # but if ai can't gain life, the effects are negated
+            chosenList.append(lose if ai.canGainLife() else gain)
+        elif ai.getGame().isCardInPlay("Sulfuric Vortex"):
+            # no life gain, but extra life loss.
+            if aiLife >= 17:
+                chosenList.append(lose)
+            # try to prevent to get to 13 with extra lose
+            elif aiLife < 13 or ((aiLife - 13) % 2) == 1:
+                chosenList.append(gain)
+            else:
+                chosenList.append(lose)
+        elif ai.canGainLife() and aiLife <= 5:
+            # critical Life try to gain more
+            chosenList.append(gain)
+        elif not ai.canGainLife() and aiLife == 14:
+            # ai can't gain life, but try to avoid falling to 13
+            # but if a opponent does control Tainted Remedy its irrelevant
+            chosenList.append(lose if oppTainted else gain)
+        elif allyTainted:
+            # Tainted Remedy negation logic, try gain instead of lose
+            # because negation does turn it into lose for opponents
+            oppCritical = False
+            # an opponent is Critical = 14, and can't gain life, try to lose life instead
+            # but only if ai doesn't kill itself with that.
+            if aiLife != 14:
+                for p in opponents:
+                    if p.getLife() == 14 and not p.canGainLife() and p.canLoseLife():
+                        oppCritical = True
+                        break
+            chosenList.append(lose if (aiLife == 12 or oppCritical) else gain)
+        else:
+            # normal logic, try to gain life if its critical
+            oppCritical = False
+            # an opponent is Critical = 12, and can gain life, try to gain life instead
+            # but only if ai doesn't kill itself with that.
+            if aiLife != 12:
+                for p in opponents:
+                    if p.getLife() == 12 and p.canGainLife():
+                        oppCritical = True
+                        break
+            chosenList.append(gain if (aiLife == 14 or aiLife <= 10 or oppCritical) else lose)
+        return chosenList
+
+    # Choice selection for charms that require multiple choices (e.g. Cryptic Command)
+    def chooseMultipleOptionsAi(self, sa: SpellAbility, choices: list[AbilitySub], ai: Player, min: int) -> list[AbilitySub]:
+        goodChoice = None
+        chosen = []
+        aic = ai.getController().getAi()
+        for sub in choices:
+            self.handleDependentModes(sa, chosen, sub)
+            sub.setActivatingPlayer(ai)
+            # Assign generic good choice to fill up choices if necessary
+            if "Good" == sub.getParam("AILogic") and aic.doTrigger(sub, False):
+                goodChoice = sub
+            elif AiPlayDecision.WillPlay == aic.canPlaySa(sub):
+                chosen.append(sub)
+                if len(chosen) == min:
+                    break  # enough choices
+        # Add generic good choice if one more choice is needed
+        if len(chosen) == min - 1 and goodChoice is not None:
+            chosen.insert(0, goodChoice)  # hack to make Dromoka's Command fight targets work
+        if len(chosen) != min:
+            chosen.clear()
+        sa.setSubAbility(None)
+        return chosen
+
+    def handleDependentModes(self, sa: SpellAbility, chosen: list[AbilitySub], sub: AbilitySub) -> None:
+        if sub.hasParam("TargetUnique") and len(chosen) != 0:
+            # support "Each mode must target a different..."
+            sa.setSubAbility(None)
+            CharmEffect.chainAbilities(sa, chosen)
+            sa.appendSubAbility(sub)
+
+    def chooseSinglePlayer(self, ai: Player, sa: SpellAbility, opponents, params: dict[str, object]) -> Player:
+        return Aggregates.random(opponents)
+
+    def chkDrawbackWithSubs(self, aiPlayer: Player, ab: AbilitySub) -> AiAbilityDecision:
+        # choices were already targeted
+        if ab.getRootAbility().getChosenList() is not None:
+            return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+        return super().chkDrawbackWithSubs(aiPlayer, ab)
 ```

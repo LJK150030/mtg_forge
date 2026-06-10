@@ -96,9 +96,9 @@ classDiagram
 
 ## Design Description
 
-CardLists is a stateless utility class providing static helpers for querying, filtering, sorting, and aggregating collections of `Card` objects. It centralizes the common list operations the game engine needs—filtering by power/toughness, controller, color, type, keyword, or game-rule validity; ranking via reusable `Comparator<Card>` constants; computing aggregates such as total power, CMC, and chroma; and answering combinatorial questions like subset-sum over mana values.
+CardLists is a stateless utility class providing static helpers for querying, filtering, sorting, and aggregating collections of `Card` objects. It centralizes the common list operations the game engine needsâ€”filtering by power/toughness, controller, color, type, keyword, or game-rule validity; ranking via reusable `Comparator<Card>` constants; computing aggregates such as total power, CMC, and chroma; and answering combinatorial questions like subset-sum over mana values.
 
-Rather than subclassing any collection type, it operates on `Iterable<Card>` inputs and typically returns `CardCollection` (or plain `List<Card>` variants for cases needing duplicates), delegating predicate construction to `CardPredicates` and collaborating with engine types like `Player`, `SpellAbility`, `CardTraitBase`, `Keyword`, and `TargetRestrictions`. The design intent is a single, reusable filtering vocabulary—built atop generic `Predicate<Card>` composition—so callers across the engine express card selection declaratively instead of hand-writing loops.
+Rather than subclassing any collection type, it operates on `Iterable<Card>` inputs and typically returns `CardCollection` (or plain `List<Card>` variants for cases needing duplicates), delegating predicate construction to `CardPredicates` and collaborating with engine types like `Player`, `SpellAbility`, `CardTraitBase`, `Keyword`, and `TargetRestrictions`. The design intent is a single, reusable filtering vocabularyâ€”built atop generic `Predicate<Card>` compositionâ€”so callers across the engine express card selection declaratively instead of hand-writing loops.
 
 ## Source
 `forge-game/src/main/java/forge/game/card/CardLists.java`
@@ -622,4 +622,359 @@ public class CardLists {
         return preList.size();
     }
 }
+```
+
+## Python
+`forge/game/card/CardLists.py`
+
+```python
+from forge.card.mana.ManaCostShard import ManaCostShard
+from forge.game.CardTraitBase import CardTraitBase
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardPredicates import CardPredicates
+from forge.game.keyword.Keyword import Keyword
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.spellability.TargetRestrictions import TargetRestrictions
+from forge.game.staticability.StaticAbilityTapPowerValue import StaticAbilityTapPowerValue
+from forge.util.IterableUtil import IterableUtil
+from forge.util.MyRandom import MyRandom
+from forge.util.StreamUtil import StreamUtil
+from forge.util.collect.FCollectionView import FCollectionView
+
+import functools
+from typing import Iterable, List
+
+
+def _compare_ints(x: int, y: int) -> int:
+    return (x > y) - (x < y)
+
+
+class CardLists:
+    """
+    CardListUtil class.
+
+    Stateless utility class providing static helpers for querying, filtering,
+    sorting, and aggregating collections of Card objects.
+
+    @author Forge
+    """
+
+    @staticmethod
+    def filterToughness(in_: Iterable[Card], atLeastToughness: int) -> CardCollection:
+        return CardLists.filter(in_, lambda c: c.getNetToughness() <= atLeastToughness)
+
+    @staticmethod
+    def filterPower(in_: Iterable[Card], atLeastPower: int) -> CardCollection:
+        return CardLists.filter(in_, lambda c: c.getNetPower() >= atLeastPower)
+
+    @staticmethod
+    def filterLEPower(in_: Iterable[Card], lessthanPower: int) -> CardCollection:
+        return CardLists.filter(in_, lambda c: c.getNetPower() <= lessthanPower)
+
+    @staticmethod
+    def filterAnyCounters(in_: Iterable[Card], atLeastCounters: int) -> CardCollection:
+        return CardLists.filter(in_, lambda c: c.getNumAllCounters() >= atLeastCounters)
+
+    ToughnessComparator = functools.cmp_to_key(
+        lambda a, b: _compare_ints(a.getNetToughness(), b.getNetToughness()))
+    ToughnessComparatorInv = functools.cmp_to_key(
+        lambda a, b: _compare_ints(b.getNetToughness(), a.getNetToughness()))
+    PowerComparator = functools.cmp_to_key(
+        lambda a, b: _compare_ints(a.getNetCombatDamage(), b.getNetCombatDamage()))
+    CmcComparator = functools.cmp_to_key(
+        lambda a, b: _compare_ints(a.getCMC(), b.getCMC()))
+    CmcComparatorInv = functools.cmp_to_key(
+        lambda a, b: _compare_ints(b.getCMC(), a.getCMC()))
+
+    TextLenComparator = functools.cmp_to_key(
+        lambda a, b: _compare_ints(len(a.getView().getText()), len(b.getView().getText())))
+
+    @staticmethod
+    def sortByCmcDesc(list: List[Card]) -> None:
+        list.sort(key=CardLists.CmcComparatorInv)
+
+    @staticmethod
+    def sortByToughnessAsc(list: List[Card]) -> None:
+        list.sort(key=CardLists.ToughnessComparator)
+
+    @staticmethod
+    def sortByToughnessDesc(list: List[Card]) -> None:
+        list.sort(key=CardLists.ToughnessComparatorInv)
+
+    @staticmethod
+    def sortByPowerAsc(list: List[Card]) -> None:
+        list.sort(key=CardLists.PowerComparator)
+
+    # the higher the attack the better
+    @staticmethod
+    def sortByPowerDesc(list: List[Card]) -> None:
+        list.sort(key=CardLists.PowerComparator, reverse=True)
+
+    @staticmethod
+    def getRandomSubList(c: List[Card], amount: int) -> CardCollection:
+        if len(c) < amount:
+            return None
+
+        cs = CardCollection(c)
+        subList = CardCollection()
+        while subList.size() < amount:
+            CardLists.shuffle(cs)
+            subList.add(cs.remove(0))
+        return subList
+
+    @staticmethod
+    def shuffle(list: List[Card]) -> None:
+        MyRandom.getRandom().shuffle(list)
+
+    @staticmethod
+    def filterControlledBy(cardList: Iterable[Card], player) -> CardCollection:
+        if isinstance(player, Player):
+            return CardLists.filter(cardList, CardPredicates.isController(player))
+        return CardLists.filter(cardList, CardPredicates.isControlledByAnyOf(player))
+
+    @staticmethod
+    def filterControlledByAsList(cardList: Iterable[Card], player) -> List[Card]:
+        if isinstance(player, Player):
+            return CardLists.filterAsList(cardList, CardPredicates.isController(player))
+        return CardLists.filterAsList(cardList, CardPredicates.isControlledByAnyOf(player))
+
+    @staticmethod
+    def getValidCards(cardList: Iterable[Card], restrictions, sourceController: Player, source: Card, spellAbility: CardTraitBase) -> CardCollection:
+        if isinstance(restrictions, str):
+            restrictions = restrictions.split(",")
+        return CardLists.filter(cardList, CardPredicates.restriction(restrictions, sourceController, source, spellAbility))
+
+    @staticmethod
+    def getValidCardsAsList(cardList: Iterable[Card], restriction: str, sourceController: Player, source: Card, sa: CardTraitBase) -> List[Card]:
+        return CardLists.filterAsList(cardList, CardPredicates.restriction(restriction.split(","), sourceController, source, sa))
+
+    @staticmethod
+    def getValidCardCount(cardList: Iterable[Card], restriction: str, sourceController: Player, source: Card, sa: CardTraitBase) -> int:
+        return CardLists.count(cardList, CardPredicates.restriction(restriction.split(","), sourceController, source, sa))
+
+    @staticmethod
+    def getTargetableCards(cardList: Iterable[Card], source: SpellAbility) -> CardCollection:
+        result = CardLists.filter(cardList, CardPredicates.isTargetableBy(source))
+        # Filter more cards that can only be detected along with other candidates
+        if source.getTargets().isEmpty() and source.usesTargeting() and source.getMinTargets() >= 2:
+            removeList = CardCollection()
+            tr = source.getTargetRestrictions()
+            for card in result:
+                if tr.isSameController():
+                    found = False
+                    for card2 in result:
+                        if card != card2 and card.getController() == card2.getController():
+                            found = True
+                            break
+                    if not found:
+                        removeList.add(card)
+
+                if tr.isWithoutSameCreatureType():
+                    found = False
+                    for card2 in result:
+                        if card != card2 and not card.sharesCreatureTypeWith(card2):
+                            found = True
+                            break
+                    if not found:
+                        removeList.add(card)
+
+                if tr.isWithSameCreatureType():
+                    found = False
+                    for card2 in result:
+                        if card != card2 and card.sharesCreatureTypeWith(card2):
+                            found = True
+                            break
+                    if not found:
+                        removeList.add(card)
+
+                if tr.isWithSameCardType():
+                    found = False
+                    for card2 in result:
+                        if card != card2 and card.sharesCardTypeWith(card2):
+                            found = True
+                            break
+                    if not found:
+                        removeList.add(card)
+            result.removeAll(removeList)
+        return result
+
+    @staticmethod
+    def canSubsequentlyTarget(list: CardCollection, source: SpellAbility) -> CardCollection:
+        if source.getTargets().isEmpty():
+            return list
+
+        return CardLists.filter(list, source.canTarget)
+
+    @staticmethod
+    def getKeyword(cardList: Iterable[Card], keyword) -> CardCollection:
+        return CardLists.filter(cardList, CardPredicates.hasKeyword(keyword))
+
+    @staticmethod
+    def getNotKeyword(cardList: Iterable[Card], keyword) -> CardCollection:
+        return CardLists.filter(cardList, CardPredicates.hasKeyword(keyword).negate())
+
+    @staticmethod
+    def getAmountOfKeyword(cardList: Iterable[Card], keyword) -> int:
+        nKeyword = 0
+        for c in cardList:
+            nKeyword += c.getAmountOfKeyword(keyword)
+        return nKeyword
+
+    # cardType is like "Land" or "Goblin", returns a new CardCollection that is a
+    # subset of current CardList
+    @staticmethod
+    def getNotType(cardList: Iterable[Card], cardType: str) -> CardCollection:
+        return CardLists.filter(cardList, CardPredicates.isType(cardType).negate())
+
+    @staticmethod
+    def getType(cardList: Iterable[Card], cardType: str) -> CardCollection:
+        return CardLists.filter(cardList, CardPredicates.isType(cardType))
+
+    @staticmethod
+    def getNotColor(cardList: Iterable[Card], color: int) -> CardCollection:
+        return CardLists.filter(cardList, CardPredicates.isColor(color).negate())
+
+    @staticmethod
+    def getColor(cardList: Iterable[Card], color: int) -> CardCollection:
+        return CardLists.filter(cardList, CardPredicates.isColor(color))
+
+    @staticmethod
+    def filter(cardList: Iterable[Card], *filts) -> CardCollection:
+        if len(filts) == 2:
+            f1, f2 = filts
+            return CardCollection(IterableUtil.filter(cardList, f1.and(f2)))
+        filt = filts[0]
+        if not callable(filt) and hasattr(filt, "__iter__"):
+            return CardCollection(IterableUtil.filter(cardList, IterableUtil.and(filt)))
+        return CardCollection(IterableUtil.filter(cardList, filt))
+
+    @staticmethod
+    def filterAsList(cardList: Iterable[Card], *filts) -> List[Card]:
+        if len(filts) == 2:
+            f1, f2 = filts
+            return list(IterableUtil.filter(cardList, f1.and(f2)))
+        filt = filts[0]
+        if not callable(filt) and hasattr(filt, "__iter__"):
+            return list(IterableUtil.filter(cardList, IterableUtil.and(filt)))
+        return list(IterableUtil.filter(cardList, filt))
+
+    @staticmethod
+    def count(cardList: Iterable[Card], filt) -> int:
+        if cardList is None:
+            return 0
+
+        count = 0
+        for c in cardList:
+            if filt.test(c):
+                count += 1
+        return count
+
+    @staticmethod
+    def getCardsWithHighestCMC(cardList: Iterable[Card]) -> CardCollection:
+        tiedForHighest = CardCollection()
+        highest = 0
+        for crd in cardList:
+            # do not check for Split Card anymore
+            curCmc = crd.getCMC()
+
+            if curCmc > highest:
+                highest = curCmc
+                tiedForHighest.clear()
+            if curCmc >= highest:
+                tiedForHighest.add(crd)
+        return tiedForHighest
+
+    @staticmethod
+    def getCardsWithLowestCMC(cardList: Iterable[Card]) -> CardCollection:
+        tiedForLowest = CardCollection()
+        lowest = 25
+        for crd in cardList:
+            # do not check for Split Card anymore
+            curCmc = crd.getCMC()
+
+            if curCmc < lowest:
+                lowest = curCmc
+                tiedForLowest.clear()
+            if curCmc <= lowest:
+                tiedForLowest.add(crd)
+        return tiedForLowest
+
+    @staticmethod
+    def getTotalPower(cardList: Iterable[Card], ctb: CardTraitBase) -> int:
+        total = 0
+        for crd in cardList:
+            if StaticAbilityTapPowerValue.withToughness(crd, ctb):
+                total += max(0, crd.getNetToughness())
+            else:
+                m = StaticAbilityTapPowerValue.getMod(crd, ctb)
+                total += max(0, crd.getNetPower() + m)
+        return total
+
+    @staticmethod
+    def getTotalChroma(cardList: Iterable[Card], colorCode: int) -> int:
+        colorOcurrencices = 0
+        for c0 in cardList:
+            for sh in c0.getManaCost():
+                if sh.isColor(colorCode):
+                    colorOcurrencices += 1
+        return colorOcurrencices
+
+    @staticmethod
+    def getTotalCMC(cardList: Iterable[Card]) -> int:
+        total = 0
+        for crd in cardList:
+            total += max(0, crd.getCMC())
+        return total
+
+    @staticmethod
+    def cmcCanSumTo(sum: int, cardList: Iterable[Card]) -> bool:
+        numList = []
+        for c in cardList:
+            num = c.getCMC()
+            if num == sum:
+                return True
+            elif num < sum:
+                numList.append(num)
+        if not numList:
+            return False
+        numList.sort()
+
+        return CardLists.isSubsetSum(numList, sum)
+
+    @staticmethod
+    def isSubsetSum(numList: List[int], sum: int) -> bool:
+        if sum == 0:
+            return True
+        size = len(numList)
+        if size == 0:
+            return False
+
+        last = numList[size - 1]
+        numList.remove(last)
+        # If last element is greater than sum, then ignore it
+        if last > sum:
+            return CardLists.isSubsetSum(numList, sum)
+
+        # Else, check if sum can be obtained by:
+        # (a) excluding the last element
+        # (b) including the last element
+        return CardLists.isSubsetSum(numList, sum) or CardLists.isSubsetSum(numList, sum - last)
+
+    @staticmethod
+    def getDifferentNamesCount(cardList: Iterable[Card]) -> int:
+        # first part the ones with SpyKit, and already collect them while deduping by name
+        parted = {True: [], False: []}
+        for c in cardList:
+            list = parted[c.hasNonLegendaryCreatureNames()]
+            if not c.hasNoName() and not any(c.sharesNameWith(c2) for c2 in list):
+                list.append(c)
+        preList = parted[False]
+
+        # then try to apply the SpyKit ones
+        for c in parted[True]:
+            if not any(c.sharesNameWith(c2) for c2 in preList):
+                preList.append(c)
+        return len(preList)
 ```

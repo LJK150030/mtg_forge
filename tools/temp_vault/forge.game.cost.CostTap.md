@@ -149,3 +149,61 @@ public class CostTap extends CostPart {
     }
 }
 ```
+
+## Python
+`forge/game/cost/CostTap.py`
+
+```python
+from forge.game.cost.CostPart import CostPart
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.cost.ICostVisitor import ICostVisitor
+from forge.game.cost.PaymentDecision import PaymentDecision
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.trigger.TriggerType import TriggerType
+
+
+class CostTap(CostPart):
+    """The Class CostTap."""
+
+    serialVersionUID = 1
+
+    def __init__(self):
+        """Instantiates a new cost tap."""
+        pass
+
+    def paymentOrder(self) -> int:
+        return -1
+
+    def isUndoable(self) -> bool:
+        return True
+
+    def isReusable(self) -> bool:
+        return True
+
+    def isRenewable(self) -> bool:
+        return True
+
+    def toString(self) -> str:
+        return "{T}"
+
+    def refund(self, source: Card) -> None:
+        source.setTapped(False)
+
+    def canPay(self, ability: SpellAbility, payer: Player, effect: bool) -> bool:
+        source = ability.getHostCard()
+        return source.canTap() and not source.isAbilitySick()
+
+    def payAsDecided(self, payer: Player, decision: PaymentDecision, ability: SpellAbility, effect: bool) -> bool:
+        hostCard = ability.getHostCard()
+        if hostCard.tap(True, ability, payer):
+            runParams = AbilityKey.newMap()
+            runParams[AbilityKey.Cards] = CardCollection(hostCard)
+            payer.getGame().getTriggerHandler().runTrigger(TriggerType.TapAll, runParams, False)
+        return True
+
+    def accept(self, visitor: ICostVisitor):
+        return visitor.visit(self)
+```

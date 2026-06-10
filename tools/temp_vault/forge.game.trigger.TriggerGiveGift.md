@@ -37,6 +37,12 @@ classDiagram
 - [[forge.game.card.Card|Card]]
 - [[forge.game.spellability.SpellAbility|SpellAbility]]
 
+## Design Description
+
+TriggerGiveGift is a concrete trigger that fires when a player is given a "gift" (a mechanic granting an opponent some benefit in exchange). As a subclass of Trigger, it specializes the base trigger framework for this specific event by overriding the hook methods the engine invokes during trigger evaluation: setTriggeringObjects copies the relevant Player from the run parameters into the firing SpellAbility, performTest gates activation through the ValidPlayer restriction, and getImportantStackObjects produces a localized, player-facing summary of the triggering player.
+
+The design follows the engine's template-method convention, keeping all trigger-type knowledge in small, focused overrides while delegating construction and shared behavior to the superclass. It collaborates with AbilityKey to key its single triggering object (the Player), with Card as the trigger's host, and with SpellAbility as the carrier of triggering state, and it relies on Localizer to keep displayed text translatable.
+
 ## Source
 `forge-game/src/main/java/forge/game/trigger/TriggerGiveGift.java`
 
@@ -110,4 +116,37 @@ public class TriggerGiveGift extends Trigger {
     }
 
 }
+```
+
+## Python
+`forge/game/trigger/TriggerGiveGift.py`
+
+```python
+from forge.game.trigger.Trigger import Trigger
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Localizer import Localizer
+
+
+class TriggerGiveGift(Trigger):
+
+    def __init__(self, params: dict[str, str], host: Card, intrinsic: bool):
+        super().__init__(params, host, intrinsic)
+
+    def getImportantStackObjects(self, sa: SpellAbility) -> str:
+        sb = []
+        sb.append(Localizer.getInstance().getMessage("lblPlayer"))
+        sb.append(": ")
+        sb.append(str(sa.getTriggeringObject(AbilityKey.Player)))
+        return "".join(sb)
+
+    def setTriggeringObjects(self, sa: SpellAbility, runParams: dict[AbilityKey, object]) -> None:
+        sa.setTriggeringObjectsFrom(runParams, AbilityKey.Player)
+
+    def performTest(self, runParams: dict[AbilityKey, object]) -> bool:
+        if not self.matchesValidParam("ValidPlayer", runParams.get(AbilityKey.Player)):
+            return False
+
+        return True
 ```

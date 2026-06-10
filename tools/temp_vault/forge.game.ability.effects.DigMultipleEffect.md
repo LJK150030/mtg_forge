@@ -48,7 +48,7 @@ classDiagram
 
 ## Design Description
 
-DigMultipleEffect is a resolution handler in Forge's ability-effect framework, extending `SpellAbilityEffect` to implement the "dig" mechanic: looking at the top N cards of a source zone (typically the library) and distributing them between two destination zones. For each chosen or targeted player it reveals the dug cards, filters them against a `ChangeValid` specification into a category map, prompts the controller to select cards, and moves selections to a primary destination while sending the remainder to a secondary one. It supports extensive parameterization—optional choices, library positioning, tapped entry, face-down exile, imprinting, and remembering—reflecting the data-driven design of Forge's card scripts.
+DigMultipleEffect is a resolution handler in Forge's ability-effect framework, extending `SpellAbilityEffect` to implement the "dig" mechanic: looking at the top N cards of a source zone (typically the library) and distributing them between two destination zones. For each chosen or targeted player it reveals the dug cards, filters them against a `ChangeValid` specification into a category map, prompts the controller to select cards, and moves selections to a primary destination while sending the remainder to a secondary one. It supports extensive parameterizationâ€”optional choices, library positioning, tapped entry, face-down exile, imprinting, and rememberingâ€”reflecting the data-driven design of Forge's card scripts.
 
 Collaborating heavily with zone and card abstractions (`PlayerZone`, `ZoneType`, `CardCollection`), it accumulates all zone transitions in a `CardZoneTable` and fires `triggerChangesZoneAll` once at the end, ensuring zone-change triggers see the batch atomically rather than per card.
 
@@ -248,4 +248,162 @@ public class DigMultipleEffect extends SpellAbilityEffect {
     }
 
 }
+```
+
+## Python
+`forge/game/ability/effects/DigMultipleEffect.py`
+
+```python
+from typing import Map
+
+from forge.game.Game import Game
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CardZoneTable import CardZoneTable
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.PlayerZone import PlayerZone
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.Localizer import Localizer
+
+
+class DigMultipleEffect(SpellAbilityEffect):
+
+    def resolve(self, sa: SpellAbility) -> None:
+        host = sa.getHostCard()
+        player = sa.getActivatingPlayer()
+        game = player.getGame()
+        digNum = AbilityUtils.calculateAmount(host, sa.getParam("DigNum"), sa)
+
+        srcZone = ZoneType.smartValueOf(sa.getParam("SourceZone")) if sa.hasParam("SourceZone") else ZoneType.Library
+
+        destZone1 = ZoneType.smartValueOf(sa.getParam("DestinationZone")) if sa.hasParam("DestinationZone") else ZoneType.Hand
+        destZone2 = ZoneType.smartValueOf(sa.getParam("DestinationZone2")) if sa.hasParam("DestinationZone2") else ZoneType.Library
+        libraryPosition = int(sa.getParam("LibraryPosition")) if sa.hasParam("LibraryPosition") else -1
+        libraryPosition2 = int(sa.getParam("LibraryPosition2")) if sa.hasParam("LibraryPosition2") else -1
+
+        changeValid = sa.getParamOrDefault("ChangeValid", "")
+        chooseOptional = sa.hasParam("Optional")
+
+        table = CardZoneTable()
+        for chooser in self.getDefinedPlayersOrTargeted(sa):
+            if not chooser.isInGame():
+                continue
+            top = CardCollection()
+            rest = CardCollection()
+            sourceZone = chooser.getZone(srcZone)
+
+            numToDig = min(digNum, sourceZone.size())
+            for i in range(numToDig):
+                top.add(sourceZone.get(i))
+
+            if top.isEmpty():
+                continue
+
+            rest.addAll(top)
+
+            if sa.hasParam("Reveal"):
+                game.getAction().reveal(top, chooser, False)
+            else:
+                # reveal cards first
+                game.getAction().revealTo(top, chooser)
+
+            validMap: dict[str, CardCollection] = {}
+
+            for valid in changeValid.split(","):
+                list = CardLists.getValidCards(top, valid, host.getController(), host, sa)
+                if not list.isEmpty():
+                    validMap[valid] = list
+
+            if not validMap:
+                chooser.getController().notifyOfValue(sa, None, Localizer.getInstance().getMessage("lblNoValidCards"))
+            else:
+                chosen = None
+                # ensure choosing something when possible and not optional
+                while True:
+                    chosen = chooser.getController().chooseCardsForEffectMultiple(validMap, sa,
+                            Localizer.getInstance().getMessage("lblChooseCards"), chooseOptional)
+
+                    if not chosen.isEmpty():
+                        game.getAction().reveal(chosen, chooser, True,
+                                Localizer.getInstance().getMessage("lblPlayerPickedCardFrom", chooser.getName()))
+                        break
+                    if chooseOptional:
+                        break
+                    chooser.getController().notifyOfValue(sa, None,
+                            Localizer.getInstance().getMessage("lblMustChoose"))
+
+                if sa.hasParam("ChooseAmount") or sa.hasParam("ChosenZone"):
+                    amount = AbilityUtils.calculateAmount(host, sa.getParamOrDefault("ChooseAmount", "1"), sa)
+                    chosenZone = ZoneType.smartValueOf(sa.getParam("ChosenZone")) if sa.hasParam("ChosenZone") else ZoneType.Battlefield
+
+                    extraChosen = chooser.getController().chooseCardsForEffect(chosen, sa, Localizer.getInstance().getMessage("lblChooseCards"), amount, amount, False, None)
+                    if not extraChosen.isEmpty():
+                        game.getAction().reveal(extraChosen, chooser, True, Localizer.getInstance().getMessage("lblPlayerPickedCardFrom", chooser.getName()))
+
+                    for c in extraChosen:
+                        origin = c.getZone().getZoneType()
+                        zone = c.getOwner().getZone(chosenZone)
+                        chosen.remove(c)
+                        rest.remove(c)
+                        c = game.getAction().moveTo(zone, c, sa)
+                        if not origin.equals(c.getZone().getZoneType()):
+                            table.put(origin, c.getZone().getZoneType(), c)
+
+                for c in chosen:
+                    origin = c.getZone().getZoneType()
+                    zone = c.getOwner().getZone(destZone1)
+
+                    if not sa.hasParam("ChangeLater"):
+                        if zone.getZoneType().isDeck():
+                            c = game.getAction().moveTo(destZone1, c, libraryPosition, sa, AbilityKey.newMap())
+                        else:
+                            if destZone1.equals(ZoneType.Battlefield):
+                                if sa.hasParam("Tapped"):
+                                    c.setTapped(True)
+                            c = game.getAction().moveTo(zone, c, sa)
+                        if not origin.equals(c.getZone().getZoneType()):
+                            table.put(origin, c.getZone().getZoneType(), c)
+
+                    if sa.hasParam("ExileFaceDown"):
+                        c.turnFaceDown(True)
+                    if sa.hasParam("Imprint"):
+                        host.addImprintedCard(c)
+                    if sa.hasParam("ForgetOtherRemembered"):
+                        host.clearRemembered()
+                    if sa.hasParam("RememberChanged"):
+                        host.addRemembered(c)
+                    rest.remove(c)
+
+            # now, move the rest to destZone2
+            if not sa.hasParam("ChangeLater"):
+                if destZone2.isDeck() or destZone2 == ZoneType.Graveyard:
+                    afterOrder = rest
+                    if sa.hasParam("RestRandomOrder"):
+                        CardLists.shuffle(afterOrder)
+                    if libraryPosition2 != -1:
+                        # Closest to top
+                        Collections.reverse(afterOrder)
+                    for c in afterOrder:
+                        origin = c.getZone().getZoneType()
+                        m = game.getAction().moveTo(destZone2, c, libraryPosition2, sa, AbilityKey.newMap())
+                        if m is not None and not origin.equals(m.getZone().getZoneType()):
+                            table.put(origin, m.getZone().getZoneType(), m)
+                else:
+                    # just move them randomly
+                    for c in rest:
+                        origin = c.getZone().getZoneType()
+                        toZone = c.getOwner().getZone(destZone2)
+                        c = game.getAction().moveTo(toZone, c, sa)
+                        if not origin.equals(c.getZone().getZoneType()):
+                            table.put(origin, c.getZone().getZoneType(), c)
+            if sa.hasParam("ImprintRest"):
+                host.addImprintedCards(rest)
+        # table trigger there
+        table.triggerChangesZoneAll(game, sa)
 ```

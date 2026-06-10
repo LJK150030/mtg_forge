@@ -82,6 +82,12 @@ classDiagram
 - [[forge.game.mana.ManaCostBeingPaid.ShardCount|ShardCount]]
 - [[forge.game.mana.ManaPool|ManaPool]]
 
+## Design Description
+
+ManaCostBeingPaid models the mutable, in-progress state of a mana cost as it is being settled during payment, tracking the still-unpaid shards (grouped by ManaCostShard with per-shard total and X counts via the inner ShardCount), the count of pending {X} symbols, a sunburst bitmask of colors spent, and which colors paid for colored-X portions. Constructed from an immutable ManaCost (or copied), it exposes the payment lifecycle: querying what colors or Mana a cost still needs, applying payments through payMana/ai_payMana/payManaViaConvoke, and reporting completion via isPaid.
+
+It delegates color-matching rules to the collaborating ManaPool and Mana, and uses ManaCostShard to classify hybrid, Phyrexian, snow, and 2-generic shards. Notable design intent includes a priority-based shard selection (getPayPriority/tryPayMana) that picks the most economical shard to pay, careful X-cost accounting, and complex fallback logic in decreaseShard for substituting hybrid shards. The inner ManaCostBeingPaidIterator implements IParserManaCost to convert the remaining cost back into an immutable ManaCost via toManaCost.
+
 ## Source
 `forge-game/src/main/java/forge/game/mana/ManaCostBeingPaid.java`
 
@@ -824,4 +830,528 @@ public class ManaCostBeingPaid {
         return false;
     }
 }
+```
+
+## Python
+`forge/game/mana/ManaCostBeingPaid.py`
+
+```python
+from forge.card.ColorSet import ColorSet
+from forge.card.MagicColor import MagicColor
+from forge.card.mana.IParserManaCost import IParserManaCost
+from forge.card.mana.ManaAtom import ManaAtom
+from forge.card.mana.ManaCost import ManaCost
+from forge.card.mana.ManaCostShard import ManaCostShard
+from forge.game.mana.Mana import Mana
+from forge.game.mana.ManaPool import ManaPool
+
+
+class ManaCostBeingPaid:
+    class ManaCostBeingPaidIterator(IParserManaCost):
+        def __init__(self, outer):
+            self.outer = outer
+            self.mch = iter(list(outer.unpaidShards.keys()))
+            self.nextShard = None
+            self.remainingShards = 0
+            self.hasSentX = False
+
+        def remove(self):
+            raise NotImplementedError()
+
+        def next(self):
+            if self.remainingShards == 0:
+                raise Exception("All shards were depleted, call hasNext()")
+            self.remainingShards -= 1
+            return self.nextShard
+
+        def hasNext(self):
+            if self.remainingShards > 0:
+                return True
+            if not self.hasSentX:
+                if self.nextShard != ManaCostShard.X and self.outer.cntX > 0:
+                    self.nextShard = ManaCostShard.X
+                    self.remainingShards = self.outer.cntX
+                    return True
+                else:
+                    self.hasSentX = True
+            try:
+                self.nextShard = next(self.mch)
+            except StopIteration:
+                return False
+            if self.nextShard == ManaCostShard.GENERIC:
+                return self.hasNext()  # skip generic
+            self.remainingShards = self.outer.unpaidShards.get(self.nextShard).totalCount
+            return True
+
+        def getTotalGenericCost(self):
+            c = self.outer.unpaidShards.get(ManaCostShard.GENERIC)
+            if c is None:
+                return -1 if (len(self.outer.unpaidShards) == 0 and self.outer.cntX == 0) else 0
+            return c.totalCount
+
+    class ShardCount:
+        def __init__(self, copy=None):
+            if copy is not None:
+                self.xCount = copy.xCount
+                self.totalCount = copy.totalCount
+            else:
+                self.xCount = 0
+                self.totalCount = 0
+
+        def __str__(self):
+            return "{x=" + str(self.xCount) + " total=" + str(self.totalCount) + "}"
+
+    def __init__(self, source):
+        # holds Mana_Part objects
+        # ManaPartColor is stored before ManaPartGeneric
+        self.unpaidShards = {}
+        self.xManaCostPaidByColor = None
+        self.sunburstMap = 0
+        self.cntX = 0
+
+        if isinstance(source, ManaCostBeingPaid):
+            manaCostBeingPaid = source
+            for k, v in manaCostBeingPaid.unpaidShards.items():
+                self.unpaidShards[k] = ManaCostBeingPaid.ShardCount(v)
+            if manaCostBeingPaid.xManaCostPaidByColor is not None:
+                self.xManaCostPaidByColor = dict(manaCostBeingPaid.xManaCostPaidByColor)
+            self.sunburstMap = manaCostBeingPaid.sunburstMap
+            self.cntX = manaCostBeingPaid.cntX
+        else:
+            manaCost = source
+            if manaCost is None:
+                return
+            for shard in manaCost:
+                if shard == ManaCostShard.X:
+                    self.cntX += 1
+                else:
+                    self.increaseShard(shard, 1, False)
+            self.increaseGenericMana(manaCost.getGenericCost())
+
+    def getXManaCostPaidByColor(self):
+        return self.xManaCostPaidByColor
+
+    def getSunburst(self):
+        return ColorSet.fromMask(self.sunburstMap).countColors()
+
+    def getColorsPaid(self):
+        return self.sunburstMap
+
+    def containsPhyrexianMana(self):
+        for shard in self.unpaidShards.keys():
+            if shard.isPhyrexian():
+                return True
+        return False
+
+    def containsOnlyPhyrexianMana(self):
+        for shard in self.unpaidShards.keys():
+            if not shard.isPhyrexian():
+                return False
+        return True
+
+    def payPhyrexian(self):
+        phy = None
+        for mcs in self.unpaidShards.keys():
+            if mcs.isPhyrexian():
+                phy = mcs
+                break
+
+        if phy is None:
+            return False
+
+        self.decreaseShard(phy, 1)
+        return True
+
+    # takes a Short Color and returns true if it exists in the mana cost.
+    # Easier for split costs
+    def needsColor(self, colorMask, pool):
+        for shard in self.unpaidShards.keys():
+            if shard == ManaCostShard.GENERIC:
+                continue
+            if shard.isOr2Generic():
+                if (shard.getColorMask() & colorMask) != 0:
+                    return True
+            elif pool.canPayForShardWithColor(shard, colorMask):
+                return True
+        return False
+
+    # isNeeded(String) still used by the Computer, might have problems activating Snow abilities
+    def isAnyPartPayableWith(self, colorMask, pool):
+        for shard in self.unpaidShards.keys():
+            if pool.canPayForShardWithColor(shard, colorMask):
+                return True
+        return False
+
+    def isNeeded(self, paid, pool):
+        for shard in self.unpaidShards.keys():
+            if ManaCostBeingPaid.canBePaidWith(shard, paid, pool, self.xManaCostPaidByColor):
+                return True
+        return False
+
+    def isPaid(self):
+        return len(self.unpaidShards) == 0
+
+    def setXManaCostPaid(self, xPaid, xColor):
+        xCost = xPaid * self.cntX
+        self.cntX = 0
+
+        if xColor is None or xColor == "":
+            shard = ManaCostShard.GENERIC
+        else:
+            shard = ManaCostShard.parseNonGeneric(xColor)
+        self.increaseShard(shard, xCost, True)
+
+    def increaseGenericMana(self, toAdd):
+        self.increaseShard(ManaCostShard.GENERIC, toAdd, False)
+
+    def increaseShard(self, shard, toAdd, forX=False):
+        if toAdd <= 0:
+            return
+
+        sc = self.unpaidShards.get(shard)
+        if sc is None:
+            sc = ManaCostBeingPaid.ShardCount()
+            self.unpaidShards[shard] = sc
+        if forX:
+            sc.xCount += toAdd
+        sc.totalCount += toAdd
+
+    def decreaseGenericMana(self, manaToSubtract):
+        self.decreaseShard(ManaCostShard.GENERIC, manaToSubtract)
+
+    def decreaseShard(self, shard, manaToSubtract):
+        if manaToSubtract <= 0:
+            return
+
+        sc = self.unpaidShards.get(shard)
+        if sc is None:
+            # only special rules for Mono Color Shards and for Generic
+            if not shard.isMonoColor() and shard != ManaCostShard.GENERIC:
+                return
+            otherSubtract = manaToSubtract
+            toRemove = []
+
+            # TODO move that for parts into extra function if able
+
+            # try to remove multicolored hybrid shards
+            # for that, this shard need to be mono colored
+            if shard.isMonoColor():
+                for eShard, sc in self.unpaidShards.items():
+                    if eShard != ManaCostShard.COLORED_X and eShard.isOfKind(shard.getShard()) and eShard.isMultiColor():
+                        if otherSubtract >= sc.totalCount:
+                            otherSubtract -= sc.totalCount
+                            sc.xCount = sc.totalCount = 0
+                            toRemove.append(eShard)
+                        else:
+                            sc.totalCount -= otherSubtract
+                            if sc.xCount > sc.totalCount:
+                                sc.xCount = sc.totalCount
+                            # nothing more left in otherSubtract
+                            break
+
+                # try to remove 2 generic hybrid shards with colored shard
+                for eShard, sc in self.unpaidShards.items():
+                    if eShard.isOfKind(shard.getShard()) and eShard.isOr2Generic():
+                        if otherSubtract >= sc.totalCount:
+                            otherSubtract -= sc.totalCount
+                            sc.xCount = sc.totalCount = 0
+                            toRemove.append(eShard)
+                        else:
+                            sc.totalCount -= otherSubtract
+                            if sc.xCount > sc.totalCount:
+                                sc.xCount = sc.totalCount
+                            # nothing more left in otherSubtract
+                            break
+
+                # try to remove colorless hybrid shards with colored shard
+                for eShard, sc in self.unpaidShards.items():
+                    if eShard.isOfKind(shard.getShard()) and eShard.isColorless():
+                        if otherSubtract >= sc.totalCount:
+                            otherSubtract -= sc.totalCount
+                            sc.xCount = sc.totalCount = 0
+                            toRemove.append(eShard)
+                        else:
+                            sc.totalCount -= otherSubtract
+                            if sc.xCount > sc.totalCount:
+                                sc.xCount = sc.totalCount
+                            # nothing more left in otherSubtract
+                            break
+
+                # try to remove phyrexian shards with colored shard
+                for eShard, sc in self.unpaidShards.items():
+                    if eShard.isOfKind(shard.getShard()) and eShard.isPhyrexian():
+                        if otherSubtract >= sc.totalCount:
+                            otherSubtract -= sc.totalCount
+                            sc.xCount = sc.totalCount = 0
+                            toRemove.append(eShard)
+                        else:
+                            sc.totalCount -= otherSubtract
+                            if sc.xCount > sc.totalCount:
+                                sc.xCount = sc.totalCount
+                            # nothing more left in otherSubtract
+                            break
+            elif shard == ManaCostShard.GENERIC:
+                # try to remove 2 generic hybrid shards WITH generic shard
+                shardAmount = otherSubtract // 2
+                for eShard, sc in self.unpaidShards.items():
+                    if eShard.isOr2Generic():
+                        if shardAmount >= sc.totalCount:
+                            shardAmount -= sc.totalCount
+                            otherSubtract -= sc.totalCount * 2
+                            sc.xCount = sc.totalCount = 0
+                            toRemove.append(eShard)
+                        else:
+                            sc.totalCount -= shardAmount
+                            if sc.xCount > sc.totalCount:
+                                sc.xCount = sc.totalCount
+                            # nothing more left in otherSubtract
+                            break
+                    elif sc.xCount > 0:  # X part that can only be paid by specific color
+                        if otherSubtract >= sc.xCount:
+                            otherSubtract -= sc.xCount
+                            sc.totalCount -= sc.xCount
+                            sc.xCount = 0
+                            if sc.totalCount == 0:
+                                toRemove.append(eShard)
+                        else:
+                            sc.totalCount -= otherSubtract
+                            sc.xCount -= otherSubtract
+                            # nothing more left in otherSubtract
+                            break
+
+            for k in toRemove:
+                if k in self.unpaidShards:
+                    del self.unpaidShards[k]
+            # System.out.println("Tried to subtract a " + shard.toString() + " shard that is not present in this ManaCostBeingPaid");
+            return
+
+        difference = manaToSubtract - sc.totalCount
+
+        if manaToSubtract >= sc.totalCount:
+            sc.xCount = 0
+            sc.totalCount = 0
+            del self.unpaidShards[shard]
+            # try to remove difference from the rest
+            self.decreaseShard(shard, difference)
+            return
+
+        sc.totalCount -= manaToSubtract
+        if sc.xCount > sc.totalCount:
+            sc.xCount = sc.totalCount  # only decrease xCount if it would otherwise be greater than totalCount
+
+    def getGenericManaAmount(self):
+        sc = self.unpaidShards.get(ManaCostShard.GENERIC)
+        if sc is not None:
+            return sc.totalCount
+        return 0
+
+    def ai_payMana(self, mana, pool):
+        colorMask = ManaAtom.fromName(mana)
+        if not self.isAnyPartPayableWith(colorMask, pool):
+            # System.out.println("ManaCost : addMana() error, mana not needed - " + mana);
+            return False
+
+        def predCanBePaid(ms):
+            # Check Colored X and see if the color is already used
+            if ms == ManaCostShard.COLORED_X and not ManaCostBeingPaid.canColoredXShardBePaidByColor(MagicColor.toShortString(colorMask), self.xManaCostPaidByColor):
+                return False
+            return pool.canPayForShardWithColor(ms, colorMask)
+
+        payable = [ms for ms in self.unpaidShards.keys() if predCanBePaid(ms)]
+        return self.tryPayMana(colorMask, payable, pool.getPossibleColorUses(colorMask)) is not None
+
+    def payMana(self, mana, pool):
+        if not self.isNeeded(mana, pool):
+            raise Exception("ManaCost : addMana() error, mana not needed - " + str(mana))
+
+        def predCanBePaid(ms):
+            return ManaCostBeingPaid.canBePaidWith(ms, mana, pool, self.xManaCostPaidByColor)
+
+        inColor = mana.getColor()
+        outColor = pool.getPossibleColorUses(inColor)
+        payable = [ms for ms in self.unpaidShards.keys() if predCanBePaid(ms)]
+        return self.tryPayMana(inColor, payable, outColor) is not None
+
+    def payManaViaConvoke(self, color):
+        def predCanBePaid(ms):
+            return not ms.isSnow() and not ms.isColorless() and ms.canBePaidWithManaOfColor(color)
+
+        payable = [ms for ms in self.unpaidShards.keys() if predCanBePaid(ms)]
+        return self.tryPayMana(color, payable, 0xFF)
+
+    def getShardToPayByPriority(self, payableShards, possibleUses):
+        choice = []
+        priority = -2147483648
+        for toPay in payableShards:
+            # if m is a better to pay than choice
+            toPayPriority = ManaCostBeingPaid.getPayPriority(toPay, possibleUses)
+            if toPayPriority > priority:
+                priority = toPayPriority
+                choice.clear()
+            if toPayPriority == priority:
+                choice.append(toPay)
+        if len(choice) == 0:
+            return None
+
+        return choice[0] if choice else None
+
+    def tryPayMana(self, colorMask, payableShards, possibleUses):
+        chosenShard = self.getShardToPayByPriority(payableShards, possibleUses)
+        if chosenShard is None:
+            return None
+        sc = self.unpaidShards.get(chosenShard)
+        if sc is not None and sc.xCount > 0:
+            # if there's any X part of the cost for the chosen shard, pay it off first and track what color was spent to pay X
+            sc.xCount -= 1
+            color = MagicColor.toShortString(colorMask)
+            if self.xManaCostPaidByColor is None:
+                self.xManaCostPaidByColor = {}
+            self.xManaCostPaidByColor[color] = self.xManaCostPaidByColor.get(color, 0) + 1
+
+        self.decreaseShard(chosenShard, 1)
+        if chosenShard.isOr2Generic() and (0 == (chosenShard.getColorMask() & possibleUses)):
+            self.increaseGenericMana(1)
+
+        self.sunburstMap |= colorMask
+        return chosenShard
+
+    @staticmethod
+    def getPayPriority(bill, paymentColor):
+        if bill == ManaCostShard.GENERIC:
+            return 2
+
+        if bill.isMonoColor():
+            if bill.isOr2Generic():
+                # The generic portion of a 2/Colored mana, should be lower priority than generic mana
+                return 9 if not ColorSet.fromMask(bill.getColorMask() & paymentColor).isColorless() else 1
+            if bill.isPhyrexian():
+                return 8
+            return 10
+        return 5
+
+    @staticmethod
+    def canColoredXShardBePaidByColor(color, xManaCostPaidByColor):
+        if xManaCostPaidByColor is not None and xManaCostPaidByColor.get(color) is not None:
+            return False
+        return True
+
+    @staticmethod
+    def canBePaidWith(shard, mana, pool, xManaCostPaidByColor):
+        if shard.isSnow() and not mana.isSnow():
+            return False
+        if mana.isRestricted() and not mana.getManaAbility().meetsManaShardRestrictions(shard, mana.getColor()):
+            return False
+
+        # snow can be paid for any color
+        if shard.getColorMask() != 0 and mana.isSnow() and pool.isSnowForColor():
+            return True
+
+        # Check Colored X and see if the color is already used
+        if shard == ManaCostShard.COLORED_X and not ManaCostBeingPaid.canColoredXShardBePaidByColor(MagicColor.toShortString(mana.getColor()), xManaCostPaidByColor):
+            return False
+
+        color = mana.getColor()
+        return pool.canPayForShardWithColor(shard, color)
+
+    def addManaCost(self, extra):
+        for shard in extra:
+            if shard == ManaCostShard.X:
+                self.cntX += 1
+            else:
+                self.increaseShard(shard, 1, False)
+        self.increaseGenericMana(extra.getGenericCost())
+
+    def subtractManaCost(self, subThisManaCost):
+        for shard in subThisManaCost:
+            if shard == ManaCostShard.X:
+                self.cntX -= 1
+            elif shard in self.unpaidShards:
+                self.decreaseShard(shard, 1)
+            else:
+                self.decreaseGenericMana(shard.getCmc())
+        self.decreaseGenericMana(subThisManaCost.getGenericCost())
+
+    def toString(self, addX=True, pool=None):
+        # Boolean addX used to add Xs into the returned value
+        sb = []
+
+        # TODO Prepend a line about paying with any type/color if available
+        if addX:
+            for i in range(self.getXcounter()):
+                sb.append("{X}")
+
+        nGeneric = self.getGenericManaAmount()
+        shards = list(self.unpaidShards.keys())
+
+        if nGeneric > 0:
+            if nGeneric <= 20:
+                sb.append("{" + str(nGeneric) + "}")
+            else:  # if no mana symbol exists for generic amount, use combination of symbols for each digit
+                genericStr = str(nGeneric)
+                for i in range(len(genericStr)):
+                    sb.append("{" + genericStr[i] + "}")
+
+        # Sort the keys to get a deterministic ordering.
+        shards.sort()
+        for shard in shards:
+            if shard == ManaCostShard.GENERIC:
+                continue
+
+            s = str(shard)
+            count = self.unpaidShards.get(shard).totalCount
+            for i in range(count):
+                sb.append(s)
+
+        result = "".join(sb)
+        return "0" if len(result) == 0 else result
+
+    def __str__(self):
+        return self.toString(True, None)
+
+    def getConvertedManaCost(self):
+        cmc = 0
+
+        for key, value in self.unpaidShards.items():
+            cmc += key.getCmc() * value.totalCount
+        return cmc
+
+    def toManaCost(self):
+        return ManaCost(ManaCostBeingPaid.ManaCostBeingPaidIterator(self))
+
+    def getXcounter(self):
+        return self.cntX
+
+    def removeGenericMana(self):
+        if ManaCostShard.GENERIC in self.unpaidShards:
+            del self.unpaidShards[ManaCostShard.GENERIC]
+
+    def getDistinctShards(self):
+        return self.unpaidShards.keys()
+
+    def getUnpaidShards(self, key=None):
+        if key is not None:
+            sc = self.unpaidShards.get(key)
+            if sc is not None:
+                return sc.totalCount
+            return 0
+
+        result = []
+        for k, v in self.unpaidShards.items():
+            for i in range(v.totalCount, 0, -1):
+                result.append(k)
+        for i in range(self.cntX, 0, -1):
+            result.append(ManaCostShard.X)
+        return result
+
+    def getUnpaidColors(self):
+        result = 0
+        for s in self.unpaidShards.keys():
+            result |= s.getColorMask()
+        return result
+
+    def hasAnyKind(self, kind):
+        for e_key, e_value in self.unpaidShards.items():
+            if e_key.isOfKind(kind) and e_value.totalCount > e_value.xCount:
+                return True
+        return False
 ```

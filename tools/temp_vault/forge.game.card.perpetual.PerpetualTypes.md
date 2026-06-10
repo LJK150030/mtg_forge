@@ -66,3 +66,34 @@ public record PerpetualTypes(long timestamp, CardType addTypes, CardType removeT
 
 }
 ```
+
+## Python
+`forge/game/card/perpetual/PerpetualTypes.py`
+
+```python
+package = forge.game.card.perpetual, so module path forge/game/card/perpetual/PerpetualTypes.py
+
+A record with components: timestamp (long), addTypes (CardType), removeTypes (CardType), removeXTypes (Set<RemoveType>). Implements PerpetualInterface.
+
+Let me write Python with dataclass(frozen=True) for record immutability.from typing import Set
+
+from forge.card.CardType import CardType
+from forge.card.RemoveType import RemoveType
+from forge.game.card.Card import Card
+from forge.game.card.perpetual.PerpetualInterface import PerpetualInterface
+
+
+class PerpetualTypes(PerpetualInterface):
+
+    def __init__(self, timestamp: int, addTypes: CardType, removeTypes: CardType, removeXTypes: Set[RemoveType]):
+        self.timestamp = timestamp
+        self.addTypes = addTypes
+        self.removeTypes = removeTypes
+        self.removeXTypes = removeXTypes
+
+    def getTimestamp(self) -> int:
+        return self.timestamp
+
+    def applyEffect(self, c: Card) -> None:
+        c.addChangedCardTypes(self.addTypes, self.removeTypes, False, self.removeXTypes, self.timestamp, 0, True, False)
+```

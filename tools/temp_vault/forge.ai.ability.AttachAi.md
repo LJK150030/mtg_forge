@@ -100,7 +100,7 @@ classDiagram
 
 ## Design Description
 
-AttachAi is the artificial-intelligence decision layer for "Attach" spells and abilities (Auras, Equipment, and Fortifications) in Forge's AI module. Extending `SpellAbilityAi`, it overrides the standard hooks—`checkApiLogic`, `doTriggerNoCost`, `chkDrawback`, `confirmAction`, `chooseSingleCard`, and `chooseSinglePlayer`—to decide whether the AI should play an attach effect and, crucially, which `Card` or `Player` to attach to. Its core is a large family of strategy-style preference methods (pump, curse, control, animate, reanimate, change-type, curiosity, etc.) dispatched by `attachGeneralAI` on each ability's `AILogic` string, evaluating candidates through `ComputerUtilCard`/`ComputerUtilCombat` heuristics, `StaticAbility` analysis, and keyword usefulness checks. It collaborates with `SpellAbility`, `TargetRestrictions`, `Combat`, `PhaseHandler`, and AI-profile properties to weigh timing (e.g., flash auras as combat tricks) and target quality, returning `AiAbilityDecision` verdicts that encode both willingness and reasoning.
+AttachAi is the artificial-intelligence decision layer for "Attach" spells and abilities (Auras, Equipment, and Fortifications) in Forge's AI module. Extending `SpellAbilityAi`, it overrides the standard hooksâ€”`checkApiLogic`, `doTriggerNoCost`, `chkDrawback`, `confirmAction`, `chooseSingleCard`, and `chooseSinglePlayer`â€”to decide whether the AI should play an attach effect and, crucially, which `Card` or `Player` to attach to. Its core is a large family of strategy-style preference methods (pump, curse, control, animate, reanimate, change-type, curiosity, etc.) dispatched by `attachGeneralAI` on each ability's `AILogic` string, evaluating candidates through `ComputerUtilCard`/`ComputerUtilCombat` heuristics, `StaticAbility` analysis, and keyword usefulness checks. It collaborates with `SpellAbility`, `TargetRestrictions`, `Combat`, `PhaseHandler`, and AI-profile properties to weigh timing (e.g., flash auras as combat tricks) and target quality, returning `AiAbilityDecision` verdicts that encode both willingness and reasoning.
 
 ## Source
 `forge-ai/src/main/java/forge/ai/ability/AttachAi.java`
@@ -1797,4 +1797,1228 @@ public class AttachAi extends SpellAbilityAi {
         return attachToPlayerAIPreferences(ai, sa, true, (List<Player>)options);
     }
 }
+```
+
+## Python
+`forge/ai/ability/AttachAi.py`
+
+```python
+package forge.ai.ability ΓÇö porting AttachAi. Here is the faithful Python port:
+
+from forge.ai.SpellAbilityAi import SpellAbilityAi
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.ai.AiController import AiController
+from forge.ai.PlayerControllerAi import PlayerControllerAi
+from forge.ai.AiProfileUtil import AiProfileUtil
+from forge.ai.AiProps import AiProps
+from forge.ai.AiAttackController import AiAttackController
+from forge.ai.AiCardMemory import AiCardMemory
+from forge.ai.ComputerUtil import ComputerUtil
+from forge.ai.ComputerUtilAbility import ComputerUtilAbility
+from forge.ai.ComputerUtilCard import ComputerUtilCard
+from forge.ai.ComputerUtilCombat import ComputerUtilCombat
+from forge.ai.ComputerUtilCost import ComputerUtilCost
+from forge.ai.SpecialCardAi import SpecialCardAi
+from forge.ai.AnimateAi import AnimateAi
+from forge.game.Game import Game
+from forge.game.GameObject import GameObject
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.ability.ApiType import ApiType
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CardPredicates import CardPredicates
+from forge.game.card.CardUtil import CardUtil
+from forge.game.card.CardCopyService import CardCopyService
+from forge.game.combat.Combat import Combat
+from forge.game.combat.CombatUtil import CombatUtil
+from forge.game.cost.Cost import Cost
+from forge.game.cost.CostPart import CostPart
+from forge.game.cost.CostSacrifice import CostSacrifice
+from forge.game.keyword.Keyword import Keyword
+from forge.game.keyword.KeywordInterface import KeywordInterface
+from forge.game.phase.PhaseHandler import PhaseHandler
+from forge.game.phase.PhaseType import PhaseType
+from forge.game.player.Player import Player
+from forge.game.player.PlayerActionConfirmMode import PlayerActionConfirmMode
+from forge.game.replacement.ReplacementLayer import ReplacementLayer
+from forge.game.replacement.ReplacementType import ReplacementType
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.spellability.TargetRestrictions import TargetRestrictions
+from forge.game.staticability.StaticAbility import StaticAbility
+from forge.game.staticability.StaticAbilityCantAttackBlock import StaticAbilityCantAttackBlock
+from forge.game.staticability.StaticAbilityMode import StaticAbilityMode
+from forge.game.trigger.Trigger import Trigger
+from forge.game.trigger.TriggerType import TriggerType
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.Aggregates import Aggregates
+from forge.util.MyRandom import MyRandom
+
+
+class AttachAi(SpellAbilityAi):
+
+    def checkApiLogic(self, ai, sa):
+        abCost = sa.getPayCosts()
+        source = sa.getHostCard()
+
+        # TODO: improve this so that the AI can use a flash aura buff as a means of killing opposing creatures and gaining card advantage
+        if source.hasKeyword("MayFlashSac") and not ai.canCastSorcery():
+            return AiAbilityDecision(0, AiPlayDecision.TimingRestrictions)
+
+        if source.isAura() and sa.isSpell() and not source.ignoreLegendRule() and ai.isCardInPlay(source.getName()):
+            # Don't play the second copy of a legendary enchantment already in play
+
+            # TODO: Add some extra checks for where the AI may want to cast a replacement aura
+            # on another creature and keep it when the original enchanted creature is useless
+            return AiAbilityDecision(0, AiPlayDecision.WouldDestroyLegend)
+
+        # Attach spells always have a target
+        tgt = sa.getTargetRestrictions()
+        if tgt is not None:
+            sa.resetTargets()
+            attachDecision = AttachAi.attachPreference(sa, tgt, False)
+            if not attachDecision.willingToPlay():
+                return attachDecision
+
+        advancedFlash = AiProfileUtil.getBoolProperty(ai, AiProps.FLASH_ENABLE_ADVANCED_LOGIC)
+
+        if (source.hasKeyword(Keyword.FLASH) or (not ai.canCastSorcery() and sa.canCastTiming(ai))) \
+                and source.isAura() and advancedFlash and not self.doAdvancedFlashAuraLogic(ai, sa, sa.getTargetCard()):
+            return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+        if abCost.getTotalMana().countX() > 0 and sa.getSVar("X") == "Count$xPaid":
+            xPay = ComputerUtilCost.setMaxXValue(sa, ai, sa.isTrigger())
+            if xPay == 0:
+                return AiAbilityDecision(0, AiPlayDecision.CantAffordX)
+
+        return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+    def doAdvancedFlashAuraLogic(self, ai, sa, attachTarget):
+        source = sa.getHostCard()
+        game = ai.getGame()
+        combat = game.getCombat()
+
+        if not AiProfileUtil.getBoolProperty(ai, AiProps.FLASH_USE_BUFF_AURAS_AS_COMBAT_TRICKS):
+            # Currently this only works with buff auras, so if the relevant toggle is disabled, just return true
+            # for instant speed use. To be improved later.
+            return True
+
+        power = 0
+        toughness = 0
+        keywords = []
+        for stAb in source.getStaticAbilities():
+            if stAb.checkMode(StaticAbilityMode.Continuous):
+                if stAb.hasParam("AddPower"):
+                    power += AbilityUtils.calculateAmount(source, stAb.getParam("AddPower"), stAb)
+                if stAb.hasParam("AddToughness"):
+                    toughness += AbilityUtils.calculateAmount(source, stAb.getParam("AddToughness"), stAb)
+                if stAb.hasParam("AddKeyword"):
+                    keywords.extend(stAb.getParam("AddKeyword").split(" & "))
+
+        isBuffAura = not sa.isCurse() and (power > 0 or toughness > 0 or len(keywords) > 0)
+        if not isBuffAura:
+            # Currently only works with buff auras, otherwise returns true for instant speed use. To be improved later.
+            return True
+
+        canRespondToStack = False
+        if not game.getStack().isEmpty():
+            peekSa = game.getStack().peekAbility()
+            activator = peekSa.getActivatingPlayer()
+            if activator is not None and activator.isOpponentOf(ai) \
+                    and (not peekSa.usesTargeting() or peekSa.getTargets().getTargetCards().contains(attachTarget)):
+                if peekSa.getApi() == ApiType.DealDamage or peekSa.getApi() == ApiType.DamageAll:
+                    dmg = AbilityUtils.calculateAmount(peekSa.getHostCard(), peekSa.getParam("NumDmg"), peekSa)
+                    if dmg < toughness + attachTarget.getNetToughness():
+                        canRespondToStack = True
+                elif peekSa.getApi() == ApiType.Destroy or peekSa.getApi() == ApiType.DestroyAll:
+                    if not attachTarget.hasKeyword(Keyword.INDESTRUCTIBLE) and not ComputerUtil.canRegenerate(ai, attachTarget) \
+                            and "Indestructible" in keywords:
+                        canRespondToStack = True
+                elif peekSa.getApi() == ApiType.Pump or peekSa.getApi() == ApiType.PumpAll:
+                    p = AbilityUtils.calculateAmount(peekSa.getHostCard(), peekSa.getParam("NumAtt"), peekSa)
+                    t = AbilityUtils.calculateAmount(peekSa.getHostCard(), peekSa.getParam("NumDef"), peekSa)
+                    if t < 0 and toughness > 0 and attachTarget.getNetToughness() + t + toughness > 0:
+                        canRespondToStack = True
+                    elif p < 0 and power > 0 and attachTarget.getNetPower() + p + power > 0 \
+                            and attachTarget.getNetToughness() + t + toughness > 0:
+                        # Yep, still need to ensure that the net toughness will be positive here even if buffing for power
+                        canRespondToStack = True
+
+        canSurviveCombat = True
+        if combat is not None and combat.isBlocked(attachTarget):
+            if not attachTarget.hasKeyword(Keyword.INDESTRUCTIBLE) and not ComputerUtil.canRegenerate(ai, attachTarget):
+                dangerous = False
+                totalAtkPower = 0
+                for attacker in combat.getBlockers(attachTarget):
+                    if attacker.hasKeyword(Keyword.DEATHTOUCH) or attacker.isWitherDamage():
+                        dangerous = True
+                    totalAtkPower += attacker.getNetPower()
+                if totalAtkPower > attachTarget.getNetToughness() + toughness or dangerous:
+                    canSurviveCombat = False
+
+        if not canSurviveCombat or (attachTarget.isCreature() and ComputerUtilCard.isUselessCreature(ai, attachTarget)):
+            # don't buff anything that will die or get seriously crippled in combat, it's pointless anyway
+            return False
+
+        chanceToCastAtEOT = AiProfileUtil.getIntProperty(ai, AiProps.FLASH_BUFF_AURA_CHANCE_CAST_AT_EOT)
+        chanceToCastEarly = AiProfileUtil.getIntProperty(ai, AiProps.FLASH_BUFF_AURA_CHANCE_TO_CAST_EARLY)
+        chanceToRespondToStack = AiProfileUtil.getIntProperty(ai, AiProps.FLASH_BUFF_AURA_CHANCE_TO_RESPOND_TO_STACK)
+
+        hasFloatMana = ai.getManaPool().totalMana() > 0
+        willDiscardNow = getattr(game.getPhaseHandler(), "is")(PhaseType.END_OF_TURN, ai) \
+            and not ai.isUnlimitedHandSize() and ai.getCardsIn(ZoneType.Hand).size() > ai.getMaxHandSize()
+        willDieNow = combat is not None and ComputerUtilCombat.lifeInSeriousDanger(ai, combat)
+        willRespondToStack = canRespondToStack and MyRandom.percentTrue(chanceToRespondToStack)
+        willCastEarly = MyRandom.percentTrue(chanceToCastEarly)
+        willCastAtEOT = getattr(game.getPhaseHandler(), "is")(PhaseType.END_OF_TURN) \
+            and game.getPhaseHandler().getNextTurn().equals(ai) and MyRandom.percentTrue(chanceToCastAtEOT)
+
+        alternativeConsiderations = hasFloatMana or willDiscardNow or willDieNow or willRespondToStack or willCastAtEOT or willCastEarly
+
+        if not alternativeConsiderations:
+            if combat is None or game.getPhaseHandler().getPhase().isBefore(PhaseType.COMBAT_DECLARE_BLOCKERS):
+                return False
+
+            return combat.isAttacking(attachTarget) or combat.isBlocking(attachTarget)
+
+        return True
+
+    @staticmethod
+    def acceptableChoice(c, mandatory):
+        if mandatory:
+            return c
+
+        # TODO If Not Mandatory, make sure the card is "good enough"
+        if c.isCreature():
+            eval = ComputerUtilCard.evaluateCreature(c)
+            if eval < 130:
+                return None
+
+        return c
+
+    @staticmethod
+    def chooseUnpreferred(mandatory, list):
+        if not mandatory:
+            return None
+
+        return ComputerUtilCard.getWorstPermanentAI(list, True, True, True, False)
+
+    @staticmethod
+    def chooseLessPreferred(mandatory, list):
+        if not mandatory:
+            return None
+
+        return ComputerUtilCard.getBestAI(list)
+
+    @staticmethod
+    def attachAIChangeTypePreference(sa, list, mandatory, attachSource):
+        # AI For Cards like Evil Presence or Spreading Seas
+
+        type = ""
+
+        for stAb in attachSource.getStaticAbilities():
+            if stAb.checkMode(StaticAbilityMode.Continuous) and stAb.hasParam("AddType"):
+                type = stAb.getParam("AddType")
+
+        if "ChosenType" == type:
+            # TODO ChosenTypeEffect should have exact same logic that's here
+            # For now, Island is as good as any for a default value
+            type = "Island"
+
+        list = CardLists.getNotType(list, type)  # Filter out Basic Lands that have the same type as the changing type
+
+        # Don't target fetchlands
+        def _notFetch(c):
+            # Check for cards that can be sacrificed in response
+            for ability in c.getAllSpellAbilities():
+                if ability.isActivatedAbility():
+                    cost = ability.getPayCosts()
+                    for part in cost.getCostParts():
+                        if not isinstance(part, CostSacrifice):
+                            continue
+                        sacCost = part
+                        if sacCost.payCostFromSource() and ComputerUtilCost.canPayCost(ability, c.getController(), False):
+                            return False
+            return True
+        list = CardLists.filter(list, _notFetch)
+
+        c = ComputerUtilCard.getBestAI(list)
+
+        # TODO Port over some of the existing code, but rewrite most of it.
+        # Ultimately, these spells need to be used to reduce mana base of a
+        # color. So it might be better to choose a Basic over a Nonbasic
+        # Although a nonbasic card with a nasty ability, might be worth it to
+        # cast on
+
+        if c is None:
+            return AttachAi.chooseLessPreferred(mandatory, list)
+
+        return AttachAi.acceptableChoice(c, mandatory)
+
+    @staticmethod
+    def attachAIKeepTappedPreference(sa, list, mandatory, attachSource):
+        # AI For Cards like Paralyzing Grasp and Glimmerdust Nap
+
+        # check for ETB Trigger
+        def _tapPred(t):
+            if t.getMode() != TriggerType.ChangesZone:
+                return False
+
+            if ZoneType.Battlefield.toString() != t.getParam("Destination"):
+                return False
+
+            if t.hasParam("ValidCard") and "Self" not in t.getParam("ValidCard"):
+                return False
+
+            tSa = t.ensureAbility()
+            if tSa is None:
+                return False
+
+            if ApiType.Tap != tSa.getApi():
+                return False
+            if "Enchanted" != tSa.getParam("Defined"):
+                return False
+
+            return True
+        tapETB = AttachAi.isAuraSpell(sa) and attachSource.getTriggers().anyMatch(_tapPred)
+
+        def _prefPred(c):
+            # Don't do Untapped Vigilance cards
+            if not tapETB and c.isCreature() and c.hasKeyword(Keyword.VIGILANCE) and c.isUntapped():
+                return False
+
+            if not mandatory:
+                if not c.isCreature() and not c.getType().hasSubtype("Vehicle") and not c.isTapped():
+                    # try to identify if this thing can actually tap
+                    for ab in c.getAllSpellAbilities():
+                        if ab.getPayCosts().hasTapCost():
+                            return True
+                    return False
+            # already affected
+            if not c.canUntap(c.getController(), True):
+                return False
+
+            return True
+        prefList = CardLists.filter(list, _prefPred)
+
+        c = ComputerUtilCard.getBestAI(prefList)
+
+        if c is None:
+            return AttachAi.chooseLessPreferred(mandatory, list)
+
+        return AttachAi.acceptableChoice(c, mandatory)
+
+    @staticmethod
+    def attachToPlayerAIPreferences(aiPlayer, sa, mandatory, targetable):
+        if "Curse" == sa.getParam("AILogic"):
+            if not mandatory:
+                allies = aiPlayer.getAllies()
+                targetable = [p for p in targetable if not allies.contains(p)]
+                if aiPlayer in targetable:
+                    targetable.remove(aiPlayer)
+            if targetable:
+                # first try get weakest opponent to reduce opponents faster
+                if aiPlayer.getWeakestOpponent() in targetable:
+                    return aiPlayer.getWeakestOpponent()
+                else:
+                    # then try any other opponent
+                    for curseChoice in targetable:
+                        if curseChoice.isOpponentOf(aiPlayer):
+                            return curseChoice
+                    # only reaches here if no preferred targets are targetable and sa is mandatory
+                    return targetable[0]
+        else:
+            if not mandatory:
+                opponents = aiPlayer.getOpponents()
+                targetable = [p for p in targetable if not opponents.contains(p)]
+            if targetable:
+                # first try self
+                if aiPlayer in targetable:
+                    return aiPlayer
+                else:
+                    # then try allies
+                    for boonChoice in targetable:
+                        if not boonChoice.isOpponentOf(aiPlayer):
+                            return boonChoice
+                    # only reaches here if no preferred choices are targetable and sa is mandatory
+                    return targetable[0]
+
+        return None
+
+    @staticmethod
+    def attachAIAnimatePreference(sa, list, mandatory, attachSource):
+        if not list:
+            return None
+        card = None
+        # AI For choosing a Card to Animate.
+        betterList = CardLists.getNotType(list, "Creature")
+        if ComputerUtilAbility.getAbilitySourceName(sa) == "Animate Artifact":
+            betterList = CardLists.filter(betterList, lambda c: c.getCMC() > 0)
+            card = ComputerUtilCard.getMostExpensivePermanentAI(betterList)
+        else:
+            evenBetterList = CardLists.filter(betterList, lambda c: c.hasKeyword(Keyword.INDESTRUCTIBLE) or c.hasKeyword(Keyword.HEXPROOF))
+            if evenBetterList:
+                betterList = evenBetterList
+            evenBetterList = CardLists.filter(betterList, CardPredicates.UNTAPPED)
+            if evenBetterList:
+                betterList = evenBetterList
+            evenBetterList = CardLists.filter(betterList, lambda c: c.getTurnInZone() != c.getGame().getPhaseHandler().getTurn())
+            if evenBetterList:
+                betterList = evenBetterList
+
+            def _noTapAbility(c):
+                for sa1 in c.getSpellAbilities():
+                    if sa1.isAbility() and sa1.getPayCosts().hasTapCost():
+                        return False
+                return True
+            evenBetterList = CardLists.filter(betterList, _noTapAbility)
+            if evenBetterList:
+                betterList = evenBetterList
+            card = ComputerUtilCard.getWorstAI(betterList)
+
+        # If Mandatory (brought directly into play without casting) gotta
+        # choose something
+        if card is None and mandatory:
+            return AttachAi.chooseLessPreferred(mandatory, list)
+
+        return card
+
+    @staticmethod
+    def attachAIReanimatePreference(sa, list, mandatory, attachSource):
+        # AI For choosing a Card to Animate.
+        ai = sa.getActivatingPlayer()
+        attachSourceLki = None
+        for t in attachSource.getTriggers():
+            if not (t.getMode() == TriggerType.ChangesZone):
+                continue
+            if "Battlefield" != t.getParam("Destination"):
+                continue
+            if "Card.Self" != t.getParam("ValidCard"):
+                continue
+            trigSa = t.ensureAbility()
+            animateSa = trigSa.findSubAbilityByType(ApiType.Animate)
+            if animateSa is None:
+                continue
+            animateSa.setActivatingPlayer(sa.getActivatingPlayer())
+            attachSourceLki = AnimateAi.becomeAnimated(attachSource, animateSa)
+        if attachSourceLki is None:
+            return None
+        attachSourceLki.setLastKnownZone(ai.getZone(ZoneType.Battlefield))
+        finalAttachSourceLki = attachSourceLki
+
+        def _betterPred(c):
+            lki = CardCopyService.getLKICopy(c)
+            # need to fake it as if lki would be on the battlefield
+            lki.setLastKnownZone(ai.getZone(ZoneType.Battlefield))
+
+            # Reanimate Auras use "Enchant creature put onto the battlefield with CARDNAME" with Remembered
+            finalAttachSourceLki.clearRemembered()
+            finalAttachSourceLki.addRemembered(lki)
+
+            # need to check what the cards would be on the battlefield
+            # do not attach yet, that would cause Events
+            preList = CardCollection(lki)
+            preList.add(finalAttachSourceLki)
+            c.getGame().getAction().checkStaticAbilities(False, set(preList), preList)
+            result = lki.canBeAttached(finalAttachSourceLki, None)
+
+            # reset static abilities
+            c.getGame().getAction().checkStaticAbilities(False)
+
+            return result
+        betterList = CardLists.filter(list, _betterPred)
+
+        c = ComputerUtilCard.getBestCreatureAI(betterList)
+
+        # If Mandatory (brought directly into play without casting) gotta
+        # choose something
+        if c is None and mandatory:
+            return AttachAi.chooseLessPreferred(mandatory, list)
+
+        return c
+
+    # Cards that trigger on dealing damage
+    @staticmethod
+    def attachAICuriosityPreference(sa, list, mandatory, attachSource):
+        chosen = None
+        priority = 0
+        for card in list:
+            cardPriority = 0
+            # Prefer Evasion
+            if card.hasKeyword(Keyword.TRAMPLE):
+                cardPriority += 10
+            if card.hasKeyword(Keyword.MENACE):
+                cardPriority += 10
+            # Avoid this for Sleepers Robe?
+            if card.hasKeyword(Keyword.FEAR):
+                cardPriority += 15
+            if card.hasKeyword(Keyword.FLYING):
+                cardPriority += 20
+            if card.hasKeyword(Keyword.SHADOW):
+                cardPriority += 30
+            if card.hasKeyword(Keyword.HORSEMANSHIP):
+                cardPriority += 40
+            # check if card is generally unblockable
+            if StaticAbilityCantAttackBlock.cantBlockBy(card, None):
+                cardPriority += 50
+            # Prefer "tap to deal damage"
+            # TODO : Skip this one if triggers on combat damage only?
+            for sa2 in card.getSpellAbilities():
+                if ApiType.DealDamage == sa2.getApi() and sa2.usesTargeting() and sa2.getTargetRestrictions().canTgtPlayer():
+                    cardPriority += 300
+            # Prefer stronger creatures, avoid if can't attack
+            cardPriority += card.getCurrentToughness() * 2
+            cardPriority += card.getCurrentPower()
+            if card.getCurrentPower() <= 0:
+                cardPriority = -100
+            if card.hasKeyword(Keyword.DEFENDER):
+                cardPriority = -100
+            if card.hasKeyword(Keyword.INDESTRUCTIBLE):
+                cardPriority += 15
+            if cardPriority > priority:
+                priority = cardPriority
+                chosen = card
+
+        return chosen
+
+    @staticmethod
+    def attachAISpecificCardPreference(sa, list, mandatory, attachSource):
+        ai = sa.getActivatingPlayer()
+        sourceName = ComputerUtilAbility.getAbilitySourceName(sa)
+        chosen = None
+
+        if "Guilty Conscience" == sourceName:
+            chosen = SpecialCardAi.GuiltyConscience.getBestAttachTarget(ai, sa, list)
+        elif sa.hasParam("AIValid"):
+            # TODO: Make the AI recognize which cards to pump based on the card's abilities alone
+            chosen = AttachAi.doPumpOrCurseAILogic(ai, sa, list, sa.getParam("AIValid"))
+
+        # If Mandatory (brought directly into play without casting) gotta
+        # choose something
+        if chosen is None and mandatory:
+            return AttachAi.chooseLessPreferred(mandatory, list)
+
+        return chosen
+
+    @staticmethod
+    def attachAIInstantReequipPreference(sa, attachSource):
+        # e.g. Cranial Plating
+        ph = attachSource.getGame().getPhaseHandler()
+        combat = attachSource.getGame().getCombat()
+        equipped = sa.getHostCard().getEquipping()
+        if equipped is None:
+            return None
+
+        powerBuff = 0
+        for stAb in sa.getHostCard().getStaticAbilities():
+            if "Card.EquippedBy" == stAb.getParam("Affected") and stAb.hasParam("AddPower"):
+                powerBuff = AbilityUtils.calculateAmount(sa.getHostCard(), stAb.getParam("AddPower"), stAb)
+        if combat is not None and combat.isAttacking(equipped) and getattr(ph, "is")(PhaseType.COMBAT_DECLARE_BLOCKERS, sa.getActivatingPlayer()):
+            damage = 0
+            for c in combat.getUnblockedAttackers():
+                damage += ComputerUtilCombat.predictDamageTo(combat.getDefenderPlayerByAttacker(equipped), c.getNetCombatDamage(), c, True)
+            if combat.isBlocked(equipped):
+                for atk in combat.getAttackers():
+                    if not combat.isBlocked(atk) and not ComputerUtil.predictThreatenedObjects(sa.getActivatingPlayer(), None).contains(atk):
+                        if ComputerUtilCombat.predictDamageTo(combat.getDefenderPlayerByAttacker(atk),
+                                atk.getNetCombatDamage(), atk, True) > 0:
+                            if damage + powerBuff >= combat.getDefenderPlayerByAttacker(atk).getLife():
+                                sa.resetTargets()  # this is needed to avoid bugs with adding two targets to a single SA
+                                return atk  # lethal damage, we can win right now, so why not?
+
+        return None
+
+    # Should generalize this code a bit since they all have similar structures
+    @staticmethod
+    def attachAIControlPreference(sa, list, mandatory, attachSource):
+        # AI For choosing a Card to Gain Control of.
+
+        if sa.getTargetRestrictions().canTgtPermanent():
+            # If can target all Permanents, and Life isn't in eminent danger,
+            # grab Planeswalker first, then Creature
+            # if Life < 5 grab Creature first, then Planeswalker. Lands,
+            # Enchantments and Artifacts are probably "not good enough"
+            pass
+
+        c = ComputerUtilCard.getBestAI(list)
+
+        # If Mandatory (brought directly into play without casting) gotta
+        # choose something
+        if c is None:
+            return AttachAi.chooseLessPreferred(mandatory, list)
+
+        return AttachAi.acceptableChoice(c, mandatory)
+
+    @staticmethod
+    def attachAIHighestEvaluationPreference(list):
+        return ComputerUtilCard.getBestAI(list)
+
+    @staticmethod
+    def attachAICursePreference(sa, list, mandatory, attachSource, ai):
+        # AI For choosing a Card to Curse of.
+
+        # TODO Figure out some way to combine The "gathering of data" from
+        # statics used in both Pump and Curse
+        stCheck = None
+        if attachSource.isAura():
+            stCheck = "EnchantedBy"
+        elif attachSource.isEquipment():
+            stCheck = "EquippedBy"
+
+        totToughness = 0
+        totPower = 0
+        keywords = []
+
+        cantAttack = False
+        cantBlock = False
+
+        for stAbility in attachSource.getStaticAbilities():
+            if stAbility.checkMode(StaticAbilityMode.CantAttack):
+                valid = stAbility.getParam("ValidCard")
+                if stCheck in valid or "AttachedBy" in valid:
+                    cantAttack = True
+            elif stAbility.checkMode(StaticAbilityMode.CantBlock):
+                valid = stAbility.getParam("ValidCard")
+                if stCheck in valid or "AttachedBy" in valid:
+                    cantBlock = True
+            elif stAbility.checkMode(StaticAbilityMode.CantBlockBy):
+                valid = stAbility.getParam("ValidBlocker")
+                if stCheck in valid or "AttachedBy" in valid:
+                    cantBlock = True
+
+            if not stAbility.checkMode(StaticAbilityMode.Continuous):
+                continue
+
+            affected = stAbility.getParam("Affected")
+
+            if affected is None:
+                continue
+            if stCheck in affected or "AttachedBy" in affected:
+                totToughness += AbilityUtils.calculateAmount(attachSource, stAbility.getParam("AddToughness"), sa)
+                totPower += AbilityUtils.calculateAmount(attachSource, stAbility.getParam("AddPower"), sa)
+
+                kws = stAbility.getParam("AddKeyword")
+                if kws is not None:
+                    keywords.extend(kws.split(" & "))
+                kws = stAbility.getParam("AddHiddenKeyword")
+                if kws is not None:
+                    keywords.extend(kws.split(" & "))
+
+        prefList = None
+        if totToughness < 0:
+            # Kill a creature if we can
+            tgh = totToughness
+
+            def _killPred(c):
+                if not c.hasKeyword(Keyword.INDESTRUCTIBLE) and (c.getLethalDamage() <= abs(tgh)):
+                    return True
+
+                return c.getNetToughness() <= abs(tgh)
+            prefList = CardLists.filter(list, _killPred)
+
+        card = None
+        if prefList is None or prefList.isEmpty():
+            prefList = [c for c in list]
+        else:
+            card = ComputerUtilCard.getBestAI(prefList)
+            if card is not None:
+                return card
+
+        if keywords:
+            prefList = CardLists.filter(prefList, lambda c: AttachAi.containsUsefulCurseKeyword(keywords, c, sa))
+        elif totPower < 0:
+            prefList = CardLists.filter(prefList, lambda c: c.getNetPower() > 0 and ComputerUtilCombat.canAttackNextTurn(c))
+
+        if cantAttack:
+            prefList = CardLists.filter(prefList, lambda c: c.isCreature() and ComputerUtilCombat.canAttackNextTurn(c))
+        elif cantBlock:  # TODO better can block filter?
+            prefList = CardLists.filter(prefList, lambda c: c.isCreature() and not ComputerUtilCard.isUselessCreature(ai, c))
+
+        # some auras aren't useful in multiples
+        if attachSource.hasSVar("NonStackingAttachEffect"):
+            nameP = CardPredicates.isEnchantedBy(attachSource.getName())
+            prefList = CardLists.filter(prefList, lambda c: not nameP(c))
+
+        # If this is already attached and there's a sac cost, make sure we attach to something that's
+        # seriously better than whatever the attachment is currently attached to (e.g. Bound by Moonsilver)
+        if sa.getHostCard().getAttachedTo() is not None and sa.getHostCard().getAttachedTo().isCreature() \
+                and sa.getPayCosts() is not None and sa.getPayCosts().hasSpecificCostType(CostSacrifice):
+            oldEvalRating = ComputerUtilCard.evaluateCreature(sa.getHostCard().getAttachedTo())
+            threshold = AiProfileUtil.getIntProperty(ai, AiProps.SAC_TO_REATTACH_TARGET_EVAL_THRESHOLD)
+
+            def _sacPred(c):
+                if not c.isCreature():
+                    return False
+
+                return ComputerUtilCard.evaluateCreature(c) >= oldEvalRating + threshold
+            prefList = CardLists.filter(prefList, _sacPred)
+
+        card = ComputerUtilCard.getBestAI(prefList)
+
+        if card is None:
+            return AttachAi.chooseLessPreferred(mandatory, list)
+
+        return AttachAi.acceptableChoice(card, mandatory)
+
+    def doTriggerNoCost(self, ai, sa, mandatory):
+        card = sa.getHostCard()
+        tgt = sa.getTargetRestrictions()
+        if tgt is None:
+            targets = AbilityUtils.getDefinedObjects(card, sa.getParam("Defined"), sa)
+        else:
+            AttachAi.attachPreference(sa, tgt, mandatory)
+            targets = sa.getTargets()
+
+        if not mandatory and card.isEquipment() and not targets.isEmpty():
+            newTarget = targets.get(0)
+            if newTarget.getController().isOpponentOf(ai):
+                return AiAbilityDecision(0, AiPlayDecision.TargetingFailed)
+            if card.isEquipping():
+                oldTarget = card.getEquipping()
+                if ComputerUtilCard.evaluateCreature(oldTarget) > ComputerUtilCard.evaluateCreature(newTarget):
+                    return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+                stacking = not card.hasSVar("NonStackingAttachEffect") or not newTarget.isEquippedBy(card.getName())
+                if not stacking:
+                    return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+        return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+    def chkDrawback(self, ai, sa):
+        if sa.isTrigger() and sa.usesTargeting():
+            targetables = CardLists.getTargetableCards(ai.getCardsIn(ZoneType.Battlefield), sa)
+            source = AbilityUtils.getDefinedCards(sa.getHostCard(), sa.getParam("Object"), sa)
+            tgt = AttachAi.attachGeneralAI(ai, sa, targetables, not sa.getRootAbility().isOptionalTrigger(), source.getFirst(), None)
+            if tgt is not None:
+                sa.resetTargets()
+                sa.getTargets().add(tgt)
+            if sa.isTargetNumberValid():
+                return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+            return AiAbilityDecision(0, AiPlayDecision.TargetingFailed)
+        elif "Remembered" == sa.getParam("Defined") and sa.getParent() is not None \
+                and sa.getParent().getApi() == ApiType.Token and sa.getParent().hasParam("RememberTokens"):
+            # Living Weapon or similar
+            return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+        return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+    @staticmethod
+    def isAuraSpell(sa):
+        return sa.isSpell() and sa.getHostCard().isAura()
+
+    @staticmethod
+    def attachPreference(sa, tgt, mandatory):
+        spellCanTargetPlayer = False
+        if AttachAi.isAuraSpell(sa):
+            source = sa.getHostCard()
+            if not source.hasKeyword(Keyword.ENCHANT):
+                return AiAbilityDecision(0, AiPlayDecision.TargetingFailed)
+            for ki in source.getKeywords(Keyword.ENCHANT):
+                ko = ki.getOriginal()
+                m = ko.split(":")
+                v = m[1]
+                if "Player" in v or "Opponent" in v:
+                    spellCanTargetPlayer = True
+                    break
+        if tgt.canTgtPlayer() and (not AttachAi.isAuraSpell(sa) or spellCanTargetPlayer):
+            targetable = []
+            for player in sa.getHostCard().getGame().getPlayers():
+                if sa.canTarget(player):
+                    targetable.append(player)
+            o = AttachAi.attachToPlayerAIPreferences(sa.getActivatingPlayer(), sa, mandatory, targetable)
+        else:
+            o = AttachAi.attachToCardAIPreferences(sa.getActivatingPlayer(), sa, mandatory)
+
+        if o is None:
+            return AiAbilityDecision(0, AiPlayDecision.TargetingFailed)
+
+        sa.getTargets().add(o)
+        return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+    @staticmethod
+    def attachAIPumpPreference(ai, sa, list, mandatory, attachSource):
+        # AI For choosing a Card to Pump
+        card = None
+        magnetList = None
+        stCheck = None
+        if attachSource.isAura():
+            stCheck = "EnchantedBy"
+
+            def _magAura(c):
+                if not c.isCreature():
+                    return False
+                sVar = c.getSVar("EnchantMe")
+                return sVar == "Multiple" or (sVar == "Once" and not c.isEnchanted())
+            magnetList = CardLists.filter(list, _magAura)
+        elif attachSource.isEquipment():
+            stCheck = "EquippedBy"
+
+            def _magEquip(c):
+                if not c.isCreature():
+                    return False
+                sVar = c.getSVar("EquipMe")
+                return sVar == "Multiple" or (sVar == "Once" and not c.isEquipped())
+            magnetList = CardLists.filter(list, _magEquip)
+        elif attachSource.isFortification():
+            stCheck = "FortifiedBy"
+            magnetList = CardLists.filter(list, lambda c: c.isCreature() and not c.isFortified())
+
+        # Look for triggers that will damage the creature and remove AI-owned creatures that will die
+        toRemove = CardCollection()
+        for t in attachSource.getTriggers():
+            if t.getMode() == TriggerType.ChangesZone:
+                if "Card.Self" == t.getParam("ValidCard") and "Battlefield" == t.getParam("Destination"):
+                    trigSa = t.ensureAbility()
+                    if trigSa is not None and trigSa.getApi() == ApiType.DealDamage and "Enchanted" == trigSa.getParam("Defined"):
+                        for target in list:
+                            if not target.getController().isOpponentOf(ai):
+                                numDmg = AbilityUtils.calculateAmount(target, trigSa.getParam("NumDmg"), trigSa)
+                                if target.getNetToughness() - target.getDamage() <= numDmg and not target.hasKeyword(Keyword.INDESTRUCTIBLE):
+                                    toRemove.add(target)
+        list.removeAll(toRemove)
+
+        if magnetList is not None:
+            # Look for Heroic triggers
+            if not magnetList and sa.isSpell():
+                for target in list:
+                    for t in target.getTriggers():
+                        if t.getMode() == TriggerType.SpellCast:
+                            if "Card.Self" == t.getParam("TargetsValid") and "You" == t.getParam("ValidActivatingPlayer"):
+                                magnetList.add(target)
+                                break
+
+            if magnetList:
+                # Always choose something from the Magnet List.
+                # Probably want to "weight" the list by amount of Enchantments and
+                # choose the "lightest"
+
+                betterList = CardLists.filter(magnetList, lambda c: CombatUtil.canAttack(c, ai.getWeakestOpponent()))
+                if betterList:
+                    return ComputerUtilCard.getBestAI(betterList)
+
+                # Magnet List should not be attached when they are useless
+                betterList = CardLists.filter(magnetList, lambda c: not ComputerUtilCard.isUselessCreature(ai, c))
+
+                if betterList:
+                    return ComputerUtilCard.getBestAI(betterList)
+
+                # return ComputerUtilCard.getBestAI(magnetList);
+
+        totToughness = 0
+        totPower = 0
+        keywords = []
+        grantingAbilities = False
+        grantingExtraBlock = False
+
+        for stAbility in attachSource.getStaticAbilities():
+            if not stAbility.checkMode(StaticAbilityMode.Continuous):
+                continue
+
+            affected = stAbility.getParam("Affected")
+
+            if affected is None:
+                continue
+            if stCheck in affected or "AttachedBy" in affected:
+                totToughness += AbilityUtils.calculateAmount(attachSource, stAbility.getParam("AddToughness"), stAbility)
+                totPower += AbilityUtils.calculateAmount(attachSource, stAbility.getParam("AddPower"), stAbility)
+
+                grantingAbilities |= stAbility.hasParam("AddAbility")
+                grantingExtraBlock |= stAbility.hasParam("CanBlockAmount") or stAbility.hasParam("CanBlockAny")
+
+                kws = stAbility.getParam("AddKeyword")
+                if kws is not None:
+                    keywords.extend(kws.split(" & "))
+                kws = stAbility.getParam("AddHiddenKeyword")
+                if kws is not None:
+                    keywords.extend(kws.split(" & "))
+
+        prefList = CardCollection(list)
+
+        # Filter AI-specific targets if provided
+        prefList = ComputerUtil.filterAITgts(sa, ai, prefList, False)
+
+        if totToughness < 0:
+            # Don't kill my own stuff with Negative toughness Auras
+            tgh = totToughness
+            prefList = CardLists.filter(prefList, lambda c: c.getLethalDamage() > abs(tgh))
+
+        # only add useful keywords unless P/T bonus is significant
+        if totToughness + totPower < 4 and (keywords or grantingExtraBlock):
+            pow = totPower
+            extraBlock = grantingExtraBlock
+
+            def _kwPred(c):
+                if keywords:
+                    for keyword in keywords:
+                        if AttachAi.isUsefulAttachKeyword(keyword, c, sa, pow):
+                            return True
+
+                if c.hasKeyword(Keyword.INFECT) and pow >= 2:
+                    # consider +2 power a significant bonus on Infect creatures
+                    return True
+                if extraBlock and CombatUtil.canBlock(c, True) and not c.canBlockAny():
+                    return True
+                return False
+            prefList = CardLists.filter(prefList, _kwPred)
+
+        # some auras/equipment aren't useful in multiples
+        if attachSource.hasSVar("NonStackingAttachEffect"):
+            isEqP = CardPredicates.isEquippedBy(attachSource.getName())
+            isEnP = CardPredicates.isEnchantedBy(attachSource.getName())
+            prefList = CardLists.filter(prefList, lambda c: not (isEqP(c) or isEnP(c)))
+
+        # Don't pump cards that will die.
+        prefList = ComputerUtil.getSafeTargets(ai, sa, prefList)
+
+        if attachSource.isAura():
+            if attachSource.getName() != "Daybreak Coronet":
+                # TODO For Auras like Rancor, that aren't as likely to lead to
+                # card disadvantage, this check should be skipped
+                prefList = CardLists.filter(prefList, lambda c: not c.isEnchanted() or c.hasKeyword(Keyword.HEXPROOF))
+
+            # should not attach Auras to creatures that does leave the play
+            prefList = CardLists.filter(prefList, lambda c: not c.hasSVar("EndOfTurnLeavePlay"))
+
+        # Should not attach things to crewed vehicles that will stop being creatures soon
+        # Equipping in Main 1 on creatures that actually attack is probably fine though
+        # TODO Somehow test for definitive advantage (e.g. opponent low on health, AI is attacking)
+        # to be able to deal the final blow with an enchanted vehicle like that
+        canOnlyTargetCreatures = True
+        if attachSource.isAura():
+            for ki in attachSource.getKeywords(Keyword.ENCHANT):
+                o = ki.getOriginal()
+                m = o.split(":")
+                v = m[1]
+                if not v.startswith("Creature"):
+                    canOnlyTargetCreatures = False
+                    break
+        if canOnlyTargetCreatures and (attachSource.isAura() or attachSource.isEquipment()):
+            prefList = CardLists.filter(prefList, lambda c: c.getTimesCrewedThisTurn() == 0 or (attachSource.isEquipment() and getattr(attachSource.getGame().getPhaseHandler(), "is")(PhaseType.MAIN1, ai)))
+
+        if not grantingAbilities:
+            # Probably prefer to Enchant Creatures that Can Attack
+            # Filter out creatures that can't Attack or have Defender
+            if not keywords:
+                powerBonus = totPower
+
+                def _atkPred(c):
+                    if not c.isCreature():
+                        return True
+                    return powerBonus + c.getNetPower() > 0 and ComputerUtilCombat.canAttackNextTurn(c)
+                prefList = CardLists.filter(prefList, _atkPred)
+            card = ComputerUtilCard.getBestAI(prefList)
+        else:
+            for pref in prefList:
+                if pref.isLand() and pref.isUntapped():
+                    return pref
+            # If we grant abilities, we may want to put it on something Weak?
+            # Possibly more defensive?
+            card = ComputerUtilCard.getWorstPermanentAI(prefList, False, False, False, False)
+
+        if card is None:
+            return AttachAi.chooseLessPreferred(mandatory, list)
+
+        return card
+
+    @staticmethod
+    def attachToCardAIPreferences(aiPlayer, sa, mandatory):
+        # TODO AttachSource is currently set for the Source of the Spell, but
+        # at some point can support attaching a different card
+        attachSource = sa.getHostCard()
+        if sa.hasParam("Object"):
+            objs = AbilityUtils.getDefinedCards(attachSource, sa.getParam("Object"), sa)
+            if objs.isEmpty():
+                if not mandatory:
+                    return None
+            else:
+                attachSource = objs.get(0)
+
+        # Don't equip if DontEquip SVar is set
+        if attachSource.hasSVar("DontEquip"):
+            return None
+
+        # is no attachment so no using attach
+        if not mandatory and not attachSource.isAttachment():
+            return None
+
+        # Is a SA that moves target attachment
+        if "MoveTgtAura" == sa.getParam("AILogic"):
+            pred1 = CardPredicates.isControlledByAnyOf(aiPlayer.getOpponents())
+            list = CardLists.filter(CardUtil.getValidCardsToTarget(sa),
+                lambda card: pred1(card) or ComputerUtilCard.isUselessCreature(aiPlayer, card.getAttachedTo()))
+
+            return ComputerUtilCard.getBestAI(list) if not list.isEmpty() else None
+        elif "Unenchanted" == sa.getParam("AILogic"):
+            list = CardUtil.getValidCardsToTarget(sa)
+            preferred = CardLists.filter(list, lambda card: not card.hasCardAttachments())
+            return Aggregates.random(list) if preferred.isEmpty() else Aggregates.random(preferred)
+
+        # Don't fortify if already fortifying
+        if attachSource.isFortification() and attachSource.getAttachedTo() is not None \
+                and attachSource.getAttachedTo().getController() == aiPlayer:
+            return None
+
+        list = None
+        if sa.usesTargeting():
+            list = CardUtil.getValidCardsToTarget(sa)
+        else:
+            list = AbilityUtils.getDefinedCards(attachSource, sa.getParam("Defined"), sa)
+
+        if list.isEmpty():
+            return None
+        prefList = CardLists.filter(list, CardPredicates.canBeAttached(attachSource, sa))
+
+        # Filter AI-specific targets if provided
+        prefList = ComputerUtil.filterAITgts(sa, aiPlayer, prefList, True)
+
+        c = AttachAi.attachGeneralAI(aiPlayer, sa, prefList, mandatory, attachSource, sa.getParam("AILogic"))
+
+        aic = aiPlayer.getController().getAi()
+        if c is not None and attachSource.isEquipment() \
+                and attachSource.isEquipping() \
+                and attachSource.getEquipping().getController() == aiPlayer:
+            if c.equals(attachSource.getEquipping()) and not mandatory:
+                # Do not equip if equipping the same card already
+                return None
+
+            if "InstantReequipPowerBuff" == sa.getParam("AILogic"):
+                return c
+
+            uselessCreature = ComputerUtilCard.isUselessCreature(aiPlayer, attachSource.getEquipping())
+
+            if aic.getProperty(AiProps.MOVE_EQUIPMENT_TO_BETTER_CREATURES) == "never" and not mandatory:
+                # Do not equip other creatures if the AI profile does not allow moving equipment around
+                return None
+            elif aic.getProperty(AiProps.MOVE_EQUIPMENT_TO_BETTER_CREATURES) == "from_useless_only":
+                # Do not equip other creatures if the AI profile only allows moving equipment from useless creatures
+                # and the equipped creature is still useful (not non-untapping+tapped and not set to can't attack/block)
+                if not uselessCreature and not mandatory:
+                    return None
+
+            # make sure to prioritize casting spells in main 2 (creatures, other equipment, etc.) rather than moving equipment around
+            decideMoveFromUseless = uselessCreature and aic.getBoolProperty(AiProps.PRIORITIZE_MOVE_EQUIPMENT_IF_USELESS)
+
+            if not decideMoveFromUseless and AiCardMemory.isMemorySetEmpty(aiPlayer, AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_MAIN2):
+                futureSpell = aic.predictSpellToCastInMain2(ApiType.Attach)
+                if futureSpell is not None and futureSpell.getHostCard() is not None:
+                    aic.reserveManaSources(futureSpell)
+
+            # avoid randomly moving the equipment back and forth between several creatures in one turn
+            if AiCardMemory.isRememberedCard(aiPlayer, attachSource, AiCardMemory.MemorySet.ATTACHED_THIS_TURN) and not mandatory:
+                return None
+
+            # do not equip if the new creature is not significantly better than the previous one (evaluates at least better by evalT)
+            evalT = aic.getIntProperty(AiProps.MOVE_EQUIPMENT_CREATURE_EVAL_THRESHOLD)
+            if not decideMoveFromUseless and ComputerUtilCard.evaluateCreature(c) - ComputerUtilCard.evaluateCreature(attachSource.getEquipping()) < evalT and not mandatory:
+                return None
+
+        AiCardMemory.rememberCard(aiPlayer, attachSource, AiCardMemory.MemorySet.ATTACHED_THIS_TURN)
+
+        if c is None and mandatory:
+            CardLists.shuffle(list)
+            c = list.get(0)
+
+        return c
+
+    @staticmethod
+    def attachGeneralAI(ai, sa, list, mandatory, attachSource, logic):
+        # AI logic types that do not require a prefList and that evaluate the
+        # usefulness of attach action autonomously
+        if "InstantReequipPowerBuff" == logic:
+            return AttachAi.attachAIInstantReequipPreference(sa, attachSource)
+
+        if "Pump" == logic or "Animate" == logic or "Curiosity" == logic or "MoveTgtAura" == logic \
+                or "MoveAllAuras" == logic:
+            prefPlayer = ai
+        else:
+            prefPlayer = AiAttackController.choosePreferredDefenderPlayer(ai)
+
+        # Some ChangeType cards are beneficial, and PrefPlayer should be
+        # changed to represent that
+        if "Reanimate" == logic or "SpecificCard" == logic:
+            # Reanimate or SpecificCard aren't so restrictive
+            prefList = list
+        else:
+            prefList = CardLists.filterControlledBy(list, prefPlayer)
+
+        # If there are no preferred cards, and not mandatory bail out
+        if logic is None or prefList.isEmpty():
+            return AttachAi.chooseUnpreferred(mandatory, list)
+
+        # Preferred list has at least one card in it to make to the actual Logic
+        c = None
+        if "GainControl" == logic:
+            c = AttachAi.attachAIControlPreference(sa, prefList, mandatory, attachSource)
+        elif "Curse" == logic:
+            c = AttachAi.attachAICursePreference(sa, prefList, mandatory, attachSource, ai)
+        elif "Pump" == logic or logic.startswith("Move"):
+            c = AttachAi.attachAIPumpPreference(ai, sa, prefList, mandatory, attachSource)
+        elif "Curiosity" == logic:
+            c = AttachAi.attachAICuriosityPreference(sa, prefList, mandatory, attachSource)
+        elif "ChangeType" == logic:
+            c = AttachAi.attachAIChangeTypePreference(sa, prefList, mandatory, attachSource)
+        elif "Animate" == logic:
+            c = AttachAi.attachAIAnimatePreference(sa, prefList, mandatory, attachSource)
+        elif "Reanimate" == logic:
+            c = AttachAi.attachAIReanimatePreference(sa, prefList, mandatory, attachSource)
+        elif "SpecificCard" == logic:
+            c = AttachAi.attachAISpecificCardPreference(sa, prefList, mandatory, attachSource)
+        elif "HighestEvaluation" == logic:
+            c = AttachAi.attachAIHighestEvaluationPreference(prefList)
+
+        if AttachAi.isAuraSpell(sa):
+            if attachSource.getReplacementEffects().anyMatch(lambda re: re.getMode() == ReplacementType.Untap and re.getLayer() == ReplacementLayer.CantHappen):
+                c = AttachAi.attachAIKeepTappedPreference(sa, prefList, mandatory, attachSource)
+
+        # Consider exceptional cases which break the normal evaluation rules
+        if not AttachAi.isUsefulAttachAction(ai, c, sa):
+            return None
+
+        return c
+
+    @staticmethod
+    def containsUsefulCurseKeyword(keywords, card, sa):
+        for keyword in keywords:
+            if AttachAi.isUsefulCurseKeyword(keyword, card, sa):
+                return True
+        return False
+
+    @staticmethod
+    def isUsefulAttachKeyword(keyword, card, sa, powerBonus):
+        ai = sa.getActivatingPlayer()
+        ph = ai.getGame().getPhaseHandler()
+
+        if not CardUtil.isStackingKeyword(keyword) and card.hasKeyword(keyword):
+            return False
+
+        # Don't play if would choose a color the target is already protected from
+        if sa.getHostCard().hasSVar("ChosenProtection"):
+            oppAllCards = ai.getOpponents().getCardsIn(ZoneType.Battlefield)
+            cc = ComputerUtilCard.getMostProminentColor(oppAllCards)
+            if card.hasKeyword("Protection from " + cc.lower()):
+                return False
+            # Also don't play if it would destroy own Aura
+            for c in card.getEnchantedBy():
+                if c.getController().equals(ai) and c.isOfColor(cc):
+                    return False
+
+        evasive = keyword == "Fear" \
+            or keyword == "Intimidate" or keyword == "Shadow" \
+            or keyword == "Flying" or keyword == "Horsemanship" \
+            or keyword.startswith("Landwalk") or keyword == "All creatures able to block CARDNAME do so."
+        # give evasive keywords to creatures that can attack and deal damage
+
+        canBeBlocked = False
+        for opp in ai.getOpponents():
+            if CombatUtil.canBeBlocked(card, None, opp):
+                canBeBlocked = True
+                break
+
+        if evasive:
+            return card.getNetCombatDamage() + powerBonus > 0 \
+                and canBeBlocked \
+                and ComputerUtilCombat.canAttackNextTurn(card)
+        elif keyword == "Haste":
+            return card.hasSickness() and ph.isPlayerTurn(ai) and not card.isTapped() \
+                and card.getNetCombatDamage() + powerBonus > 0 \
+                and not ph.getPhase().isAfter(PhaseType.COMBAT_DECLARE_ATTACKERS) \
+                and ComputerUtilCombat.canAttackNextTurn(card)
+        elif keyword.endswith("Indestructible"):
+            return True
+        elif keyword.endswith("Deathtouch") or keyword.endswith("Wither"):
+            return card.getNetCombatDamage() + powerBonus > 0 \
+                and ((canBeBlocked and ComputerUtilCombat.canAttackNextTurn(card))
+                     or CombatUtil.canBlock(card, True))
+        elif keyword == "Double Strike" or keyword == "Lifelink":
+            return card.getNetCombatDamage() + powerBonus > 0 \
+                and (ComputerUtilCombat.canAttackNextTurn(card) or CombatUtil.canBlock(card, True))
+        elif keyword == "First Strike":
+            return card.getNetCombatDamage() + powerBonus > 0 and not card.hasDoubleStrike() \
+                and (ComputerUtilCombat.canAttackNextTurn(card) or CombatUtil.canBlock(card, True))
+        elif keyword.startswith("Flanking"):
+            return card.getNetCombatDamage() + powerBonus > 0 \
+                and canBeBlocked \
+                and ComputerUtilCombat.canAttackNextTurn(card)
+        elif keyword.startswith("Bushido"):
+            return (canBeBlocked and ComputerUtilCombat.canAttackNextTurn(card)) \
+                or CombatUtil.canBlock(card, True)
+        elif keyword == "Trample":
+            return card.getNetCombatDamage() + powerBonus > 1 \
+                and canBeBlocked \
+                and ComputerUtilCombat.canAttackNextTurn(card)
+        elif keyword == "Infect":
+            return card.getNetCombatDamage() + powerBonus > 0 \
+                and ComputerUtilCombat.canAttackNextTurn(card)
+        elif keyword == "Vigilance":
+            return card.getNetCombatDamage() + powerBonus > 0 \
+                and ComputerUtilCombat.canAttackNextTurn(card) \
+                and CombatUtil.canBlock(card, True)
+        elif keyword == "Reach":
+            return not card.hasKeyword(Keyword.FLYING) and CombatUtil.canBlock(card, True)
+        elif keyword == "Shroud" or keyword == "Hexproof":
+            return not card.hasKeyword(Keyword.SHROUD) and not card.hasKeyword(Keyword.HEXPROOF)
+        else:
+            return keyword != "Defender"
+
+    @staticmethod
+    def isUsefulCurseKeyword(keyword, card, sa):
+        if not CardUtil.isStackingKeyword(keyword) and card.hasKeyword(keyword):
+            return False
+
+        if keyword.endswith("CARDNAME can't attack.") or keyword == "Defender" \
+                or keyword.endswith("CARDNAME can't attack or block."):
+            return card.getNetCombatDamage() >= 1 and ComputerUtilCombat.canAttackNextTurn(card)
+        elif keyword.endswith("CARDNAME can't block."):
+            return CombatUtil.canBlock(card, True)
+        elif keyword.endswith("Prevent all combat damage that would be dealt by CARDNAME."):
+            return card.getNetCombatDamage() >= 1 and ComputerUtilCombat.canAttackNextTurn(card)
+        elif keyword.endswith("Prevent all combat damage that would be dealt to and dealt by CARDNAME.") \
+                or keyword.endswith("Prevent all damage that would be dealt to and dealt by CARDNAME."):
+            return card.getNetCombatDamage() >= 2 and ComputerUtilCombat.canAttackNextTurn(card)
+        return True
+
+    @staticmethod
+    def isUsefulAttachAction(ai, c, sa):
+        if c is None:
+            return False
+
+        # useless to equip a creature that can't attack or block.
+        return not sa.getHostCard().isEquipment() or not ComputerUtilCard.isUselessCreature(ai, c)
+
+    @staticmethod
+    def doPumpOrCurseAILogic(ai, sa, list, type):
+        chosen = None
+
+        def _aiType(c):
+            # Don't buff opponent's creatures of given type
+            if not c.getController().equals(ai):
+                return False
+            return c.isValid(type, ai, sa.getHostCard(), sa)
+        aiType = CardLists.filter(list, _aiType)
+
+        def _oppNonType(c):
+            # Don't debuff AI's own creatures not of given type
+            if c.getController().equals(ai):
+                return False
+            return not c.isValid(type, ai, sa.getHostCard(), sa) and not ComputerUtilCard.isUselessCreature(ai, c)
+        oppNonType = CardLists.filter(list, _oppNonType)
+
+        if aiType and oppNonType:
+            bestAi = ComputerUtilCard.getBestCreatureAI(aiType)
+            bestOpp = ComputerUtilCard.getBestCreatureAI(oppNonType)
+            chosen = bestAi if ComputerUtilCard.evaluateCreature(bestAi) > ComputerUtilCard.evaluateCreature(bestOpp) else bestOpp
+        elif aiType:
+            chosen = ComputerUtilCard.getBestCreatureAI(aiType)
+        elif oppNonType:
+            chosen = ComputerUtilCard.getBestCreatureAI(oppNonType)
+
+        return chosen
+
+    def confirmAction(self, player, sa, mode, message, params):
+        return True
+
+    def chooseSingleCard(self, ai, sa, options, isOptional, targetedPlayer, params):
+        return AttachAi.attachGeneralAI(ai, sa, options, not isOptional, sa.getHostCard(), sa.getParam("AILogic"))
+
+    def chooseSinglePlayer(self, ai, sa, options, params):
+        return AttachAi.attachToPlayerAIPreferences(ai, sa, True, options)
 ```

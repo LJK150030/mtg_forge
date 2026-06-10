@@ -175,7 +175,7 @@ classDiagram
 
 ## Design Description
 
-CardEdition is an immutable, final value object in the `forge-core` module representing a single Magic: The Gathering set. It holds release metadata (date, set codes, type, border, foil style) and the set's contents—cards, tokens, and "other" entries stored as `EditionEntry` records in case-insensitive `ListMultimap`s keyed by section—alongside booster and draft configuration via `SealedTemplate`s, `BoosterSlot`s, and `DraftOptions`. Beyond accessors it provides domain queries such as obtainable/rebalanced-card filtering, collector-number lookup, and natural collector-number sorting through a cached zero-padding transform.
+CardEdition is an immutable, final value object in the `forge-core` module representing a single Magic: The Gathering set. It holds release metadata (date, set codes, type, border, foil style) and the set's contentsâ€”cards, tokens, and "other" entries stored as `EditionEntry` records in case-insensitive `ListMultimap`s keyed by sectionâ€”alongside booster and draft configuration via `SealedTemplate`s, `BoosterSlot`s, and `DraftOptions`. Beyond accessors it provides domain queries such as obtainable/rebalanced-card filtering, collector-number lookup, and natural collector-number sorting through a cached zero-padding transform.
 
 Implementing `Comparable`, it orders editions by release date then name, with equality on code and name. Its private constructors are driven by a nested `Reader` (a `StorageReaderFolder` that parses edition `.txt` files via regex) and exposed through the nested `Collection` storage, which adds alias/code2 resolution and read-only locking. It collaborates with `CardDb`, `CardPool`, `PaperCard`, and `StaticData` to resolve cards and build print sheets, with `UNKNOWN` serving as a sentinel.
 
@@ -799,8 +799,8 @@ public final class CardEdition implements Comparable<CardEdition> {
                  * name - grouping #3
                  * artist name - grouping #5
                  */
-                //"(?:^(?<cnum>.?[0-9A-Z-]+\\S?[A-ZÃ¢Ëœâ€¡]*)\\s)?(?<name>[^@]*)(?: @(?<artist>.*))?$"
-                "(^(.?[0-9A-Z-]+\\S?[A-ZÃ¢Ëœâ€¡]*)\\s)?([^@]+)( @(.*))?$"
+                //"(?:^(?<cnum>.?[0-9A-Z-]+\\S?[A-ZÃƒÂ¢Ã‹Å“Ã¢â‚¬Â¡]*)\\s)?(?<name>[^@]*)(?: @(?<artist>.*))?$"
+                "(^(.?[0-9A-Z-]+\\S?[A-ZÃƒÂ¢Ã‹Å“Ã¢â‚¬Â¡]*)\\s)?([^@]+)( @(.*))?$"
         );
 
         public static final Pattern EXTRA_PARAMS_PATTERN = Pattern.compile(
@@ -1248,4 +1248,977 @@ public final class CardEdition implements Comparable<CardEdition> {
         return true;
     }
 }
+```
+
+## Python
+`forge/card/CardEdition.py`
+
+```python
+from forge.StaticData import StaticData
+from forge.card.CardDb import CardDb
+from forge.card.CardDb.CardArtPreference import CardArtPreference
+from forge.card.CardRarity import CardRarity
+from forge.card.CardType import CardType
+from forge.card.DraftOptions import DraftOptions
+from forge.card.MagicColor import MagicColor
+from forge.card.PrintSheet import PrintSheet
+from forge.deck.CardPool import CardPool
+from forge.item.BoosterSlot import BoosterSlot
+from forge.item.PaperCard import PaperCard
+from forge.item.SealedTemplate import SealedTemplate
+from forge.item.SealedTemplateWithSlots import SealedTemplateWithSlots
+from forge.util.Aggregates import Aggregates
+from forge.util.FileSection import FileSection
+from forge.util.FileUtil import FileUtil
+from forge.util.IItemReader import IItemReader
+from forge.util.IterableUtil import IterableUtil
+from forge.util.MyRandom import MyRandom
+from forge.util.TextUtil import TextUtil
+from forge.util.storage.StorageBase import StorageBase
+from forge.util.storage.StorageReaderBase import StorageReaderBase
+from forge.util.storage.StorageReaderFolder import StorageReaderFolder
+
+import enum
+import functools
+import re
+import sys
+from datetime import datetime
+
+
+class _CaseInsensitiveMap(dict):
+    """Mirror of a java.util.TreeMap with String.CASE_INSENSITIVE_ORDER."""
+
+    @staticmethod
+    def _k(key):
+        return key.lower() if isinstance(key, str) else key
+
+    def __setitem__(self, key, value):
+        super().__setitem__(_CaseInsensitiveMap._k(key), value)
+
+    def __getitem__(self, key):
+        return super().__getitem__(_CaseInsensitiveMap._k(key))
+
+    def get(self, key, default=None):
+        return super().get(_CaseInsensitiveMap._k(key), default)
+
+    def __contains__(self, key):
+        return super().__contains__(_CaseInsensitiveMap._k(key))
+
+
+class ListMultimap:
+    """Minimal stand-in for com.google.common.collect.ListMultimap."""
+
+    def __init__(self, case_insensitive=False):
+        self._ci = case_insensitive
+        self._data = {}
+        self._orig = {}
+
+    def _norm(self, key):
+        if self._ci and isinstance(key, str):
+            return key.lower()
+        return key
+
+    def put(self, key, value):
+        nk = self._norm(key)
+        if nk not in self._data:
+            self._data[nk] = []
+            self._orig[nk] = key
+        self._data[nk].append(value)
+
+    def get(self, key):
+        return self._data.get(self._norm(key), [])
+
+    def containsKey(self, key):
+        return self._norm(key) in self._data
+
+    def keySet(self):
+        return [self._orig[k] for k in self._data]
+
+    def values(self):
+        result = []
+        for v in self._data.values():
+            result.extend(v)
+        return result
+
+    def asMap(self):
+        return {self._orig[k]: v for k, v in self._data.items()}
+
+
+class CardEdition:
+    """CardSet class."""
+
+    class Type(enum.Enum):
+        UNKNOWN = enum.auto()
+        CORE = enum.auto()
+        EXPANSION = enum.auto()
+        STARTER = enum.auto()
+        REPRINT = enum.auto()
+        BOXED_SET = enum.auto()
+        COLLECTOR_EDITION = enum.auto()
+        DUEL_DECK = enum.auto()
+        PROMO = enum.auto()
+        ONLINE = enum.auto()
+        DRAFT = enum.auto()
+        COMMANDER = enum.auto()
+        MULTIPLAYER = enum.auto()
+        FUNNY = enum.auto()
+        OTHER = enum.auto()  # FALLBACK CATEGORY
+        CUSTOM_SET = enum.auto()  # custom sets
+
+        def getBoosterBoxDefault(self):
+            if self in (CardEdition.Type.CORE, CardEdition.Type.EXPANSION):
+                return "36"
+            return "0"
+
+        def getFatPackDefault(self):
+            if self in (CardEdition.Type.CORE, CardEdition.Type.EXPANSION):
+                return "10"
+            return "0"
+
+        def __str__(self):
+            names = TextUtil.splitWithParenthesis(self.name.lower(), '_')
+            for i in range(len(names)):
+                names[i] = TextUtil.capitalize(names[i])
+            return TextUtil.join(list(names), " ")
+
+        @staticmethod
+        def fromString(label):
+            names = list(TextUtil.splitWithParenthesis(label.upper(), ' '))
+            value = TextUtil.join(names, "_")
+            return CardEdition.Type[value]
+
+    class FoilType(enum.Enum):
+        NOT_SUPPORTED = enum.auto()  # sets before Urza's Legacy
+        OLD_STYLE = enum.auto()  # sets between Urza's Legacy and 8th Edition
+        MODERN = enum.auto()  # 8th Edition and newer
+
+    class BorderColor(enum.Enum):
+        WHITE = enum.auto()
+        BLACK = enum.auto()
+        SILVER = enum.auto()
+        GOLD = enum.auto()
+
+    # reserved names of sections inside edition files, that are not parsed as cards
+    reservedSectionNames = ["metadata", "tokens", "other"]
+
+    # commonly used printsheets with collector number
+    class EditionSectionWithCollectorNumbers(enum.Enum):
+        CARDS = "cards"
+        SPECIAL_SLOT = "special slot"  # to help with convoluted boosters
+        PRECON_PRODUCT = "precon product"
+        BORDERLESS = "borderless"
+        ETCHED = "etched"
+        SHOWCASE = "showcase"
+        FULL_ART = "full art"
+        EXTENDED_ART = "extended art"
+        ALTERNATE_ART = "alternate art"
+        RETRO_FRAME = "retro frame"
+        BUY_A_BOX = "buy a box"
+        PROMO = "promo"
+        PRERELEASE_PROMO = "prerelease promo"
+        BUNDLE = "bundle"
+        BOX_TOPPER = "box topper"
+        JUMPSTART = "jumpstart"
+        REBALANCED = "rebalanced"
+        ETERNAL = "eternal"
+        CONJURED = "conjured"
+        SCHEME = "scheme"
+        PRINTSHEETS = "printsheets"
+
+        def __init__(self, n):
+            self._section_name = n
+
+        def getName(self):
+            return self._section_name
+
+        @staticmethod
+        def getNames():
+            list_ = []
+            for s in CardEdition.EditionSectionWithCollectorNumbers:
+                sName = s.getName()
+                list_.append(sName)
+            return list_
+
+    def getDraftOptions(self):
+        return self.draftOptions
+
+    sortableCollNumberLookup = {}
+
+    @staticmethod
+    def getSortableCollectorNumber(collectorNumber):
+        inputCollNumber = collectorNumber
+        if collectorNumber is None or collectorNumber == "":
+            inputCollNumber = "50000"  # very big number of 5 digits to have them in last positions
+
+        matchedCollNr = CardEdition.sortableCollNumberLookup.get(inputCollNumber, None)
+        if matchedCollNr is not None:
+            return matchedCollNr
+
+        # Now, for proper sorting, let's zero-pad the collector number (if integer)
+        try:
+            collNr = int(inputCollNumber)
+            sortableCollNr = "%05d" % collNr
+        except ValueError:
+            nonNumSub = re.sub(r"[0-9]", "", inputCollNumber)
+            onlyNumSub = re.sub(r"[^0-9]", "", inputCollNumber)
+            try:
+                collNr = int(onlyNumSub)
+            except ValueError:
+                collNr = 0  # this is the case of ONLY-letters collector numbers
+            if (collNr > 0) and inputCollNumber.startswith(onlyNumSub):  # e.g. 12a, 37+, 2018f,
+                sortableCollNr = ("%05d" % collNr) + nonNumSub
+            else:  # e.g. WS6, S1
+                sortableCollNr = nonNumSub + ("%05d" % collNr)
+        CardEdition.sortableCollNumberLookup[inputCollNumber] = sortableCollNr
+        return sortableCollNr
+
+    class EditionEntry:
+        def __init__(self, name, collectorNumber, rarity, artistName, extraParams):
+            self.name = name
+            self.collectorNumber = collectorNumber
+            self.rarity = rarity
+            self.artistName = artistName
+            self.extraParams = extraParams
+
+        def __str__(self):
+            sb = []
+            if self.collectorNumber is not None:
+                sb.append(self.collectorNumber)
+                sb.append(' ')
+            if self.rarity != CardRarity.Unknown and self.rarity != CardRarity.Token:
+                sb.append(str(self.rarity))
+                sb.append(' ')
+            sb.append(self.name)
+            if self.artistName is not None:
+                sb.append(" @")
+                sb.append(self.artistName)
+            if self.extraParams is not None:
+                sb.append(" $")
+                sb.append(", ".join('"%s"="%s"' % (k, v) for k, v in self.extraParams.items()))
+            return "".join(sb)
+
+        def compareTo(self, o):
+            al, bl = self.name.lower(), o.name.lower()
+            nameCmp = (al > bl) - (al < bl)
+            if 0 != nameCmp:
+                return nameCmp
+            thisCollNr = CardEdition.getSortableCollectorNumber(self.collectorNumber)
+            othrCollNr = CardEdition.getSortableCollectorNumber(o.collectorNumber)
+            collNrCmp = (thisCollNr > othrCollNr) - (thisCollNr < othrCollNr)
+            if 0 != collNrCmp:
+                return collNrCmp
+            return self.rarity.compareTo(o.rarity)
+
+        def getFlavorName(self):
+            if self.extraParams is None:
+                return None
+            return self.extraParams.get("flavorname")
+
+        def getFunctionalVariantName(self):
+            if self.extraParams is None:
+                return None
+            return self.extraParams.get("variant")
+
+    # Equivalent to the set code of CardEdition.UNKNOWN
+    UNKNOWN_CODE = "???"
+    UNKNOWN_SET_NAME = "UNKNOWN"
+    UNKNOWN = None  # assigned after class definition
+
+    def _set_defaults(self):
+        self.date = None
+        self.code = None
+        self.code2 = None
+        self.scryfallCode = None
+        self.tokensCode = None
+        self.tokenFallbackCode = None
+        self.cardsLanguage = None
+        self.type = None
+        self.name = None
+        self.alias = None
+        self.borderColor = CardEdition.BorderColor.BLACK
+
+        # SealedProduct
+        self.prerelease = None
+        self.boosterBoxCount = 0
+        self.fatPackCount = 0
+        self.fatPackExtraSlots = ""
+
+        # Booster/draft info
+        self.boosterSlots = None
+        self.smallSetOverride = False
+        self.additionalUnlockSet = ""
+        self.foilType = CardEdition.FoilType.NOT_SUPPORTED
+
+        # Replace all of these things with booster slots
+        self.foilAlwaysInCommonSlot = False
+        self.foilChanceInBooster = 0
+        self.chanceReplaceCommonWith = 0
+        self.slotReplaceCommonWith = "Common"
+        self.additionalSheetForFoils = ""
+        self.boosterMustContain = ""
+        self.boosterReplaceSlotFromPrintSheet = ""
+        self.sheetReplaceCardFromSheet = ""
+        self.sheetReplaceCardFromSheet2 = ""
+
+        # Draft options
+        self.draftOptions = None
+        self.chaosDraftThemes = []
+
+        self.otherMap = ListMultimap()
+
+        self.boosterArts = 1
+        self.boosterTpl = None
+        self.boosterTemplates = {}
+
+    def _init_from_maps(self, cardMap, tokens, customPrintSheetsToParse):
+        self.cardMap = cardMap
+        self.cardsInSet = list(cardMap.values())
+        self.cardsInSet.sort(key=functools.cmp_to_key(lambda a, b: a.compareTo(b)))
+        self.cardsInSetLookupMap = ListMultimap(case_insensitive=True)
+        for e in self.cardsInSet:
+            self.cardsInSetLookupMap.put(e.name, e)
+        self.tokenMap = tokens
+        self.customPrintSheetsToParse = customPrintSheetsToParse
+
+    def __init__(self, *args):
+        self._set_defaults()
+        if len(args) == 3:
+            cardMap, tokens, customPrintSheetsToParse = args
+            self._init_from_maps(cardMap, tokens, customPrintSheetsToParse)
+        elif len(args) == 6:
+            # date, code, code2, type, name, foil
+            date, code, code2, type_, name, foil = args
+            self._init_from_maps(ListMultimap(), ListMultimap(), {})
+            self.code = code
+            self.code2 = code2
+            self.type = type_
+            self.name = name
+            self.date = CardEdition.parseDate(date)
+            self.foilType = foil
+        else:
+            raise TypeError("Unsupported CardEdition constructor arguments")
+
+    @staticmethod
+    def parseDate(date):
+        if len(date) <= 7:
+            date = date + "-01"
+        try:
+            return datetime.strptime(date, "%Y-%m-%d")
+        except Exception:
+            return datetime.now()
+
+    def getDate(self):
+        return self.date
+
+    def getCode(self):
+        return self.code
+
+    def getCode2(self):
+        return self.code2
+
+    def getScryfallCode(self):
+        return self.scryfallCode.lower()
+
+    def getTokensCode(self):
+        return self.tokensCode.lower()
+
+    def getCardsLangCode(self):
+        return self.cardsLanguage.lower()
+
+    def getType(self):
+        return self.type
+
+    def getName(self):
+        return self.name
+
+    def getAlias(self):
+        return self.alias
+
+    def getPrerelease(self):
+        return self.prerelease
+
+    def getBoosterBoxCount(self):
+        return self.boosterBoxCount
+
+    def getFatPackCount(self):
+        return self.fatPackCount
+
+    def getFatPackExtraSlots(self):
+        return self.fatPackExtraSlots
+
+    def getFoilType(self):
+        return self.foilType
+
+    def getFoilChanceInBooster(self):
+        return self.foilChanceInBooster
+
+    def getFoilAlwaysInCommonSlot(self):
+        return self.foilAlwaysInCommonSlot
+
+    def getChanceReplaceCommonWith(self):
+        return self.chanceReplaceCommonWith
+
+    def getSlotReplaceCommonWith(self):
+        return self.slotReplaceCommonWith
+
+    def getAdditionalSheetForFoils(self):
+        return self.additionalSheetForFoils
+
+    def getAdditionalUnlockSet(self):
+        return self.additionalUnlockSet
+
+    def getBoosterMustContain(self):
+        return self.boosterMustContain
+
+    def getBoosterReplaceSlotFromPrintSheet(self):
+        return self.boosterReplaceSlotFromPrintSheet
+
+    def getSheetReplaceCardFromSheet(self):
+        return self.sheetReplaceCardFromSheet
+
+    def getSheetReplaceCardFromSheet2(self):
+        return self.sheetReplaceCardFromSheet2
+
+    def getChaosDraftThemes(self):
+        return self.chaosDraftThemes
+
+    def getCards(self):
+        return self.cardMap.get(CardEdition.EditionSectionWithCollectorNumbers.CARDS.getName())
+
+    def getRebalancedCards(self):
+        return self.cardMap.get(CardEdition.EditionSectionWithCollectorNumbers.REBALANCED.getName())
+
+    def getFunnyEternalCards(self):
+        return self.cardMap.get(CardEdition.EditionSectionWithCollectorNumbers.ETERNAL.getName())
+
+    def getObtainableCards(self):
+        allCards = list(self.getAllCardsInSet())
+        conjuredCards = self.cardMap.get(CardEdition.EditionSectionWithCollectorNumbers.CONJURED.getName())
+        if conjuredCards is not None:
+            allCards = [c for c in allCards if c not in conjuredCards]
+        return allCards
+
+    def getAllCardsInSet(self):
+        return self.cardsInSet
+
+    def getCardInSet(self, cardName):
+        return self.cardsInSetLookupMap.get(cardName)
+
+    def getCardFromCollectorNumber(self, collectorNumber):
+        if collectorNumber is None or collectorNumber == "":
+            return None
+        for c in self.cardsInSet:
+            # Could build a map for this one too if it's used for more than one-offs.
+            if c.collectorNumber is not None and c.collectorNumber.lower() == collectorNumber.lower():
+                return c
+        return None
+
+    def getSectionForCollectorNumber(self, collectorNumber):
+        """Returns the section name (e.g. "cards", "full art", "borderless") that contains the given collector number, or None."""
+        if collectorNumber is None or collectorNumber == "":
+            return None
+        for key, value in self.cardMap.asMap().items():
+            for ee in value:
+                if ee.collectorNumber is not None and collectorNumber.lower() == ee.collectorNumber.lower():
+                    return key
+        return None
+
+    def isRebalanced(self, cardName):
+        for cis in self.getRebalancedCards():
+            if cis.name == cardName:
+                return True
+        return False
+
+    def isCardObtainable(self, cardName):
+        for ee in self.cardMap.get(CardEdition.EditionSectionWithCollectorNumbers.CONJURED.getName()):
+            if ee.name == cardName:
+                return False
+        return True
+
+    def isModern(self):
+        return self.getDate() > CardEdition.parseDate("2003-07-27")  # 8ED and above are modern except some promo cards and others
+
+    def getTokens(self):
+        return self.tokenMap
+
+    def getTokenSet(self, token):
+        if self.tokenMap.containsKey(token):
+            return self.getCode()
+        if self.tokenFallbackCode is not None:
+            return StaticData.instance().getCardEdition(self.tokenFallbackCode).getTokenSet(token)
+        return None
+
+    def getOtherSet(self, token):
+        if self.otherMap.containsKey(token):
+            return self.getCode()
+        if self.tokenFallbackCode is not None:
+            return StaticData.instance().getCardEdition(self.tokenFallbackCode).getOtherSet(token)
+        return None
+
+    def findOther(self, name):
+        if self.otherMap.containsKey(name):
+            return Aggregates.random(self.otherMap.get(name))
+        return None
+
+    def compareTo(self, o):
+        if o is None:
+            return 1
+        dateComp = (self.date > o.date) - (self.date < o.date)
+        if 0 != dateComp:
+            return dateComp
+        return (self.name > o.name) - (self.name < o.name)
+
+    def __hash__(self):
+        return (hash(self.code) * 17) + hash(self.name)
+
+    def __eq__(self, obj):
+        if self is obj:
+            return True
+        if obj is None:
+            return False
+        if type(self) is not type(obj):
+            return False
+        other = obj
+        return other.name == self.name and self.code == other.code
+
+    def __str__(self):
+        return self.name + " (" + self.code + ")"
+
+    def getBorderColor(self):
+        return self.borderColor
+
+    def isLargeSet(self):
+        return len(self.cardsInSet) > 200 and not self.smallSetOverride
+
+    def getCntBoosterPictures(self):
+        return self.boosterArts
+
+    def getBoosterTemplate(self, boosterType="Draft"):
+        return self.boosterTemplates.get(boosterType)
+
+    def getRandomBoosterKind(self):
+        return Aggregates.random(list(self.boosterTemplates.keys()))
+
+    def getAvailableBoosterTypes(self):
+        return set(self.boosterTemplates.keys())
+
+    def hasBoosterTemplate(self):
+        return "Draft" in self.boosterTemplates
+
+    def getPrintSheetsBySection(self):
+        cardDb = StaticData.instance().getCommonCards()
+
+        sheets = []
+        for key, value in self.cardMap.asMap().items():
+            if key == CardEdition.EditionSectionWithCollectorNumbers.CONJURED.getName():
+                continue
+            sheet = PrintSheet("%s %s" % (self.getCode(), key))
+
+            for card in value:
+                sheet.add(cardDb.getCard(card.name, self.getCode(), card.collectorNumber))
+
+            sheets.append(sheet)
+
+        for sheetName in self.customPrintSheetsToParse.keys():
+            sheetToParse = self.customPrintSheetsToParse.get(sheetName)
+            sheetPool = CardPool.fromCardList(sheetToParse)
+            sheet = PrintSheet("%s %s" % (self.getCode(), sheetName), sheetPool)
+            sheets.append(sheet)
+
+        return sheets
+
+    class Reader(StorageReaderFolder):
+
+        CARD_PATTERN = re.compile(
+            # Collector numbers now should allow hyphens for Planeswalker Championship Promos
+            #   * cnum - grouping #2
+            #   * rarity - grouping #4
+            #   * name - grouping #5
+            #   * artist name - grouping #7
+            #   * extra parameters - grouping #9
+            r"(^(.?[0-9A-Z-]+\S*[A-Z]*)\s)?(([SCURML])\s)?([^@$]+)( @([^$]*))?( \$\{(.+)\})?$"
+        )
+
+        TOKEN_PATTERN = re.compile(
+            # cnum - grouping #2
+            # name - grouping #3
+            # artist name - grouping #5
+            r"(^(.?[0-9A-Z-]+\S?[A-Z???????????????]*)\s)?([^@]+)( @(.*))?$"
+        )
+
+        EXTRA_PARAMS_PATTERN = re.compile(
+            # Simple JSON string map parser - "key": "value". No support for escaping quotation marks or anything fancy.
+            r'"([^"]+)"\s*:\s*"([^"]+)",?'
+        )
+
+        def __init__(self, path, isCustomEditions=False):
+            super().__init__(path, CardEdition.getCode)
+            self.isCustomEditions = isCustomEditions
+
+        def createMap(self):
+            # Create our own map to make it case-insensitive for set codes.
+            return _CaseInsensitiveMap()
+
+        def read(self, file):
+            cardMap = ListMultimap()
+            customPrintSheetsToParse = {}
+            editionSectionsWithCollectorNumbers = CardEdition.EditionSectionWithCollectorNumbers.getNames()
+
+            contents = FileSection.parseSections(FileUtil.readFile(file))
+            metadata = FileSection.parse(contents.get("metadata"), FileSection.EQUALS_KV_SEPARATOR)
+
+            boosterSlotsToParse = []
+            boosterSlots = None
+            if metadata.contains("BoosterSlots"):
+                boosterSlotsToParse = list(metadata.get("BoosterSlots").split(","))
+                boosterSlots = []
+
+            for sectionName in contents.keys():
+                # skip reserved section names like 'metadata' and 'tokens' that are handled separately
+                if sectionName in CardEdition.reservedSectionNames:
+                    continue
+
+                if sectionName.endswith("Types"):
+                    CardType.Helper.parseTypes(sectionName, contents.get(sectionName))
+                elif sectionName in editionSectionsWithCollectorNumbers:
+                    # parse sections of the format "<collector number> <rarity> <name>"
+                    for line in contents.get(sectionName):
+                        matcher = CardEdition.Reader.CARD_PATTERN.fullmatch(line)
+
+                        if not matcher:
+                            continue
+
+                        collectorNumber = matcher.group(2)
+                        r = CardRarity.smartValueOf(matcher.group(4))
+                        cardName = matcher.group(5)
+                        artistName = matcher.group(7)
+                        extraParamText = matcher.group(9)
+                        extraParams = None
+                        if not (extraParamText is None or extraParamText.strip() == ""):
+                            if not CardEdition.Reader.EXTRA_PARAMS_PATTERN.match(extraParamText):
+                                print("Ignoring malformed parameter text: " + extraParamText, file=sys.stderr)
+                            else:
+                                extraParams = {}
+                                for paramMatcher in CardEdition.Reader.EXTRA_PARAMS_PATTERN.finditer(extraParamText):
+                                    k = paramMatcher.group(1).strip().lower()
+                                    v = paramMatcher.group(2).strip()
+                                    if k == "" or v == "":
+                                        continue
+                                    extraParams[k] = v
+
+                        cis = CardEdition.EditionEntry(cardName, collectorNumber, r, artistName, extraParams)
+                        cardMap.put(sectionName, cis)
+                elif sectionName in boosterSlotsToParse:
+                    # parse booster slots of the format "Base=N\n|Replace=<amount> <sheet>"
+                    boosterSlots.append(BoosterSlot.parseSlot(sectionName, contents.get(sectionName)))
+                else:
+                    # save custom print sheets of the format "<amount> <name>|<setcode>|<art index>"
+                    # to parse later when printsheets are loaded lazily (and the cardpool is already initialized)
+                    customPrintSheetsToParse[sectionName] = contents.get(sectionName)
+
+            tokenMap = ListMultimap()
+            otherMap = ListMultimap()
+            # parse tokens section
+            if "tokens" in contents:
+                for line in contents.get("tokens"):
+                    if line is None or line.strip() == "":
+                        continue
+                    matcher = CardEdition.Reader.TOKEN_PATTERN.fullmatch(line)
+
+                    if not matcher:
+                        continue
+
+                    collectorNumber = matcher.group(2)
+                    cardName = matcher.group(3)
+                    artistName = matcher.group(5)
+                    # rarity isn't used for this anyway
+                    tis = CardEdition.EditionEntry(cardName, collectorNumber, CardRarity.Token, artistName, None)
+                    tokenMap.put(cardName, tis)
+            if "other" in contents:
+                for line in contents.get("other"):
+                    if line is None or line.strip() == "":
+                        continue
+                    matcher = CardEdition.Reader.TOKEN_PATTERN.fullmatch(line)
+
+                    if not matcher:
+                        continue
+                    collectorNumber = matcher.group(2)
+                    cardName = matcher.group(3)
+                    artistName = matcher.group(5)
+                    tis = CardEdition.EditionEntry(cardName, collectorNumber, CardRarity.Unknown, artistName, None)
+                    otherMap.put(cardName, tis)
+
+            res = CardEdition(cardMap, tokenMap, customPrintSheetsToParse)
+            # parse metadata section
+            res.name = metadata.get("name")
+            res.date = CardEdition.parseDate(metadata.get("date"))
+            res.code = metadata.get("code")
+            res.code2 = metadata.get("code2", res.code)
+            res.scryfallCode = metadata.get("ScryfallCode", res.code)
+            res.tokensCode = metadata.get("TokensCode", "T" + res.scryfallCode)
+            res.tokenFallbackCode = metadata.get("TokenFallbackCode")
+            res.cardsLanguage = metadata.get("CardLang", "en")
+            res.boosterArts = metadata.getInt("BoosterCovers", 1)
+
+            res.otherMap = otherMap
+
+            res.boosterSlots = boosterSlots
+            boosterDesc = metadata.get("Booster")
+
+            if metadata.contains("Booster"):
+                # Historical naming convention in Forge for "DraftBooster"
+                if res.boosterSlots is not None:
+                    res.boosterTpl = SealedTemplateWithSlots(res.code, SealedTemplate.Reader.parseSlots(boosterDesc), res.boosterSlots)
+                else:
+                    res.boosterTpl = SealedTemplate(res.code, SealedTemplate.Reader.parseSlots(boosterDesc))
+
+                res.boosterTemplates["Draft"] = res.boosterTpl
+
+            boostertype = ["Draft", "Collector", "Set"]
+            # Theme boosters aren't here because they are closer to preconstructed decks, and should be treated as such
+            for type in boostertype:
+                name = type + "Booster"
+                if metadata.contains(name):
+                    res.boosterTemplates[type] = SealedTemplate(res.code, SealedTemplate.Reader.parseSlots(metadata.get(name)))
+
+            enumType = CardEdition.Type.UNKNOWN
+            if self.isCustomEditions:
+                enumType = CardEdition.Type.CUSTOM_SET  # Forcing ThirdParty Edition Type to avoid inconsistencies
+            else:
+                type = metadata.get("type")
+                if type is not None and type != "":
+                    try:
+                        enumType = CardEdition.Type[type.upper()]
+                    except KeyError:
+                        # ignore; type will get UNKNOWN
+                        print("Ignoring unknown type in set definitions: name: " + res.name + "; type: " + type, file=sys.stderr)
+
+            res.type = enumType
+            if res.hasBoosterTemplate():
+                res.boosterBoxCount = int(metadata.get("BoosterBox", enumType.getBoosterBoxDefault()))
+                res.fatPackCount = int(metadata.get("FatPack", enumType.getFatPackDefault()))
+                res.fatPackExtraSlots = metadata.get("FatPackExtraSlots", "")
+
+            foilValue = metadata.get("foil", "newstyle").lower()
+            if foilValue in ("oldstyle", "classic"):
+                res.foilType = CardEdition.FoilType.OLD_STYLE
+            elif foilValue in ("newstyle", "modern"):
+                res.foilType = CardEdition.FoilType.MODERN
+            else:
+                res.foilType = CardEdition.FoilType.NOT_SUPPORTED
+
+            replaceCommon = metadata.get("ChanceReplaceCommonWith", "0F Common").split(" ", 1)
+            res.chanceReplaceCommonWith = float(replaceCommon[0])
+            res.slotReplaceCommonWith = replaceCommon[1]
+
+            res.foilChanceInBooster = metadata.getDouble("FoilChanceInBooster", 21.43) / 100.0
+
+            res.foilAlwaysInCommonSlot = metadata.getBoolean("FoilAlwaysInCommonSlot", True)
+            res.additionalSheetForFoils = metadata.get("AdditionalSheetForFoils", "")
+
+            res.additionalUnlockSet = metadata.get("AdditionalSetUnlockedInQuest", "")  # e.g. Time Spiral Timeshifted (TSB) for Time Spiral
+
+            res.smallSetOverride = metadata.getBoolean("TreatAsSmallSet", False)  # for "small" sets with over 200 cards (e.g. Eldritch Moon)
+
+            res.boosterMustContain = metadata.get("BoosterMustContain", "")  # e.g. Dominaria guaranteed legendary creature
+            res.boosterReplaceSlotFromPrintSheet = metadata.get("BoosterReplaceSlotFromPrintSheet", "")  # e.g. Zendikar Rising guaranteed double-faced card
+            res.sheetReplaceCardFromSheet = metadata.get("SheetReplaceCardFromSheet", "")
+            res.sheetReplaceCardFromSheet2 = metadata.get("SheetReplaceCardFromSheet2", "")
+            res.chaosDraftThemes = metadata.get("ChaosDraftThemes", "").split(";")  # semicolon separated list of theme names
+
+            res.alias = metadata.get("alias")
+            res.borderColor = CardEdition.BorderColor[metadata.get("border", "Black").upper()]
+            res.prerelease = metadata.get("Prerelease", None)
+
+            # Draft options
+            doublePick = metadata.get("DoublePick", "Never")
+            maxPodSize = metadata.getInt("MaxPodSize", 8)
+            recommendedPodSize = metadata.getInt("RecommendedPodSize", 8)
+            maxMatchPlayers = metadata.getInt("MaxMatchPlayers", 2)
+            deckType = metadata.get("DeckType", "Normal")
+            freeCommander = metadata.get("FreeCommander", "")
+
+            res.draftOptions = DraftOptions(
+                doublePick,
+                maxPodSize,
+                recommendedPodSize,
+                maxMatchPlayers,
+                deckType,
+                freeCommander
+            )
+
+            return res
+
+        def getFileFilter(self):
+            return CardEdition.Reader.TXT_FILE_FILTER
+
+        TXT_FILE_FILTER = staticmethod(lambda dir, name: name.endswith(".txt"))
+
+    class Collection(StorageBase):
+        def __init__(self, reader):
+            super().__init__("Card editions", reader)
+            self.aliasToEdition = _CaseInsensitiveMap()
+            self.lock = False  # Lock once custom content has been added.
+            self.CARD_EDITION_COMPARATOR = lambda c: self.get(c.getEdition())
+
+            for ee in self:
+                self.initAliases(ee)
+
+        def initAliases(self, E):  # Add the alias to the edition here, to ensure it's always done equally.
+            alias = E.getAlias()
+            if alias is not None:
+                self.aliasToEdition[alias] = E
+            self.aliasToEdition[E.getCode2()] = E
+
+        def add(self, item):  # Even though we want it to be read only, make an exception for custom content.
+            if self.lock:
+                raise Exception("This is a read-only storage")
+            else:
+                self.map[item.getCode()] = item
+
+        def append(self, C):  # Append custom editions
+            if self.lock:
+                raise Exception("This is a read-only storage")
+            for E in C:  # Update the alias list as above or else it'll fail to look up.
+                self.add(E)
+                self.initAliases(E)  # Made a method in case the system changes, so it's consistent.
+            customBucket = CardEdition("2990-01-01", "USER", "USER", CardEdition.Type.CUSTOM_SET, "USER", CardEdition.FoilType.NOT_SUPPORTED)
+            self.add(customBucket)
+            self.initAliases(customBucket)
+            self.lock = True  # Consider it initialized and prevent from writing any more data.
+
+        # Gets a sets by code.  It will search first by three letter codes, then by aliases and two-letter codes.
+        def get(self, code):
+            if code is None:
+                return None
+
+            baseResult = super().get(code)
+            return self.aliasToEdition.get(code) if baseResult is None else baseResult
+
+        def getOrderedEditions(self):
+            res = list(self)
+            res.sort(key=functools.cmp_to_key(lambda a, b: a.compareTo(b)))
+            res.reverse()
+            return res
+
+        def getPrereleaseEditions(self):
+            return [edition for edition in self if edition.getPrerelease() is not None]
+
+        def getEditionByCodeOrThrow(self, code):
+            set_ = self.get(code)
+            if set_ is None and code == CardEdition.UNKNOWN_CODE:  # Hardcoded set ??? is not with the others, needs special check.
+                return CardEdition.UNKNOWN
+            if set_ is None:
+                raise RuntimeError("Edition with code '" + code + "' not found")
+            return set_
+
+        # used by image generating code
+        def getCode2ByCode(self, code):
+            set_ = self.get(code)
+            return "" if set_ is None else set_.getCode2()
+
+        def getBoosterGenerator(self):
+            outer = self
+
+            class _BoosterGenerator(StorageReaderBase):
+                def __init__(self):
+                    super().__init__(None)
+
+                def readAll(self):
+                    map = _CaseInsensitiveMap()
+                    for ce in outer:
+                        boosterTypes = list(ce.getAvailableBoosterTypes())
+                        for type in boosterTypes:
+                            setAffix = "" if type == "Draft" else type
+
+                            map[ce.getCode() + setAffix] = ce.getBoosterTemplate(type)
+                    return map
+
+                def getItemKey(self, item):
+                    return item.getEdition()
+
+                def getFullPath(self):
+                    return None
+
+            return _BoosterGenerator()
+
+        # @leriomaggio
+        #   What the method does is to return the **latest** (as in the most recent)
+        #   Card Edition among all the different "Original" sets (as in "first print") were cards
+        #   in the Pool can be found.
+        def getTheLatestOfAllTheOriginalEditionsOfCardsIn(self, cards):
+            minEditions = set()
+            db = StaticData.instance().getCommonCards()
+            for k in cards:
+                # NOTE: Even if we do force a very stringent Policy on Editions
+                # (which only considers core, expansions, and reprint editions), the fetch method
+                # is flexible enough to relax the constraint automatically, if no card can be found
+                # under those conditions (i.e. ORIGINAL_ART_ALL_EDITIONS will be automatically used instead).
+                cp = db.getCardFromEditions(k.getKey().getName(),
+                                            CardArtPreference.ORIGINAL_ART_CORE_EXPANSIONS_REPRINT_ONLY)
+                if cp is None:  # it's unlikely, this code will ever run. Only Happens if card does not exist.
+                    cp = k.getKey()
+                minEditions.add(cp.getEdition())
+            for ed in self.getOrderedEditions():
+                if ed.getCode() in minEditions:
+                    return ed
+            return CardEdition.UNKNOWN
+
+    class Predicates:
+        CAN_MAKE_BOOSTER = staticmethod(lambda ce: ce.hasBoosterTemplate())
+
+        @staticmethod
+        def getRandomSetWithAllBasicLands(allEditions):
+            return Aggregates.random(IterableUtil.filter(allEditions, CardEdition.Predicates.hasBasicLands))
+
+        @staticmethod
+        def getPreferredArtEditionWithAllBasicLands():
+            artPreference = StaticData.instance().getCardArtPreference()
+            editionsWithBasicLands = IterableUtil.filter(
+                StaticData.instance().getEditions().getOrderedEditions(),
+                lambda ed: CardEdition.Predicates.hasBasicLands(ed) and artPreference.accept(ed))
+            editionsIterator = iter(editionsWithBasicLands)
+            selectedEditions = []
+            for edition in editionsIterator:
+                selectedEditions.append(edition)
+            if len(selectedEditions) == 0:
+                return None
+            editionIndex = 0 if artPreference.latestFirst else len(selectedEditions) - 1
+            return selectedEditions[editionIndex]
+
+        HAS_TOURNAMENT_PACK = staticmethod(lambda edition: StaticData.instance().getTournamentPacks().contains(edition.getCode()))
+
+        HAS_FAT_PACK = staticmethod(lambda edition: edition.getFatPackCount() > 0)
+
+        HAS_BOOSTER_BOX = staticmethod(lambda edition: edition.getBoosterBoxCount() > 0)
+
+        # Deprecated: Use CardEdition.hasBasicLands and a nonnull test.
+        hasBasicLands = staticmethod(lambda ed: False if ed is None else ed.hasBasicLands())
+
+    @staticmethod
+    def getRandomFoil(setCode):
+        foilType = CardEdition.FoilType.NOT_SUPPORTED
+        if setCode is not None \
+                and StaticData.instance().getEditions().get(setCode) is not None:
+            foilType = StaticData.instance().getEditions().get(setCode).getFoilType()
+        if foilType != CardEdition.FoilType.NOT_SUPPORTED:
+            return MyRandom.getRandom().nextInt(9) + 1 \
+                if foilType == CardEdition.FoilType.MODERN \
+                else MyRandom.getRandom().nextInt(9) + 11
+        return 0
+
+    def hasBasicLands(self):
+        for landName in MagicColor.Constant.BASIC_LANDS:
+            if len(self.getCardInSet(landName)) == 0:
+                return False
+        return True
+
+
+CardEdition.Type.REPRINT_SET_TYPES = frozenset({
+    CardEdition.Type.REPRINT,
+    CardEdition.Type.PROMO,
+    CardEdition.Type.COLLECTOR_EDITION,
+})
+
+CardEdition.UNKNOWN = CardEdition("1990-01-01", CardEdition.UNKNOWN_CODE, "??", CardEdition.Type.UNKNOWN, CardEdition.UNKNOWN_SET_NAME, CardEdition.FoilType.NOT_SUPPORTED)
 ```

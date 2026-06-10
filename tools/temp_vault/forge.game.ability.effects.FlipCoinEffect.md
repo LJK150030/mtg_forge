@@ -48,9 +48,9 @@ classDiagram
 
 ## Design Description
 
-FlipCoinEffect implements the resolution logic for any card ability that involves flipping coins, extending the abstract `SpellAbilityEffect` base class by overriding `getStackDescription` and `resolve`. It interprets a `SpellAbility`'s parameters to drive several distinct flip modes—plain win/lose flips, heads-or-tails flips with no call (`NoCall`), and per-player flips (`ForEachPlayer`)—dispatching to remembered results or named sub-abilities (`WinSubAbility`, `LoseSubAbility`, `HeadsSubAbility`, `TailsSubAbility`) based on outcomes, and optionally repeating until a loss.
+FlipCoinEffect implements the resolution logic for any card ability that involves flipping coins, extending the abstract `SpellAbilityEffect` base class by overriding `getStackDescription` and `resolve`. It interprets a `SpellAbility`'s parameters to drive several distinct flip modesâ€”plain win/lose flips, heads-or-tails flips with no call (`NoCall`), and per-player flips (`ForEachPlayer`)â€”dispatching to remembered results or named sub-abilities (`WinSubAbility`, `LoseSubAbility`, `HeadsSubAbility`, `TailsSubAbility`) based on outcomes, and optionally repeating until a loss.
 
-The actual flipping is delegated to static helpers (`flipCoins`/`flipCoin`) so other effects can reuse coin mechanics directly. These honor `StaticAbilityFlipCoinMod` for replacement multipliers and fixed results, prompt the controlling `Player` to call the flip, use `MyRandom` for randomness, fire a `GameEventFlipCoin`, and run `FlippedCoin` triggers via `AbilityKey` parameters—cleanly separating game-rule mechanics, UI notification, and the event/trigger system.
+The actual flipping is delegated to static helpers (`flipCoins`/`flipCoin`) so other effects can reuse coin mechanics directly. These honor `StaticAbilityFlipCoinMod` for replacement multipliers and fixed results, prompt the controlling `Player` to call the flip, use `MyRandom` for randomness, fire a `GameEventFlipCoin`, and run `FlippedCoin` triggers via `AbilityKey` parametersâ€”cleanly separating game-rule mechanics, UI notification, and the event/trigger system.
 
 ## Source
 `forge-game/src/main/java/forge/game/ability/effects/FlipCoinEffect.java`
@@ -295,4 +295,202 @@ public class FlipCoinEffect extends SpellAbilityEffect {
     }
 
 }
+```
+
+## Python
+`forge/game/ability/effects/FlipCoinEffect.py`
+
+```python
+package = "forge.game.ability.effects"
+
+from java.util import HashSet, List, Map, Set
+
+from typing import List as _List
+
+from forge.game.GameObject import GameObject
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.event.GameEventFlipCoin import GameEventFlipCoin
+from forge.game.player.Player import Player
+from forge.game.player.PlayerCollection import PlayerCollection
+from forge.game.player.PlayerController import PlayerController
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.staticability.StaticAbilityFlipCoinMod import StaticAbilityFlipCoinMod
+from forge.game.trigger.TriggerType import TriggerType
+from forge.util.Localizer import Localizer
+from forge.util.MyRandom import MyRandom
+
+
+class FlipCoinEffect(SpellAbilityEffect):
+    # (non-Javadoc)
+    # @see forge.card.abilityfactory.SpellEffect#getStackDescription(java.util.Map, forge.card.spellability.SpellAbility)
+    def getStackDescription(self, sa: SpellAbility) -> str:
+        host = sa.getHostCard()
+        player = host.getController()
+        tgts = self.getTargets(sa)
+
+        sb = []
+
+        sb.append(str(player))
+        sb.append(" flips a coin.")
+        if tgts is not None and len(tgts) != 0:
+            sb.append(" Targeting: ")
+            sb.append(str(tgts))
+            sb.append(".")
+        return "".join(sb)
+
+    # (non-Javadoc)
+    # @see forge.card.ability.SpellAbilityEffect#resolve(forge.card.spellability.SpellAbility)
+    def resolve(self, sa: SpellAbility) -> None:
+        host = sa.getHostCard()
+
+        playersToFlip = AbilityUtils.getDefinedPlayers(host, sa.getParam("Flipper"), sa)
+        # caller = AbilityUtils.getDefinedPlayers(host, sa.getParam("Caller"), sa)
+
+        noCall = sa.hasParam("NoCall")
+        forEachPlayer = sa.hasParam("ForEachPlayer")
+        varName = sa.getParamOrDefault("SaveNumFlipsToSVar", "X")
+        amount = 1
+        if sa.hasParam("Amount"):
+            amount = AbilityUtils.calculateAmount(host, sa.getParam("Amount"), sa)
+
+        for flipper in playersToFlip:
+            if noCall:
+                countHeads = FlipCoinEffect.flipCoins(flipper, sa, amount)
+                countTails = abs(countHeads - amount)
+                if countHeads > 0:
+                    if sa.hasParam("RememberResult"):
+                        host.addFlipResult(flipper, "Heads")
+                    sub = sa.getAdditionalAbility("HeadsSubAbility")
+                    if sub is not None:
+                        if sa.hasParam("Amount"):
+                            sub.setSVar(varName, "Number$" + str(countHeads))
+                        AbilityUtils.resolve(sub)
+                if countTails > 0:
+                    if sa.hasParam("RememberResult"):
+                        host.addFlipResult(flipper, "Tails")
+                    sub = sa.getAdditionalAbility("TailsSubAbility")
+                    if sub is not None:
+                        if sa.hasParam("Amount"):
+                            sub.setSVar(varName, "Number$" + str(countTails))
+                        AbilityUtils.resolve(sub)
+            elif forEachPlayer:
+                countWins = 0
+                countLosses = 0
+                wonFor = PlayerCollection()
+                lostFor = PlayerCollection()
+
+                for p in AbilityUtils.getDefinedPlayers(host, sa.getParam("ForEachPlayer"), sa):
+                    info = " (" + p.getName() + ")"
+                    win = FlipCoinEffect.flipCoins(flipper, sa, 1, info)
+
+                    if win > 0:
+                        countWins += 1
+                        wonFor.add(p)
+                    else:
+                        countLosses += 1
+                        lostFor.add(p)
+                if countWins > 0:
+                    sub = sa.getAdditionalAbility("WinSubAbility")
+                    if sub is not None:
+                        tempRemembered = list(host.getRemembered())
+                        host.removeRemembered(tempRemembered)
+                        host.addRemembered(wonFor)
+                        sub.setSVar("Wins", "Number$" + str(countWins))
+                        AbilityUtils.resolve(sub)
+                        host.removeRemembered(wonFor)
+                        host.addRemembered(tempRemembered)
+                if countLosses > 0:
+                    sub = sa.getAdditionalAbility("LoseSubAbility")
+                    if sub is not None:
+                        tempRemembered = list(host.getRemembered())
+                        host.removeRemembered(tempRemembered)
+                        host.addRemembered(lostFor)
+                        sub.setSVar("Losses", "Number$" + str(countLosses))
+                        AbilityUtils.resolve(sub)
+                        host.removeRemembered(lostFor)
+                        host.addRemembered(tempRemembered)
+            else:
+                countWins = FlipCoinEffect.flipCoins(flipper, sa, amount)
+                countLosses = abs(countWins - amount)
+                if countWins > 0:
+                    if sa.hasParam("RememberWinner"):
+                        host.addRemembered(flipper)
+                    sub = sa.getAdditionalAbility("WinSubAbility")
+                    if sub is not None:
+                        sub.setSVar("Wins", "Number$" + str(countWins))
+                        AbilityUtils.resolve(sub)
+                if countLosses > 0:
+                    if sa.hasParam("RememberLoser"):
+                        host.addRemembered(flipper)
+                    sub = sa.getAdditionalAbility("LoseSubAbility")
+                    if sub is not None:
+                        sub.setSVar("Losses", "Number$" + str(countLosses))
+                        AbilityUtils.resolve(sub)
+                if sa.hasParam("RememberNumber"):
+                    toRemember = sa.getParam("RememberNumber")
+                    if toRemember.startswith("Win"):
+                        host.addRemembered(countWins)
+                    elif toRemember.startswith("Loss"):
+                        host.addRemembered(countLosses)
+
+    @staticmethod
+    def flipCoins(flipper: Player, sa: SpellAbility, amount: int, info: str = "") -> int:
+        multiplier = StaticAbilityFlipCoinMod.getFlipMultiplier(flipper)
+        result = 0
+        won = False
+        while True:
+            fixedResult = StaticAbilityFlipCoinMod.fixedResult(flipper)
+            for i in range(amount):
+                iterationInfo = " " + str(i + 1) + "/" + str(amount) if amount > 1 else ""
+                won = FlipCoinEffect._flipCoin(flipper, sa, multiplier, fixedResult, info + iterationInfo)
+                if won:
+                    result += 1
+            # CR 705.3 relevant: until is sequential
+            if not (sa.hasParam("FlipUntilYouLose") and won):
+                break
+        return result
+
+    # flipCoinCall.
+    #
+    # @param flipper
+    # @param sa
+    # @param multiplier
+    # @return a boolean.
+    @staticmethod
+    def _flipCoin(flipper: Player, sa: SpellAbility, multiplier: int, fixedResult: bool, info: str) -> bool:
+        flipResults = set()
+        noCall = sa.hasParam("NoCall")
+        choice = True
+        if fixedResult is not None:
+            flipResults.add(fixedResult)
+        else:
+            # no reason to ask if result is fixed anyway
+            if not noCall:
+                choice = flipper.getController().chooseBinary(sa, sa.getHostCard().getDisplayName() + " - " + Localizer.getInstance().getMessage("lblCallCoinFlip") + info, PlayerController.BinaryChoiceType.HeadsOrTails)
+
+            for i in range(multiplier):
+                flipResults.add(MyRandom.getRandom().nextBoolean())
+
+        result = next(iter(flipResults)) if len(flipResults) == 1 else flipper.getController().chooseFlipResult(sa, flipper, not noCall)
+        wonOrHeads = result == choice
+
+        if noCall:
+            outcome = Localizer.getInstance().getMessage("lblHeads") if wonOrHeads else Localizer.getInstance().getMessage("lblTails")
+        else:
+            outcome = Localizer.getInstance().getMessage("lblWin") if wonOrHeads else Localizer.getInstance().getMessage("lblLose")
+
+        flipper.getGame().fireEvent(GameEventFlipCoin())
+        flipper.getGame().getAction().notifyOfValue(sa, flipper, outcome, None)
+
+        flipper.flip()
+
+        if not noCall or fixedResult is not None:
+            runParams = AbilityKey.mapFromPlayer(flipper)
+            runParams.put(AbilityKey.Result, wonOrHeads)
+            flipper.getGame().getTriggerHandler().runTrigger(TriggerType.FlippedCoin, runParams, False)
+
+        return wonOrHeads
 ```

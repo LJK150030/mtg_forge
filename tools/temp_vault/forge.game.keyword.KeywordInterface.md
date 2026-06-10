@@ -79,6 +79,12 @@ classDiagram
 - [[forge.game.staticability.StaticAbility|StaticAbility]]
 - [[forge.game.trigger.Trigger|Trigger]]
 
+## Design Description
+
+KeywordInterface defines the contract for a Magic: The Gathering keyword instance attached to a card, exposing its identity (the parsed `Keyword`, original text, title, reminder text, and numeric amount) and binding it to a host `Card` or `Player`. Its central responsibility is generating and aggregating the rules machinery a keyword grantsâ€”`Trigger`s, `ReplacementEffect`s, `SpellAbility`s, and `StaticAbility`sâ€”via the `createTraits` overloads, while tracking whether the keyword is intrinsic and identifying redundant duplicates.
+
+By extending `IHasSVars` and `ICardTraitChanges`, it participates in Forge's shared script-variable and trait-mutation protocols, and `Cloneable` plus the `copy` method support last-known-information snapshots (`lki`). The interface abstracts keyword behavior from concrete implementations, letting callers manipulate triggers and abilities uniformly. The `default getView()` method supplies a ready `DefaultKeywordView`, decoupling the game model from the UI/view layer while allowing implementations to override presentation.
+
 ## Source
 `forge-game/src/main/java/forge/game/keyword/KeywordInterface.java`
 
@@ -160,4 +166,110 @@ public interface KeywordInterface extends Cloneable, IHasSVars, ICardTraitChange
         return new DefaultKeywordView(getOriginal(), getKeyword(), getTitle(), getReminderText());
     }
 }
+```
+
+## Python
+`forge/game/keyword/KeywordInterface.py`
+
+```python
+from typing import Collection
+
+from forge.game.IHasSVars import IHasSVars
+from forge.game.card.Card import Card
+from forge.game.card.ICardTraitChanges import ICardTraitChanges
+from forge.game.player.Player import Player
+from forge.game.replacement.ReplacementEffect import ReplacementEffect
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.staticability.StaticAbility import StaticAbility
+from forge.game.trigger.Trigger import Trigger
+from forge.game.keyword.Keyword import Keyword
+from forge.game.keyword.KeywordView import KeywordView
+from forge.game.keyword.DefaultKeywordView import DefaultKeywordView
+
+
+class KeywordInterface(IHasSVars, ICardTraitChanges):
+
+    def getHostCard(self) -> Card:
+        raise NotImplementedError
+
+    def setHostCard(self, host: Card) -> None:
+        raise NotImplementedError
+
+    def isIntrinsic(self) -> bool:
+        raise NotImplementedError
+
+    def setIntrinsic(self, value: bool) -> None:
+        raise NotImplementedError
+
+    def getOriginal(self) -> str:
+        raise NotImplementedError
+
+    def getKeyword(self) -> Keyword:
+        raise NotImplementedError
+
+    def getTitle(self) -> str:
+        raise NotImplementedError
+
+    def getReminderText(self) -> str:
+        raise NotImplementedError
+
+    def getAmount(self) -> int:
+        raise NotImplementedError
+
+    def getAmountString(self) -> str:
+        raise NotImplementedError
+
+    def getStatic(self) -> StaticAbility:
+        raise NotImplementedError
+
+    def setStatic(self, st: StaticAbility) -> None:
+        raise NotImplementedError
+
+    def getIdx(self) -> int:
+        raise NotImplementedError
+
+    def setIdx(self, i: int) -> None:
+        raise NotImplementedError
+
+    def createTraits(self, host: Card, intrinsic: bool, clear: bool = None) -> None:
+        raise NotImplementedError
+
+    def createTraitsForPlayer(self, player: Player, clear: bool = None) -> None:
+        raise NotImplementedError
+
+    def hasTraits(self) -> bool:
+        raise NotImplementedError
+
+    def addTrigger(self, trg: Trigger) -> None:
+        raise NotImplementedError
+
+    def addReplacement(self, trg: ReplacementEffect) -> None:
+        raise NotImplementedError
+
+    def addSpellAbility(self, s: SpellAbility) -> None:
+        raise NotImplementedError
+
+    def addStaticAbility(self, st: StaticAbility) -> None:
+        raise NotImplementedError
+
+    def getTriggers(self) -> Collection[Trigger]:
+        raise NotImplementedError
+
+    def getReplacements(self) -> Collection[ReplacementEffect]:
+        raise NotImplementedError
+
+    def getAbilities(self) -> Collection[SpellAbility]:
+        raise NotImplementedError
+
+    def getStaticAbilities(self) -> Collection[StaticAbility]:
+        raise NotImplementedError
+
+    def copy(self, host: Card, lki: bool) -> "KeywordInterface":
+        raise NotImplementedError
+
+    def redundant(self, list: Collection["KeywordInterface"]) -> bool:
+        raise NotImplementedError
+
+    def getView(self) -> KeywordView:
+        return DefaultKeywordView(self.getOriginal(), self.getKeyword(), self.getTitle(), self.getReminderText())
 ```

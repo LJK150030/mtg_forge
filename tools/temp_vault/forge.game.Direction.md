@@ -127,3 +127,66 @@ public enum Direction {
 	}
 }
 ```
+
+## Python
+`forge/game/Direction.py`
+
+```python
+from enum import Enum
+from typing import List
+
+
+class Direction(Enum):
+    Left = 1
+    Right = 2
+
+    LEFT = "Left"
+    RIGHT = "Right"
+
+    @staticmethod
+    def getDefaultDirection() -> "Direction":
+        """:return: The default direction."""
+        return Direction.Left
+
+    @staticmethod
+    def getListOfDirections() -> List["Direction"]:
+        """:return: Immutable list of all directions (in order, Left and Right)."""
+        return Direction.listOfDirections
+
+    def isDefaultDirection(self) -> bool:
+        """:return: True if and only if this is the default direction."""
+        return self == Direction.getDefaultDirection()
+
+    def getShift(self) -> int:
+        """
+        Get the index by which the turn order is shifted, given this Direction.
+        :return: 1 or -1.
+        """
+        if self.isDefaultDirection():
+            return 1
+        return -1
+
+    def getOtherDirection(self) -> "Direction":
+        """
+        Give the other Direction.
+        :return: Right if this is Left, and vice versa.
+        """
+        if self is Direction.Left:
+            return Direction.Right
+        elif self is Direction.Right:
+            return Direction.Left
+        return None
+
+    def __str__(self) -> str:
+        if self is Direction.Left:
+            return Direction.LEFT.value
+        elif self is Direction.Right:
+            return Direction.RIGHT.value
+        return None
+
+
+Direction.listOfDirections = [
+    Direction.getDefaultDirection(),
+    Direction.getDefaultDirection().getOtherDirection(),
+]
+```

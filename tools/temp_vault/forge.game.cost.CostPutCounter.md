@@ -69,7 +69,7 @@ classDiagram
 
 CostPutCounter models the "put one or more counters of a given type onto a permanent" portion of an ability or spell cost. Extending CostPartWithList, it tracks the cards it has affected and reuses that list for refunds, hashing, and reset, while delegating the numeric amount and valid-target type parsing to its supertype. Its responsibility is to validate payability (canPay) and execute the counter placement (doPayment), routing counters either directly onto a target Card or, during an enter-the-battlefield replacement, into the replacement's GameEntityCounterTable.
 
-Notable design intent includes special handling for self-targeting ETB replacements via an LKI copy and static-ability check to predict whether the permanent could receive counters; loyalty-counter costs rendered as "+N"; treating −1/−1 counters as non-reusable; and batching placements through a GameEntityCounterTable so triggerCounterPutAll can fire counter-related replacement effects collectively. It accepts ICostVisitor for double-dispatch over cost types.
+Notable design intent includes special handling for self-targeting ETB replacements via an LKI copy and static-ability check to predict whether the permanent could receive counters; loyalty-counter costs rendered as "+N"; treating âˆ’1/âˆ’1 counters as non-reusable; and batching placements through a GameEntityCounterTable so triggerCounterPutAll can fire counter-related replacement effects collectively. It accepts ICostVisitor for double-dispatch over cost types.
 
 ## Source
 `forge-game/src/main/java/forge/game/cost/CostPutCounter.java`
@@ -316,4 +316,165 @@ public class CostPutCounter extends CostPartWithList {
        return true;
    }
 }
+```
+
+## Python
+`forge/game/cost/CostPutCounter.py`
+
+```python
+from forge.game.Game import Game
+from forge.game.GameEntityCounterTable import GameEntityCounterTable
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardCopyService import CardCopyService
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CardPredicates import CardPredicates
+from forge.game.card.CounterEnumType import CounterEnumType
+from forge.game.card.CounterType import CounterType
+from forge.game.cost.Cost import Cost
+from forge.game.cost.CostPartWithList import CostPartWithList
+from forge.game.cost.ICostVisitor import ICostVisitor
+from forge.game.cost.PaymentDecision import PaymentDecision
+from forge.game.player.Player import Player
+from forge.game.replacement.ReplacementEffect import ReplacementEffect
+from forge.game.replacement.ReplacementType import ReplacementType
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+
+
+class CostPutCounter(CostPartWithList):
+    """The Class CostPutCounter."""
+
+    # Serializables need a version ID.
+    serialVersionUID = 1
+
+    def __init__(self, amount: str, cntr: CounterType, type: str, description: str):
+        """Instantiates a new cost put counter.
+
+        :param amount: the amount
+        :param cntr: the cntr
+        :param type: the type
+        :param description: the description
+        """
+        super().__init__(amount, type, description)
+        # Put Counter doesn't really have a "Valid" portion of the cost
+        self.counter = cntr
+        self.counterTable = GameEntityCounterTable()
+
+    def getCounter(self) -> CounterType:
+        return self.counter
+
+    def paymentOrder(self) -> int:
+        return 6
+
+    def isReusable(self) -> bool:
+        return not self.counter.is_(CounterEnumType.M1M1)
+
+    def toString(self) -> str:
+        sb = []
+        if self.counter.is_(CounterEnumType.LOYALTY):
+            if self.getAmount() == "0":
+                sb.append("0")
+            else:
+                sb.append("+")
+                sb.append(self.getAmount())
+        else:
+            sb.append("Put ")
+            i = self.convertAmount()
+            sb.append(Cost.convertAmountTypeToWords(i, self.getAmount(), self.counter.getName() + " counter"))
+
+            sb.append(" on ")
+            if self.payCostFromSource():
+                sb.append(self.getType())
+            else:
+                desc = self.getType() if self.getTypeDescription() is None else self.getTypeDescription()
+                sb.append(desc)
+        return "".join(sb)
+
+    def refund(self, source: Card) -> None:
+        i = self.convertAmount()
+        for c in self.getCardList():
+            c.subtractCounter(self.counter, i, None)
+
+    def canPay(self, ability: SpellAbility, payer: Player, effect: bool) -> bool:
+        source = ability.getHostCard()
+        game = source.getGame()
+        if self.payCostFromSource():
+            if self.isETBReplacement(ability, effect):
+                copy = CardCopyService.getLKICopy(source)
+                copy.setLastKnownZone(payer.getZone(ZoneType.Battlefield))
+
+                # check state it would have on the battlefield
+                preList = CardCollection(copy)
+                game.getAction().checkStaticAbilities(False, {copy}, preList)
+                # reset again?
+                game.getAction().checkStaticAbilities(False)
+                if copy.canReceiveCounters(self.getCounter()):
+                    return True
+            else:
+                if not source.isInPlay():
+                    return False
+                if source.canReceiveCounters(self.getCounter()):
+                    return True
+            return self.getAbilityAmount(ability) == 0
+
+        # 3 Cards have Put a -1/-1 Counter on a Creature you control.
+        typeList = CardLists.getValidCards(source.getGame().getCardsIn(ZoneType.Battlefield),
+                self.getType().split(";"), payer, source, ability)
+
+        typeList = CardLists.filter(typeList, CardPredicates.canReceiveCounters(self.getCounter()))
+
+        return len(typeList) != 0
+
+    def payAsDecided(self, payer: Player, decision: PaymentDecision, ability: SpellAbility, effect: bool) -> bool:
+        super().payAsDecided(payer, decision, ability, effect)
+        self.triggerCounterPutAll(ability, effect)
+        return True
+
+    def doPayment(self, payer: Player, ability: SpellAbility, targetCard: Card, effect: bool) -> Card:
+        i = self.getAbilityAmount(ability)
+        if self.isETBReplacement(ability, effect):
+            etbTable = ability.getReplacingObject(AbilityKey.CounterTable)
+            etbTable.put(payer, targetCard, self.getCounter(), i)
+        else:
+            targetCard.addCounter(self.getCounter(), i, payer, self.counterTable)
+        return targetCard
+
+    def getHashForLKIList(self) -> str:
+        return "CounterPut"
+
+    def getHashForCardList(self) -> str:
+        return "CounterPutCards"
+
+    def accept(self, visitor: ICostVisitor):
+        return visitor.visit(self)
+
+    def triggerCounterPutAll(self, ability: SpellAbility, effect: bool) -> None:
+        if self.counterTable.isEmpty():
+            return
+
+        tempTable = GameEntityCounterTable(self.counterTable)
+        tempTable.replaceCounterEffect(ability.getHostCard().getGame(), ability, effect, False, None)
+
+    def resetLists(self) -> None:
+        super().resetLists()
+        self.counterTable.clear()
+
+    def isETBReplacement(self, ability: SpellAbility, effect: bool) -> bool:
+        if not effect:
+            return False
+        # only for itself?
+        if not self.payCostFromSource():
+            return False
+        if ability is None:
+            return False
+        if not ability.isReplacementAbility():
+            return False
+        re = ability.getReplacementEffect()
+        if re.getMode() != ReplacementType.Moved:
+            return False
+        if not ability.getHostCard().equals(ability.getReplacingObject(AbilityKey.Card)):
+            return False
+        return True
 ```

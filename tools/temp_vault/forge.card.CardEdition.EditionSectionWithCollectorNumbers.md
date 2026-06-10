@@ -54,7 +54,7 @@ A configurable enumeration of card-edition section types, each pairing an enum c
 Each constant carries an immutable `name` string supplied through its constructor and exposed via `getName()`. The static `getNames()` helper iterates all values to return the full list of section names, supporting lookups that match parsed textual section headers against the enum. The design favors a simple value-with-label pattern: a fixed, type-safe vocabulary of section categories whose human-readable forms stay decoupled from the constant identifiers, allowing the display strings to differ from the Java naming conventions.
 
 ## Source
-`forge-core/src/main/java/forge/card/CardEdition.java` â€” declaration excerpt
+`forge-core/src/main/java/forge/card/CardEdition.java` Ã¢â‚¬â€ declaration excerpt
 
 ```java
     // commonly used printsheets with collector number
@@ -98,4 +98,49 @@ Each constant carries an immutable `name` string supplied through its constructo
             return list;
         }
     }
+```
+
+## Python
+`forge/card/CardEdition/EditionSectionWithCollectorNumbers.py`
+
+```python
+from enum import Enum
+
+
+class EditionSectionWithCollectorNumbers(Enum):
+    CARDS = "cards"
+    SPECIAL_SLOT = "special slot"  # to help with convoluted boosters
+    PRECON_PRODUCT = "precon product"
+    BORDERLESS = "borderless"
+    ETCHED = "etched"
+    SHOWCASE = "showcase"
+    FULL_ART = "full art"
+    EXTENDED_ART = "extended art"
+    ALTERNATE_ART = "alternate art"
+    RETRO_FRAME = "retro frame"
+    BUY_A_BOX = "buy a box"
+    PROMO = "promo"
+    PRERELEASE_PROMO = "prerelease promo"
+    BUNDLE = "bundle"
+    BOX_TOPPER = "box topper"
+    JUMPSTART = "jumpstart"
+    REBALANCED = "rebalanced"
+    ETERNAL = "eternal"
+    CONJURED = "conjured"
+    SCHEME = "scheme"
+    PRINTSHEETS = "printsheets"
+
+    def __init__(self, n: str):
+        self.name = n
+
+    def getName(self) -> str:
+        return self.name
+
+    @staticmethod
+    def getNames() -> list[str]:
+        list_: list[str] = []
+        for s in EditionSectionWithCollectorNumbers.values():
+            sName = s.getName()
+            list_.append(sName)
+        return list_
 ```

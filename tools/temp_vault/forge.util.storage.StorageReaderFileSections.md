@@ -35,6 +35,10 @@ classDiagram
 **Extends:**
 - [[forge.util.storage.StorageReaderBase|StorageReaderBase]]
 
+## Design Description
+
+StorageReaderFileSections is an abstract, generic storage reader that parses a single file into a map of named objects, treating bracket-delimited `[header]` lines as section boundaries and the lines beneath each as that object's body. Extending StorageReaderBase, it implements the IItemReader contractâ€”`readAll`, `getFullPath`, and `getItemKey`â€”while delegating the actual construction of each item to the abstract `read` hook that concrete subclasses must supply, making it a template-method base for section-structured configuration files. It collaborates with FileUtil for line-by-line reading and a key-selecting Function (inherited as `keySelector`) to derive each item's map key. Notable design intent includes the overridable `lineContainsObject` filter that skips blanks and `#` comments, fail-fast RuntimeException reporting when an item cannot be loaded, and a diagnostic warning when a duplicate key would overwrite an existing entry.
+
 ## Source
 `forge-core/src/main/java/forge/util/storage/StorageReaderFileSections.java`
 
@@ -176,4 +180,109 @@ public abstract class StorageReaderFileSections<T> extends StorageReaderBase<T> 
         return keySelector.apply(item);
     }
 }
+```
+
+## Python
+`forge/util/storage/StorageReaderFileSections.py`
+
+```python
+from forge.util.FileUtil import FileUtil
+from forge.util.storage.StorageReaderBase import StorageReaderBase
+
+import os
+from abc import abstractmethod
+from typing import Callable, Iterable, List, Map, TypeVar
+
+T = TypeVar("T")
+
+
+class StorageReaderFileSections(StorageReaderBase):
+    """
+    This class treats every line of a given file as a source for a named object.
+
+    @param <T> the generic type
+    """
+
+    def __init__(self, arg0, keySelector0: Callable[[T], str]):
+        # Java overloads:
+        #   StorageReaderFileSections(String pathname, Function keySelector0)
+        #   StorageReaderFileSections(File file0, Function keySelector0)
+        # A str pathname is wrapped into a File; a File is used directly.
+        if isinstance(arg0, str):
+            file0 = File(arg0)
+        else:
+            file0 = arg0
+        super().__init__(keySelector0)
+        self.file = file0
+
+    def getFullPath(self) -> str:
+        return self.file.getPath()
+
+    def readAll(self) -> dict[str, T]:
+        result = self.createMap()
+
+        idx = 0
+        contents = FileUtil.readFile(self.file)
+
+        accumulator: List[str] = []
+        header = None
+
+        for s in contents:
+            if not self.lineContainsObject(s):
+                continue
+
+            if s[0] == '[':
+                if header is not None:
+                    # read previously collected item
+                    item = self.readItem(header, accumulator, idx)
+                    if item is not None:
+                        result[self.keySelector(item)] = item
+                        idx += 1
+
+                header = s.strip("[] ")
+                accumulator.clear()
+            else:
+                accumulator.append(s)
+
+        # store the last item
+        if accumulator:
+            item = self.readItem(header, accumulator, idx)
+            if item is not None:
+                newKey = self.keySelector(item)
+                if newKey in result:
+                    import sys
+                    print("StorageReaderFileSelections: Overwriting an object with key " + newKey, file=sys.stderr)
+
+                result[newKey] = item
+        return result
+
+    def readItem(self, header: str, accumulator: Iterable[str], idx: int) -> T:
+        item = self.read(header, accumulator, idx)
+        if item is not None:
+            return item
+
+        msg = "An object stored in " + self.file.getPath() + " failed to load.\nPlease submit this as a bug with the mentioned file attached."
+        raise RuntimeError(msg)
+
+    @abstractmethod
+    def read(self, title: str, body: Iterable[str], idx: int) -> T:
+        """
+        TODO: Write javadoc for this method.
+
+        @param line the line
+        @return the t
+        """
+        ...
+
+    def lineContainsObject(self, line: str) -> bool:
+        """
+        Line contains object.
+
+        @param line the line
+        @return true, if successful
+        """
+        return line is not None and line.strip() != "" and not line.strip().startswith("#")
+
+    def getItemKey(self, item: T) -> str:
+        return self.keySelector(item)
 ```

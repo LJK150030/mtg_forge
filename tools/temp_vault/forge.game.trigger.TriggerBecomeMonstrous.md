@@ -37,6 +37,12 @@ classDiagram
 - [[forge.game.card.Card|Card]]
 - [[forge.game.spellability.SpellAbility|SpellAbility]]
 
+## Design Description
+
+TriggerBecomeMonstrous is a concrete trigger that fires when a creature becomes monstrous, recognizing the game event and exposing the monstered creature to dependent abilities. As a subclass of Trigger, it overrides the standard trigger lifecycle: performTest gates firing by validating the affected card against the "ValidCard" parameter, setTriggeringObjects publishes the relevant Card and Amount into the triggering context for the resolving SpellAbility, and getImportantStackObjects produces a localized stack description.
+
+Its design mirrors the engine's data-driven trigger patternâ€”behavior is configured through the string parameter map passed to the superclass rather than hardcodedâ€”while collaborating with AbilityKey to key run parameters and triggering objects. Keeping per-event logic minimal and delegating shared mechanics to Trigger keeps each trigger type small, uniform, and easy to register alongside its siblings.
+
 ## Source
 `forge-game/src/main/java/forge/game/trigger/TriggerBecomeMonstrous.java`
 
@@ -117,4 +123,50 @@ public class TriggerBecomeMonstrous extends Trigger {
         return sb.toString();
     }
 }
+```
+
+## Python
+`forge/game/trigger/TriggerBecomeMonstrous.py`
+
+```python
+from forge.game.trigger.Trigger import Trigger
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Localizer import Localizer
+
+
+class TriggerBecomeMonstrous(Trigger):
+    """
+    Trigger_BecomeMonstrous class.
+
+    @author Forge
+    @version $Id: TriggerBecomeMonstrous.java 21543 2013-05-19 21:35:20Z Max mtg $
+    """
+
+    def __init__(self, params: dict[str, str], host: Card, intrinsic: bool):
+        """
+        Constructor for Trigger_BecomeMonstrous.
+
+        @param params a {@link java.util.HashMap} object.
+        @param host a {@link forge.game.card.Card} object.
+        @param intrinsic the intrinsic
+        """
+        super().__init__(params, host, intrinsic)
+
+    def performTest(self, runParams: dict[AbilityKey, object]) -> bool:
+        if not self.matchesValidParam("ValidCard", runParams.get(AbilityKey.Card)):
+            return False
+
+        return True
+
+    def setTriggeringObjects(self, sa: SpellAbility, runParams: dict[AbilityKey, object]) -> None:
+        sa.setTriggeringObjectsFrom(runParams, AbilityKey.Card, AbilityKey.Amount)
+
+    def getImportantStackObjects(self, sa: SpellAbility) -> str:
+        sb = []
+        sb.append(Localizer.getInstance().getMessage("lblMonstrous"))
+        sb.append(": ")
+        sb.append(str(sa.getTriggeringObject(AbilityKey.Card)))
+        return "".join(sb)
 ```

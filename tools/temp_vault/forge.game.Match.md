@@ -99,6 +99,12 @@ classDiagram
 - [[forge.util.Localizer|Localizer]]
 - [[forge.util.collect.FCollectionView|FCollectionView]]
 
+## Design Description
+
+Match is a non-card-game value object that orchestrates a best-of-N series of individual Games between a fixed roster of `RegisteredPlayer`s under a shared `GameRules` configuration. It owns the immutable player list, title, and accumulated `GameOutcome` history (keyed by game id), and exposes the series-level queries that depend on that historyâ€”win tallies via Guava `Multiset`, match-over and winner determination against `getGamesToWinMatch()`, and aggregated ante results. As a factory it constructs each `Game` and drives its lifecycle through `createGame`/`startGame`, where it prepares player zones (deck validation, sideboarding, foiling, ante-card removal) and applies post-game ownership changes for ante and effects like Darkpact.
+
+Design intent is visible in the unmodifiable player list, the encapsulation of zone-preparation in private helpers, and the embedded Guava `EventBus` that lets the match relay UI/log/sound events while keeping subscribers decoupled. Static `removedCards` state and an explicit `System.gc()` reflect pragmatic, engine-specific concessions rather than clean design.
+
 ## Source
 `forge-game/src/main/java/forge/game/Match.java`
 
@@ -567,4 +573,392 @@ public class Match {
     }
 
 }
+```
+
+## Python
+`forge/game/Match.py`
+
+```python
+from forge.LobbyPlayer import LobbyPlayer
+from forge.deck.CardPool import CardPool
+from forge.deck.Deck import Deck
+from forge.deck.DeckFormat import DeckFormat
+from forge.deck.DeckSection import DeckSection
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.card.Card import Card
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.event.Event import Event
+from forge.game.event.GameEventAddLog import GameEventAddLog
+from forge.game.event.GameEventAnteCardsSelected import GameEventAnteCardsSelected
+from forge.game.event.GameEventGameFinished import GameEventGameFinished
+from forge.game.player.Player import Player
+from forge.game.player.PlayerController import PlayerController
+from forge.game.player.RegisteredPlayer import RegisteredPlayer
+from forge.game.trigger.Trigger import Trigger
+from forge.game.zone.PlayerZone import PlayerZone
+from forge.game.zone.ZoneType import ZoneType
+from forge.item.PaperCard import PaperCard
+from forge.util.Localizer import Localizer
+from forge.util.MyRandom import MyRandom
+from forge.util.collect.FCollectionView import FCollectionView
+from forge.game.Game import Game
+from forge.game.GameOutcome import GameOutcome
+from forge.game.GameOutcome.AnteResult import AnteResult
+from forge.game.GameRules import GameRules
+from forge.game.GameLogEntryType import GameLogEntryType
+
+from com.google.common.eventbus.EventBus import EventBus
+from com.google.common.collect.ArrayListMultimap import ArrayListMultimap
+
+import collections
+import gc
+import sys
+
+
+class Match:
+    removedCards = []
+
+    def __init__(self, rules0, players0, title):
+        self.players = list(players0)
+        self.rules = rules0
+        self.title = title
+
+        self.events = EventBus("match events")
+        self.gameOutcomes = {}
+
+        self.lastOutcome = None
+
+    def getRules(self):
+        return self.rules
+
+    def getTitle(self):
+        wins = self.getGamesWon()
+        titleAppend = self.title + " ("
+        parts = []
+        for rp in self.players:
+            parts.append(str(wins[rp]))
+        titleAppend += "-".join(parts)
+        titleAppend += ")"
+        return titleAppend
+
+    def addGamePlayed(self, finished):
+        if not finished.isGameOver():
+            raise RuntimeError("Game is not over yet.")
+        self.lastOutcome = finished.getOutcome()
+        self.gameOutcomes[finished.getId()] = finished.getOutcome()
+
+    def createGame(self):
+        return Game(self.players, self.rules, self)
+
+    def startGame(self, game, startGameHook=None):
+        self.prepareAllZones(game)
+        if self.rules.useAnte():  # Deciding which cards go to ante
+            list = game.chooseCardsForAnte(self.rules.getMatchAnteRarity(), self.rules.getAnteIncludeBasicLands())
+            for kv in list.entries():
+                p = kv.getKey()
+                game.getAction().moveTo(ZoneType.Ante, kv.getValue(), None, AbilityKey.newMap())
+                game.fireEvent(GameEventAddLog(GameLogEntryType.ANTE, f"{p} anted {kv.getValue()}"))
+            game.fireEvent(GameEventAnteCardsSelected.fromCards(list))
+
+        game.getAction().startGame(self.lastOutcome, startGameHook)
+
+        # Typically ante, but also tearing up a blacker lotus
+        self.executeOwnershipChanges(game)
+
+        game.clearCaches()
+
+        # will pull UI dialog, when the UI is listening
+        game.fireEvent(GameEventGameFinished())
+
+        # run GC after game is finished
+        gc.collect()
+
+    def getOutcomeById(self, id):
+        return self.gameOutcomes.get(id)
+
+    def clearGamesPlayed(self):
+        self.gameOutcomes.clear()
+        for p in self.players:
+            p.restoreDeck()
+
+    def getOutcomes(self):
+        return self.gameOutcomes.values()
+
+    def getLastOutcome(self):
+        return self.lastOutcome
+
+    def isMatchOver(self):
+        victories = [0] * len(self.players)
+        for go in self.getOutcomes():
+            winner = go.getWinningLobbyPlayer()
+            i = 0
+            for p in self.players:
+                if p.getPlayer().equals(winner):
+                    victories[i] += 1
+                    if victories[i] >= self.rules.getGamesToWinMatch():
+                        return True
+                i += 1
+
+        # Games are first to X wins, not first to X wins or Y total games played
+        return False
+
+    def getGamesWonBy(self, questPlayer):
+        sum = 0
+        for go in self.getOutcomes():
+            if questPlayer.equals(go.getWinningLobbyPlayer()):
+                sum += 1
+        return sum
+
+    def getGamesWon(self):
+        won = collections.Counter()
+        for go in self.getOutcomes():
+            if go.getWinningPlayer() is None:
+                # Game hasn't finished yet. Exit early.
+                return won
+            won[go.getWinningPlayer()] += 1
+        return won
+
+    def isWonBy(self, questPlayer):
+        return self.getGamesWonBy(questPlayer) >= self.rules.getGamesToWinMatch()
+
+    def getWinner(self):
+        if self.isMatchOver():
+            return self.lastOutcome.getWinningPlayer()
+        return None
+
+    def getPlayers(self):
+        return self.players
+
+    @staticmethod
+    def getRemovedAnteCards(toUse):
+        keywordToRemove = "Remove CARDNAME from your deck before playing if you're not playing for ante."
+        myRemovedAnteCards = set()
+        for ds in toUse:
+            for cp in ds.getValue():
+                if keywordToRemove in cp.getKey().getRules().getMainPart().getKeywords():
+                    myRemovedAnteCards.add(cp.getKey())
+        return myRemovedAnteCards
+
+    @staticmethod
+    def getRemovedCards():
+        return Match.removedCards
+
+    def removeCard(self, c):
+        Match.removedCards.append(c)
+
+    @staticmethod
+    def preparePlayerZone(player, zoneType, section, canRandomFoil):
+        library = player.getZone(zoneType)
+        newLibrary = []
+        for stackOfCards in section:
+            cp = stackOfCards.getKey()
+            for i in range(stackOfCards.getValue()):
+                card = Card.fromPaperCard(cp, player)
+
+                # Assign card-specific foiling or random foiling on approximately 1:20 cards if enabled
+                if cp.isFoil() or (canRandomFoil and MyRandom.percentTrue(5)):
+                    card.setRandomFoil()
+                card.setCollectible(True)
+
+                newLibrary.append(card)
+        library.setCards(newLibrary)
+
+    def prepareAllZones(self, game):
+        # need this code here, otherwise observables fail
+        Trigger.resetIDs()
+        game.getTriggerHandler().clearDelayedTrigger()
+
+        # friendliness
+        rAICards = {}
+        removedAnteCards = ArrayListMultimap.create()
+        unsupported = {}
+
+        players = game.getPlayers()
+        playersConditions = game.getMatch().getPlayers()
+
+        isFirstGame = len(self.gameOutcomes) == 0
+        canSideBoard = not isFirstGame and self.rules.getGameType().isSideboardingAllowed()
+        # Only allow this if feature flag is on AND for certain match types
+        sideboardForAIs = self.rules.getSideboardForAI() and \
+            self.rules.getGameType().getDeckFormat() == DeckFormat.Constructed
+        sideboardProxy = None
+        if canSideBoard and sideboardForAIs:
+            for i in range(players.size()):
+                player = players.get(i)
+                # psc = playersConditions.get(i)
+                if not player.getController().isAI():
+                    sideboardProxy = player.getController()
+                    break
+
+        for i in range(len(playersConditions)):
+            player = players.get(i)
+            psc = playersConditions[i]
+            person = player.getController()
+
+            if canSideBoard:
+                if sideboardProxy is not None and person.isAI():
+                    person = sideboardProxy
+
+                toChange = psc.getDeck()
+                if len(Match.getRemovedCards()) > 0:
+                    main = CardPool()
+                    main.addAll(toChange.get(DeckSection.Main))
+                    sideboard = CardPool()
+                    sideboard.addAll(toChange.getOrCreate(DeckSection.Sideboard))
+                    for c in Match.removedCards:
+                        if main.contains(c):
+                            main.remove(c, 1)
+                        elif sideboard.contains(c):
+                            sideboard.remove(c, 1)
+                    toChange.getMain().clear()
+                    toChange.getMain().addAll(main)
+                    toChange.get(DeckSection.Sideboard).clear()
+                    toChange.get(DeckSection.Sideboard).addAll(sideboard)
+                newMain = person.sideboard(toChange, self.rules.getGameType(), player.getName())
+                if newMain is not None:
+                    allCards = CardPool()
+                    allCards.addAll(toChange.get(DeckSection.Main))
+                    allCards.addAll(toChange.getOrCreate(DeckSection.Sideboard))
+                    for c in newMain:
+                        allCards.remove(c)
+                    toChange.getMain().clear()
+                    toChange.getMain().add(newMain)
+                    toChange.get(DeckSection.Sideboard).clear()
+                    toChange.get(DeckSection.Sideboard).addAll(allCards)
+
+            toCheck = psc.getDeck()
+            if toCheck is None:
+                try:
+                    print(psc.getPlayer().getName() + " Deck is NULL...", file=sys.stderr)
+                    val = self.rules.getGameType().getDeckFormat().getMainRange().getMinimum()
+                    toCheck = Deck("NULL")
+                    if val > 0:
+                        toCheck.getMain().add("Wastes", val)
+                except Exception:
+                    pass
+            myDeck = toCheck.getValid()
+            player.setDraftNotes(myDeck.getLeft().getDraftNotes())
+
+            myRemovedAnteCards = None
+            if not self.rules.useAnte():
+                myRemovedAnteCards = Match.getRemovedAnteCards(myDeck.getLeft())
+                for cp in myRemovedAnteCards:
+                    for ds in myDeck.getLeft():
+                        ds.getValue().removeAll(cp)
+
+            Match.preparePlayerZone(player, ZoneType.Library, myDeck.getLeft().getMain(), psc.useRandomFoil())
+            if myDeck.getLeft().has(DeckSection.Sideboard):
+                Match.preparePlayerZone(player, ZoneType.Sideboard, myDeck.getLeft().get(DeckSection.Sideboard), psc.useRandomFoil())
+
+                player.assignCompanion(game, person)
+
+            player.initVariantsZones(psc)
+
+            player.shuffle(None)
+
+            if isFirstGame:
+                cardsComplained = player.getController().complainCardsCantPlayWell(myDeck.getLeft())
+                if cardsComplained is not None and len(cardsComplained) != 0:
+                    rAICards[player] = cardsComplained
+            else:
+                # reset cards to fix weird issues on netplay nextgame client
+                for c in player.getCardsIn(ZoneType.Library):
+                    c.setTapped(False)
+                    c.resetActivationsPerTurn()
+
+            if myRemovedAnteCards is not None and len(myRemovedAnteCards) != 0:
+                removedAnteCards.putAll(player, myRemovedAnteCards)
+            unsupported[player] = myDeck.getRight()
+
+        localizer = Localizer.getInstance()
+        if len(rAICards) != 0 and not self.rules.getGameType().isCardPoolLimited() and self.rules.warnAboutAICards():
+            game.getAction().revealUnplayableByAI(localizer.getMessage("lblAICantPlayCards"), rAICards)
+
+        if not removedAnteCards.isEmpty():
+            game.getAction().revealAnte(localizer.getMessage("lblAnteCardsRemoved"), removedAnteCards)
+
+        if len(unsupported) != 0:
+            game.getAction().revealUnsupported(unsupported)
+
+    def executeOwnershipChanges(self, lastGame):
+        outcome = lastGame.getOutcome()
+
+        # remove all the lost cards from owners' decks
+        losses = []
+        cntPlayers = len(self.players)
+        iWinner = -1
+        for i in range(cntPlayers):
+            gamePlayer = lastGame.getRegisteredPlayers().get(i)
+            registered = gamePlayer.getRegisteredPlayer()
+
+            # Add/Remove Cards lost via ChangeOwnership cards like Darkpact
+            lostOwnership = gamePlayer.getLostOwnership()
+            gainedOwnership = gamePlayer.getGainedOwnership()
+
+            if not lostOwnership.isEmpty():
+                lostPaperOwnership = []
+                for c in lostOwnership:
+                    lostPaperOwnership.append(c.getPaperCard())
+                outcome.addAnteLost(registered, lostPaperOwnership)
+
+            if not gainedOwnership.isEmpty():
+                gainedPaperOwnership = []
+                for c in gainedOwnership:
+                    gainedPaperOwnership.append(c.getPaperCard())
+                outcome.addAnteWon(registered, gainedPaperOwnership)
+
+            if not self.getRules().useAnte():
+                continue
+
+            if outcome.isDraw():
+                continue
+
+            if not gamePlayer.hasLost():
+                iWinner = i
+                continue  # not a loser
+
+            losersDeck = self.players[i].getDeck()
+            personalLosses = []
+            for c in gamePlayer.getCardsIn(ZoneType.Ante):
+                if not c.isCollectible():
+                    continue
+                toRemove = c.getPaperCard()
+                # this could miss the cards by returning instances that are not equal to cards found in deck
+                # (but only if the card has multiple prints in a set)
+                losersDeck.getMain().remove(toRemove)
+                personalLosses.append(toRemove)
+                losses.append(toRemove)
+
+            outcome.addAnteLost(registered, personalLosses)
+
+        if self.rules.useAnte() and iWinner >= 0:
+            # Winner gains these cards always
+            fromGame = lastGame.getRegisteredPlayers().get(iWinner)
+            registered = fromGame.getRegisteredPlayer()
+            outcome.addAnteWon(registered, losses)
+
+            if self.rules.getGameType().canAddWonCardsMidGame():
+                # But only certain game types lets you swap midgame
+                chosen = fromGame.getController().chooseCardsYouWonToAddToDeck(losses)
+                if chosen is not None:
+                    deck = self.players[iWinner].getDeck()
+                    for c in chosen:
+                        deck.getMain().add(c)
+            # Other game types (like Quest) need to do something in their own calls to actually update data
+
+    def getAnteResult(self, player):
+        out = GameOutcome.AnteResult()
+        for outcome in self.gameOutcomes.values():
+            gameAnte = outcome.getAnteResult(player)
+            if gameAnte is None:
+                continue
+            out.addWon(gameAnte.wonCards)
+            out.addLost(gameAnte.lostCards)
+        return out
+
+    def fireEvent(self, event):
+        self.events.post(event)
+
+    def subscribeToEvents(self, subscriber):
+        self.events.register(subscriber)
 ```

@@ -48,9 +48,9 @@ classDiagram
 
 ## Design Description
 
-AnimateAllEffect implements the resolution logic for mass-animation effects that transform every qualifying card into a creature at once—mass-animation spells affecting lands or other permanents. As a concrete subclass of AnimateEffectBase, it overrides `getStackDescription` for player-facing text and `resolve` to carry out the effect, delegating each card's transformation to the inherited `doAnimate` helper and reusing the base class's shared animation machinery.
+AnimateAllEffect implements the resolution logic for mass-animation effects that transform every qualifying card into a creature at onceâ€”mass-animation spells affecting lands or other permanents. As a concrete subclass of AnimateEffectBase, it overrides `getStackDescription` for player-facing text and `resolve` to carry out the effect, delegating each card's transformation to the inherited `doAnimate` helper and reusing the base class's shared animation machinery.
 
-Its `resolve` method parses the SpellAbility's parameters into a complete animation specification: power/toughness via AbilityUtils, added and removed CardTypes (with ChosenType override), keywords (allowing SVar substitution), ColorSet colors, plus abilities, triggers, replacements, static abilities, and sVars. It then collects the target CardCollectionView from the specified ZoneType (defaulting to the battlefield), filters by the ValidCards restriction, and animates each Card under one shared timestamp—ensuring the batch is treated as a single timestamped change—firing a GameEventCardStatsChanged per card so the UI reflects the updated stats.
+Its `resolve` method parses the SpellAbility's parameters into a complete animation specification: power/toughness via AbilityUtils, added and removed CardTypes (with ChosenType override), keywords (allowing SVar substitution), ColorSet colors, plus abilities, triggers, replacements, static abilities, and sVars. It then collects the target CardCollectionView from the specified ZoneType (defaulting to the battlefield), filters by the ValidCards restriction, and animates each Card under one shared timestampâ€”ensuring the batch is treated as a single timestamped changeâ€”firing a GameEventCardStatsChanged per card so the UI reflects the updated stats.
 
 ## Source
 `forge-game/src/main/java/forge/game/ability/effects/AnimateAllEffect.java`
@@ -214,4 +214,136 @@ public class AnimateAllEffect extends AnimateEffectBase {
     }
 
 }
+```
+
+## Python
+`forge/game/ability/effects/AnimateAllEffect.py`
+
+```python
+from forge.game.ability.effects.AnimateEffectBase import AnimateEffectBase
+from forge.card.CardType import CardType
+from forge.card.ColorSet import ColorSet
+from forge.game.Game import Game
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.card.Card import Card
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.event.GameEventCardStatsChanged import GameEventCardStatsChanged
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+
+
+class AnimateAllEffect(AnimateEffectBase):
+
+    def getStackDescription(self, sa: SpellAbility) -> str:
+        return sa.getParamOrDefault("SpellDescription", "Animate all valid cards.")
+
+    def resolve(self, sa: SpellAbility) -> None:
+        host = sa.getHostCard()
+
+        power = None
+        if sa.hasParam("Power"):
+            power = AbilityUtils.calculateAmount(host, sa.getParam("Power"), sa)
+        toughness = None
+        if sa.hasParam("Toughness"):
+            toughness = AbilityUtils.calculateAmount(host, sa.getParam("Toughness"), sa)
+        game = host.getGame()
+
+        # Every Animate event needs a unique time stamp
+        timestamp = game.getNextTimestamp()
+
+        types = CardType(True)
+        if sa.hasParam("Types"):
+            types.addAll(sa.getParam("Types").split(","))
+
+        removeTypes = CardType(True)
+        if sa.hasParam("RemoveTypes"):
+            removeTypes.addAll(sa.getParam("RemoveTypes").split(","))
+
+        # allow ChosenType - overrides anything else specified
+        if types.hasSubtype("ChosenType"):
+            types.clear()
+            types.add(host.getChosenType())
+        elif types.hasSubtype("ChosenType2"):
+            types.clear()
+            types.add(host.getChosenType2())
+
+        keywords = []
+        if sa.hasParam("Keywords"):
+            keywords.extend(sa.getParam("Keywords").split(" & "))
+
+        removeKeywords = []
+        if sa.hasParam("RemoveKeywords"):
+            removeKeywords.extend(sa.getParam("RemoveKeywords").split(" & "))
+
+        hiddenKeywords = []
+        if sa.hasParam("HiddenKeywords"):
+            hiddenKeywords.extend(sa.getParam("HiddenKeywords").split(" & "))
+        # allow SVar substitution for keywords
+        i = 0
+        while i < len(keywords):
+            k = keywords[i]
+            if host.hasSVar(k):
+                keywords.append(host.getSVar(k))
+                keywords.remove(k)
+            i += 1
+
+        # colors to be added or changed to
+        finalColors = None
+        if sa.hasParam("Colors"):
+            colors = sa.getParam("Colors")
+            if colors == "ChosenColor":
+                finalColors = ColorSet.fromNames(host.getChosenColors())
+            else:
+                finalColors = ColorSet.fromNames(colors.split(","))
+
+        # abilities to add to the animated being
+        abilities = []
+        if sa.hasParam("Abilities"):
+            abilities.extend(sa.getParam("Abilities").split(","))
+        # replacement effects to add to the animated being
+        replacements = []
+        if sa.hasParam("Replacements"):
+            replacements.extend(sa.getParam("Replacements").split(","))
+        # triggers to add to the animated being
+        triggers = []
+        if sa.hasParam("Triggers"):
+            triggers.extend(sa.getParam("Triggers").split(","))
+
+        # sVars to add to the animated being
+        sVars = []
+        if sa.hasParam("sVars"):
+            sVars.extend(sa.getParam("sVars").split(","))
+
+        # static abilities to add to the animated being
+        stAbs = []
+        if sa.hasParam("staticAbilities"):
+            stAbs.extend(sa.getParam("staticAbilities").split(","))
+
+        sVarsMap = {}
+        for s in sVars:
+            sVarsMap[s] = AbilityUtils.getSVar(sa, s)
+
+        valid = sa.getParamOrDefault("ValidCards", "")
+
+        list = None
+
+        z = ZoneType.listValueOf(sa.getParam("Zone")) if sa.hasParam("Zone") else \
+            ZoneType.listValueOf("Battlefield")
+
+        if sa.usesTargeting() or sa.hasParam("Defined"):
+            list = self.getTargetPlayers(sa).getCardsIn(z)
+        else:
+            list = game.getCardsIn(z)
+
+        list = AbilityUtils.filterListByType(list, valid, sa)
+
+        for c in list:
+            self.doAnimate(c, sa, power, toughness, types, removeTypes, finalColors, keywords, removeKeywords,
+                    hiddenKeywords, abilities, triggers, replacements, stAbs, timestamp, sa.getParam("Duration"))
+
+            # give sVars
+            if sVarsMap:
+                c.addChangedSVars(sVarsMap, timestamp, 0)
+
+            game.fireEvent(GameEventCardStatsChanged(c))
 ```

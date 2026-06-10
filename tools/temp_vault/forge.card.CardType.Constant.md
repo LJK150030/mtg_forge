@@ -51,7 +51,7 @@ A nested static holder class within `CardType` that centralizes the canonical vo
 As a pure constants container, it has no supertype and is never instantiated; collaborators read its static fields directly. It maintains bidirectional `BiMap` mappings between singular and plural type names, seeded in a static initializer from `CoreType.values()`, so callers can translate either direction from a single source of truth. The design intent is to provide one globally shared, lazily-loaded registry of type metadata that the rest of the card subtype system queries rather than duplicating.
 
 ## Source
-`forge-core/src/main/java/forge/card/CardType.java` â€” declaration excerpt
+`forge-core/src/main/java/forge/card/CardType.java` Ã¢â‚¬â€ declaration excerpt
 
 ```java
     public static class Constant {
@@ -94,4 +94,55 @@ As a pure constants container, it has no supertype and is never instantiated; co
                 "Warrior",
                 "Wizard");
     }
+```
+
+## Python
+`forge/card/CardType/Constant.py`
+
+```python
+from forge.card.CardType.CoreType import CoreType
+from forge.util.Settable import Settable
+
+
+class Constant:
+    LOADED = Settable()
+    BASIC_TYPES: set[str] = set()
+    LAND_TYPES: set[str] = set()
+    CREATURE_TYPES: set[str] = set()
+    SPELL_TYPES: set[str] = set()
+    ENCHANTMENT_TYPES: set[str] = set()
+    ARTIFACT_TYPES: set[str] = set()
+    WALKER_TYPES: set[str] = set()
+    DUNGEON_TYPES: set[str] = set()
+    BATTLE_TYPES: set[str] = set()
+    PLANAR_TYPES: set[str] = set()
+
+    MultiwordTypes: set[str] = set()
+
+    # singular -> plural
+    pluralTypes: dict[str, str] = {}
+    # plural -> singular
+    singularTypes: dict[str, str] = {}
+
+    OUTLAW_TYPES: set[str] = {
+        "Assassin",
+        "Mercenary",
+        "Pirate",
+        "Rogue",
+        "Warlock",
+    }
+
+    PARTY_TYPES: set[str] = {
+        "Cleric",
+        "Rogue",
+        "Warrior",
+        "Wizard",
+    }
+
+
+for c in CoreType.values():
+    Constant.pluralTypes[c.name()] = c.pluralName
+
+# plural -> singular is the inverse of pluralTypes
+Constant.singularTypes = {v: k for k, v in Constant.pluralTypes.items()}
 ```

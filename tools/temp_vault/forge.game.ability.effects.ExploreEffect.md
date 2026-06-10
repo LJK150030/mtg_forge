@@ -166,3 +166,98 @@ public class ExploreEffect extends SpellAbilityEffect {
 
 }
 ```
+
+## Python
+`forge/game/ability/effects/ExploreEffect.py`
+
+```python
+from forge.game.Game import Game
+from forge.game.GameActionUtil import GameActionUtil
+from forge.game.GameEntityCounterTable import GameEntityCounterTable
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.card.CardZoneTable import CardZoneTable
+from forge.game.card.CounterEnumType import CounterEnumType
+from forge.game.player.Player import Player
+from forge.game.replacement.ReplacementResult import ReplacementResult
+from forge.game.replacement.ReplacementType import ReplacementType
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.trigger.TriggerType import TriggerType
+from forge.game.zone.ZoneType import ZoneType
+from forge.util.Lang import Lang
+from forge.util.Localizer import Localizer
+
+
+class ExploreEffect(SpellAbilityEffect):
+
+    # (non-Javadoc)
+    # @see forge.game.ability.SpellAbilityEffect#getStackDescription(forge.game.spellability.SpellAbility)
+    def getStackDescription(self, sa: SpellAbility) -> str:
+        sb = []
+
+        tgt = self.getTargetCards(sa)
+
+        sb.append(Lang.joinHomogenous(tgt))
+        sb.append(" ")
+        sb.append("explore" if len(tgt) > 1 else "explores")
+        sb.append(". ")
+
+        return "".join(sb)
+
+    # (non-Javadoc)
+    # @see forge.game.ability.SpellAbilityEffect#resolve(forge.game.spellability.SpellAbility)
+    def resolve(self, sa: SpellAbility) -> None:
+        host = sa.getHostCard()
+        game = host.getGame()
+        amount = AbilityUtils.calculateAmount(host, sa.getParamOrDefault("Num", "1"), sa)
+
+        tgts = GameActionUtil.orderCardsByTheirOwners(game, self.getTargetCards(sa), ZoneType.Battlefield, sa)
+
+        for c in tgts:
+            pl = c.getController()
+            for i in range(amount):
+                if game.getReplacementHandler().run(ReplacementType.Explore, AbilityKey.mapFromAffected(c)) \
+                        != ReplacementResult.NotReplaced:
+                    continue
+
+                table = GameEntityCounterTable()
+                moveParams = AbilityKey.newMap()
+                triggerList = AbilityKey.addCardZoneTableParams(moveParams, sa)
+
+                # revealed land card
+                revealedLand = False
+                top = pl.getTopXCardsFromLibrary(1)
+                if not top.isEmpty():
+                    game.getAction().reveal(top, pl, False,
+                            Localizer.getInstance().getMessage("lblRevealedForExplore") + " - ")
+                    r = top.getFirst()
+                    if r.isLand():
+                        game.getAction().moveTo(ZoneType.Hand, r, sa, moveParams)
+                        revealedLand = True
+                    else:
+                        params = {}
+                        params["RevealedCard"] = r
+                        if pl.getController().confirmAction(sa, None,
+                                Localizer.getInstance().getMessage("lblPutThisCardToYourGraveyard",
+                                        r.getTranslatedName()), r, params):
+                            game.getAction().moveTo(ZoneType.Graveyard, r, sa, moveParams)
+                if not revealedLand:
+                    # need to get newest game state to check if it is still on the battlefield
+                    # and the timestamp didn't change
+                    gamec = game.getCardState(c)
+                    if gamec.isInPlay() and gamec.equalsWithGameTimestamp(c):
+                        c.addCounter(CounterEnumType.P1P1, 1, pl, table)
+
+                # a creature does explore even if it isn't on the battlefield anymore
+                pl.addExploredThisTurn()
+                runParams = AbilityKey.mapFromCard(c)
+                if not top.isEmpty():
+                    runParams[AbilityKey.Explored] = top.getFirst()
+                game.getTriggerHandler().runTrigger(TriggerType.Explores, runParams, False)
+                table.replaceCounterEffect(game, sa)
+                triggerList.triggerChangesZoneAll(game, sa)
+```

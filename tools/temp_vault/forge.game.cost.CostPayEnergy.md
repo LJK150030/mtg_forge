@@ -161,3 +161,74 @@ public class CostPayEnergy extends CostPart {
 
 }
 ```
+
+## Python
+`forge/game/cost/CostPayEnergy.py`
+
+```python
+/*
+ * Forge: Play Magic: the Gathering.
+ * Copyright (C) 2011  Forge Team
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
+from forge.game.card.Card import Card
+from forge.game.card.CounterEnumType import CounterEnumType
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.cost.CostPart import CostPart
+from forge.game.cost.ICostVisitor import ICostVisitor
+from forge.game.cost.PaymentDecision import PaymentDecision
+
+
+class CostPayEnergy(CostPart):
+    """
+    Instantiates a new cost pay energy.
+    """
+    serialVersionUID = 1
+
+    def __init__(self, amount: str):
+        self.paidAmount = 0
+        self.setAmount(amount)
+
+    def paymentOrder(self) -> int:
+        return 7
+
+    def getMaxAmountX(self, ability: SpellAbility, payer: Player, effect: bool):
+        return payer.getCounters(CounterEnumType.ENERGY)
+
+    def toString(self) -> str:
+        sb = []
+        sb.append("Pay ")
+        if self.getAmount() == "X":
+            sb.append("X {E}")
+        else:
+            sb.append("{E}" * int(self.getAmount()))
+        return "".join(sb)
+
+    def refund(self, source: Card) -> None:
+        # Really should be activating player
+        source.getController().loseEnergy(self.paidAmount * -1)
+
+    def canPay(self, ability: SpellAbility, payer: Player, effect: bool) -> bool:
+        return payer.getCounters(CounterEnumType.ENERGY) >= self.getAbilityAmount(ability)
+
+    def payAsDecided(self, ai: Player, decision: PaymentDecision, ability: SpellAbility, effect: bool) -> bool:
+        self.paidAmount = decision.c
+        return ai.payEnergy(self.paidAmount, None)
+
+    def accept(self, visitor: ICostVisitor):
+        return visitor.visit(self)
+```

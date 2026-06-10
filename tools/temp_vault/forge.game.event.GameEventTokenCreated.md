@@ -36,7 +36,7 @@ classDiagram
 
 `GameEventTokenCreated` is an immutable, parameterless record that signals the creation of a token onto the battlefield within the forge-game module's event system. As a concrete implementation of the `GameEvent` interface, it participates in a visitor-based dispatch scheme: its `visit` method forwards to the appropriate overload on an `IGameEventVisitor<T>`, letting listeners react to token creation without the event itself carrying any behavior or state.
 
-The design favors lightweight, self-describing notification — the record carries no payload, so it merely announces that *some* token was created, and overrides `toString` to yield the human-readable label "Token created" for logging or debugging. Choosing a record makes the type concise and inherently immutable, fitting its role as a transient signal broadcast through Forge's game-event pipeline.
+The design favors lightweight, self-describing notification â€” the record carries no payload, so it merely announces that *some* token was created, and overrides `toString` to yield the human-readable label "Token created" for logging or debugging. Choosing a record makes the type concise and inherently immutable, fitting its role as a transient signal broadcast through Forge's game-event pipeline.
 
 ## Source
 `forge-game/src/main/java/forge/game/event/GameEventTokenCreated.java`
@@ -59,4 +59,23 @@ public record GameEventTokenCreated() implements GameEvent {
         return "Token created";
     }
 }
+```
+
+## Python
+`forge/game/event/GameEventTokenCreated.py`
+
+```python
+package = "forge.game.event"
+
+from forge.game.event.GameEvent import GameEvent
+from forge.game.event.IGameEventVisitor import IGameEventVisitor
+
+
+class GameEventTokenCreated(GameEvent):
+
+    def visit(self, visitor: IGameEventVisitor):
+        return visitor.visit(self)
+
+    def __str__(self) -> str:
+        return "Token created"
 ```

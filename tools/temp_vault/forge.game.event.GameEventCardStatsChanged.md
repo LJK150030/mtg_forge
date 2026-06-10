@@ -43,7 +43,7 @@ classDiagram
 
 `GameEventCardStatsChanged` is an immutable record-based notification signalling that a card's characteristics (type, power, toughness, transform state) have changed on the server, prompting clients to re-request the affected cards' current state. As an implementation of the `GameEvent` interface, it participates in the engine's visitor-based event dispatch: its `visit` method double-dispatches to an `IGameEventVisitor`, letting handlers react to stat changes without the event needing to know their concrete types.
 
-Its design favors convenience and decoupling. Rather than retaining live `Card` model objects, the constructors eagerly translate one or many `Card` instances into a `Collection<CardView>` via `CardView.getCollection`, so the event carries only the client-facing view snapshot. Overloaded constructors accept a single card, a card with a transform flag, or a collection, while `toString` produces a human-readable summary—name, types, and P/T of the first card plus an "and N more" suffix—useful for logging and sound/UI triggers.
+Its design favors convenience and decoupling. Rather than retaining live `Card` model objects, the constructors eagerly translate one or many `Card` instances into a `Collection<CardView>` via `CardView.getCollection`, so the event carries only the client-facing view snapshot. Overloaded constructors accept a single card, a card with a transform flag, or a collection, while `toString` produces a human-readable summaryâ€”name, types, and P/T of the first card plus an "and N more" suffixâ€”useful for logging and sound/UI triggers.
 
 ## Source
 `forge-game/src/main/java/forge/game/event/GameEventCardStatsChanged.java`
@@ -104,4 +104,54 @@ public record GameEventCardStatsChanged(Collection<CardView> cards, boolean tran
     }
 
 }
+```
+
+## Python
+`forge/game/event/GameEventCardStatsChanged.py`
+
+```python
+package forge.game.event
+
+from typing import TypeVar, Generic
+
+from forge.game.event.GameEvent import GameEvent
+from forge.game.card.Card import Card
+from forge.game.card.CardView import CardView
+from forge.game.event.IGameEventVisitor import IGameEventVisitor
+
+T = TypeVar("T")
+
+
+class GameEventCardStatsChanged(GameEvent):
+
+    def __init__(self, affected=None, isTransform=False, cards=None, transform=False):
+        if cards is not None:
+            self.cards = cards
+            self.transform = transform
+        elif isinstance(affected, Card):
+            self.cards = CardView.getCollection([affected])
+            self.transform = False
+        else:
+            self.cards = CardView.getCollection(affected)
+            self.transform = False
+
+    def visit(self, visitor):
+        return visitor.visit(self)
+
+    def __str__(self):
+        card = next(iter(self.cards), None)
+        if card is None:
+            return "Card state changes: (empty list)"
+        if len(self.cards) == 1:
+            return ("Card state changes: " + card.getName() +
+                    " (" + " ".join(card.getCurrentState().getType()) + ") " +
+                    str(card.getCurrentState().getPower()) + "/" + str(card.getCurrentState().getToughness()))
+        else:
+            return ("Card state changes: " + card.getName() +
+                    " (" + " ".join(card.getCurrentState().getType()) + ") " +
+                    str(card.getCurrentState().getPower()) + "/" + str(card.getCurrentState().getToughness()) +
+                    " and " + str(len(self.cards) - 1) + " more")
+
+    def toString(self):
+        return self.__str__()
 ```

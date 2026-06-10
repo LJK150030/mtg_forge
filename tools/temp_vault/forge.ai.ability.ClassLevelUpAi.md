@@ -90,3 +90,38 @@ public class ClassLevelUpAi extends SpellAbilityAi {
 
 }
 ```
+
+## Python
+`forge/ai/ability/ClassLevelUpAi.py`
+
+```python
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.ai.SpellAbilityAi import SpellAbilityAi
+from forge.ai.SpellApiToAi import SpellApiToAi
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.card.Card import Card
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.staticability.StaticAbility import StaticAbility
+from forge.game.trigger.Trigger import Trigger
+from forge.game.trigger.TriggerType import TriggerType
+
+
+class ClassLevelUpAi(SpellAbilityAi):
+    def canPlay(self, aiPlayer: Player, sa: SpellAbility) -> AiAbilityDecision:
+        # TODO does leveling up affect combat? Otherwise wait for Main2
+        host = sa.getHostCard()
+        level = host.getClassLevel() + 1
+        for stAb in host.getStaticAbilities():
+            if not stAb.hasParam("AddTrigger") or not stAb.isClassLevelNAbility(level):
+                continue
+            for sTrig in stAb.getParam("AddTrigger").split(" & "):
+                t = host.getTriggerForStaticAbility(AbilityUtils.getSVar(stAb, sTrig), stAb)
+                if t.getMode() != TriggerType.ClassLevelGained:
+                    continue
+                effect = t.ensureAbility()
+                if not SpellApiToAi.Converter.get(effect).doTrigger(aiPlayer, effect, False):
+                    return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+        return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+```

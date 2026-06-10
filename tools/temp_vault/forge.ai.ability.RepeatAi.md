@@ -48,7 +48,7 @@ classDiagram
 
 ## Design Description
 
-RepeatAi is the AI decision-maker for "Repeat" spell abilities, extending SpellAbilityAi to plug into Forge's ability-resolution framework. It overrides canPlay to evaluate whether the AI should cast the ability—handling targeting of a preferred opponent and special "MaxX"/"MaxXAtOppEOT" logic that maximizes the X cost, optionally deferring until the opponent's end of turn—and returns its verdict as an AiAbilityDecision carrying both a score and an AiPlayDecision rationale.
+RepeatAi is the AI decision-maker for "Repeat" spell abilities, extending SpellAbilityAi to plug into Forge's ability-resolution framework. It overrides canPlay to evaluate whether the AI should cast the abilityâ€”handling targeting of a preferred opponent and special "MaxX"/"MaxXAtOppEOT" logic that maximizes the X cost, optionally deferring until the opponent's end of turnâ€”and returns its verdict as an AiAbilityDecision carrying both a score and an AiPlayDecision rationale.
 
 Its core responsibility lives in doTriggerNoCost, which configures the repeated sub-ability: it selects targets per the AILogic parameter (e.g., copying the AI's best creature, or targeting the lowest-life opponent), retrieves the nested "RepeatSubAbility", and delegates evaluation to the AiController obtained through PlayerControllerAi. confirmAction is deliberately stubbed to decline, reflecting an acknowledged gap (per the TODO) where smarter choice logic is still needed.
 
@@ -159,4 +159,96 @@ public class RepeatAi extends SpellAbilityAi {
         }
     }
 }
+```
+
+## Python
+`forge/ai/ability/RepeatAi.py`
+
+```python
+from forge.ai.SpellAbilityAi import SpellAbilityAi
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.ai.AiAttackController import AiAttackController
+from forge.ai.ComputerUtilCost import ComputerUtilCost
+from forge.ai.ComputerUtilCard import ComputerUtilCard
+from forge.ai.AiController import AiController
+from forge.ai.PlayerControllerAi import PlayerControllerAi
+from forge.game.card.Card import Card
+from forge.game.card.CardPredicates import CardPredicates
+from forge.game.phase.PhaseType import PhaseType
+from forge.game.player.Player import Player
+from forge.game.player.PlayerActionConfirmMode import PlayerActionConfirmMode
+from forge.game.player.PlayerCollection import PlayerCollection
+from forge.game.player.PlayerPredicates import PlayerPredicates
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.IterableUtil import IterableUtil
+
+from typing import Map
+
+
+class RepeatAi(SpellAbilityAi):
+
+    def canPlay(self, ai: Player, sa: SpellAbility) -> AiAbilityDecision:
+        opp = AiAttackController.choosePreferredDefenderPlayer(ai)
+        logic = sa.getParamOrDefault("AILogic", "")
+
+        if sa.usesTargeting():
+            if not sa.canTarget(opp):
+                return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+            sa.resetTargets()
+            sa.getTargets().add(opp)
+        if "MaxX" == logic or "MaxXAtOppEOT" == logic:
+            if "MaxXAtOppEOT" == logic and not (ai.getGame().getPhaseHandler().is_(PhaseType.END_OF_TURN) and ai.getGame().getPhaseHandler().getNextTurn() == ai):
+                return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+            max = ComputerUtilCost.setMaxXValue(sa, ai, sa.isTrigger())
+            if max <= 0:
+                return AiAbilityDecision(0, AiPlayDecision.CantAffordX)
+            return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+        return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+
+    def confirmAction(self, player: Player, sa: SpellAbility, mode: PlayerActionConfirmMode, message: str, params: dict[str, object]) -> bool:
+        # TODO add logic to have computer make better choice (ArsenalNut)
+        return False
+
+    def doTriggerNoCost(self, ai: Player, sa: SpellAbility, mandatory: bool) -> AiAbilityDecision:
+        logic = sa.getParamOrDefault("AILogic", "")
+
+        if sa.usesTargeting():
+            if logic.startswith("CopyBestCreature"):
+                best = None
+                targetableAi = IterableUtil.filter(ai.getCreaturesInPlay(), CardPredicates.isTargetableBy(sa))
+                if not logic.endswith("IgnoreLegendary"):
+                    best = ComputerUtilCard.getBestAI(IterableUtil.filter(targetableAi, Card.ignoreLegendRule))
+                else:
+                    best = ComputerUtilCard.getBestAI(targetableAi)
+                if best is None and mandatory and sa.canTarget(sa.getHostCard()):
+                    best = sa.getHostCard()
+                if best is not None:
+                    sa.resetTargets()
+                    sa.getTargets().add(best)
+                    return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+                return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+            targetableOpps = ai.getOpponents().filter(PlayerPredicates.isTargetableBy(sa))
+            opp = targetableOpps.min(PlayerPredicates.compareByLife())
+            if opp is not None:
+                sa.resetTargets()
+                sa.getTargets().add(opp)
+            elif not mandatory:
+                return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+        # setup subability to repeat
+        repeat = sa.getAdditionalAbility("RepeatSubAbility")
+
+        if repeat is None:
+            if mandatory:
+                return AiAbilityDecision(50, AiPlayDecision.MandatoryPlay)
+            else:
+                return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+
+        aic = ai.getController().getAi()
+        if aic.doTrigger(repeat, mandatory):
+            return AiAbilityDecision(100, AiPlayDecision.WillPlay)
+        else:
+            return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
 ```

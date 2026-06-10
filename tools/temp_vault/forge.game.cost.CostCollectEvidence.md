@@ -58,7 +58,7 @@ classDiagram
 
 ## Design Description
 
-CostCollectEvidence models the Magic "Collect Evidence" payment cost, by which a player exiles cards from their graveyard whose combined mana value meets a specified amount. It extends CostPartWithList, inheriting the machinery for costs that act on a tracked collection of cards, and implements the cost-specific contract: validating affordability, defining payment order, and executing the exile. Affordability (canPay) is checked by summing the CMC of exilable graveyard cards against the required amount, while payment is performed in bulk—canPayListAtOnce returns true and doListPayment exiles the whole selection at once, leaving the single-card doPayment unused.
+CostCollectEvidence models the Magic "Collect Evidence" payment cost, by which a player exiles cards from their graveyard whose combined mana value meets a specified amount. It extends CostPartWithList, inheriting the machinery for costs that act on a tracked collection of cards, and implements the cost-specific contract: validating affordability, defining payment order, and executing the exile. Affordability (canPay) is checked by summing the CMC of exilable graveyard cards against the required amount, while payment is performed in bulkâ€”canPayListAtOnce returns true and doListPayment exiles the whole selection at once, leaving the single-card doPayment unused.
 
 Notable design intent: paymentOrder is fixed at 15 to stay aligned with CostExile (for interactions like Lamplight Phoenix); fixed hash keys ("Collected"/"CollectedCards") expose the paid cards to dependent effects; doListPayment records zone-change table params, tags exiled-with provenance via SpellAbilityEffect, and fires the CollectEvidence trigger. Dispatch to cost handling follows the visitor pattern through accept(ICostVisitor).
 
@@ -147,4 +147,77 @@ public class CostCollectEvidence extends CostPartWithList {
         return moved;
     }
 }
+```
+
+## Python
+`forge/game/cost/CostCollectEvidence.py`
+
+```python
+from forge.game.Game import Game
+from forge.game.ability.AbilityKey import AbilityKey
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.card.CardCollection import CardCollection
+from forge.game.card.CardCollectionView import CardCollectionView
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CardPredicates import CardPredicates
+from forge.game.cost.CostPartWithList import CostPartWithList
+from forge.game.cost.ICostVisitor import ICostVisitor
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.trigger.TriggerType import TriggerType
+from forge.game.zone.ZoneType import ZoneType
+
+
+class CostCollectEvidence(CostPartWithList):
+    # CollectEvidence<Amount>
+
+    serialVersionUID = 1
+
+    HashLKIListKey = "Collected"
+    HashCardListKey = "CollectedCards"
+
+    def __init__(self, amount: str):
+        self.setAmount(amount)
+
+    def getHashForLKIList(self) -> str:
+        return CostCollectEvidence.HashLKIListKey
+
+    def getHashForCardList(self) -> str:
+        return CostCollectEvidence.HashCardListKey
+
+    def paymentOrder(self) -> int:
+        # needs to be aligned with CostExile because of Lamplight Phoenix
+        return 15
+
+    def canPay(self, ability: SpellAbility, payer: Player, effect: bool) -> bool:
+        amount = self.getAbilityAmount(ability)
+
+        # This may need to be updated if we get a card like "Cards in graveyards can't be exiled to pay for costs"
+
+        return CardLists.getTotalCMC(CardLists.filter(payer.getCardsIn(ZoneType.Graveyard), CardPredicates.canExiledBy(ability, effect))) >= amount
+
+    def accept(self, visitor: ICostVisitor):
+        return visitor.visit(self)
+
+    def toString(self) -> str:
+        sb = []
+        sb.append("Collect evidence ")
+        sb.append(self.getAmount())
+        return "".join(str(x) for x in sb)
+
+    def canPayListAtOnce(self) -> bool:
+        return True
+
+    def doPayment(self, payer: Player, ability: SpellAbility, targetCard: Card, effect: bool) -> Card:
+        return None
+
+    def doListPayment(self, payer: Player, ability: SpellAbility, targetCards: CardCollectionView, effect: bool) -> CardCollectionView:
+        game = payer.getGame()
+        moveParams = AbilityKey.newMap()
+        AbilityKey.addCardZoneTableParams(moveParams, self.table)
+        moved = game.getAction().exile(CardCollection(targetCards), ability, moveParams)
+        SpellAbilityEffect.handleExiledWith(moved, ability)
+        game.getTriggerHandler().runTrigger(TriggerType.CollectEvidence, AbilityKey.mapFromPlayer(payer), False)
+        return moved
 ```

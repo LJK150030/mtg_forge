@@ -32,6 +32,12 @@ classDiagram
 **Extends:**
 - [[forge.util.Lang|Lang]]
 
+## Design Description
+
+Japanese-specific implementation of the abstract `Lang` localization strategy, overriding its hooks to render text according to Japanese grammar and typography. It supplies a positional ordinal suffix (ç•ª), the possessive particle (ã®), and composes the two in `getPossessedObject`; `getNickName` extracts the second segment of a name split on the Japanese comma (ã€). Beyond grammar, it declares the font asset (`SourceHanSansJP`) needed to render CJK glyphs and a representative character used to verify the active font can display Japanese text.
+
+As a concrete subtype of `Lang`, it plugs into Forge's locale dispatch so callers depend only on the `Lang` abstraction while language-specific behavior is selected at runtime. The design keeps all Japanese-specific string formatting and font-capability knowledge encapsulated behind the inherited interface, making each language a self-contained, swappable unit.
+
 ## Source
 `forge-core/src/main/java/forge/util/lang/LangJapanese.java`
 
@@ -44,12 +50,12 @@ public class LangJapanese extends Lang {
     
     @Override
     public String getOrdinal(final int position) {
-        return position + "番";
+        return position + "Ã§â€¢Âª";
     }
 
     @Override
     public String getPossesive(final String name) {
-        return name + "の";
+        return name + "Ã£ÂÂ®";
     }
 
     @Override
@@ -59,7 +65,7 @@ public class LangJapanese extends Lang {
 
     @Override
     public String getNickName(final String name) {
-        String [] splitName = name.split("、");
+        String [] splitName = name.split("Ã£â‚¬Â");
         if (splitName.length > 1) return splitName[1];
         return name;
     }
@@ -69,7 +75,38 @@ public class LangJapanese extends Lang {
         return "SourceHanSansJP";
     }
     public char canDisplayCheck() {
-        return '鍮';
+        return 'Ã©ÂÂ®';
     }
 }
+```
+
+## Python
+`forge/util/lang/LangJapanese.py`
+
+```python
+from forge.util.Lang import Lang
+
+
+class LangJapanese(Lang):
+
+    def getOrdinal(self, position: int) -> str:
+        return str(position) + "???????"
+
+    def getPossesive(self, name: str) -> str:
+        return name + "??????"
+
+    def getPossessedObject(self, owner: str, object: str) -> str:
+        return self.getPossesive(owner) + object
+
+    def getNickName(self, name: str) -> str:
+        splitName = name.split("???????")
+        if len(splitName) > 1:
+            return splitName[1]
+        return name
+
+    def getFontFile(self) -> str:
+        return "SourceHanSansJP"
+
+    def canDisplayCheck(self) -> str:
+        return '??????'
 ```

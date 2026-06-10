@@ -396,3 +396,277 @@ public class GameSimulator {
     }
 }
 ```
+
+## Python
+`forge/ai/simulation/GameSimulator.py`
+
+```python
+from forge.ai.ComputerUtil import ComputerUtil
+from forge.ai.PlayerControllerAi import PlayerControllerAi
+from forge.ai.simulation.GameStateEvaluator.Score import Score
+from forge.ai.simulation.GameCopier import GameCopier
+from forge.ai.simulation.GameStateEvaluator import GameStateEvaluator
+from forge.ai.simulation.SimulationController import SimulationController
+from forge.ai.simulation.SpellAbilityChoicesIterator import SpellAbilityChoicesIterator
+from forge.ai.simulation.SpellAbilityPicker import SpellAbilityPicker
+from forge.game.Game import Game
+from forge.game.GameActionUtil import GameActionUtil
+from forge.game.GameObject import GameObject
+from forge.game.card.Card import Card
+from forge.game.phase.PhaseType import PhaseType
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.spellability.TargetChoices import TargetChoices
+from forge.util.collect.FCollectionView import FCollectionView
+
+import sys
+
+
+class GameSimulator:
+    COPY_STACK = False
+    debugLines = None
+
+    def __init__(self, controller: SimulationController, origGame: Game, origAiPlayer: Player, advanceToPhase: PhaseType):
+        self.controller = controller
+        self.copier = GameCopier(origGame)
+        self.simGame = self.copier.makeCopy(advanceToPhase, origAiPlayer)
+
+        self.aiPlayer = self.copier.find(origAiPlayer)
+        self.eval = GameStateEvaluator()
+
+        self.interceptor = None
+
+        self.origLines = []
+        GameSimulator.debugLines = self.origLines
+
+        GameSimulator.debugPrint.flag = False
+        self.origScore = self.eval.getScoreForGameState(origGame, origAiPlayer)
+
+        if advanceToPhase is None:
+            self.ensureGameCopyScoreMatches(origGame, origAiPlayer)
+
+        # If the stack on the original game is not empty, resolve it
+        # first and get the updated eval score, since this is what we'll
+        # want to compare to the eval score after simulating.
+        if GameSimulator.COPY_STACK and not origGame.getStackZone().isEmpty():
+            self.origLines = []
+            GameSimulator.debugLines = self.origLines
+            copyOrigGame = self.copier.makeCopy()
+            copyOrigAiPlayer = copyOrigGame.getPlayers()[1]
+            GameSimulator.resolveStack(copyOrigGame, copyOrigGame.getPlayers()[0])
+            self.origScore = self.eval.getScoreForGameState(copyOrigGame, copyOrigAiPlayer)
+
+        GameSimulator.debugPrint.flag = False
+        GameSimulator.debugLines = None
+
+    def ensureGameCopyScoreMatches(self, origGame: Game, origAiPlayer: Player) -> None:
+        self.eval.setDebugging(True)
+        simLines = []
+        GameSimulator.debugLines = simLines
+        simScore = self.eval.getScoreForGameState(self.simGame, self.aiPlayer)
+        if simScore != self.origScore:
+            # Re-eval orig with debug printing.
+            self.origLines = []
+            GameSimulator.debugLines = self.origLines
+            self.eval.getScoreForGameState(origGame, origAiPlayer)
+            # Print debug info.
+            self.printDiff(self.origLines, simLines)
+            # make sure it gets printed
+            sys.stdout.flush()
+            raise RuntimeError("Game copy error. See diff output above for details.")
+        self.eval.setDebugging(False)
+
+    def setInterceptor(self, interceptor: SpellAbilityChoicesIterator) -> None:
+        self.interceptor = interceptor
+        self.aiPlayer.getController().getAi().getSimulationPicker().setInterceptor(interceptor)
+
+    def printDiff(self, lines1: list, lines2: list) -> None:
+        i = 0
+        j = 0
+        lines1.sort()
+        lines2.sort()
+        while i < len(lines1) and j < len(lines2):
+            left = lines1[i]
+            right = lines2[j]
+            if left == right:
+                i += 1
+                j += 1
+            elif left < right:
+                print("-" + left)
+                i += 1
+            else:
+                print("+" + right)
+                j += 1
+        while i < len(lines1):
+            print("-" + lines1[i])
+            i += 1
+        while j < len(lines2):
+            print("+" + lines2[j])
+            j += 1
+
+    @staticmethod
+    def debugPrint(str) -> None:
+        if GameSimulator.debugPrint.flag:
+            print(str)
+        if GameSimulator.debugLines is not None:
+            GameSimulator.debugLines.append(str)
+
+    def findSaInSimGame(self, sa: SpellAbility) -> SpellAbility:
+        # is already an ability from sim game
+        if sa.getHostCard().getGame() == self.simGame:
+            return sa
+        origHostCard = sa.getHostCard()
+        hostCard = self.copier.find(origHostCard)
+        desc = sa.getDescription()
+        candidates = hostCard.getSpellAbilities()
+
+        result = self.saMatcher(candidates, desc)
+        for cSa in candidates:
+            if result is not None:
+                break
+            result = self.saMatcher(GameActionUtil.getAlternativeCosts(cSa, self.aiPlayer, True), desc)
+
+        return result
+
+    def saMatcher(self, candidates, desc: str) -> SpellAbility:
+        # first pass for accuracy (spells with alternative costs)
+        for cSa in candidates:
+            if desc == cSa.getDescription():
+                return cSa
+        # fall back for safety
+        for cSa in candidates:
+            if desc.startswith(cSa.getDescription()):
+                return cSa
+        return None
+
+    def simulateSpellAbility(self, origSa: SpellAbility, eval=None, resolve: bool = True) -> Score:
+        if isinstance(eval, bool):
+            resolve = eval
+            eval = None
+        if eval is None:
+            eval = self.eval
+
+        if origSa.isLandAbility():
+            hostCard = self.copier.find(origSa.getHostCard())
+            if origSa.canPlay():
+                self.aiPlayer.playLand(hostCard, origSa)
+            else:
+                print("Simulation: Couldn't play land! " + str(origSa), file=sys.stderr)
+            sa = origSa
+        else:
+            # TODO: optimize: prune identical SA (e.g. two of the same card in hand)
+            sa = self.findSaInSimGame(origSa)
+            if sa is None:
+                print("Simulation: SA not found! " + str(origSa) + " / " + str(type(origSa)), file=sys.stderr)
+                return Score(-2147483648)
+
+            GameSimulator.debugPrint("Found SA " + str(sa) + " on host card " + str(sa.getHostCard()) + " with owner:" + str(sa.getHostCard().getOwner()))
+            sa.setActivatingPlayer(self.aiPlayer)
+            origSaOrSubSa = origSa
+            saOrSubSa = sa
+            while True:
+                if origSaOrSubSa.usesTargeting():
+                    divided = origSaOrSubSa.isDividedAsYouChoose()
+                    for o in origSaOrSubSa.getTargets():
+                        target = self.copier.find(o)
+                        saOrSubSa.getTargets().add(target)
+                        if divided:
+                            saOrSubSa.addDividedAllocation(target, origSaOrSubSa.getDividedValue(o))
+                origSaOrSubSa = origSaOrSubSa.getSubAbility()
+                saOrSubSa = saOrSubSa.getSubAbility()
+                if saOrSubSa is None:
+                    break
+
+            if GameSimulator.debugPrint.flag and len(sa.getAllTargetChoices()) > 0:
+                GameSimulator.debugPrint("Targets: ")
+                for target in sa.getAllTargetChoices():
+                    print(target, end="")
+                print()
+            playingSa = sa
+
+            # Is this right?
+            self.simGame.copyLastState()
+
+            def _onPlay():
+                if self.interceptor is not None:
+                    self.interceptor.announceX(playingSa)
+                    self.interceptor.chooseTargets(playingSa, self)
+
+            success = ComputerUtil.handlePlayingSpellAbility(self.aiPlayer, sa, _onPlay)
+            if not success:
+                return Score(-2147483648)
+
+        if resolve:
+            # TODO: Support multiple opponents.
+            opponent = self.aiPlayer.getWeakestOpponent()
+            GameSimulator.resolveStack(self.simGame, opponent)
+
+        # TODO: If this is during combat, before blockers are declared,
+        # we should simulate how combat will resolve and evaluate that
+        # state instead!
+        simLines = None
+        if GameSimulator.debugPrint.flag:
+            GameSimulator.debugPrint("SimGame:")
+            simLines = []
+            GameSimulator.debugLines = simLines
+            GameSimulator.debugPrint.flag = False
+        score = eval.getScoreForGameState(self.simGame, self.aiPlayer)
+        if simLines is not None:
+            GameSimulator.debugLines = None
+            GameSimulator.debugPrint.flag = True
+            self.printDiff(self.origLines, simLines)
+        self.controller.possiblyCacheResult(score, origSa)
+        if self.controller.shouldRecurse() and not self.simGame.isGameOver():
+            self.controller.push(sa, score, self)
+            sim = SpellAbilityPicker(self.simGame, self.aiPlayer)
+            nextSa = sim.chooseSpellAbilityToPlay(self.controller)
+            if nextSa is not None:
+                score = sim.getScoreForChosenAbility()
+            self.controller.pop(score, nextSa)
+
+        return score
+
+    @staticmethod
+    def resolveStack(game: Game, opponent: Player) -> None:
+        # TODO: This needs to set an AI controller for all opponents, in case of multiplayer.
+        sim = PlayerControllerAi(game, opponent, opponent.getLobbyPlayer())
+        sim.setUseSimulation(True)
+
+        def _runnable():
+            allAffectedCards = set()
+            game.getAction().checkStateEffects(False, allAffectedCards)
+            game.getStack().addAllTriggeredAbilitiesToStack()
+            while not game.getStack().isEmpty() and not game.isGameOver():
+                GameSimulator.debugPrint("Resolving:" + str(game.getStack().peekAbility()))
+
+                # Resolve the top effect on the stack.
+                game.getStack().resolveStack()
+
+                # Evaluate state based effects as a result of resolving stack.
+                # Note: Needs to happen after resolve stack rather than at the
+                # top of the loop to ensure state effects are evaluated after the
+                # last resolved effect
+                game.getAction().checkStateEffects(False, allAffectedCards)
+
+                # Add any triggers additional triggers as a result of the above.
+                # Must be below state effects, since legendary rule is evaluated
+                # as part of state effects and trigger come afterward. (e.g. to
+                # correctly handle two Dark Depths - one having no counters).
+                game.getStack().addAllTriggeredAbilitiesToStack()
+
+                # Continue until stack is empty.
+
+        opponent.runWithController(_runnable, sim)
+
+    def getSimulatedGameState(self) -> Game:
+        return self.simGame
+
+    def getScoreForOrigGame(self) -> Score:
+        return self.origScore
+
+    def getGameCopier(self) -> GameCopier:
+        return self.copier
+
+
+GameSimulator.debugPrint.flag = False
+```

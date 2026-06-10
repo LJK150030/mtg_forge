@@ -36,9 +36,9 @@ classDiagram
 
 ## Design Description
 
-AdvanceCrankAi is the AI decision-making companion for the "Advance the Crank" ability, determining whether the computer player should activate the crank that advances the contraption sprocket sequence. As a concrete subclass of SpellAbilityAi, it overrides the protected `canPlay` hook to inject domain-specific reasoning: it computes the next sprocket (cycling 1–3 from the player's crank counter) and counts how many contraptions on the battlefield sit on that sprocket. If fewer than two would be triggered, it returns an AiAbilityDecision declining to play; otherwise it defers to the superclass's default evaluation.
+AdvanceCrankAi is the AI decision-making companion for the "Advance the Crank" ability, determining whether the computer player should activate the crank that advances the contraption sprocket sequence. As a concrete subclass of SpellAbilityAi, it overrides the protected `canPlay` hook to inject domain-specific reasoning: it computes the next sprocket (cycling 1â€“3 from the player's crank counter) and counts how many contraptions on the battlefield sit on that sprocket. If fewer than two would be triggered, it returns an AiAbilityDecision declining to play; otherwise it defers to the superclass's default evaluation.
 
-The class collaborates with Player and SpellAbility as the actors being evaluated, and wraps its verdict in AiAbilityDecision paired with an AiPlayDecision enum. The design keeps the heuristic narrowly scoped—only acting when cranking yields meaningful value—while delegating all generic playability checks upward, a clean example of the template-method pattern used throughout Forge's AI ability hierarchy.
+The class collaborates with Player and SpellAbility as the actors being evaluated, and wraps its verdict in AiAbilityDecision paired with an AiPlayDecision enum. The design keeps the heuristic narrowly scopedâ€”only acting when cranking yields meaningful valueâ€”while delegating all generic playability checks upward, a clean example of the template-method pattern used throughout Forge's AI ability hierarchy.
 
 ## Source
 `forge-ai/src/main/java/forge/ai/ability/AdvanceCrankAi.java`
@@ -67,4 +67,27 @@ public class AdvanceCrankAi extends SpellAbilityAi {
     }
 
 }
+```
+
+## Python
+`forge/ai/ability/AdvanceCrankAi.py`
+
+```python
+from forge.ai.AiAbilityDecision import AiAbilityDecision
+from forge.ai.AiPlayDecision import AiPlayDecision
+from forge.ai.SpellAbilityAi import SpellAbilityAi
+from forge.game.card.CardLists import CardLists
+from forge.game.card.CardPredicates import CardPredicates
+from forge.game.player.Player import Player
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.game.zone.ZoneType import ZoneType
+
+
+class AdvanceCrankAi(SpellAbilityAi):
+    def canPlay(self, ai: Player, sa: SpellAbility) -> AiAbilityDecision:
+        nextSprocket = (ai.getCrankCounter() % 3) + 1
+        crankCount = CardLists.count(ai.getCardsIn(ZoneType.Battlefield), CardPredicates.isContraptionOnSprocket(nextSprocket))
+        if crankCount < 2:
+            return AiAbilityDecision(0, AiPlayDecision.CantPlayAi)
+        return super().canPlay(ai, sa)
 ```

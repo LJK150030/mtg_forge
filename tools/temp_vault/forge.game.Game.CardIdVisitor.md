@@ -39,7 +39,7 @@ classDiagram
 The CardIdVisitor is a private static helper that implements the `Visitor<Card>` interface to locate a single card by its numeric identifier. Constructed with a target id, it is designed to be driven across a collection of cards by an external traversal mechanism: each `visit` call compares the candidate card's id against the target, capturing the first match in its `found` field. Its boolean return implements an early-termination protocol, yielding `true` to continue the traversal only while no match has been found and `false` once the card is located, after which `getFound` exposes the result. The private constructor and tight scoping reflect its intent as an internal, single-use search utility within Game rather than a reusable component.
 
 ## Source
-`forge-game/src/main/java/forge/game/Game.java` â€” declaration excerpt
+`forge-game/src/main/java/forge/game/Game.java` Ã¢â‚¬â€ declaration excerpt
 
 ```java
     private static class CardIdVisitor implements Visitor<Card> {
@@ -62,4 +62,26 @@ The CardIdVisitor is a private static helper that implements the `Visitor<Card>`
             return found;
         }
     }
+```
+
+## Python
+`forge/game/Game/CardIdVisitor.py`
+
+```python
+from forge.util.Visitor import Visitor
+from forge.game.card.Card import Card
+
+
+class CardIdVisitor(Visitor[Card]):
+    def __init__(self, id: int):
+        self.found: Card = None
+        self.id: int = id
+
+    def visit(self, object: Card) -> bool:
+        if self.id == object.getId():
+            self.found = object
+        return self.found is None
+
+    def getFound(self) -> Card:
+        return self.found
 ```

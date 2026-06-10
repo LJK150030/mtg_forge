@@ -42,7 +42,7 @@ HasKeywordVisitor is a private static helper nested in `Card`, implementing `Vis
 The design keeps matching logic encapsulated and reusable: a small immutable-result holder accumulates the outcome while the visitor remains stateless beyond its query parameters, and `getResult()` exposes the final verdict. As a Visitor implementation, it decouples the keyword-search algorithm from `Card`'s internal keyword collection structure, letting `Card` apply the same traversal mechanism used elsewhere rather than duplicating iteration code.
 
 ## Source
-`forge-game/src/main/java/forge/game/card/Card.java` â€” declaration excerpt
+`forge-game/src/main/java/forge/game/card/Card.java` Ã¢â‚¬â€ declaration excerpt
 
 ```java
     private static final class HasKeywordVisitor implements Visitor<KeywordInterface> {
@@ -67,4 +67,29 @@ The design keeps matching logic encapsulated and reusable: a small immutable-res
             return result.isTrue();
         }
     }
+```
+
+## Python
+`forge/game/card/Card/HasKeywordVisitor.py`
+
+```python
+from forge.util.Visitor import Visitor
+from forge.game.keyword.KeywordInterface import KeywordInterface
+from org.apache.commons.lang3.mutable.MutableBoolean import MutableBoolean
+
+
+class HasKeywordVisitor(Visitor):
+    def __init__(self, keyword: str, startOf: bool):
+        self.keyword = keyword
+        self.result = MutableBoolean(False)
+        self.startOf = startOf
+
+    def visit(self, inst: KeywordInterface) -> bool:
+        kw = inst.getOriginal()
+        if (self.startOf and kw.startswith(self.keyword)) or kw == self.keyword:
+            self.result.setTrue()
+        return self.result.isFalse()
+
+    def getResult(self) -> bool:
+        return self.result.isTrue()
 ```

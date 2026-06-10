@@ -353,3 +353,262 @@ public class CharmEffect extends SpellAbilityEffect {
 
 }
 ```
+
+## Python
+`forge/game/ability/effects/CharmEffect.py`
+
+```python
+from forge.game.ability.AbilityUtils import AbilityUtils
+from forge.game.ability.SpellAbilityEffect import SpellAbilityEffect
+from forge.game.card.Card import Card
+from forge.game.cost.Cost import Cost
+from forge.game.keyword.Keyword import Keyword
+from forge.game.player.Player import Player
+from forge.game.spellability.AbilitySub import AbilitySub
+from forge.game.spellability.SpellAbility import SpellAbility
+from forge.util.Aggregates import Aggregates
+from forge.util.Lang import Lang
+from forge.util.Localizer import Localizer
+from forge.util.collect.FCollection import FCollection
+
+
+class CharmEffect(SpellAbilityEffect):
+
+    @staticmethod
+    def makePossibleOptions(sa):
+        source = sa.getHostCard()
+        restriction = None
+
+        if sa.hasParam("ChoiceRestriction"):
+            restriction = source.getChosenModes(sa, sa.getParam("ChoiceRestriction"))
+
+        choices = list(sa.getAdditionalAbilityList("Choices"))
+
+        if source.getZone() is not None:
+            toRemove = []
+            for ch in choices:
+                # 603.3c If one of the modes would be illegal, that mode can't be chosen.
+                if ((ch.usesTargeting() and ch.getMinTargets() > 0 and
+                        ch.getTargetRestrictions().getNumCandidates(ch, True) == 0) or
+                        (restriction is not None and ch.getDescription() in restriction)):
+                    toRemove.append(ch)
+            for ch in toRemove:
+                choices.remove(ch)
+
+        indx = 1
+        # set CharmOrder
+        for sub in choices:
+            sub.setSVar("CharmOrder", str(indx))
+            indx += 1
+        return choices
+
+    @staticmethod
+    def makeFormatedDescription(sa, includeChosen=True):
+        source = sa.getHostCard()
+
+        list_ = CharmEffect.makePossibleOptions(sa)
+        numParam = sa.getParamOrDefault("CharmNum", "1")
+        isX = numParam == "X"
+        repeat = sa.hasParam("CanRepeatModes")
+        num = 0
+        additionalDesc = sa.hasParam("AdditionalDescription")
+        optional = sa.hasParam("Optional")
+        # hotfix for complex cards when using getCardForUi
+        if source.getController() is None and not numParam.isnumeric() and additionalDesc and not optional:
+            # using getCardForUi game is not set, so can't guess max charm
+            num = 2147483647
+        else:
+            # fallback needed while ability building
+            if sa.getActivatingPlayer() is None:
+                sa.setActivatingPlayer(source.getController())
+            if not isX:
+                num = AbilityUtils.calculateAmount(source, numParam, sa)
+                if not repeat:
+                    num = min(num, len(list_))
+        min_ = AbilityUtils.calculateAmount(source, sa.getParam("MinCharmNum"), sa) if sa.hasParam("MinCharmNum") else num
+
+        random = sa.hasParam("Random")
+        limit = sa.hasParam("ActivationLimit")
+        gameLimit = sa.hasParam("GameActivationLimit")
+        oppChooses = "Opponent" == sa.getParam("Chooser")
+        spree = source.hasKeyword(Keyword.SPREE)
+        tiered = source.hasKeyword(Keyword.TIERED)
+
+        sb = []
+        sb.append(sa.getCostDescription())
+
+        if not spree and not tiered:
+            sb.append("An opponent chooses " if oppChooses else "Choose ")
+            if isX:
+                sb.append("up to " if sa.hasParam("MinCharmNum") and min_ == 0 else "")
+                sb.append("X")
+            elif num == min_ or num == 2147483647:
+                sb.append("up to that many" if num == 0 else Lang.getNumeral(min_))
+            elif min_ == 0 and num == len(sa.getParam("Choices").split(",")):
+                sb.append("any number ")
+            elif min_ == 0:
+                sb.append("up to ")
+                sb.append(Lang.getNumeral(num))
+            else:
+                sb.append(Lang.getNumeral(min_))
+                sb.append(" or ")
+                sb.append("both" if len(list_) == 2 else "more")
+
+        if sa.hasParam("Pawprint"):
+            sb.append("{P} worth of modes")
+
+        if sa.hasParam("ChoiceRestriction"):
+            rest = sa.getParam("ChoiceRestriction")
+            if rest == "ThisGame":
+                sb.append(" that hasn't been chosen")
+            elif rest == "ThisTurn":
+                sb.append(" that hasn't been chosen this turn")
+            elif rest == "YourLastCombat":
+                sb.append(" that wasn't chosen during your last combat")
+
+        if random:
+            sb.append(" at random.")
+        if repeat:
+            sb.append(". You may choose the same mode more than once.")
+        if limit:
+            limitNum = AbilityUtils.calculateAmount(source, sa.getParam("ActivationLimit"), sa)
+            if limitNum == 1:
+                sb.append(". Activate only once each turn.")
+            else:
+                sb.append(". Additional code needed in CharmEffect.")
+        if gameLimit:
+            limitNum = AbilityUtils.calculateAmount(source, sa.getParam("GameActivationLimit"), sa)
+            if limitNum == 1:
+                sb.append(". Activate only once.")
+            else:
+                sb.append(". Additional code needed in CharmEffect.")
+
+        if additionalDesc:
+            addDescS = sa.getParam("AdditionalDescription")
+            if optional:
+                sb.append(". ")
+                sb.append(addDescS.strip())
+            elif addDescS.startswith("."):
+                sb.append(addDescS.strip())
+            elif addDescS.startswith("where X"):
+                sb.append(", ")
+                sb.append(addDescS.strip())
+                sb.append(" \u2014")
+            else:
+                sb.append(" ")
+                sb.append(addDescS.strip())
+
+        if not includeChosen:
+            sb.append(" mode." if num == 1 else " modes.")
+        elif len(list_) != 0:
+            if not spree and not tiered:
+                if not repeat and not additionalDesc and not limit and not gameLimit:
+                    sb.append(" \u2014")
+                sb.append("\r\n")
+            for sub in list_:
+                if spree:
+                    sb.append("+ " + Cost(sub.getParam("ModeCost"), False).toSimpleString() + " \u2014 ")
+                elif tiered:
+                    sb.append("\u2022 ")
+                    sb.append(sub.getParam("PrecostDesc"))
+                    sb.append(" \u2014 ")
+                    sb.append(Cost(sub.getParam("ModeCost"), False).toSimpleString() + " \u2014 ")
+                elif sub.hasParam("Pawprint"):
+                    sb.append("{P}" * int(sub.getParam("Pawprint")) + " \u2014 ")
+                else:
+                    sb.append("\u2022 ")
+                sb.append(sub.getParam("SpellDescription"))
+                sb.append("\r\n")
+            sb.append("\r\n")
+        return "".join(sb)
+
+    def resolve(self, sa):
+        # all chosen modes have been chained as subabilities to this sa.
+        # so nothing to do in this resolve
+        pass
+
+    def getStackDescription(self, sa):
+        # StackDescription based on Chosen SubAbilities allowed in chainAbilities
+        return ""
+
+    @staticmethod
+    def makeChoices(sa):
+        # CR 700.2g
+        if sa.isCopied():
+            return True
+
+        # reset all previous choices
+        sa.setSubAbility(None)
+
+        choices = CharmEffect.makePossibleOptions(sa)
+
+        # Entwine does use all Choices
+        if sa.isEntwine():
+            CharmEffect.chainAbilities(sa, choices)
+            return True
+
+        source = sa.getHostCard()
+        activator = sa.getActivatingPlayer()
+
+        canRepeat = sa.hasParam("CanRepeatModes")
+        num = AbilityUtils.calculateAmount(source, sa.getParamOrDefault("CharmNum", "1"), sa)
+        min_ = AbilityUtils.calculateAmount(source, sa.getParam("MinCharmNum"), sa) if sa.hasParam("MinCharmNum") else num
+
+        if not canRepeat:
+            # not enough choices
+            if min_ > len(choices):
+                return False
+            num = min(num, len(choices))
+
+        isOptional = sa.hasParam("Optional")
+        if isOptional and not activator.getController().confirmAction(sa, None, Localizer.getInstance().getMessage("lblWouldYouLikeCharm", source.getTranslatedName()), None):
+            return False
+
+        if sa.hasParam("Random"):
+            CharmEffect.chainAbilities(sa, Aggregates.random(choices, num))
+            return True
+
+        chooser = sa.getActivatingPlayer()
+
+        if sa.hasParam("Chooser"):
+            # Three modal cards require you to choose a player to make the modal choice'
+            # Two of these also reference the chosen player during the spell effect
+
+            # String choosers = sa.getParam("Chooser");
+            opponents = activator.getOpponents()  # all cards have Choser$ Opponent, so it's hardcoded here
+            chooser = activator.getController().chooseSingleEntityForEffect(opponents, sa, "Choose an opponent", None)
+            sa.setChoosingPlayer(chooser)
+
+        chosen = chooser.getController().chooseModeForAbility(sa, choices, min_, num, canRepeat)
+        CharmEffect.chainAbilities(sa, chosen)
+
+        # trigger without chosen modes are removed from stack
+        if sa.isTrigger():
+            return chosen is not None and len(chosen) != 0
+
+        # for spells and activated abilities it is possible to chose zero if minCharmNum allows it
+        return True
+
+    @staticmethod
+    def chainAbilities(sa, chosen):
+        if chosen is None:
+            return
+
+        # Sort Chosen by SA order
+        chosen.sort(key=lambda o: o.getSVarInt("CharmOrder"))
+
+        indx = 1
+        for sub in chosen:
+            # Clone the chosen, just in case the same subAb gets chosen multiple times
+            clone = sub.copy(sa.getActivatingPlayer())
+
+            clone.setSVar("CharmOrder", str(indx))
+            indx += 1
+
+            # make StackDescription be the SpellDescription if it doesn't already have one
+            if not clone.hasParam("StackDescription"):
+                clone.putParam("StackDescription", "SpellDescription")
+
+            # add Clone to Tail of sa
+            sa.appendSubAbility(clone)
+```
